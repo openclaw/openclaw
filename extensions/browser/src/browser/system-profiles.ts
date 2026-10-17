@@ -13,6 +13,7 @@ import { type BrowserRouteContext, runProfileContextOperation } from "./server-c
 import { isProfileRestartRequiredError } from "./server-context.lifecycle.js";
 import {
   readChromeCookiesDatabase,
+  SUPPORTED_SYSTEM_BROWSERS,
   type CookieImportCounts,
   type KeychainSecretReader,
   type PlaywrightCookie,
@@ -54,8 +55,9 @@ const SYSTEM_BROWSER_DIRS: Record<SystemBrowser, string[]> = {
 
 function resolveSystemBrowser(value?: string): SystemBrowser {
   const browser = value?.trim().toLowerCase() || "chrome";
-  if (browser === "chrome" || browser === "brave" || browser === "edge" || browser === "chromium") {
-    return browser;
+  const supported = SUPPORTED_SYSTEM_BROWSERS.find((candidate) => candidate === browser);
+  if (supported) {
+    return supported;
   }
   throw new Error(`unsupported system browser "${value}"; use chrome, brave, edge, or chromium`);
 }
@@ -114,8 +116,6 @@ function readProfileNames(root: string): Map<string, string> {
     return new Map();
   }
 }
-
-const SUPPORTED_SYSTEM_BROWSERS: readonly SystemBrowser[] = ["chrome", "brave", "edge", "chromium"];
 
 function listOneBrowserProfiles(browser: SystemBrowser): SystemProfileInfo[] {
   const root = resolveSystemBrowserRoot(browser);

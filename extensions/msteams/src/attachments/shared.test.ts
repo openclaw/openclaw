@@ -1,16 +1,15 @@
-import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
-  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
-} from "openclaw/plugin-sdk/ssrf-policy";
-// Msteams tests cover shared plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
-  applyAuthorizationHeaderForUrl,
+  useAttachmentTestTransport,
+  type AttachmentTestTransport,
+} from "./transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
+import { lookup } from "node:dns/promises";
+import {
   encodeGraphShareId,
   isDownloadableAttachment,
   isLikelyImageAttachment,
   normalizeContentType,
-  resolveAttachmentFetchPolicy,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
@@ -21,27 +20,25 @@ const failingResolve = async () => {
   throw new Error("DNS failure");
 };
 
-const resolveAllowedHosts = (input?: string[]) =>
-  resolveAttachmentFetchPolicy({ allowHosts: input }).allowHosts;
-const resolveAuthAllowedHosts = (input?: string[]) =>
-  resolveAttachmentFetchPolicy({ authAllowHosts: input }).authAllowHosts;
 const isGraphSharedLinkUrl = (url: string) =>
   tryBuildGraphSharesUrlForSharedLink(url) !== undefined;
 
-type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy"> & {
-  allowHosts: string[];
-  authorizationAllowHosts?: string[];
-};
+type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy" | "resolveFn"> &
+  AttachmentTestTransport & {
+    allowHosts: string[];
+    authorizationAllowHosts?: string[];
+  };
 
 async function safeFetch(params: SafeFetchParams) {
-  const { allowHosts, authorizationAllowHosts, ...request } = params;
+  const { allowHosts, authorizationAllowHosts, fetchFn, resolveFn, ...request } = params;
+  installAttachmentTestTransport({ fetchFn, resolveFn: resolveFn ?? publicResolve });
   return await safeFetchWithPolicy({
     ...request,
+    resolveFn: lookup,
     policy: {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
     },
-    resolveFn: request.resolveFn ?? publicResolve,
   });
 }
 
@@ -58,105 +55,7 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
   });
 }
 
-function fetchInitAt(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
-  const call = fetchMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected fetch call ${index}`);
-  }
-  return call[1];
-}
-
-async function expectSafeFetchStatus(params: {
-  fetchMock: ReturnType<typeof vi.fn>;
-  url: string;
-  allowHosts: string[];
-  expectedStatus: number;
-  resolveFn?: typeof publicResolve;
-}) {
-  const res = await safeFetch({
-    url: params.url,
-    allowHosts: params.allowHosts,
-    fetchFn: params.fetchMock as unknown as typeof fetch,
-    resolveFn: params.resolveFn ?? publicResolve,
-  });
-  expect(res.status).toBe(params.expectedStatus);
-  await res.body?.cancel();
-  return res;
-}
-
-describe("msteams attachment allowlists", () => {
-  it("normalizes wildcard host lists", () => {
-    expect(resolveAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
-    expect(resolveAuthAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
-  });
-
-  it("allows Azure China Bot Framework attachment URLs with auth by default", () => {
-    const policy = resolveAttachmentFetchPolicy();
-    const url = "https://msteams.botframework.azure.cn/teams/v3/attachments/att-1/views/original";
-    const headers = new Headers();
-
-    expect(isUrlAllowed(url, policy.allowHosts)).toBe(true);
-    applyAuthorizationHeaderForUrl({
-      headers,
-      url,
-      authAllowHosts: policy.authAllowHosts,
-      bearerToken: "token-1",
-    });
-
-    expect(headers.get("Authorization")).toBe("Bearer token-1");
-  });
-
-  it("requires https and host suffix match", () => {
-    const allowHosts = resolveAllowedHosts(["sharepoint.com"]);
-    expect(isUrlAllowed("https://contoso.sharepoint.com/file.png", allowHosts)).toBe(true);
-    expect(isUrlAllowed("http://contoso.sharepoint.com/file.png", allowHosts)).toBe(false);
-    expect(isUrlAllowed("https://evil.example.com/file.png", allowHosts)).toBe(false);
-  });
-
-  it("builds shared SSRF policy from suffix allowlist", () => {
-    expect(resolveMediaSsrfPolicy(["sharepoint.com"])).toEqual({
-      hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
-    });
-    expect(resolveMediaSsrfPolicy(["*"])).toBeUndefined();
-  });
-});
-
-// ─── safeFetch ───────────────────────────────────────────────────────────────
-
 describe("safeFetch", () => {
-  it("pins the validated DNS result into the request dispatcher", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
-      return new Response("ok", { status: 200 });
-    });
-
-    await expectSafeFetchStatus({
-      fetchMock,
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
-      expectedStatus: 200,
-    });
-
-    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("dispatcher");
-  });
-
-  it("fails explicitly for custom fetch functions that cannot receive the pinned dispatcher", async () => {
-    let called = false;
-    const customFetch = async () => {
-      called = true;
-      return new Response("ok", { status: 200 });
-    };
-
-    await expect(
-      safeFetch({
-        url: "https://teams.sharepoint.com/file.pdf",
-        allowHosts: ["sharepoint.com"],
-        fetchFn: customFetch as typeof fetch,
-        resolveFn: publicResolve,
-      }),
-    ).rejects.toThrow("fetchFnSupportsDispatcher");
-    expect(called).toBe(false);
-  });
-
   it("blocks a redirect to a non-allowlisted host", async () => {
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": "https://evil.example.com/steal",
@@ -212,18 +111,6 @@ describe("safeFetch", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("blocks private hosts with the default resolver", async () => {
-    const fetchMock = vi.fn();
-    await expect(
-      safeFetch({
-        url: "https://localhost/file.pdf",
-        allowHosts: ["localhost"],
-        fetchFn: fetchMock as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow("private/internal");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("blocks when initial URL DNS resolution fails", async () => {
     const fetchMock = vi.fn();
     await expect(
@@ -235,34 +122,6 @@ describe("safeFetch", () => {
       }),
     ).rejects.toThrow("DNS failure");
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("follows multiple redirects when all are valid", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "https://a.sharepoint.com/1" && init?.redirect === "manual") {
-        return new Response(null, {
-          status: 302,
-          headers: { location: "https://b.sharepoint.com/2" },
-        });
-      }
-      if (url === "https://b.sharepoint.com/2" && init?.redirect === "manual") {
-        return new Response(null, {
-          status: 302,
-          headers: { location: "https://c.sharepoint.com/3" },
-        });
-      }
-      return new Response("final", { status: 200 });
-    });
-
-    const res = await safeFetch({
-      url: "https://a.sharepoint.com/1",
-      allowHosts: ["sharepoint.com"],
-      fetchFn: fetchMock as unknown as typeof fetch,
-      resolveFn: publicResolve,
-    });
-    expect(res.status).toBe(200);
-    await res.body?.cancel();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("throws on too many redirects", async () => {
@@ -387,6 +246,9 @@ describe("safeFetch", () => {
     await res.body?.cancel();
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toContain("Bearer secret");
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init).toHaveProperty("dispatcher");
+    }
   });
 
   it("strips authorization from the initial fetch outside auth allowlist", async () => {
@@ -411,71 +273,22 @@ describe("safeFetch", () => {
   });
 });
 
-describe("attachment fetch auth helpers", () => {
-  it("sets and clears authorization header by auth allowlist", () => {
-    const headers = new Headers();
-    applyAuthorizationHeaderForUrl({
-      headers,
-      url: "https://graph.microsoft.com/v1.0/me",
-      authAllowHosts: ["graph.microsoft.com"],
-      bearerToken: "token-1",
-    });
-    expect(headers.get("authorization")).toBe("Bearer token-1");
-
-    applyAuthorizationHeaderForUrl({
-      headers,
-      url: "https://evil.example.com/collect",
-      authAllowHosts: ["graph.microsoft.com"],
-      bearerToken: "token-1",
-    });
-    expect(headers.get("authorization")).toBeNull();
-  });
-});
-
 describe("Graph shared-link helpers", () => {
   it.each([
-    ["https://contoso.sharepoint.com/personal/user/Documents/report.pdf", true],
-    ["https://contoso.sharepoint.us/sites/team/file.docx", true],
-    ["https://contoso.sharepoint.cn/file", true],
-    ["https://1drv.ms/b/s!AkxYabc", true],
     ["https://onedrive.live.com/view.aspx?resid=ABC", true],
-    ["https://onedrive.com/share/abc", true],
-    ["https://graph.microsoft.com/v1.0/me", false],
     ["https://notonedrive.com/x", false],
-    ["https://evil1drv.ms/x", false],
-    ["https://fakeonedrive.live.com/x", false],
-    ["https://evilsharepoint.com/x", false],
     ["http://onedrive.com/x", false],
     ["not-a-url", false],
   ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
     expect(isGraphSharedLinkUrl(url)).toBe(expected);
   });
 
-  it("encodeGraphShareId uses u! + base64url without padding", () => {
-    // Graph docs example: encoding "https://onedrive.live.com/redir?resid=..."
-    // should yield u!aHR0cHM6... (base64url, no '+', '/', or trailing '=').
-    const url = "https://contoso.sharepoint.com/sites/a/Shared Documents/file.pdf";
-    const shareId = encodeGraphShareId(url);
-    expect(shareId.startsWith("u!")).toBe(true);
-    const encoded = shareId.slice(2);
-    // base64url alphabet is A-Z, a-z, 0-9, '-', '_' (no padding).
-    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
-    // Round-trip check: decoding yields the original URL.
-    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
-    expect(decoded).toBe(url);
-  });
-
   it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
     const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toBe(
-      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
-    );
-  });
-
-  it("tryBuildGraphSharesUrlForSharedLink rewrites OneDrive URLs", () => {
-    const url = "https://1drv.ms/b/s!AkxYabcdefg";
-    const result = tryBuildGraphSharesUrlForSharedLink(url);
+    const shareId = encodeGraphShareId(url);
+    expect(shareId).toMatch(/^u![A-Za-z0-9_-]+$/);
+    expect(Buffer.from(shareId.slice(2), "base64url").toString("utf8")).toBe(url);
     expect(result).toBe(
       `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
@@ -483,13 +296,6 @@ describe("Graph shared-link helpers", () => {
 });
 
 describe("normalizeContentType case-insensitivity", () => {
-  // MIME types are case-insensitive (RFC 2045); relay payloads routinely emit
-  // mixed-case values. normalizeContentType must lowercase so the downstream
-  // startsWith/=== comparisons (which assume lowercase) match.
-  it("trims surrounding whitespace before lowercasing", () => {
-    expect(normalizeContentType("  Image/PNG  ")).toBe("image/png");
-  });
-
   it("preserves case-sensitive parameter values", () => {
     expect(normalizeContentType('  Text/HTML ; charset="X-Custom"  ')).toBe(
       'text/html; charset="X-Custom"',

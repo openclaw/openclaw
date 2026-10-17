@@ -12,12 +12,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
-import {
-  callAgentToolGatewayRequest,
-  callInProcessGatewayTool,
-  type AgentToolGatewayRequestCaller,
-  type InProcessGatewayCaller,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest, callInProcessGatewayTool } from "./in-process-gateway.js";
 import {
   PORTAL_TOOL_DESCRIPTION,
   SESSION_PORTAL_TOOL_DESCRIPTION,
@@ -39,20 +34,20 @@ type PortalToolOutcome =
 export function formatPortalResult(
   outcome: PortalToolOutcome,
 ): AgentToolResult<PortalSummary | PortalListResult | PortalCloseResult> {
+  const loopbackWarning =
+    "Loopback-only portal: access is local to the Gateway host, even when the app runs on a worker. For a remote viewer, configure private portal ingress or a reachable direct listener; local use is still valid.";
   const text =
     outcome.action === "open"
-      ? `Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server. Open it in the Control UI Portals page to verify browser access and application rendering; allocation does not prove either. Remote access requires private portal ingress or a reachable direct listener.`
+      ? `${outcome.result.exposure?.kind === "loopback-only" ? `${loopbackWarning} ` : ""}Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server on the selected environment. Browser access and application rendering remain unverified from the requesting viewer; allocation or a worker/Gateway browser test is not delivery proof. Use the returned URLs unchanged.`
       : outcome.action === "list"
-        ? `${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. The operator can see them in the Control UI Portals page.`
-        : `Portal ${outcome.id} closed. The Control UI Portals page has been updated.`;
+        ? `${outcome.result.portals.some((portal) => portal.exposure?.kind === "loopback-only") ? `${loopbackWarning} ` : ""}${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. Inspect each portal's exposure facts; browser access and application rendering remain unverified from the requesting viewer. The Control UI Portals page lists the routes.`
+        : `Portal ${outcome.id}: ${outcome.result.closed ? "closed" : "not closed"}.`;
   const result = jsonResult(outcome.result);
   return { ...result, content: [{ type: "text", text }, ...result.content] };
 }
 
 export function createAvailablePortalTools(
   options: {
-    callGateway?: InProcessGatewayCaller;
-    callGatewayRequest?: AgentToolGatewayRequestCaller;
     sessionPortalTarget?: SessionPortalToolTarget;
     senderIsOwner?: boolean;
   } = {},
@@ -61,8 +56,6 @@ export function createAvailablePortalTools(
   if (options.senderIsOwner === false && !target) {
     return [];
   }
-  const callGateway = options.callGateway ?? callInProcessGatewayTool;
-  const callGatewayRequest = options.callGatewayRequest ?? callAgentToolGatewayRequest;
   return [
     {
       label: "Portal",
@@ -95,8 +88,8 @@ export function createAvailablePortalTools(
           // caller that can mint the same portal through action=open; ask with the
           // write authority this tool already requires so the listing stays usable.
           const result = target
-            ? await callGateway<PortalListResult>("portal.session.list", environment)
-            : await callGatewayRequest<PortalListResult>({
+            ? await callInProcessGatewayTool<PortalListResult>("portal.session.list", environment)
+            : await callAgentToolGatewayRequest<PortalListResult>({
                 method: "portal.list",
                 params: environment,
                 scopes: [PORTAL_URL_SCOPE],
@@ -106,7 +99,7 @@ export function createAvailablePortalTools(
         }
         if (action === "close") {
           const id = readToolStringParam(params, "id", { required: true });
-          const result = await callGateway<PortalCloseResult>(
+          const result = await callInProcessGatewayTool<PortalCloseResult>(
             target ? "portal.session.close" : "portal.close",
             { id, ...environment },
           );
@@ -129,7 +122,7 @@ export function createAvailablePortalTools(
         if (path !== undefined && !path.startsWith("/")) {
           throw new ToolInputError("path must start with /");
         }
-        const portal = await callGateway<PortalSummary>(
+        const portal = await callInProcessGatewayTool<PortalSummary>(
           target ? "portal.session.open" : "portal.open",
           {
             ...environment,

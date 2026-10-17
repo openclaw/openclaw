@@ -505,7 +505,8 @@ process.on("message", (message) => {
   );
 });
 
-it.runIf(process.platform === "linux")(
+// Detached leases intentionally refuse root-owned worker sessions.
+it.runIf(process.platform === "linux" && process.getuid?.() !== 0)(
   "preserves an older Gateway's detached lease on the new node-host command route",
   async () => {
     const f = fixture();

@@ -1,4 +1,5 @@
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -7,6 +8,18 @@ import {
   resolveUpdateAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
+
+/** The selected channel owns notification eligibility, not stale target metadata. */
+export function isReleaseUpdateAvailable(
+  updateAvailable: UpdateAvailable | null | undefined,
+  updateSchedule: UpdateScheduleState | null | undefined,
+): boolean {
+  const channel = updateSchedule?.channel ?? updateAvailable?.channel;
+  return (
+    (channel === "stable" || channel === "beta") &&
+    isUpdateActionable(updateAvailable, updateSchedule, false)
+  );
+}
 
 export function isUpdateRunAttentionVisible(
   run: UpdateRunRecord | null,
@@ -43,7 +56,8 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
-  const actionable = isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy);
+  const actionable =
+    busy || isReleaseUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
   if (
     !(
       runVisible ||

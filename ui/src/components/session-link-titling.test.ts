@@ -76,7 +76,7 @@ describe("SessionLinkTitler", () => {
       expect(label.textContent).toBe("Cached research");
       expect(label.querySelector(":scope > .session-label")?.textContent).toBe("Cached research");
       expect(label.classList.contains("markdown-session-link--titled")).toBe(true);
-      expect(label.title).toBe(SESSION_KEY);
+      expect(label.hasAttribute("title")).toBe(false);
       expect(label.getAttribute("href")).toBe(labelOnly ? null : "/chat/main/research");
       expect(label.parentElement).toBe(host);
       expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(!labelOnly);
@@ -198,11 +198,12 @@ describe("SessionLinkTitler", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it("retires a retained URL title when the replacement roster cannot resolve it", async () => {
+  it("retires a retained URL title when the replacement Gateway cannot resolve it", async () => {
     const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
-    const { host, titler, request } = createTitler([
-      { key, kind: "direct", displayName: "Previous Gateway", updatedAt: Date.now() },
-    ]);
+    const { host, titler, request } = createTitler(
+      [{ key, kind: "direct", displayName: "Previous Gateway", updatedAt: Date.now() }],
+      vi.fn().mockResolvedValue({ ok: false }),
+    );
     host.innerHTML = toSanitizedMarkdownHtml(
       "[Contract](/chat/main/d0effac9?view=details#latest)",
       {
@@ -223,7 +224,87 @@ describe("SessionLinkTitler", () => {
     expect(link.hasAttribute("title")).toBe(false);
     expect(link.dataset.sessionKey).toBeUndefined();
     expect(link.getAttribute("href")).toBe("/chat/main/d0effac9?view=details#latest");
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
+      shortId: "d0effac9",
+      agentId: "main",
+      allowMissing: true,
+    });
+  });
+
+  it.each([
+    {
+      kind: "full-key URL",
+      markdown: "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`",
+      params: {
+        reference: { key: "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6" },
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: true,
+        allowMissing: true,
+      },
+      displayName: "Peter's plan",
+    },
+    {
+      kind: "short URL",
+      markdown: "[Plan](/chat/main/d0effac9?view=details)",
+      params: { shortId: "d0effac9", agentId: "main", allowMissing: true },
+      displayName: undefined,
+    },
+  ])("titles a $kind outside the loaded roster", async ({ markdown, params, displayName }) => {
+    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.resolve"
+        ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
+        : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
+    );
+    const { host, titler } = createTitler([], request);
+    titler.context = {
+      ...sessionContext(),
+      runtimeConfig: {
+        state: {
+          configSnapshot: { runtimeConfig: { gateway: { publicOrigin: "https://chat.example" } } },
+        },
+      },
+    } as unknown as ApplicationContext;
+    host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true });
+    titler.refresh();
+    await vi.runAllTimersAsync();
+
+    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    expect(link.textContent).toBe(displayName ?? "Derived plan");
+    expect(link.dataset.sessionKey).toBe(key);
+    expect(link.hasAttribute("title")).toBe(false);
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
+    expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(host, { attributes: true, childList: true, subtree: true });
+    titler.refresh();
+    await vi.runAllTimersAsync();
+    expect(observer.takeRecords()).toEqual([]);
+    observer.disconnect();
+    expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+  });
+
+  it("leaves ambiguous short URLs plain", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      candidates: [
+        { key: "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6", agentId: "main" },
+        { key: "agent:main:dashboard:d0effac9-4322-4641-b993-10f619f124e6", agentId: "main" },
+      ],
+    });
+    const { host, titler } = createTitler([], request);
+    host.innerHTML = toSanitizedMarkdownHtml("[Plan](/chat/main/d0effac9)", { sessionLinks: true });
+    titler.refresh();
+    await vi.runAllTimersAsync();
+    titler.refresh();
+    await vi.runAllTimersAsync();
+
+    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    expect(link.textContent).toBe("Plan");
+    expect(link.dataset.sessionKey).toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -257,7 +338,7 @@ describe("SessionLinkTitler", () => {
         },
       } as unknown as ApplicationContext;
       host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
-      await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!, true);
+      await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!);
       expect(request).not.toHaveBeenCalled();
       rows.push(row);
       titler.connect();
@@ -265,7 +346,7 @@ describe("SessionLinkTitler", () => {
       const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.dataset.sessionKey).toBe(key);
       expect(link?.textContent).toBe("Shared contract");
-      expect(link?.title).toBe(key);
+      expect(link?.hasAttribute("title")).toBe(false);
       expect(link?.getAttribute("href")).toMatch(
         /^\/chat\/main\/(?:.*d0effac9|shared-contract)\?view=details#latest$/,
       );
@@ -278,7 +359,7 @@ describe("SessionLinkTitler", () => {
   it("resolves newly loaded and ambiguous references without mutating unchanged links", () => {
     const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
     const rows: GatewaySessionRow[] = [];
-    const { host, titler, request } = createTitler(rows);
+    const { host, titler, request } = createTitler(rows, vi.fn().mockResolvedValue({ ok: false }));
     host.innerHTML = toSanitizedMarkdownHtml(
       "[First](/chat/main/d0effac9?view=details#first) " +
         "[Second](/chat/main/d0effac9?view=details#second) " +
@@ -318,7 +399,8 @@ describe("SessionLinkTitler", () => {
       rows.pop();
       titler.refresh();
       expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
-      expect(request).not.toHaveBeenCalled();
+      // Roster-resolved links never need a title request.
+      expect(request).not.toHaveBeenCalledWith("controlUi.sessionPreview", expect.anything());
     } finally {
       observer.disconnect();
     }

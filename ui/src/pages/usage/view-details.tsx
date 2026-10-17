@@ -91,7 +91,10 @@ export function SessionDetailPanel(props: {
     const usage = session.usage;
     const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
 
-    const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
+    const hasRange =
+      detail.timeSeries?.usageReport?.state !== "unavailable" &&
+      timeSeriesCursorStart !== null &&
+      timeSeriesCursorEnd !== null;
     const filteredUsage =
       hasRange && detail.timeSeries?.points && usage
         ? computeFilteredUsage(
@@ -142,12 +145,23 @@ export function SessionDetailPanel(props: {
           {props.session.usage ? (
             <>
               <span>
-                <strong>{formatUsageTokens(state().headerStats.totalTokens)}</strong>{" "}
+                <strong>
+                  {formatUsageTokens(
+                    state().headerStats.totalTokens,
+                    props.session.usage?.usageReport,
+                  )}
+                </strong>{" "}
                 {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
                 {state().cursorIndicator}
               </span>
               <span>
-                <strong>{formatUsageCost(state().headerStats.totalCost)}</strong>
+                <strong>
+                  {formatUsageCost(
+                    state().headerStats.totalCost,
+                    2,
+                    props.session.usage?.usageReport,
+                  )}
+                </strong>
                 {state().cursorIndicator}
               </span>
             </>
@@ -300,7 +314,10 @@ function LoadedContextPanel(props: {
       ...groups,
     ];
     const totalContextTokens = categories.reduce((sum, { tokens }) => sum + tokens, 0);
-    const inputTokens = usage && usage.totalTokens > 0 ? usage.input + usage.cacheRead : 0;
+    const inputTokens =
+      usage && usage.usageReport?.state !== "unavailable" && usage.totalTokens > 0
+        ? usage.input + usage.cacheRead
+        : 0;
     const contextDescription =
       inputTokens > 0
         ? `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% ${t("usage.details.ofInput")}`
@@ -333,7 +350,7 @@ function LoadedContextPanel(props: {
         <For each={state().categories}>
           {({ className, labelKey, tokens }) => (
             <div
-              class={`context-segment ${className}`}
+              class={["context-segment", className]}
               style={{ width: `${pct(tokens, state().totalContextTokens).toFixed(1)}%` }}
               title={`${t(labelKey)}: ~${formatUsageTokens(tokens)}`}
             />
@@ -344,7 +361,7 @@ function LoadedContextPanel(props: {
         <For each={state().categories}>
           {({ className, labelKey, tokens }) => (
             <span class="legend-item">
-              <span class={`legend-dot ${className}`} />
+              <span class={["legend-dot", className]} />
               {t(className === "system" ? "usage.details.systemShort" : labelKey)} ~
               {formatUsageTokens(tokens)}
             </span>
@@ -585,7 +602,6 @@ function SessionLogs(props: {
             <For each={state().filteredEntries}>
               {(entry) => {
                 const { log, toolInfo, cleanContent } = entry;
-                const roleClass = log.role === "user" ? "user" : "assistant";
                 const roleLabel = () =>
                   log.role === "user"
                     ? t("usage.details.you")
@@ -593,7 +609,7 @@ function SessionLogs(props: {
                       ? t("usage.overview.assistant")
                       : t("usage.details.tool");
                 return (
-                  <div class={`session-log-entry ${roleClass}`}>
+                  <div class={["session-log-entry", log.role === "user" ? "user" : "assistant"]}>
                     <div class="session-log-meta">
                       <span class="session-log-role">{roleLabel()}</span>
                       <span>{state().formatLogTimestamp(log.timestamp)}</span>

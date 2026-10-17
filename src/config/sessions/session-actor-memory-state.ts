@@ -89,9 +89,9 @@ export function resolveSessionActorMemoryWindow(
   state: SessionActorMemoryState,
   sessionId?: string,
 ): SessionActorMemoryWindow | undefined {
-  return sessionId === undefined || !state.hot.entry || sessionId === state.hot.entry.sessionId
+  return sessionId === undefined || sessionId === state.hot.entry?.sessionId
     ? state
-    : state.historicalWindows.get(sessionId);
+    : (state.historicalWindows.get(sessionId) ?? (state.hot.entry ? undefined : state));
 }
 
 /** Copy current metadata and row collections, retaining immutable historical windows. */

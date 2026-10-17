@@ -1,14 +1,17 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveContextTokens } from "./model-selection-context.js";
 import type { FollowupRun } from "./queue.js";
 
 type FollowupRuntimeParams = {
@@ -76,19 +79,62 @@ export function followupOwnsNativeCompaction(
 }
 
 export function resolveFollowupContextTokens(
-  { cfg, followupRun, defaultModel }: FollowupRuntimeParams & { defaultModel: string },
+  {
+    cfg,
+    followupRun,
+    defaultModel,
+    sessionEntry,
+  }: FollowupRuntimeParams & {
+    defaultModel: string;
+    sessionEntry?: SessionEntry;
+  },
   runtimeId: string,
 ): number {
   const { provider } = followupRun.run;
   const model = followupRun.run.model ?? defaultModel;
-  const catalogModel = findModelInCatalog(followupRun.run.thinkingCatalog ?? [], provider, model);
-  return resolveContextTokens({
+  const catalogModel = findModelInCatalog(
+    (followupRun.run.thinkingCatalog ?? []).filter((entry) =>
+      runtimeId === "openclaw" ? !entry.nativeRuntime : entry.nativeRuntime === runtimeId,
+    ),
+    provider,
+    model,
+  );
+  const matchingSessionEntry =
+    sessionEntry?.sessionId === followupRun.run.sessionId ? sessionEntry : undefined;
+  const profile = resolveModelContextWindowProfile({
+    catalogEntry: catalogModel,
+    selected: matchingSessionEntry?.contextWindow,
+  });
+  const projection = resolveModelContextTokenProjection({
     cfg,
     provider: resolveContextConfigProviderForRuntime({ provider, runtimeId, config: cfg }),
+    modelProvider: provider,
     model,
-    modelContextWindow: catalogModel?.contextWindow,
+    modelContextWindow:
+      profile.contextWindow || catalogModel?.contextWindowSource !== "synthetic"
+        ? profile.contextTokens
+        : undefined,
     modelContextTokens: catalogModel?.contextTokens,
+    fallbackContextTokens: catalogModel?.contextWindow,
+    allowAsyncLoad: false,
+    // Maintenance consumes this run's admitted catalog, never another route's cache.
+    allowCacheLookup: false,
   });
+  const projected =
+    resolveProjectedSessionContextTokens({
+      entry:
+        matchingSessionEntry?.authProfileOverride === followupRun.run.authProfileId
+          ? matchingSessionEntry
+          : undefined,
+      provider,
+      model,
+      agentHarnessId: runtimeId,
+      authoredContextTokens: projection.authoredContextTokens,
+      resolvedContextTokens: projection.contextTokens,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
+  return profile.contextWindow && profile.contextTokens
+    ? Math.min(projected, profile.contextTokens)
+    : projected;
 }
 
 export async function defersTokenCompactionToChatGPTBoundary(

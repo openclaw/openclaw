@@ -43,7 +43,7 @@ import {
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-/** @deprecated Use PersonalGitHubSessionActionV2; removed in the next Plugin SDK major. */
+/** @deprecated Use PersonalGitHubSessionActionV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   sessionId: string;
   sessionKey: string;
@@ -53,7 +53,11 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
 export type PersonalGitHubSessionActionV2 = PersonalGitHubSessionAction &
   Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource">;
 type Selection = { generation: string; account: { accountId: number; login: string } };
-type PersonalPublicationWorkspace = { assertCurrent: () => void; assertCustody: () => void };
+type PersonalPublicationWorkspace = {
+  assertCurrent: () => void;
+  assertCustody: () => void;
+  worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"];
+};
 
 export {
   preparePersonalRepositoryPublicationStatus,
@@ -99,12 +103,12 @@ export async function bindPersonalGitHubPublicationSelection(
   let prepared = await prepareUserGitHubConnection(action.owner).catch(rejectRevokedConnection);
   const assertCurrent = () => {
     action.assertCurrent();
+    let record: ReturnType<typeof prepared.read>;
     try {
-      prepared.assertCurrent();
+      record = prepared.read();
     } catch (error) {
       rejectRevokedConnection(error);
     }
-    const record = prepared.connection;
     if (
       record?.generation !== selected.generation ||
       record.selection.kind !== "connected" ||
@@ -142,7 +146,9 @@ export async function preparePersonalGitHubPublicationSelection(
   assertCurrent();
   try {
     await requestCurrentPersonalGitHubRefresh(bound.owner);
+    await bound.refresh();
   } catch {
+    await bound.refresh();
     assertCurrent();
     throw new Error(
       "My GitHub credentials are unavailable; reconnect My GitHub before publishing.",
@@ -196,6 +202,8 @@ export function createPersonalGitHubPublicationCoordinator(
     action.assertCurrent();
     return await placements.withLocalWorkspaceReservation(action, async (assertReservation) => {
       const worktreeOwner = await readGitHubPublicationWorktreeOwner(action);
+      using _ = { [Symbol.dispose]: () => worktreeOwner.release() };
+
       const { worktree } = worktreeOwner;
       action.assertCurrent();
       assertReservation();
@@ -218,7 +226,7 @@ export function createPersonalGitHubPublicationCoordinator(
       };
       try {
         assertCurrent();
-        return await run({ assertCurrent, assertCustody });
+        return await run({ assertCurrent, assertCustody, worktree });
       } finally {
         await lease.release();
       }
@@ -348,7 +356,7 @@ export function createPersonalGitHubPublicationCoordinator(
           workspace.assertCurrent();
           bound.assertCurrent();
         };
-        const { worktree } = await readGitHubPublicationWorktreeOwner(action);
+        const { worktree } = workspace;
         assertCurrent();
         const identity = await preparePersonalGitHubPublicationSelection(
           bound,
@@ -488,7 +496,7 @@ export function createPersonalGitHubPublicationCoordinator(
   };
   return {
     ...methods,
-    /** @deprecated Await personalStatusAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Await personalStatusAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     personalStatus(
       _action: PersonalGitHubAction,
       _session: SessionIdentity & { archivedAt?: number | null },
@@ -502,7 +510,7 @@ export function createPersonalGitHubPublicationCoordinator(
       });
       throw new Error("GitHub publication requires awaiting personalStatusAsync.");
     },
-    /** @deprecated Use requestPersonalForSessionV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use requestPersonalForSessionV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     async requestPersonalForSession(
       _input: SessionGitHubPublishParams,
       _action: PersonalGitHubSessionAction,
@@ -517,7 +525,7 @@ export function createPersonalGitHubPublicationCoordinator(
         "GitHub publication requires requestPersonalForSessionV2 with a host-prepared V2 action.",
       );
     },
-    /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
+    /** @deprecated Use confirmPersonalV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     async confirmPersonal(
       _input: SessionGitHubConfirmParams,
       _action: PersonalGitHubSessionAction,

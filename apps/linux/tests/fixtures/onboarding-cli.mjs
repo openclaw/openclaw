@@ -28,7 +28,8 @@ if (args[0] === "gateway" && args[1] === "install") {
     console.error(readFileSync(failure, "utf8"));
     process.exit(1);
   }
-  writeFileSync(installed, JSON.stringify({ bun: process.execPath }));
+  writeFileSync(path.join(prefix, "openclaw.json"), JSON.stringify({ gateway: { mode: "local" } }));
+  writeFileSync(installed, JSON.stringify({ bun: process.execPath, entry: process.argv[1] }));
   reply({ ok: true });
 } else if (args[0] === "gateway" && args[1] === "status" && args.includes("--deep")) {
   assert.deepEqual(args.slice(0, 4), ["gateway", "status", "--deep", "--json"]);

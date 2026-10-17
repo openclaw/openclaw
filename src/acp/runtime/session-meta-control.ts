@@ -1,19 +1,10 @@
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import {
-  captureIncognitoSessionOperation,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
-import {
-  matchesAcpSessionRuntimeLocator,
-  resolveAcpSessionControlOwner,
-} from "./session-control-owner.js";
+import { resolveAcpSessionControlOwner } from "./session-control-owner.js";
 import type {
   AcpSessionRuntimeLocator,
   AcpSessionControlConstraint,
@@ -27,7 +18,6 @@ import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { prepareMemoryAcpSessionControlRead } from "./session-meta-memory-control.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { withAcpSessionEntryRead } from "./session-meta-read.js";
-import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp, type AcpSessionStoreEntry } from "./session-meta-store.js";
 
 type AcpSessionControlReadResult = {
@@ -43,47 +33,27 @@ type AcpSessionControlReadParams = {
   assertCurrent?: () => void;
 };
 
-/** Retain source custody; each effect gets a fresh metadata join, never a presence cache. */
-export function prepareAcpSessionControlRead(params: AcpSessionControlReadParams) {
-  const memory = getSessionActorStorageBinding({ ...params, sessionKey: params.sessionKey.trim() });
-  if (memory) {
-    return prepareMemoryAcpSessionControlRead(params, memory);
-  }
-  const binding = captureIncognitoSessionOperation(params);
-  if (!binding) {
-    return prepareAcpSessionControlReadOwned(params);
-  }
-  return binding.actor.sessions.withSharedState(async () => {
-    const released = createDeferredCore();
-    void binding.actor.sessions.withSharedState(() => released.promise);
-    try {
-      const prepared = await withIncognitoSessionBinding(binding, () =>
-        prepareAcpSessionControlReadOwned(params),
-      );
-      return {
-        ...prepared,
-        readCurrent: (cfg: OpenClawConfig) =>
-          withIncognitoSessionBinding(binding, () => prepared.readCurrent(cfg)),
-        release() {
-          try {
-            prepared.release();
-          } finally {
-            released.resolve();
-          }
-        },
-      };
-    } catch (error) {
-      released.resolve();
-      throw error;
-    }
-  });
+type PreparedAcpSessionControlRead = {
+  initialRead: AcpSessionControlReadResult;
+  readCurrent(cfg: OpenClawConfig): Promise<AcpSessionControlReadResult>;
+  assertCurrent(cfg: OpenClawConfig): void;
+  assertAcpCurrent?(cfg: OpenClawConfig, runtimeLocator?: AcpSessionRuntimeLocator): void;
+  release(): void;
+};
+
+/** Retain source custody; each effect gets the session and shared metadata owners. */
+export function prepareAcpSessionControlRead(
+  params: AcpSessionControlReadParams,
+): Promise<PreparedAcpSessionControlRead> {
+  return isIncognitoSessionKey(params.sessionKey.trim())
+    ? prepareMemoryAcpSessionControlRead(params)
+    : prepareAcpSessionControlReadOwned(params);
 }
 
 async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadParams) {
   const captured = await captureAcpSessionReadContext(params);
   const target = resolveSessionStorePathForAcp({ ...params, ...captured });
   const databasePath = resolveOpenClawStateSqlitePath(captured.env);
-  const incognito = isIncognitoSessionKey(target.storeSessionKey);
   const shared = captureOpenClawStateReadContext(databasePath);
   const { prepareSessionMutationFacts, SessionMutationFactsUnavailableError } =
     await import("../../gateway/session-sharing-preparation.js");
@@ -196,7 +166,7 @@ async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadPa
       ownerKey,
     };
     let constraint: AcpSessionControlConstraint | undefined;
-    if (!incognito && source) {
+    if (source) {
       constraint = {
         source,
         sharedSource: { path: databasePath, identity: { ...shared.admission.identity } },
@@ -213,7 +183,7 @@ async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadPa
   };
   try {
     const prepared = facts.readCurrent(params.cfg);
-    if (!incognito && prepared.sourcePath && prepared.sourceAgentId) {
+    if (prepared.sourcePath && prepared.sourceAgentId) {
       source = {
         agentId: prepared.sourceAgentId,
         path: prepared.sourcePath,
@@ -227,32 +197,6 @@ async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadPa
       assertCurrent: (cfg: OpenClawConfig) => {
         assertCurrent(cfg);
       },
-      // Incognito's retained native admission must still join the separate global ACP row.
-      ...(incognito
-        ? {
-            assertNativeAcpCurrent(cfg: OpenClawConfig, runtimeLocator?: AcpSessionRuntimeLocator) {
-              const current = assertCurrent(cfg);
-              const acp = readAcpSessionMetaForEntry(
-                {
-                  cfg,
-                  sessionKey: target.storeSessionKey,
-                  agentId: target.agentId,
-                  entry: current.target?.entry,
-                  env: captured.env,
-                  databasePath,
-                },
-                { current: true },
-              );
-              assertCurrent(cfg);
-              if (
-                !acp ||
-                (runtimeLocator && !matchesAcpSessionRuntimeLocator(acp, runtimeLocator))
-              ) {
-                throw new SessionMutationFactsUnavailableError();
-              }
-            },
-          }
-        : {}),
       release,
     };
   } catch (error) {

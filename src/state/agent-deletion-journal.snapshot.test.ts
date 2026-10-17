@@ -9,6 +9,7 @@ import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
@@ -56,6 +57,15 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
         ?.retainedDeletions,
     ).toEqual({ status: "empty" });
     runOpenClawStateWriteTransaction((database) => {
+      database.db
+        .prepare("UPDATE agent_deletion_journal SET database_paths_json = '[1]' WHERE agent_id = ?")
+        .run("retired");
+    }, options);
+    expect(
+      (await prepareAgentDatabaseDeletionSnapshotRead(options, "runtime-discovery").read()).snapshot
+        ?.retainedDeletions,
+    ).toMatchObject({ status: "present", entries: [{ agentId: "retired" }], held: [] });
+    runOpenClawStateWriteTransaction((database) => {
       expect(
         updateAgentDeletionJournalPathsInDatabase(
           database,
@@ -65,8 +75,10 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
           [survivor.path],
         ),
       ).toBe(true);
-      const reads = trackSqliteStatementExecutions(database.db, ["journal"], (sql) =>
-        /^select\b.*from "agent_deletion_journal"/iu.test(sql) ? "journal" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["journal"],
+        (sql) => (/^select\b.*from "agent_deletion_journal"/iu.test(sql) ? "journal" : null),
       );
       try {
         expect(completeAgentDeletionJournalInDatabase(database, "retired", "retained-owner")).toBe(
@@ -236,7 +248,7 @@ it("keeps absent discovery conservative until its first canonical creation", asy
   });
 });
 
-it.each(["runtime", "maintenance"] as const)(
+it.each(["runtime", "runtime-discovery", "maintenance"] as const)(
   "keeps reconstructed deletion holds with their %s purpose through the native snapshot",
   async (purpose) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

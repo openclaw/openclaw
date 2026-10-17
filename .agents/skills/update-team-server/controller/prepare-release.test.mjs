@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,64 @@ const source = readFileSync(new URL("./openclaw-release-deploy", import.meta.url
 const operation = source.match(/^prepare_release\(\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(operation);
 const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+
+test("sealing persists only its tree, retains modes and links, and refuses failed fsyncs", t => {
+  const root = mkdtempSync(join(tmpdir(), "team-seal-"));
+  t.after(() => {
+    spawnSync("chmod", ["-R", "u+w", root]);
+    rmSync(root, { recursive: true, force: true });
+  });
+  const release = join(root, "release"), bin = join(root, "bin");
+  mkdirSync(join(release, "nested"), { recursive: true });
+  mkdirSync(bin);
+  const file = join(release, "nested/data"), executable = join(release, "run");
+  writeFileSync(file, "release content\n");
+  writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+  symlinkSync("nested/data", join(release, "link"));
+  writeFileSync(join(bin, "sync"), "#!/bin/sh\nexit 74\n", { mode: 0o755 });
+  const args = [new URL("./release-lib.mjs", import.meta.url).pathname, "seal-tree", release];
+  const sealed = spawnSync(process.execPath, args, {
+    encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  });
+  assert.equal(sealed.status, 0, "unrelated filesystem flushes must not gate sealing: " + sealed.stderr);
+  const trace = join(root, "fsyncs"), preload = join(root, "fsync.mjs");
+  writeFileSync(preload, `
+    import fs from "node:fs/promises";
+    import { appendFileSync } from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const open = fs.open;
+    fs.open = async (...args) => {
+      const handle = await open(...args), sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        if (args[0] === process.env.FAIL_FSYNC) throw new Error("fixture fsync failure");
+        await sync();
+        appendFileSync(${JSON.stringify(trace)}, args[0] + "\\n");
+      };
+      return handle;
+    };
+    syncBuiltinESMExports();
+  `);
+  for (const pathname of [file, join(release, "nested")]) {
+    const failed = spawnSync(process.execPath, ["--import", preload, ...args], {
+      encoding: "utf8", env: { ...process.env, FAIL_FSYNC: pathname },
+    });
+    assert.notEqual(failed.status, 0, "file and directory fsync failures must refuse sealing");
+    assert.match(failed.stderr, /fixture fsync failure/);
+  }
+  writeFileSync(trace, "");
+  const retried = spawnSync(process.execPath, ["--import", preload, ...args], { encoding: "utf8" });
+  assert.equal(retried.status, 0, retried.stderr);
+  const persisted = readFileSync(trace, "utf8").trim().split("\n");
+  assert.deepEqual(new Set(persisted), new Set([file, executable, release, join(release, "nested")]));
+  assert.ok(persisted.indexOf(file) < persisted.indexOf(release), "file data precedes directory persistence");
+  for (const directory of [release, join(release, "nested")]) {
+    assert.equal(statSync(directory).mode & 0o777, 0o555);
+  }
+  assert.equal(statSync(file).mode & 0o777, 0o444);
+  assert.equal(statSync(executable).mode & 0o777, 0o555);
+  assert.equal(readFileSync(file, "utf8"), "release content\n");
+  assert.equal(readlinkSync(join(release, "link")), "nested/data");
+});
 
 test("publishes standalone exact-commit releases with an inode-independent reusable package store", t => {
   const root = mkdtempSync(join(tmpdir(), "team-publish-build-"));
@@ -50,6 +108,7 @@ test("publishes standalone exact-commit releases with an inode-independent reusa
     fs.mkdirSync('dist/control-ui/assets', {recursive:true});
     for (const name of ['.buildstamp', '.runtime-postbuildstamp']) fs.writeFileSync('dist/'+name, JSON.stringify({head}));
     fs.writeFileSync('dist/build-info.json', JSON.stringify({commit:head, buildId:head}));
+    fs.writeFileSync('dist/build-cache-inputs.json', JSON.stringify({version:1, steps:{'fixture-runtime':'a'.repeat(64)}}));
     fs.writeFileSync('dist/index.js', 'fixture();');
     fs.writeFileSync('dist/control-ui/index.html', '<script src="./assets/app.js"></script>');
     fs.writeFileSync('dist/control-ui/assets/app.js', 'fixture();');
@@ -97,6 +156,15 @@ publish_release "$1" "$mirror"
 `;
   run("bash", ["-c", program, "publish", target]);
   const release = join(serving, "releases", target);
+  assert.deepEqual(JSON.parse(readFileSync(join(release, "deployment.json"), "utf8")).buildCacheInputs,
+    { version: 1, steps: { "fixture-runtime": "a".repeat(64) } });
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "sync"), "#!/bin/sh\nexit 74\n", { mode: 0o755 });
+  const originalPath = env.PATH;
+  env.PATH = `${bin}:${originalPath}`;
+  run("bash", ["-c", program, "publish", target]);
+  env.PATH = originalPath;
   assert.equal(run("git", ["rev-parse", "HEAD"], release), target);
   assert.equal(run("git", ["remote", "get-url", "origin"], release), "https://github.com/openclaw/openclaw.git");
   assert.notEqual(spawnSync("git", ["cat-file", "-e", retiredBlob], { cwd: release }).status, 0,

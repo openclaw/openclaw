@@ -4,9 +4,9 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import {
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
-  resolveNodeExecEligibility,
   resolveNodeExecEligibilityAsync,
 } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityLegacy } from "../../agents/exec-defaults.legacy.js";
 import {
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
@@ -47,7 +47,7 @@ type WorkspaceSkillCommandParams = {
 
 function resolveWorkspaceSkillCommandOptions(
   params: WorkspaceSkillCommandParams,
-  nodeSkills: ReturnType<typeof resolveNodeExecEligibility>,
+  nodeSkills: ReturnType<typeof resolveNodeExecEligibilityLegacy>,
 ) {
   const eligibility = {
     nodeSkills,
@@ -77,7 +77,7 @@ function hasRemoteWorkspace(workspaceDir: string): boolean {
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForWorkspace; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForWorkspace; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
 ): SkillCommandSpec[] {
@@ -87,7 +87,7 @@ export function listSkillCommandsForWorkspace(
     replacement: "prepareSkillCommandsForWorkspace",
   });
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
-    ...resolveWorkspaceSkillCommandOptions(params, resolveNodeExecEligibility(params)),
+    ...resolveWorkspaceSkillCommandOptions(params, resolveNodeExecEligibilityLegacy(params)),
     reservedNames: listReservedChatSlashCommandNames(),
     gatewayOnly: hasRemoteWorkspace(params.workspaceDir),
   });
@@ -223,7 +223,7 @@ function appendSkillCommands(
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForAgents; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForAgents; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
   warnPluginSdkDeprecation({
     family: "skill-command-discovery",
@@ -243,7 +243,7 @@ export function listSkillCommandsForAgents(params: AgentSkillCommandParams): Ski
       buildWorkspaceSkillCommandSpecs(workspaceDir, {
         ...resolveWorkspaceSkillCommandOptions(
           workspaceParams,
-          resolveNodeExecEligibility(workspaceParams),
+          resolveNodeExecEligibilityLegacy(workspaceParams),
         ),
         gatewayOnly,
         reservedNames: used,

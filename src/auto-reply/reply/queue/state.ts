@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
+import {
+  resolveConfiguredThinkingDefault,
+  resolveThinkingSelection,
+} from "../../../agents/model-thinking-default.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
@@ -110,6 +113,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
       if (source) {
+        source.onQueueDisposition?.("queue-cap-old");
         completeFollowupRunLifecycle(source);
       }
       if (entry.sources.length === 0) {
@@ -240,8 +244,7 @@ export function refreshQueuedFollowupSession(params: {
     Boolean(params.previousSessionId) &&
     Boolean(params.nextSessionId) &&
     params.previousSessionId !== params.nextSessionId;
-  const hasNextModelRoute =
-    typeof params.nextProvider === "string" || typeof params.nextModel === "string";
+  const hasNextModelRoute = params.nextProvider !== undefined || params.nextModel !== undefined;
   const shouldRewriteModelSelection =
     hasNextModelRoute || Object.hasOwn(params, "nextModelOverrideSource");
   const shouldRewriteSelection =
@@ -262,10 +265,10 @@ export function refreshQueuedFollowupSession(params: {
       }
     }
     if (shouldRewriteSelection) {
-      if (typeof params.nextProvider === "string") {
+      if (params.nextProvider !== undefined) {
         run.provider = params.nextProvider;
       }
-      if (typeof params.nextModel === "string") {
+      if (params.nextModel !== undefined) {
         run.model = params.nextModel;
       }
       if (hasNextModelRoute) {
@@ -292,6 +295,14 @@ export function refreshQueuedFollowupSession(params: {
           run.thinkLevelOverride === "default"
             ? undefined
             : (run.thinkLevelOverride ?? normalizeThinkLevel(params.nextThinking.level));
+        run.thinkingExplicit =
+          explicitLevel !== undefined ||
+          resolveConfiguredThinkingDefault({
+            cfg: run.config,
+            agentId: run.agentId,
+            provider: run.provider,
+            model: run.model,
+          }) !== undefined;
         run.thinkLevel = resolveThinkingSelection({
           cfg: run.config,
           agentId: run.agentId,

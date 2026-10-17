@@ -5,7 +5,10 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import { loadCronStore } from "../cron/store.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import {
   createRegistry,
@@ -187,4 +190,74 @@ it("shares the canonical runtime identity only while the exporter lease is activ
   });
   await handle.stop();
   expect(() => readIdentity?.()).toThrow("no longer active");
+});
+
+it("isolates service deadlines and joins admitted work before retiring its owner", async () => {
+  const clock = createGatewaySchedulerClock(100);
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const registry = createRegistry([]);
+  const contexts = new Map<string, OpenClawPluginServiceContext>();
+  for (const pluginId of ["source-a", "source-b"]) {
+    registry.services.push({
+      pluginId,
+      origin: "bundled",
+      source: "test",
+      id: "events",
+      service: {
+        id: "events",
+        start: (context) => {
+          contexts.set(pluginId, context);
+        },
+      },
+    });
+  }
+  const handle = await startPluginServices({ registry, config: {}, scheduler });
+  handles.add(handle);
+  const first = expectDefined(contexts.get("source-a")?.scheduler, "first source scheduler");
+  const sibling = expectDefined(contexts.get("source-b")?.scheduler, "sibling source scheduler");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const siblingFired = createDeferredCore();
+  let callbackFinished = false;
+  first.schedule({
+    id: "refresh",
+    atMs: 200,
+    run: async () => {
+      entered.resolve();
+      await release.promise;
+      callbackFinished = true;
+    },
+  });
+  sibling.schedule({ id: "refresh", atMs: 200, run: () => siblingFired.resolve() });
+  try {
+    const firing = clock.advanceTo(200);
+    await Promise.all([entered.promise, siblingFired.promise]);
+    const stopping = handle.stop({
+      strict: true,
+      deadlineAtMs: Date.now() + 5_000,
+      pluginIds: new Set(["source-a"]),
+    });
+    expect(first.signal.aborted).toBe(true);
+    expect(sibling.signal.aborted).toBe(false);
+    expect(() => first.schedule({ id: "late", atMs: 300, run: () => {} })).toThrow();
+    let stopFinished = false;
+    void stopping.then(() => {
+      stopFinished = true;
+    });
+    await Promise.resolve();
+    expect(stopFinished).toBe(false);
+    expect(callbackFinished).toBe(false);
+    release.resolve();
+    await stopping;
+    await firing;
+    expect(callbackFinished).toBe(true);
+    const next = createDeferredCore();
+    sibling.schedule({ id: "refresh", atMs: 300, run: () => next.resolve() });
+    await clock.advanceTo(300);
+    await next.promise;
+  } finally {
+    release.resolve();
+    await handle.stop();
+    await scheduler.stop();
+  }
 });

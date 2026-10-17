@@ -1,5 +1,6 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -14,8 +15,10 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -25,7 +28,7 @@ import { sanitizeSystemRunParamsForForwarding } from "../node-invoke-system-run-
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "../worker-environments/placement-turn-claim-events.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -104,6 +107,32 @@ function requestOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
+type ApprovalFixture = Awaited<
+  ReturnType<typeof createPreparedTestApprovalManager<ExecApprovalRequestPayload>>
+>;
+
+function createApproval(test: TestContext, validate = () => true) {
+  return createPreparedTestApprovalManager(test, {
+    validateAgentRuntimeDelegatedAuthority: validate,
+  });
+}
+
+function requestApproval(fixture: ApprovalFixture, opts: GatewayRequestHandlerOptions) {
+  const handler = expectDefined(
+    createExecApprovalHandlers(fixture.manager)["exec.approval.request"],
+    "exec approval request handler",
+  );
+  return waitForApprovalRequested(opts.context, "exec.approval.requested", () =>
+    fixture.track(Promise.resolve(handler(opts))),
+  );
+}
+
+async function pendingRecord(fixture: ApprovalFixture) {
+  const records = await fixture.manager.listPendingRecords();
+  expect(records).toHaveLength(1);
+  return expectDefined(records[0], "registered approval");
+}
+
 describe("exec approval signed agent runtime", () => {
   it.for([false, true])(
     "checks live worker claims without host SQL in a registered approval (revoked: %s)",
@@ -140,32 +169,12 @@ describe("exec approval signed agent runtime", () => {
       await fixture.run(async () => {
         const database = openOpenClawStateDatabase(fixture.databaseOptions);
         const placements = createWorkerSessionPlacementStore({ database });
-        seedAttachedPlacementEnvironment(database, {
+        await advancePlacementFixtureToActive(placements, database, source, {
           environmentId: "worker-approval-environment",
-          sessionId: source.sessionId,
           ownerEpoch: 3,
+          remoteWorkspaceDir: "/workspace/approval",
+          seedEnvironment: "before-dispatch",
         });
-        let placement = await placements.startDispatch(source);
-        for (const [to, patch] of [
-          ["provisioning", { environmentId: "worker-approval-environment" }],
-          ["syncing", { workerBundleHash: "a".repeat(64) }],
-          [
-            "starting",
-            {
-              workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-              remoteWorkspaceDir: "/workspace/approval",
-            },
-          ],
-          ["active", { activeOwnerEpoch: 3 }],
-        ] as const) {
-          placement = await placements.transition({
-            sessionId: source.sessionId,
-            from: placement.state,
-            to,
-            expectedGeneration: placement.generation,
-            patch,
-          });
-        }
         const claim = await placements.claimTurn({
           ...source,
           claimId: "worker-approval-claim",
@@ -214,29 +223,18 @@ describe("exec approval signed agent runtime", () => {
           }
           const options = requestOptions(runtimeIdentity, () => check(runtimeIdentity));
           Object.assign(options.params, { timeoutMs: 60_000 });
-          const handler = createExecApprovalHandlers(fixture.manager)["exec.approval.request"];
-          if (!handler) {
-            throw new Error("exec approval request handler is missing");
-          }
-          const { pending } = await waitForApprovalRequested(
-            options.context,
-            "exec.approval.requested",
-            () => fixture.track(Promise.resolve(handler(options))),
-          );
-          const records = await fixture.manager.listPendingRecords();
-          expect(records).toHaveLength(1);
-          const record = records[0];
-          if (!record) {
-            throw new Error("registered worker approval is missing");
-          }
+
+          const { pending } = await requestApproval(fixture, options);
+          const record = await pendingRecord(fixture);
           if (revoked) {
             await placements.releaseTurn(claim);
           }
           await fixture.manager.resolve(record.id, "allow-once");
           await pending;
           const snapshot = await fixture.manager.getSnapshot(record.id);
-          expect(snapshot?.status).toBe(revoked ? "cancelled" : "allowed");
-          expect(snapshot?.decision).toBe(revoked ? undefined : "allow-once");
+          expect([snapshot?.status, snapshot?.decision]).toEqual(
+            revoked ? ["cancelled", undefined] : ["allowed", "allow-once"],
+          );
           expect(guardCalls.length).toBeGreaterThan(1);
           for (const calls of guardCalls) {
             expect(calls).toEqual([0, 0, 0, 0, 0, 0]);
@@ -281,7 +279,7 @@ describe("exec approval signed agent runtime", () => {
           },
         );
         const hostRegistryReads = trackSqliteStatementExecutions(
-          openOpenClawStateDatabase().db,
+          requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
           ["registryPayload"],
           (sql) =>
             /\bfrom\s+"?subagent_runs\b/iu.test(sql) && /\bpayload_json\b/iu.test(sql)
@@ -300,7 +298,6 @@ describe("exec approval signed agent runtime", () => {
         });
         const { manager } = fixture;
         await fixture.run(async () => {
-          const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
           const opts = requestOptions({ ...identity(false), sessionKey: child });
           const approvalId = "approval-prepared-lineage";
           Object.assign(opts.params, {
@@ -309,7 +306,9 @@ describe("exec approval signed agent runtime", () => {
             requireDeliveryRoute: false,
             suppressDelivery: true,
           });
-          const pending = fixture.track(Promise.resolve(handler(opts)));
+          const pending = fixture.track(
+            Promise.resolve(createExecApprovalHandlers(manager)["exec.approval.request"]!(opts)),
+          );
           try {
             const approval = await Promise.race([
               registered.promise,
@@ -331,15 +330,12 @@ describe("exec approval signed agent runtime", () => {
   });
 
   it("rejects closed authority before creating an exec approval", async (testContext) => {
-    const fixture = await createPreparedTestApprovalManager(testContext, {
-      validateAgentRuntimeDelegatedAuthority: () => false,
-    });
+    const fixture = await createApproval(testContext, () => false);
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const opts = requestOptions(identity(false), () => false);
 
-      await handler(opts);
+      await createExecApprovalHandlers(manager)["exec.approval.request"]!(opts);
 
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
@@ -349,19 +345,18 @@ describe("exec approval signed agent runtime", () => {
   });
 
   it("records an omitted node session before approved replay", async (testContext) => {
-    const fixture = await createPreparedTestApprovalManager(testContext, {
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
+    const fixture = await createApproval(testContext);
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
-      if (!handler) {
-        throw new Error("exec approval request handler is missing");
-      }
       const runtimeIdentity = identity(false);
       const options = requestOptions(runtimeIdentity);
       const command = ["/usr/bin/echo", "ok"];
       const commandText = "/usr/bin/echo ok";
+      const target = {
+        cwd: "/tmp",
+        agentId: runtimeIdentity.agentId,
+        sessionKey: runtimeIdentity.sessionKey,
+      };
       Object.assign(options.params, {
         host: "node",
         nodeId: "node-1",
@@ -381,15 +376,8 @@ describe("exec approval signed agent runtime", () => {
           },
         },
       });
-      const { pending } = await waitForApprovalRequested(
-        options.context,
-        "exec.approval.requested",
-        () => fixture.track(Promise.resolve(handler(options))),
-      );
-      const record = (await manager.listPendingRecords())[0];
-      if (!record) {
-        throw new Error("registered node approval is missing");
-      }
+      const { pending } = await requestApproval(fixture, options);
+      const record = await pendingRecord(fixture);
       await manager.resolve(record.id, "allow-once");
       await pending;
 
@@ -400,9 +388,7 @@ describe("exec approval signed agent runtime", () => {
           approved: true,
           command,
           rawCommand: commandText,
-          cwd: "/tmp",
-          agentId: runtimeIdentity.agentId,
-          sessionKey: runtimeIdentity.sessionKey,
+          ...target,
         },
         client: options.client,
         execApprovalManager: manager,
@@ -410,15 +396,11 @@ describe("exec approval signed agent runtime", () => {
       expect(result).toMatchObject({
         ok: true,
         params: {
-          cwd: "/tmp",
-          agentId: runtimeIdentity.agentId,
-          sessionKey: runtimeIdentity.sessionKey,
+          ...target,
           systemRunPlan: {
             argv: command,
             commandText,
-            cwd: "/tmp",
-            agentId: runtimeIdentity.agentId,
-            sessionKey: runtimeIdentity.sessionKey,
+            ...target,
           },
         },
       });
@@ -426,31 +408,25 @@ describe("exec approval signed agent runtime", () => {
   });
 
   it("sanitizes display-only cwd and resolvedPath in the stored request", async (testContext) => {
-    const fixture = await createPreparedTestApprovalManager(testContext, {
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
+    const fixture = await createApproval(testContext);
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const opts = requestOptions(identity(false));
-      // Bidi override in cwd/resolvedPath can spoof what path reviewers see.
-      (opts.params as Record<string, unknown>).cwd = "/tmp/safe‮evil";
-      (opts.params as Record<string, unknown>).resolvedPath = "/usr/bin/echo​x";
-      // Free-form policy strings must not reach reviewer meta rows: security/ask
-      // are closed enums (arbitrary values null out), host is escape-hardened.
-      (opts.params as Record<string, unknown>).security = "full‮looks-deny";
-      (opts.params as Record<string, unknown>).ask = "always​ish";
-      const { pending } = await waitForApprovalRequested(
-        opts.context,
-        "exec.approval.requested",
-        () => fixture.track(Promise.resolve(handler(opts))),
-      );
-      expect(await manager.listPendingRecords()).toHaveLength(1);
-      const record = (await manager.listPendingRecords())[0]!;
-      expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
-      expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
-      expect(record.request.security).toBeNull();
-      expect(record.request.ask).toBeNull();
+      // Reviewer paths escape invisible characters; policy values remain closed enums.
+      Object.assign(opts.params, {
+        cwd: "/tmp/safe‮evil",
+        resolvedPath: "/usr/bin/echo​x",
+        security: "full‮looks-deny",
+        ask: "always​ish",
+      });
+      const { pending } = await requestApproval(fixture, opts);
+      const record = await pendingRecord(fixture);
+      expect(record.request).toMatchObject({
+        cwd: "/tmp/safe\\u{202E}evil",
+        resolvedPath: "/usr/bin/echo\\u{200B}x",
+        security: null,
+        ask: null,
+      });
       await manager.resolve(record.id, "deny");
       await pending;
     });
@@ -458,20 +434,12 @@ describe("exec approval signed agent runtime", () => {
 
   it("cancels an exec approval when authority closes after the handshake", async (testContext) => {
     let active = true;
-    const fixture = await createPreparedTestApprovalManager(testContext, {
-      validateAgentRuntimeDelegatedAuthority: () => active,
-    });
+    const fixture = await createApproval(testContext, () => active);
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const opts = requestOptions(identity(false), () => active);
-      const { pending } = await waitForApprovalRequested(
-        opts.context,
-        "exec.approval.requested",
-        () => fixture.track(Promise.resolve(handler(opts))),
-      );
-      expect(await manager.listPendingRecords()).toHaveLength(1);
-      const record = (await manager.listPendingRecords())[0]!;
+      const { pending } = await requestApproval(fixture, opts);
+      const record = await pendingRecord(fixture);
       active = false;
 
       await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
@@ -486,23 +454,12 @@ describe("exec approval signed agent runtime", () => {
   ] as const)(
     "uses signed runtime provenance with collection %s",
     async ([_label, enabled], testContext) => {
-      const fixture = await createPreparedTestApprovalManager(testContext, {
-        approvalKind: "exec",
-        validateAgentRuntimeDelegatedAuthority: () => true,
-      });
-      const { manager, databaseOptions: options } = fixture;
+      const fixture = await createApproval(testContext);
+      const { manager, databaseOptions } = fixture;
       await fixture.run(async () => {
-        const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
-        if (!handler) {
-          throw new Error("exec approval request handler is unavailable");
-        }
         const opts = requestOptions(identity(enabled));
 
-        const { pending } = await waitForApprovalRequested(
-          opts.context,
-          "exec.approval.requested",
-          () => fixture.track(Promise.resolve(handler(opts))),
-        );
+        const { pending } = await requestApproval(fixture, opts);
         expect(opts.context.broadcast).toHaveBeenCalled();
         const approvalId = String(
           (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)
@@ -518,12 +475,13 @@ describe("exec approval signed agent runtime", () => {
           turnSourceAccountId: "default",
           turnSourceThreadId: "thread-1",
         });
-        const db = openOpenClawStateDatabase(options).db;
+        const db = openOpenClawStateDatabase(databaseOptions).db;
+        const table = "operator_approval_execution_identities";
         if (enabled) {
           expect(
             db
               .prepare(
-                "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
+                `SELECT approval_id, source_context_id, source_execution_id FROM ${table} WHERE approval_id = ?`,
               )
               .get(approvalId),
           ).toEqual({
@@ -534,10 +492,8 @@ describe("exec approval signed agent runtime", () => {
         } else {
           expect(
             db
-              .prepare(
-                "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approval_execution_identities'",
-              )
-              .get(),
+              .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+              .get(table),
           ).toBeUndefined();
         }
         await manager.resolve(approvalId, "deny");

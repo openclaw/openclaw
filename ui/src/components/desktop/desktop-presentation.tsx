@@ -1,15 +1,11 @@
-import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
-import type { DesktopFullscreenController } from "../fullscreen-controller.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
-import type { DesktopAudio } from "./desktop-audio.ts";
 import { DesktopDocumentView } from "./desktop-document-view.tsx";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
-import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
+import type { DesktopPanelOwner } from "./desktop-panel-owner.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import {
   DesktopPanelRecovery,
@@ -17,50 +13,11 @@ import {
   DesktopPicker,
   DesktopNotice,
   DesktopPanelView,
-  type DesktopSizingOptions,
 } from "./desktop-panel-view.tsx";
 import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
-type DesktopPresentationOptions = {
-  documentMode: boolean;
-  embedded: boolean;
-  workspaceControls: boolean;
-  content: {
-    state: DesktopPanelState;
-    loading: boolean;
-    automaticSource: boolean;
-    hasTarget: boolean;
-    errorText: string | null;
-    noticeText: string | null;
-    availability: Parameters<typeof DesktopNotice>[0]["availability"];
-    picker: Omit<Parameters<typeof DesktopPicker>[0], "loading">;
-    credentials: Parameters<typeof DesktopCredentials>[0];
-    recovery: Omit<Parameters<typeof DesktopPanelRecovery>[0], "inventoryError">;
-  };
-  controlling: boolean;
-  desktopApps: WorkerDesktopAppId[];
-  launchingApp: WorkerDesktopAppId | null;
-  startup: EnvironmentSummary | undefined;
-  sizing: DesktopSizingOptions;
-  mobileKeyboard: DesktopMobileKeyboard;
-  pictureInPicture: DesktopPictureInPicture;
-  audio: DesktopAudio;
-  dockLayout: DockLayoutController<"bottom" | "right">;
-  fullscreenMode: DesktopFullscreenController;
-  onControlToggle: () => void;
-  onTakeControl: () => void;
-  onLaunch: (app: WorkerDesktopAppId) => void;
-  onClose: () => void;
-  onDocumentClose: () => void;
-  focusTarget: () => {
-    basePath: string;
-    source: string | null;
-    control: boolean;
-    workspaceControls: boolean;
-  };
-  onDisconnect: () => void;
-};
+type DesktopPresentationOptions = DesktopPanelOwner["view"];
 
 function PictureInPictureButton(props: {
   controller: DesktopPictureInPicture;
@@ -69,9 +26,9 @@ function PictureInPictureButton(props: {
 }) {
   const label = () =>
     t(
-      props.controller.active
+      props.controller.feedback().active
         ? "desktop.exitPictureInPicture"
-        : props.controller.supported
+        : props.controller.supported()
           ? "desktop.enterPictureInPicture"
           : "desktop.pictureInPictureUnavailable",
     );
@@ -84,9 +41,11 @@ function PictureInPictureButton(props: {
       type="button"
       title={label()}
       aria-label={label()}
-      aria-pressed={props.controller.active ? "true" : "false"}
-      aria-busy={props.controller.pending ? "true" : "false"}
-      disabled={!props.controller.supported || !props.connected || props.controller.pending}
+      aria-pressed={props.controller.feedback().active ? "true" : "false"}
+      aria-busy={props.controller.feedback().pending ? "true" : "false"}
+      disabled={
+        !props.controller.supported() || !props.connected || props.controller.feedback().pending
+      }
       onClick={() => void props.controller.toggle()}
     >
       <svg
@@ -119,11 +78,15 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
       return (
         <>
           <DesktopNotice
-            errorText={props.view.pictureInPicture.errorText ?? props.view.content.errorText}
+            errorText={
+              props.view.pictureInPicture.feedback().errorText ??
+              props.view.fullscreenMode.errorText() ??
+              props.view.content.errorText
+            }
             noticeText={props.view.content.noticeText}
             availability={props.view.content.availability}
           />
-          <DesktopAudioNotice state={props.view.audio.state} />
+          <DesktopAudioNotice state={props.view.audio.state()} />
           {props.view.startup && (
             <DesktopNotice
               errorText={null}
@@ -161,7 +124,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
   );
   const audioControl = () => (
     <DesktopAudioControl
-      state={props.view.audio.state}
+      state={props.view.audio.state()}
       connected={props.view.content.state === "connected"}
       documentMode={props.view.documentMode}
       onToggle={() => props.view.audio.toggle()}
@@ -172,15 +135,13 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
       {props.view.documentMode ? (
         <DesktopDocumentView
           {...content}
+          surfaceRef={props.view.surfaceRef}
           controlling={props.view.controlling}
           sizing={props.view.sizing}
-          keyboardInputValue={props.view.mobileKeyboard.value}
+          keyboard={props.view.mobileKeyboard}
           pictureInPictureControl={pictureInPictureControl()}
           audioControl={audioControl()}
           onControlToggle={props.view.onControlToggle}
-          onKeyboardFocus={(event) => props.view.mobileKeyboard.focus(event)}
-          onKeyboardEvent={(event) => props.view.mobileKeyboard.handleKeyboardEvent(event)}
-          onKeyboardInput={(event) => props.view.mobileKeyboard.handleInput(event)}
           onClose={props.view.onDocumentClose}
         />
       ) : (
@@ -190,14 +151,17 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
           dock={props.view.dockLayout.dock}
           height={props.view.dockLayout.height}
           width={props.view.dockLayout.width}
-          fullscreen={props.view.fullscreenMode.active}
-          renderResizer={() => (
-            <DockResizer
-              controller={props.view.dockLayout}
-              classPrefix="bp"
-              label={t("desktop.resize")}
-            />
-          )}
+          fullscreen={props.view.fullscreenMode.active()}
+          sectionRef={props.view.fullscreenMode.sectionRef}
+          renderResizer={() =>
+            !props.view.fullscreenMode.active() && (
+              <DockResizer
+                controller={props.view.dockLayout}
+                classPrefix="bp"
+                label={t("desktop.resize")}
+              />
+            )
+          }
           renderFullscreenControl={() => (
             <FullscreenButton controller={props.view.fullscreenMode} />
           )}
@@ -214,6 +178,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
           onClose={props.view.onClose}
           content={content}
           connection={{
+            surfaceRef: props.view.surfaceRef,
             get controlling() {
               return props.view.controlling;
             },

@@ -306,19 +306,33 @@ describe("searchSessionTranscripts", () => {
     }
   });
 
-  it("filters hits across 33,000 requested session keys", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
-    await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");
+  it("ignores standalone punctuation and symbol words that the index never stores", async () => {
+    await appendUserMessage("deploy", "agent:main:deploy", "Rollback plan: deploy - staging");
 
-    const all = search("keyword");
-    expect(all.hits).toHaveLength(2);
+    for (const query of [
+      "deploy - staging",
+      "deploy & staging",
+      "deploy -> staging",
+      "deploy \u2192 staging",
+      "deploy \u3001 staging",
+    ]) {
+      expect(
+        search(query).hits.map((hit) => hit.sessionId),
+        query,
+      ).toEqual(["deploy"]);
+    }
+    expect(search("deploy staging \u{1F680}").hits.map((hit) => hit.sessionId)).toEqual(["deploy"]);
+    const prefixHits = search("deploy - stag", { match: "prefix" }).hits;
+    expect(prefixHits.map((hit) => hit.sessionId)).toEqual(["deploy"]);
+    expect(search("deploy missing -").hits).toEqual([]);
+    expect(search("- &").hits).toEqual([]);
+  });
 
-    const sessionKeys = Array.from({ length: 32_999 }, (_, index) => `agent:main:missing-${index}`);
-    sessionKeys.push("agent:main:other");
-    const filtered = search("keyword", { sessionKeys });
-    expect(filtered.hits).toHaveLength(1);
-    expect(filtered.hits[0]?.sessionKey).toBe("agent:main:other");
-    expect(filtered.hits[0]?.sessionId).toBe("session-2");
+  it("keeps symbol words that SQLite indexes as tokens", async () => {
+    await appendUserMessage("lobster", "agent:main:lobster", "deploy \u{1F99E}");
+    await appendUserMessage("plain", "agent:main:plain", "deploy plain");
+
+    expect(search("deploy \u{1F99E}").hits.map((hit) => hit.sessionId)).toEqual(["lobster"]);
   });
 
   it("scopes content reads and bounds snippets while preserving ranked and recent results", async () => {
@@ -335,14 +349,14 @@ describe("searchSessionTranscripts", () => {
       ({ db }) => {
         for (const id of ["permitted", "generation", "dirty", "excluded"]) {
           const insert = createSessionTranscriptFtsInserter(db, id);
-          for (let index = 0; index < 80; index++) {
-            insert({
+          insert(
+            Array.from({ length: 80 }, (_, index) => ({
               messageId: `${id}-${String(index).padStart(3, "0")}`,
-              text: "needle common payload",
+              text: `needle common payload${index < 10 ? "" : ` ${"padding ".repeat(40)}`}${index === 79 ? "sparse" : ""}`,
               role: index % 2 ? "assistant" : "user",
               timestamp: String(Math.floor(index / 4)),
-            });
-          }
+            })),
+          );
         }
         db.prepare(
           "UPDATE session_transcript_index_state SET needs_rebuild=1 WHERE session_id='dirty'",
@@ -383,10 +397,12 @@ describe("searchSessionTranscripts", () => {
     try {
       for (const options of [
         { limit: 3 },
+        { limit: 25 },
         { limit: 25, order: "recent" },
         { limit: 3, sessionId: "permitted", role: "assistant" },
         { limit: 3, sessionId: "permitted", role: "assistant", order: "recent" },
         { limit: 3, query: "need", match: "prefix" },
+        { limit: 25, query: "sparse" },
         { limit: 25, sessionId: "dirty" },
       ] satisfies Partial<SessionTranscriptSearchParams>[]) {
         statements.length = 0;
@@ -400,7 +416,7 @@ describe("searchSessionTranscripts", () => {
         expect(statements).toHaveLength(1);
         const captured = statements[0]!;
         const { db, query, bindings } = captured;
-        const literal = options.match === "prefix" ? '"need"*' : '"needle"';
+        const literal = options.match === "prefix" ? '"need"*' : `"${options.query ?? "needle"}"`;
         // The previous query is the equivalence oracle; it still pays the unbounded snippet cost.
         const baseline = prepare
           .call(
@@ -466,10 +482,15 @@ describe("searchSessionTranscripts", () => {
         const bytecode = prepare.call(db, `EXPLAIN ${query}`).all(...bindings);
         const matchScan = bytecode.find((row) => row.opcode === "VFilter" && row.p4 === "M5")!;
         const firstContent = bytecode.find(
-          (row) => row.opcode === "VColumn" && row.p1 === matchScan.p1,
-        )!;
+          (row) => row.opcode === "VColumn" && row.p1 === matchScan.p1 && Number(row.p2) < 5,
+        );
         const scopeCheck = bytecode.find((row) => row.opcode === "NotFound")!;
-        expect(Number(firstContent.addr)).toBeGreaterThan(Number(scopeCheck.addr));
+        if (options.role || options.order === "recent") {
+          expect(Number(firstContent?.addr)).toBeGreaterThan(Number(scopeCheck.addr));
+        } else {
+          // Ranking rejects losing scores without loading their FTS content columns.
+          expect(firstContent).toBeUndefined();
+        }
       }
     } finally {
       spy.mockRestore();
@@ -700,12 +721,14 @@ describe("searchSessionTranscripts", () => {
         createSessionTranscriptFtsInserter(
           database.db,
           "session-ghost",
-        )({
-          text: "ghost payload",
-          messageId: "m-ghost",
-          role: "user",
-          timestamp: "1",
-        }),
+        )([
+          {
+            text: "ghost payload",
+            messageId: "m-ghost",
+            role: "user",
+            timestamp: "1",
+          },
+        ]),
       { agentId: "main", env: env() },
     );
 

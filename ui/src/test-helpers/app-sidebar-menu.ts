@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import type { SidebarLifecycleState } from "./app-sidebar.ts";
+import { openPicker } from "./select-picker.ts";
 import { waitForFast } from "./wait-for.ts";
 
 type SessionMenuHost = Pick<
@@ -7,7 +8,7 @@ type SessionMenuHost = Pick<
   "querySelector" | "querySelectorAll" | "updateComplete" | "sessionData"
 >;
 
-export function sessionMenuChoice(menu: Element, value: string) {
+export async function sessionMenuChoice(menu: Element, value: string) {
   const [kind, option] = value.split(":");
   const ids: Record<string, string> = {
     grouping: "group",
@@ -16,9 +17,12 @@ export function sessionMenuChoice(menu: Element, value: string) {
     "empty-groups": "empty",
   };
   if (kind !== "status") {
-    return menu.querySelector<HTMLElement>(
-      `#sidebar-sessions-${ids[kind!]} ~ wa-popup [data-value="${option}"]`,
-    );
+    const trigger = menu.querySelector<HTMLElement>(`#sidebar-sessions-${ids[kind!]}`);
+    if (!trigger) {
+      return null;
+    }
+    const picker = await openPicker(trigger);
+    return picker.querySelector<HTMLElement>(`[role="option"][data-value="${option}"]`);
   }
   return menu.querySelector<HTMLInputElement>(
     `#sidebar-sessions-${ids[kind!]} .settings-segmented__input[value="${option}"]`,
@@ -56,33 +60,7 @@ export async function activateSessionMenuValue(sidebar: SessionMenuHost, value: 
     return;
   }
   const menu = await openSessionMenu(sidebar);
-  if (
-    value.startsWith("grouping:") ||
-    value.startsWith("sort:") ||
-    value.startsWith("empty-groups:")
-  ) {
-    const [kind, choice] = value.split(":");
-    const displayIds: Record<string, string> = {
-      grouping: "group",
-      sort: "sort",
-      "empty-groups": "empty",
-    };
-    const id = displayIds[kind!];
-    const selected = choice;
-    menu.querySelector<HTMLButtonElement>(`#sidebar-sessions-${id}`)!.click();
-    await waitForFast(() =>
-      expect(menu.querySelector(`#sidebar-sessions-${id}`)?.getAttribute("aria-expanded")).toBe(
-        "true",
-      ),
-    );
-    const option = [...menu.querySelectorAll<HTMLElement>('[role="option"]')].find(
-      (item) => item.dataset.value === selected,
-    );
-    if (!option) {
-      throw new Error(`Expected session choice ${value}`);
-    }
-    option.click();
-  } else if (value.startsWith("show-")) {
+  if (value.startsWith("show-")) {
     const ids: Record<string, string> = {
       "show-preview": "preview",
       "show-cron": "cron",
@@ -90,7 +68,7 @@ export async function activateSessionMenuValue(sidebar: SessionMenuHost, value: 
     };
     menu.querySelector<HTMLButtonElement>(`#sidebar-sessions-${ids[value]}`)!.click();
   } else {
-    const input = sessionMenuChoice(menu, value);
+    const input = await sessionMenuChoice(menu, value);
     if (!input) {
       throw new Error(`Expected session choice ${value}`);
     }

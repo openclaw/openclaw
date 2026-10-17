@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import {
   getRegistryWorktreeProvisionedChunk,
@@ -278,7 +279,7 @@ describe("managed worktree registry", () => {
     );
     await insertRegistryWorktree(env, record, { provisionedPaths });
     const counter = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase({ env }).db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase({ env }).db),
       ["records"],
       (sql) => (/\bfrom\s+"worktrees"/iu.test(sql) ? "records" : null),
     );
@@ -310,8 +311,8 @@ describe("managed worktree registry", () => {
     `);
     legacy.close();
 
-    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
     const database = openOpenClawStateDatabase({ env }).db;
+    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
     const columns = database.prepare("PRAGMA table_info(worktrees)").all() as Array<{
       name?: unknown;
     }>;

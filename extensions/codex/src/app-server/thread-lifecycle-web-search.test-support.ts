@@ -4,6 +4,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import { threadStartResult } from "./run-attempt-test-harness.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -45,7 +46,11 @@ export function registerThreadWebSearchBindingTests({
     const { client, request } = fixture;
     const policies: Array<{ persistent: boolean | undefined; current: boolean }> = [];
     const start = async () => {
-      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        undefined,
+        { nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params) },
+      );
       let persistentWebSearchAllowed: boolean | undefined;
       let webSearchAllowed = false;
       const tools = await buildDynamicTools({
@@ -131,6 +136,7 @@ export function registerThreadWebSearchBindingTests({
     });
     params.config = { tools: { deny: ["web_search"] } };
     params.toolsAllow = ["message"];
+    params.pluginHarnessToolPolicyScope = "conversation";
     await fixture.endTurn("thread-1");
     const restrictedBinding = await startOrResumeThread({
       client,

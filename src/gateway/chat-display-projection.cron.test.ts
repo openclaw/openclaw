@@ -1,7 +1,6 @@
 import path from "node:path";
-import { constants } from "node:sqlite";
 import { expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   appendTranscriptMessage,
@@ -9,9 +8,8 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
-import type { CronJob } from "../cron/types.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   prepareForwardedMessageCronJobNameResolver,
@@ -20,28 +18,21 @@ import {
 import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {
-  readSessionHistorySnapshotAsync,
+  readSessionHistorySnapshotAsync as readSnapshot,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
-it("batches automation names across history reads after rename and deletion without a source session", async () => {
-  const jobCount = 32;
-  await withOpenClawTestState({ label: "cron-attribution" }, async (state) => {
+async function appendInline(
+  sse: SessionHistorySseState,
+  message: Parameters<SessionHistorySseState["prepareInlineMessage"]>[0]["message"],
+) {
+  return (await sse.prepareInlineMessage({ message }))();
+}
+
+it("batches automation names across history reads after rename and deletion without a source session", () =>
+  withOpenClawTestState({ label: "cron-attribution" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();
-    const job: CronJob = {
-      id: "daily-report",
-      name: "Daily report",
-      enabled: true,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "Check the queue." },
-      state: {},
-    };
-    const storePath = resolveCronJobsStorePath();
     const bindingIds = [
       "daily-report",
       "report-\ufffd",
@@ -50,10 +41,11 @@ it("batches automation names across history reads after rename and deletion with
       "DAILY-report",
       "report-é",
     ];
-    const jobs = Array.from({ length: jobCount }, (_, index) =>
-      index === 0
-        ? job
-        : { ...job, id: bindingIds[index] ?? `report-${index}`, name: `Report ${index}` },
+    const jobs = Array.from({ length: 32 }, (_, index) =>
+      makeCronJob({
+        id: bindingIds[index] ?? `report-${index}`,
+        name: index === 0 ? "Daily report" : `Report ${index}`,
+      }),
     );
     const entry = { sessionId: "destination", updatedAt: 1 };
     const scope = {
@@ -62,6 +54,8 @@ it("batches automation names across history reads after rename and deletion with
       sessionId: entry.sessionId,
       storePath: path.join(state.sessionsDir("main"), "sessions.json"),
     };
+    const target = { ...scope, sessionEntry: entry };
+    const snapshotOptions = { target, maxChars: 100_000 };
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: entry.sessionId }]);
     const sourceSessionKey = "agent:main:cron:daily-report:run:completed-run";
@@ -99,45 +93,29 @@ it("batches automation names across history reads after rename and deletion with
       maxHistoryBytes: 1_000_000,
       effectiveMaxChars: 100_000,
     };
-    const database = openOpenClawStateDatabase({ env: state.env });
     // Host-boundary counts exclude the history worker's independent connection.
-    const measure = async <T>(operation: string, read: () => T | Promise<T>): Promise<T> => {
-      const counter = trackSqliteStatementExecutions(database.db, ["names"], (sql) =>
-        /\bfrom\s+"?cron_jobs"?\b/iu.test(sql) ? "names" : null,
-      );
+    const measure = async <T>(
+      read: () => T | Promise<T>,
+      forbidden = /\bfrom\s+"?cron_jobs"?\b/iu,
+    ): Promise<T> => {
+      const sql = observeHostDataSql();
       try {
         const result = await read();
-        expect(counter.counts.names, operation).toBe(0);
+        expect(sql.queries.filter((query) => forbidden.test(query))).toEqual([]);
         return result;
       } finally {
-        counter.restore();
+        sql.restore();
       }
     };
-    expect((await measure("no-id-rpc", () => readChatHistoryPage(pageParams))).messages).toEqual(
-      [],
-    );
-    const emptySnapshot = await measure("no-id-http", () =>
-      readSessionHistorySnapshotAsync({
-        target: { ...scope, sessionEntry: entry },
-        maxChars: 100_000,
-      }),
-    );
+    expect((await measure(() => readChatHistoryPage(pageParams))).messages).toEqual([]);
+    const emptySnapshot = await measure(() => readSnapshot(snapshotOptions));
     expect(emptySnapshot.history.messages).toEqual([]);
-    const emptySse = SessionHistorySseState.fromSnapshot({
-      target: { ...scope, sessionEntry: entry },
-      snapshot: emptySnapshot,
-    });
-    expect(
-      (
-        await measure("no-id-sse", async () =>
-          (
-            await emptySse.prepareInlineMessage({
-              message: { role: "user", content: "An ordinary message." },
-            })
-          )(),
-        )
-      )?.message,
-    ).toMatchObject({ role: "user", content: "An ordinary message." });
+    const fromSnapshot = (snapshot: typeof emptySnapshot, maxChars?: number) =>
+      SessionHistorySseState.fromSnapshot({ target, snapshot, maxChars });
+    const emptySse = fromSnapshot(emptySnapshot);
+    const ordinaryMessage = { role: "user", content: "An ordinary message." };
+    const emptyAppend = await measure(() => appendInline(emptySse, ordinaryMessage));
+    expect(emptyAppend?.message).toMatchObject(ordinaryMessage);
     await appendTranscriptMessage(scope, { eventId: "forwarded-result", message, now: 2 });
     await appendTranscriptMessages(scope, {
       messages: messages.slice(1).map((next, index) => ({
@@ -148,15 +126,14 @@ it("batches automation names across history reads after rename and deletion with
     });
     let sse: SessionHistorySseState | undefined;
     for (const name of ["Daily report", "Renamed report", undefined]) {
-      await saveCronJobsStore(storePath, {
+      await saveCronJobsStore(resolveCronJobsStorePath(), {
         version: 1,
         jobs: name
-          ? jobs.map((current, index) =>
-              Object.assign({}, current, {
-                name: index === 0 ? name : `${name} ${index}`,
-                updatedAtMs: 3,
-              }),
-            )
+          ? jobs.map((current, index) => ({
+              ...current,
+              name: index === 0 ? name : `${name} ${index}`,
+              updatedAtMs: 3,
+            }))
           : [],
       });
       const expected = messages.map((current, index) => ({
@@ -165,11 +142,11 @@ it("batches automation names across history reads after rename and deletion with
         senderSession: {
           sessionKey: current.provenance.sourceSessionKey,
           agentId: "main",
-          label: name ? (index % jobCount === 0 ? name : `${name} ${index}`) : "Automation",
+          label: name ? (index % jobs.length === 0 ? name : `${name} ${index}`) : "Automation",
         },
       }));
       for (const messageId of [undefined, "forwarded-result"]) {
-        const page = await measure(`${name}-${messageId ? "anchor" : "rpc"}`, () =>
+        const page = await measure(() =>
           readChatHistoryPage({ ...pageParams, messageId, encodeResponse: true }),
         );
         expect(page.encodedResponse?.messages).toBeInstanceOf(Uint8Array);
@@ -178,77 +155,38 @@ it("batches automation names across history reads after rename and deletion with
         );
       }
       for (const limit of [messages.length + 10, undefined]) {
-        const snapshot = await measure(`${name}-http-${limit}`, () =>
-          readSessionHistorySnapshotAsync({
-            target: { ...scope, sessionEntry: entry },
-            limit,
-            maxChars: 100_000,
-          }),
-        );
+        const snapshot = await measure(() => readSnapshot({ ...snapshotOptions, limit }));
         expect(snapshot.history.messages).toMatchObject(expected);
         if (limit === undefined) {
-          sse ??= SessionHistorySseState.fromSnapshot({
-            target: { ...scope, sessionEntry: entry },
-            maxChars: 100_000,
-            snapshot,
-          });
-          const currentSse = sse;
-          const appended = await measure(`${name}-sse`, async () =>
-            (
-              await currentSse.prepareInlineMessage({
-                message:
-                  name === "Renamed report"
-                    ? { role: "assistant", content: "NO_REPLY" }
-                    : { role: "user", content: `Next message after ${name}.` },
-              })
-            )(),
-          );
+          const currentSse = (sse ??= fromSnapshot(snapshot, snapshotOptions.maxChars));
+          const nextMessage =
+            name === "Renamed report"
+              ? { role: "assistant", content: "NO_REPLY" }
+              : { role: "user", content: `Next message after ${name}.` };
+          const appended = await measure(() => appendInline(currentSse, nextMessage));
           expect(currentSse.snapshot().messages.slice(0, messages.length)).toMatchObject(expected);
           if (name !== "Daily report") {
             expect(appended).toEqual({ shouldRefresh: true });
           } else {
-            expect(appended?.message).toMatchObject({
-              role: "user",
-              content: `Next message after ${name}.`,
-            });
+            expect(appended?.message).toMatchObject(nextMessage);
           }
         }
       }
-      const firstExpected = expected[0];
-      if (!firstExpected) {
-        throw new Error("Expected at least one forwarded message");
-      }
-      expect(
-        (
-          await measure(`${name}-live`, async () =>
-            projectSessionMessagePayload({
-              message,
-              sessionKey: scope.sessionKey,
-              resolveCronJobName: await prepareForwardedMessageCronJobNameResolver([message]),
-            }),
-          )
-        ).payload?.message,
-      ).toMatchObject(firstExpected);
+      const projected = await measure(async () =>
+        projectSessionMessagePayload({
+          message,
+          sessionKey: scope.sessionKey,
+          resolveCronJobName: await prepareForwardedMessageCronJobNameResolver([message]),
+        }),
+      );
+      expect(projected.payload?.message).toMatchObject(expected[0]!);
     }
-    let deniedNameReads = 0;
-    database.db.setAuthorizer((action, table, column) => {
-      if (action === constants.SQLITE_READ && table === "cron_jobs" && column === "name") {
-        deniedNameReads++;
-        return constants.SQLITE_DENY;
-      }
-      return constants.SQLITE_OK;
-    });
-    try {
+    await measure(() => {
       expect(() => projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).toThrow(
         /prepared/iu,
       );
-      expect(deniedNameReads).toBe(0);
-      database.db.setAuthorizer(() => constants.SQLITE_DENY);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];
       expect(projectForwardedMessages(ordinary)).toBe(ordinary);
-    } finally {
-      database.db.setAuthorizer(null);
-    }
-  });
-});
+    }, /./su);
+  }));

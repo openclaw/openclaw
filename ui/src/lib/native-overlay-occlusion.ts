@@ -1,4 +1,5 @@
 import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
+import { listen } from "./reactive/listener.ts";
 
 type SurfaceElements = () => Iterable<Element>;
 const surfaces = new Set<SurfaceElements>();
@@ -103,15 +104,29 @@ export function subscribeNativeOverlayOcclusion(
 
 const occludingSurfaces = new WeakSet<HTMLElement>();
 
+/** Lifecycle owners release geometry only after closing has actually finished. */
+export function acquireNativeOverlaySurface(element: HTMLElement): () => void {
+  if (!hasNativeBrowserBridge()) {
+    return () => {};
+  }
+  const elements = () => [element];
+  surfaces.add(elements);
+  notify();
+  trackSurfaceLayout();
+  return () => {
+    if (surfaces.delete(elements)) {
+      notify();
+      trackSurfaceLayout();
+    }
+  };
+}
+
 /** Keep a connected menu above native views through closing and owner removal. */
-export function occludeNativeBrowserSurface(
-  element: HTMLElement,
-  closeEvent: "toggle" | "wa-after-hide" = "toggle",
-  elements: SurfaceElements = () => [element, ...element.querySelectorAll("*")],
-) {
+export function occludeNativeBrowserSurface(element: HTMLElement) {
   if (!hasNativeBrowserBridge() || !element.isConnected || occludingSurfaces.has(element)) {
     return;
   }
+  const elements = () => [element, ...element.querySelectorAll("*")];
   surfaces.add(elements);
   trackSurfaceLayout();
   const observer = new MutationObserver(() => {
@@ -119,25 +134,21 @@ export function occludeNativeBrowserSurface(
       cleanup();
     }
   });
-  const onClose = (event: Event) => {
-    if (
-      event.target === element &&
-      // SAFETY: The toggle branch receives the Popover API event with newState.
-      (closeEvent !== "toggle" || (event as ToggleEvent).newState === "closed")
-    ) {
+  const onClose = (event: ToggleEvent) => {
+    if (event.target === element && event.newState === "closed") {
       cleanup();
     }
   };
   const cleanup = () => {
     observer.disconnect();
-    element.removeEventListener(closeEvent, onClose);
+    stopClose();
     occludingSurfaces.delete(element);
     surfaces.delete(elements);
     notify();
     trackSurfaceLayout();
   };
   occludingSurfaces.add(element);
-  element.addEventListener(closeEvent, onClose);
+  const stopClose = listen(element, "toggle", onClose);
   // Observe every containing root: document observers cannot see shadow-tree
   // removals, and an outer host can itself be removed while its tree stays intact.
   let root = element.getRootNode();

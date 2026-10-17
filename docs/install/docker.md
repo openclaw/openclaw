@@ -233,6 +233,15 @@ maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
 
+Activation retains a full pre-repair copy of local state under
+`<state-dir>.update-captures/` the first time Doctor captures in a container.
+Later starts of the same container (`docker stop`/`docker start`, restart
+policies, host reboots) still run the Doctor repair pass but skip that repeated
+full copy, keep it, and still retire other Doctor copies older than 30 days;
+repair-specific backups still apply. If a capture fails, the next
+start tries again. A new image, a recreated container, or a container whose
+`/tmp` does not persist across restarts captures again.
+
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.
 Current images use the guarded filesystem fallback; keep native filesystem
@@ -251,7 +260,11 @@ Gateway; a custom entrypoint bypasses this activation step.
 This includes agent database schema upgrades, shared-state audit migrations, and
 legacy workspace setup imports. Before advancing database schemas, Doctor saves
 verified SQLite copies beside the originals as
-`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+`<database>.pre-startup-migration-<id>.bak`. Fully declared table migrations may
+instead use `.scoped.bak` archives; restore those with
+`openclaw database restore-migration-backup`, never by replacing the database file.
+See [declared migration scopes](/reference/database-schemas/versioning#declared-migration-backup-scopes).
+The shared database and affected agent
 databases use the same backup ID. Config backups and retired workspace-file
 archives follow the normal Doctor repair rules. Keep these files with your
 pre-upgrade backup; a rollback must restore the matching state as well as the old
@@ -286,7 +299,7 @@ Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
 agent remains isolated while healthy agents can serve requests.
 
-Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+Missing or drifted required SQLite indexes are rebuilt by the schema migration
 owner before session startup completes. Repair warnings identify the agent,
 database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,
@@ -413,9 +426,9 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-Official prebuilt images already bundle `diagnostics-otel`; install `clawhub:@openclaw/diagnostics-otel` yourself only if you removed it. To enable export, allow and enable the `diagnostics-otel` plugin in config, then set `diagnostics.otel.enabled=true` (see the full example in [OpenTelemetry export](/gateway/opentelemetry)). Collector auth headers go through `diagnostics.otel.headers`, not Docker environment variables.
+Official prebuilt images already bundle `diagnostics-otel`; install `@openclaw/diagnostics-otel` yourself only if you removed it. To enable export, allow and enable the `diagnostics-otel` plugin in config, then set `diagnostics.otel.enabled=true` (see the full example in [OpenTelemetry export](/gateway/opentelemetry)). Collector auth headers go through `diagnostics.otel.headers`, not Docker environment variables.
 
-Prometheus metrics reuse the already-published Gateway port. Install `clawhub:@openclaw/diagnostics-prometheus`, enable the `diagnostics-prometheus` plugin, then scrape:
+Prometheus metrics reuse the already-published Gateway port. Install `@openclaw/diagnostics-prometheus`, enable the `diagnostics-prometheus` plugin, then scrape:
 
 ```text
 http://<gateway-host>:18789/api/diagnostics/prometheus

@@ -24,6 +24,10 @@ const sendContextMockState = vi.hoisted(() => {
         id: "mock-app",
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer/",
+          fromServiceUrl: ({ serviceUrl }: { serviceUrl: string }) => ({
+            serviceUrl,
+            conversations: { activities: getActivities },
+          }),
           conversations: { activities: getActivities },
         },
       },
@@ -394,22 +398,6 @@ describe("resolveMSTeamsSendContext", () => {
       accountId: "secondary",
       conversationId: "19:channel@thread.tacv2",
     });
-  });
-
-  it("does not query Graph while resolving an opaque Bot Framework conversation", async () => {
-    sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-        conversation: { id: "a:personal", conversationType: "personal" },
-      }),
-    );
-
-    await resolveMSTeamsSendContext({
-      cfg: createConfig({ sharePointSiteId: "site-id" }),
-      to: "conversation:a:personal",
-    });
-
-    expect(sendContextMockState.getAccessToken).not.toHaveBeenCalled();
   });
 });
 

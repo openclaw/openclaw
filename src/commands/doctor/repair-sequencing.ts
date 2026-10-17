@@ -6,7 +6,6 @@ import {
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { assertNoRetiredStateFiles } from "../../infra/state-migrations.retired-files.js";
 import {
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
@@ -25,7 +24,6 @@ import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeRepairLegacyAuthProfileStores,
 } from "../doctor-auth-flat-profiles.js";
-import { listReferencedLegacyOAuthSidecarPaths } from "../doctor-auth-legacy-paths.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { repairAuthProfileMigration } from "./auth-profile-repair.js";
@@ -96,10 +94,6 @@ export async function runDoctorRepairSequence(params: {
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
-  assertNoRetiredStateFiles(
-    "OAuth credential sidecars",
-    listReferencedLegacyOAuthSidecarPaths(env, state.candidate),
-  );
   await assertInstalledPluginIdRecoveryCurrent(
     state.candidate,
     params.installedPluginIdRecovery,

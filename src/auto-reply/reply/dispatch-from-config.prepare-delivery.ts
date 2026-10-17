@@ -1,6 +1,7 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
+import { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
 import { logVerbose } from "../../globals.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -41,22 +42,30 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     state.getPreDispatchAbortSignal()?.throwIfAborted();
     state.params.replyOptions?.operatorAuthority?.assertCurrent();
   };
-  // Gather awaits runtime preparation after its first row read. Reread ACP
-  // metadata with the same owner to preserve current lifecycle fences and
-  // recovery from an earlier store-read failure.
-  const currentAcpSession = sessionStoreEntry.sessionKey
-    ? await readAcpSessionEntryAsync({
-        cfg,
-        agentId: sessionStoreEntry.agentId,
-        sessionKey: sessionStoreEntry.sessionKey,
-        assertCurrent: assertPreparationCurrent,
-      })
-    : undefined;
+  // Delivery uses the current parent fields after gather's runtime preparation.
+  // A session without a parent cannot need the ACP child-delivery restriction.
+  const suppressAcpChildUserDelivery = sessionStoreEntry.sessionKey
+    ? await withAcpSessionEntryRead(
+        {
+          cfg,
+          agentId: sessionStoreEntry.agentId,
+          sessionKey: sessionStoreEntry.sessionKey,
+          assertCurrent: assertPreparationCurrent,
+        },
+        (session) =>
+          isParentOwnedBackgroundAcpSession(
+            session?.entry ? { ...session.entry, acp: session.acp } : undefined,
+          ),
+        {
+          includeMetadata: (entry) =>
+            Boolean(
+              normalizeOptionalString(entry?.spawnedBy) ||
+              normalizeOptionalString(entry?.parentSessionKey),
+            ),
+        },
+      )
+    : false;
   assertPreparationCurrent();
-  const sessionEntryWithAcp = currentAcpSession?.entry
-    ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
-    : undefined;
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const effectiveExplicitDeliverRoute =
     ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
   const resolveRouting = (isRoutableChannel: (channel: string | undefined) => boolean) =>
@@ -94,7 +103,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyTo &&
     routeReplyChannel === normalizedCurrentSurface,
   );
-  const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  // Heartbeat's custom dispatcher routes the reply, but synthesis still needs its destination.
+  const deliveryChannel =
+    shouldRouteToOriginating || state.replyOperationRunState.heartbeat
+      ? (routeReplyChannel ?? currentSurface)
+      : currentSurface;
   const { preparedTtsPreferences, getDispatchReplyOperation } = state;
   const maybeApplyTtsWithFinalizationLease = async (
     payload: ReplyPayload,

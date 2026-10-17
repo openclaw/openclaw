@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   ensureWorkspaceAndSessions: vi.fn(),
   inferAuthChoice: vi.fn(),
   logConfigUpdated: vi.fn(),
-  logJson: vi.fn(),
 }));
 
 vi.mock("../../config/logging.js", () => ({
@@ -51,11 +50,6 @@ vi.mock("./local/auth-choice-inference.js", () => ({
 
 vi.mock("./local/gateway-config.js", () => ({
   applyNonInteractiveGatewayConfig: mocks.applyGatewayConfig,
-}));
-
-vi.mock("./local/output.js", () => ({
-  logNonInteractiveOnboardingFailure: vi.fn(),
-  logNonInteractiveOnboardingJson: mocks.logJson,
 }));
 
 vi.mock("./local/skills-config.js", () => ({
@@ -247,7 +241,8 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         await runNonInteractiveSetup(
           {
             ...localOptions,
-            ...(agentName ? { agentName, json: true } : {}),
+            ...(agentName ? { agentName } : {}),
+            json: true,
             workspace,
             authChoice: "demo-api-key",
           },
@@ -289,9 +284,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
           `${workspace}/main`,
         );
-        expect(mocks.logJson).toHaveBeenCalledWith(
-          expect.objectContaining({ workspaceDir: expectedWorkspace }),
-        );
+        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          workspace: expectedWorkspace,
+        });
         if (legacyState) {
           expect(runtime.error).toHaveBeenCalledWith(
             expect.stringContaining("existing agents keep their current workspace"),
@@ -540,7 +536,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           runtime,
           expect.objectContaining({ agentId }),
         );
-        expect(mocks.logJson).toHaveBeenCalledWith(expect.objectContaining({ workspaceDir }));
+        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          workspace: workspaceDir,
+        });
         if (include) {
           expect(
             JSON.parse(await fs.readFile(path.join(configDir, "roster.json"), "utf8")),
@@ -581,11 +580,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       await expect(
         fs.stat(path.join(workspace, "coordinator", "BOOTSTRAP.md")),
       ).rejects.toMatchObject({ code: "ENOENT" });
-      expect(mocks.logJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceDir: path.join(workspace, "coordinator"),
-        }),
-      );
+      expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
+        ok: true,
+        workspace: path.join(workspace, "coordinator"),
+      });
     });
   });
 });

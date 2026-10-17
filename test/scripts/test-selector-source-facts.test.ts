@@ -24,6 +24,100 @@ const files = [{ file: "source.ts", parseImports: true }];
 
 beforeEach(() => spawn.mockReset());
 
+it("separates erased leading TSX imports from runtime and uncertain dependencies", async () => {
+  const cases = [
+    {
+      source: `// import type { Fake } from "./comment.js";
+import type { Value } from "./types.js";
+import { value, type Shape } from "./runtime.js";
+import type from "./default-type.js";
+import { type Shape } from "./side-effect.js";
+export const view = <div>{value} ·</div>;`,
+      erased: ["./types.js"],
+      retained: ["./runtime.js", "./default-type.js", "./side-effect.js"],
+    },
+    {
+      source:
+        'import type { Value } from "./types.js"; export const view = <div>{import("./types.js")}</div>;',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source:
+        'import type { Value } from "./types.js"; export const view = <div> // text {import("./types.js")} </div>;',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source: String.raw`import type { Value } from "./types.js"; export const view = <div> // text {import('./ty\u0070es.js')} </div>;`,
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source: String.raw`import type { Value } from "./types.js"; export const view = <div>{requ\u0069re('./types.js')}</div>;`,
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source:
+        'import type { Value } from "./types.js"; export const view = <div> // text {import(/* load */ "./types.js")} </div>;',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source:
+        'import type { Value } from "./types.js"; export const view = <div> // text\n</div>; export { value } from/* load */ "./types.js";',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source:
+        'import type { Value } from "./types.js"; export const view = <div />; import "./types.js";',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source:
+        '"import type { Fake } from \'./types.js\'"; import type { Value } from "./types.js"; export const view = <div />;',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source: '"import"\nimport type { Value } from "./types.js"; export const view = <div />;',
+      erased: [],
+      retained: ["./types.js"],
+    },
+    {
+      source:
+        'export const view = <div>import type Value from "./types.js"</div>; import("./types.js");',
+      erased: [],
+      retained: ["./types.js"],
+    },
+  ];
+  const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-tsx-import-facts-"));
+  try {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawn.mockImplementationOnce((command, args, options) =>
+      actual.spawnSync(command, args, options),
+    );
+    const inventory = cases.map(({ source }, index) => {
+      const file = `${index}.tsx`;
+      writeFileSync(path.join(cwd, file), source);
+      return { file, parseImports: true };
+    });
+    const facts = readTestSelectorSourceFacts(cwd, inventory, [], 1024 * 1024);
+    for (const [index, { erased, retained }] of cases.entries()) {
+      expect(facts[index]?.typeOnlyImports, inventory[index]?.file).toEqual(erased);
+      const runtime = facts[index]?.imports.filter(
+        (specifier) => !facts[index]?.typeOnlyImports.includes(specifier),
+      );
+      expect(runtime, inventory[index]?.file).toEqual(expect.arrayContaining(retained));
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 describe("test selector native crash recovery", () => {
   it.each([null, [["worker"]], [["worker", 1]]])(
     "rejects invalid runtime-worker export facts: %j",

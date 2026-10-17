@@ -89,40 +89,6 @@ export function resolveSessionPatchTargetError(
   return changed ? sessionChangedError(target.key) : undefined;
 }
 
-export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
-  return {
-    key: patch.key,
-    ...(patch.agentId ? { agentId: patch.agentId } : {}),
-    ...(patch.expectedSessionId !== undefined
-      ? { expectedSessionId: patch.expectedSessionId }
-      : {}),
-    ...(patch.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: patch.expectedLifecycleRevision }
-      : {}),
-    ...(patch.expectedPermissionMode !== undefined
-      ? { expectedPermissionMode: patch.expectedPermissionMode }
-      : {}),
-    ...(patch.expectedSandboxMode !== undefined
-      ? { expectedSandboxMode: patch.expectedSandboxMode }
-      : {}),
-    ...(patch.expectedNativeRuntimeConsent !== undefined
-      ? { expectedNativeRuntimeConsent: patch.expectedNativeRuntimeConsent }
-      : {}),
-    ...(patch.expectedToolOverrides !== undefined
-      ? { expectedToolOverrides: patch.expectedToolOverrides }
-      : {}),
-    ...(patch.expectedSidebarRoot !== undefined
-      ? { expectedSidebarRoot: patch.expectedSidebarRoot }
-      : {}),
-    ...(patch.expectedCategory !== undefined ? { expectedCategory: patch.expectedCategory } : {}),
-    ...(patch.expectedArchived !== undefined ? { expectedArchived: patch.expectedArchived } : {}),
-    ...(patch.expectedSidebarAncestors !== undefined
-      ? { expectedSidebarAncestors: patch.expectedSidebarAncestors }
-      : {}),
-    expectedMarkedUnreadAt: patch.expectedMarkedUnreadAt,
-  };
-}
-
 /** Prepare original writers and bind their facts before patch projection can acquire admission. */
 export async function prepareSessionPatchTargets(params: {
   cfg: OpenClawConfig;

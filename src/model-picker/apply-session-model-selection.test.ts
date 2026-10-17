@@ -1,6 +1,7 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
@@ -52,7 +53,13 @@ vi.mock("../config/config.js", factories.config);
 vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
+// mock-isolation: Picker tests provide placement capability outcomes without loading worker state.
 vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+// mock-isolation: Worker preparation is covered by the placement runtime owner tests.
+vi.mock(
+  "../gateway/worker-environments/placement-session-runtime-preparation.js",
+  factories.placementRuntimePreparation,
+);
 
 import {
   applySessionModelSelectionInternal as applySessionModelSelection,
@@ -75,6 +82,10 @@ function createRequest(
 ): ApplySessionModelSelectionParams["request"] {
   return { provider, model, isDefault: false, runtime: { kind: "unchanged" }, ...overrides };
 }
+
+beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
+});
 
 beforeEach(() => {
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
@@ -573,9 +584,10 @@ describe("applySessionModelSelection", () => {
           return metadata.promise;
         });
       } else {
-        placementMocks.getMany.mockImplementationOnce(() => {
+        placementMocks.prepareRuntimeRefresh.mockImplementationOnce(async () => {
           entered.resolve();
-          return new Map();
+          await metadata.promise;
+          return { placement: undefined, assertCurrent: () => {}, release: () => {} };
         });
       }
       const params = createParams({ thinkingCatalog: [] });

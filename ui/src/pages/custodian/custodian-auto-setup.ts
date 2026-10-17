@@ -1,3 +1,7 @@
+import type {
+  SystemAgentSetupAutoCandidate as SetupAutoCandidate,
+  SystemAgentSetupAutoResult as SetupAutoResult,
+} from "../../../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupActivateResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -12,23 +16,7 @@ import {
 } from "../model-setup/wizard-runner.ts";
 import { resolveCustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 
-// Wire result for the optional automatic setup capability.
-export type SetupAutoCandidate = {
-  kind: string;
-  label: string;
-  detail: string;
-  modelRef: string;
-  brandId?: string;
-  icon?: string;
-};
-export type SetupAutoResult = {
-  status: "configured" | "activated" | "needs-sign-in" | "unavailable";
-  selected?: SetupAutoCandidate;
-  alternatives: SetupAutoCandidate[];
-  attempts: { kind: string; label: string; error: string }[];
-  signIn?: { authOptionId: string; label: string };
-  installedPlugins: string[];
-};
+export type { SetupAutoCandidate, SetupAutoResult };
 
 const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 
@@ -206,7 +194,7 @@ export class CustodianAutoSetup {
   }
 
   async signIn(): Promise<void> {
-    const signIn = this.result?.signIn;
+    const signIn = this.result?.selected?.shared ? this.result.separateSignIn : this.result?.signIn;
     if (!this.client || !signIn || this.pending) {
       return;
     }

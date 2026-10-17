@@ -1,9 +1,24 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
-describe("prepared account catalog access", () => {
-  afterEach(() => vi.useRealTimers());
+describe("prepared account catalog observations", () => {
+  beforeEach(() => {
+    // These cases describe prepared auth facts, not credentials from the host shell.
+    for (const key of [
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_OAUTH_TOKEN",
+      "CHATGPT_OAUTH_TOKEN",
+    ]) {
+      vi.stubEnv(key, "");
+    }
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
     const retirement = new AbortController();

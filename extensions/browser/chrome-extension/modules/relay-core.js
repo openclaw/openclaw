@@ -316,7 +316,6 @@ export function reconnectDelayMs(attempt) {
   return Math.min(1000 * 2 ** capped, 30_000);
 }
 
-/** Normalize a chrome.tabs.Tab into the relay's tab info shape. */
 export function toRelayTabInfo(tab) {
   return {
     tabId: tab.id,

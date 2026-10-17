@@ -107,7 +107,8 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
   | "supportsProviderExecutionMode"
->;
+> &
+  Partial<Pick<WorkerEnvironmentService, "runProjectLifecycleCommand">>;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;

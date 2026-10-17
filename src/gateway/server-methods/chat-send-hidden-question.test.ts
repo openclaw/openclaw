@@ -7,6 +7,7 @@ import {
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -25,6 +26,10 @@ it.each(
       const runId = "gateway-hidden-question-owner";
       const text = "Green";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId, updatedAt: 1 },
+      );
       const owner = createQueueTestRun({ prompt: "child coordination" });
       owner.run = {
         ...owner.run,
@@ -47,8 +52,8 @@ it.each(
         },
       };
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(owner));
-      const fingerprint = operation.bindToolAuthorityRoute({
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(owner));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({
         provider: owner.run.provider,
         model: owner.run.model,
       });

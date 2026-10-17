@@ -24,7 +24,7 @@ export interface RequestBody {
   tool_choice?: "auto";
   parallel_tool_calls?: boolean;
   temperature?: number;
-  reasoning?: { effort?: string; summary?: string };
+  reasoning?: { effort?: string; summary?: string | null };
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
   text?: ResponseCreateParamsStreaming["text"];
   include?: string[];
@@ -128,13 +128,15 @@ export function scheduleSessionWebSocketExpiry(
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
   }
-  entry.idleTimer = setTimeout(() => {
-    if (entry.busy) {
-      return;
-    }
-    closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-    deleteOwnedWebSocketSession(state, sessionId, entry);
-  }, SESSION_WEBSOCKET_CACHE_TTL_MS);
+  entry.idleTimer = entry.authority.transportHost.runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      if (entry.busy) {
+        return;
+      }
+      closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
+      deleteOwnedWebSocketSession(state, sessionId, entry);
+    }, SESSION_WEBSOCKET_CACHE_TTL_MS),
+  );
 }
 
 function closeRuntimeState(state: OpenAICodexWebSocketRuntimeState, sessionId?: string): void {

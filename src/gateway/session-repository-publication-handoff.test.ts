@@ -10,7 +10,7 @@ import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/ses
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -32,7 +32,10 @@ import { insertGitHubPublicationRequest } from "./github-publication-store.worke
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
-import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
+import {
+  assertReceiptOwner,
+  prepareReceiptOwner,
+} from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
@@ -43,9 +46,13 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
-// mock-isolation: Publication handoff does not discover worker GitHub credentials.
-vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareGitHubPublicationFact: async () => undefined,
+// mock-isolation: Publication handoff clones a local origin without GitHub credentials.
+vi.mock("./worker-environments/repository-github-identity.js", () => ({
+  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
+    token: undefined,
+    assertSelected: assertCurrent,
+    start: async (start: () => Promise<unknown>) => await start(),
+  }),
 }));
 afterEach(() => vi.restoreAllMocks());
 it.each([
@@ -357,7 +364,8 @@ it.each([
         return;
       }
       await move();
-      const receiptWorkspace = await store.prepare(row.workspace_id);
+      const receiptWorkspace = await prepareReceiptOwner(row);
+      using _ = { [Symbol.dispose]: () => receiptWorkspace.release() };
       expect(() => assertReceiptOwner(row, receiptWorkspace)).toThrow();
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,
@@ -410,8 +418,10 @@ it.each([
       const initial = claimGitHubPublicationExecution(requestId, "local-instance");
       const execution = createGitHubPublicationExecutionStore("local-instance");
       const requester = await restoreGitHubPublicationRequester(
-        readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
-          ?.requester_authority_json,
+        readGitHubPublicationSessionLifecycle(
+          { publicationKind: "shared", requestId },
+          openOpenClawStateDatabase().db,
+        )?.requester_authority_json,
         scope,
         () => cfg,
       );

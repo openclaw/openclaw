@@ -536,8 +536,10 @@ export const scenes: Scene[] = [
       await page.keyboard.press("Enter");
       // Compact menus drill into a sheet; wide menus retain nested popovers.
       if (page.viewportSize()!.width <= 560) {
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
       } else {
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
       }
       await page.locator(".session-menu__appearance:visible").waitFor();

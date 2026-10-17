@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -8,7 +9,11 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -31,6 +36,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { mintCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { cronHandlers } from "./cron.js";
@@ -79,7 +85,9 @@ async function withAgentManagement<T>(
   run: (
     identity: AgentRuntimeIdentity,
     management: NonNullable<ReturnType<typeof bindCronManagementGrant>>,
+    capability: NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>,
   ) => Promise<T>,
+  fresh = false,
 ): Promise<T> {
   const runId = "scheduled-policy-management";
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
@@ -96,24 +104,25 @@ async function withAgentManagement<T>(
   };
   try {
     const capability = expectDefined(
-      createCronCreatorAuthorityCapability(
-        runId,
-        { kind: "unknown" },
-        {
-          source: "channel-owner",
-          isCurrent: () =>
-            isConfiguredCommandOwner(getRuntimeConfig(), {
-              channel: "discord",
-              senderId: "owner-1",
-            }),
-        },
-      ),
+      createCronCreatorAuthorityCapability(runId, fresh ? { kind: "local" } : { kind: "unknown" }, {
+        source: "channel-owner",
+        isCurrent: () =>
+          isConfiguredCommandOwner(getRuntimeConfig(), {
+            channel: "discord",
+            senderId: "owner-1",
+          }),
+      }),
       "current management capability",
     );
     return await runWithCronCreatorAuthorityCapability(capability, () =>
       withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey, operationalRunInstance, approvalAuthority: authority },
-        () => run(identity, expectDefined(bindCronManagementGrant(runId), "management binding")),
+        () =>
+          run(
+            identity,
+            expectDefined(bindCronManagementGrant(runId), "management binding"),
+            capability,
+          ),
       ),
     );
   } finally {
@@ -123,6 +132,166 @@ async function withAgentManagement<T>(
 }
 
 describe("cron.update scheduled policy adoption", () => {
+  it.each([
+    "owner",
+    "known tool",
+    "other session",
+    "other account",
+    "borrowed capture",
+    "no capture",
+  ] as const)("captures owner authority and preserves manager cap edits: %s", async (caller) => {
+    const storePath = path.join(expectDefined(stateDir, "test state"), "cron", "jobs.json");
+    const service = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "main",
+      log: createNoopLogger(),
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    cron = service;
+    const owner = {
+      agentId: "main",
+      sessionKey:
+        caller === "other session" || caller === "borrowed capture"
+          ? "agent:main:other"
+          : sessionKey,
+      accountId: caller === "other account" ? "personal" : accountId,
+    };
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const created = await service.add(
+      {
+        name: "App automation",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        agentId: "main",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "agentTurn",
+          message: "Check calendar",
+          toolsAllow: ["read", "calendar_search"],
+        },
+        delivery: { mode: "none" },
+        owner,
+      },
+      {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: owner.sessionKey,
+          ownerAccountId: owner.accountId,
+        },
+        captureRuntimeAuthority: () => runtimeAuthority,
+      },
+    );
+    const before = (await loadCronStore(storePath)).jobs;
+    const context = createDirectChatContext({
+      cron: service,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    });
+    await withAgentManagement(async (identity, _management, capability) => {
+      const tool = createCronTool(
+        {
+          runId: identity.operationalRunInstance.runId,
+          agentSessionKey: sessionKey,
+          agentAccountId: accountId,
+          creatorToolAllowlist: caller === "known tool" ? ["calendar_search"] : ["read"],
+          ...(caller === "no capture"
+            ? {}
+            : {
+                resolveCreatorToolAuthority: async () => ({
+                  tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
+                  provenance: { version: 1, source: "final-executable-surface" },
+                  grant: mintCronCreatorAuthorityGrant(capability, undefined, runtimeAuthority),
+                  holdsRuntimeAuthority: true,
+                }),
+              }),
+        },
+        {
+          callGatewayTool: async <T>(method: string, _options: unknown, params: unknown) => {
+            if (!isRecord(params)) {
+              throw new Error("Cron tool transport requires object parameters");
+            }
+            const callerIdentity = getGatewayToolCallerIdentity();
+            const client = createSyntheticPluginRuntimeClient();
+            client.internal = {
+              ...client.internal,
+              agentRuntimeIdentity: {
+                ...identity,
+                ...callerIdentity,
+                ...(caller === "borrowed capture" && method === "cron.update"
+                  ? {
+                      cronToolsAllowCapture: "final-executable-surface",
+                      cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
+                        capability,
+                        undefined,
+                        runtimeAuthority,
+                      ),
+                    }
+                  : {}),
+              },
+            };
+            const respond = vi.fn<RespondFn>();
+            await expectDefined(
+              cronHandlers[method],
+              method,
+            )({
+              req: { type: "req", id: "app-authority", method, params },
+              params,
+              client,
+              context,
+              respond,
+              isWebchatConnect: () => false,
+            });
+            const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+            if (!ok) {
+              throw new Error(error?.message);
+            }
+            return result as T;
+          },
+        },
+      );
+      const update = tool.execute("app-update", {
+        action: "update",
+        jobId: created.id,
+        job: { payload: { toolsAllow: ["calendar_search"] } },
+      });
+      if (caller === "no capture") {
+        await expect(update).rejects.toThrow(/calendar_search.*[Rr]ecreate/);
+      } else {
+        await expect(update).resolves.toMatchObject({ details: { id: created.id } });
+      }
+    }, true);
+    const stored = (await loadCronStore(storePath)).jobs;
+    if (caller === "owner" || caller === "known tool") {
+      expect(stored[0]).toMatchObject({
+        owner,
+        runtimeAuthority,
+        payload: { toolsAllow: ["calendar_search"] },
+      });
+      expect(stored[0]?.runtimeAuthorityRecoveryRequired).toBeUndefined();
+    } else if (caller === "no capture") {
+      expect(stored).toEqual(before);
+    } else {
+      expect(stored[0]).toMatchObject({
+        owner,
+        payload: { toolsAllow: ["calendar_search"] },
+        runtimeAuthorityRecoveryRequired: true,
+      });
+      expect(stored[0]?.runtimeAuthority).toBeUndefined();
+    }
+  });
+
   it.each([
     { caller: "agent management", definition: "known account", expected: accountPolicy },
     { caller: "operator", definition: "known account", expected: accountPolicy },

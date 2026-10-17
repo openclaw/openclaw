@@ -3,6 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -13,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   observeHostDataSql,
@@ -40,10 +45,12 @@ describe("memory forget source removal", () => {
 
   beforeEach(async () => {
     fixture = await createMemoryForgetFixture();
+    setRuntimeConfigSnapshot(fixture.cfg);
   });
 
   afterEach(async () => {
     await fixture.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   function indexSelection() {
@@ -307,7 +314,7 @@ describe("memory forget source removal", () => {
     const content =
       "<!-- openclaw-memory-promotion:selected-entry -->\n- Selected violet detail.\n";
     await fs.writeFile(memoryPath, content);
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const load = storage.loadSqliteVecExtension;
     const loaded = await load({ db });
     expect(loaded.ok).toBe(true);
@@ -380,7 +387,9 @@ describe("memory forget source removal", () => {
       closeOpenClawAgentDatabasesForTest(fixture.stateDir);
       expect(db.isOpen).toBe(false);
       await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
-      const successor = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const successor = requireNativeSqliteDatabase(
+        openOpenClawAgentDatabase({ agentId: "main" }).db,
+      );
       // Matcher deep-equality diagnostics cannot inspect a closed native handle.
       expect(successor === db).toBe(false);
       const successorLoaded = await load({ db: successor });
@@ -408,7 +417,7 @@ describe("memory forget source removal", () => {
   it("forgets 32 sessions with bounded writes and preserves other sources", async () => {
     const sessionCount = 32;
     const { cfg } = fixture;
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insertSource = db.prepare(
       "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
     );
@@ -481,7 +490,7 @@ describe("memory forget source removal", () => {
   });
   it("keeps the index intact when batched admission fails", async () => {
     const { cfg } = fixture;
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const sessionIds = Array.from({ length: 130 }, (_, index) => `target-${index}`);
     db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
       VALUES ('sessions/main/target-0.jsonl', 'sessions', 'keep-until-admitted', 1, 1)`).run();
@@ -531,7 +540,7 @@ describe("memory forget source removal", () => {
     const content =
       "<!-- openclaw-memory-promotion:late-lineage -->\n- Selected violet detail.\n" + survivor;
     await fs.writeFile(memoryPath, content);
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     db.prepare(`INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 3, 'fixture', 'test', ?, x'', 1)`).run(
@@ -608,7 +617,7 @@ describe("memory forget source removal", () => {
   it("does not infer hook or participant facts for an archived-only session", async () => {
     const { cfg } = fixture;
     await seedMemoryForgetSession("archived", "gmail");
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     db.prepare(
       `INSERT INTO session_participants
          (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at)
@@ -646,7 +655,7 @@ describe("memory forget source removal", () => {
   });
   it("previews and forgets selected chunks before optional provenance exists", async () => {
     await seedMemoryForgetSession("target");
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insert = db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
       VALUES (?, ?, 'sessions', 1, 1, 'fixture-hash', 'test', 'retained session body', x'', 1)`);

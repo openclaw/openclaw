@@ -52,6 +52,7 @@ import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
+import { createGatewayPresenceObserver } from "./gateway-store.presence.ts";
 import { createGatewaySelfProfile } from "./gateway-store.self-profile.ts";
 import { readHelloPluginCapabilities } from "./plugin-capabilities.ts";
 import {
@@ -152,6 +153,17 @@ export function createApplicationGateway(
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   const eventLog = createGatewayEventLog();
   const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  const presenceObserver = createGatewayPresenceObserver({
+    requestSnapshot: () => client!.request("system-presence", { snapshot: true }),
+    publish: (event) => {
+      const eventClient = client;
+      recordGatewayEvent(event);
+      notifyGatewayObservers(eventListeners, event, "event listener", () =>
+        isCurrentClient(eventClient),
+      );
+    },
+    onError: (error) => setSnapshot({ lastError: formatUiError(error) }),
+  });
   const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
     // Retirement remains valid after a reentrant stop or same-account client replacement.
     notifyGatewayObservers(
@@ -164,6 +176,7 @@ export function createApplicationGateway(
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
+    presenceObserver.synchronize(snapshot.phase === "connected" ? snapshot.hello : null);
     if (snapshot.phase !== "connecting" && snapshot.phase !== "reconnecting") {
       snapshot.reconnectAt = undefined;
     }
@@ -182,7 +195,6 @@ export function createApplicationGateway(
       snapshot.suspensionPhase = availability.hasSuspensionDeadline()
         ? snapshot.suspensionPhase
         : undefined;
-      snapshot.pluginCapabilities = null;
       snapshot.usagePublications = undefined;
       scheduleOfflineIndicator();
     }
@@ -193,6 +205,7 @@ export function createApplicationGateway(
   const setConnectionSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
     setSnapshot({
       hello: null,
+      pluginCapabilities: null,
       canvasPluginSurfaceUrl: null,
       selfUser: undefined,
       lastError: null,
@@ -554,9 +567,20 @@ export function createApplicationGateway(
           : undefined;
         // Display-only evidence; admission is still re-derived from the next hello.
         setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        // Transport loss and announced unavailability keep this client's presentation;
+        // any connect rejection (auth, pairing, protocol, build) fails closed.
+        const transientClose =
+          !error ||
+          restartPending ||
+          Boolean(suspensionPhase) ||
+          isRetryableGatewayStartupUnavailableError(error);
+        const retainPresentation = transientClose && !nextClient.offlineRecoveryRetired;
         const closeReason = formatUiExternalText(reason);
         setConnectionSnapshot({
           client: nextClient,
+          // Retained capabilities describe this client, never its live dispatch authority.
+          hello: retainPresentation ? snapshot.hello : null,
+          pluginCapabilities: retainPresentation ? snapshot.pluginCapabilities : null,
           phase:
             mismatchedBuildId !== null
               ? "reload-required"
@@ -572,15 +596,7 @@ export function createApplicationGateway(
           // Retain only established profileless display identity through transport loss.
           // Rejected admission and unresolved/replaced identities must stay fail-closed.
           selfUser:
-            everConnected &&
-            (!error ||
-              restartPending ||
-              suspensionPhase ||
-              isRetryableGatewayStartupUnavailableError(error)) &&
-            !nextClient.offlineRecoveryRetired &&
-            snapshot.selfUser === null
-              ? null
-              : undefined,
+            everConnected && retainPresentation && snapshot.selfUser === null ? null : undefined,
           restartPending: restartPending || snapshot.restartPending === true,
           suspensionPhase,
           lastError: startupPending
@@ -612,7 +628,10 @@ export function createApplicationGateway(
       onEvent: createGatewayEventObserver({
         isAttached: () => client === nextClient,
         isCurrent: () => isCurrentClient(nextClient),
-        project: (event) => metadataObserver.receive(event, snapshot),
+        project: (event) => {
+          const presenceEvent = presenceObserver.receive(event);
+          return presenceEvent && metadataObserver.receive(presenceEvent, snapshot);
+        },
         record: recordGatewayEvent,
         listeners: eventListeners,
       }),

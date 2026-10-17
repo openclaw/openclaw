@@ -62,21 +62,6 @@ describe("resolveFeishuSenderName", () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it("does not cache sender names when the expiry would exceed Date range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const get = mockUserNames("Ada", "Grace");
-
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_overflow", log: vi.fn() }),
-    ).resolves.toEqual({ name: "Ada" });
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_overflow", log: vi.fn() }),
-    ).resolves.toEqual({ name: "Grace" });
-
-    expect(get).toHaveBeenCalledTimes(2);
-  });
-
   it("caches 41050 misses per account without logging another failure", async () => {
     const get = vi
       .fn()

@@ -45,7 +45,7 @@ const resolveSessionTranscriptRuntimeTargetMock = vi.fn(async (scope: Record<str
   storePath: scope.storePath ?? resolveDefaultSessionStorePath("main"),
 }));
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
-let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
+let waitForSessionMaintenance: typeof import("../session-maintenance/coordinator.js").waitForSessionMaintenance;
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 
 vi.mock("./context-engine-capabilities.js", () => ({
@@ -82,7 +82,7 @@ describe("runContextEngineMaintenance", () => {
     resolveSessionTranscriptRuntimeTargetMock.mockClear();
     ({
       runContextEngineMaintenance,
-      waitForDeferredTurnMaintenanceForSession,
+      waitForSessionMaintenance,
       resetDeferredTurnMaintenanceStateForTest,
     } = await loadContextEngineMaintenanceModuleForTest());
   });
@@ -203,6 +203,70 @@ describe("runContextEngineMaintenance", () => {
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
   });
 
+  it.each(["restore", "hydrate"] as const)(
+    "cancels a pending lazy transcript %s before rewriting",
+    async (stage) => {
+      const { executeContextEngineMaintenance } =
+        await import("./context-engine-maintenance-execution.js");
+      const coldStorage = await import("../../config/sessions/session-cold-storage.js");
+      const { SessionManager } = await import("../sessions/index.js");
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const cancelled = new Error("maintenance cancelled during transcript read");
+      const waitForAbort = async (signal?: AbortSignal): Promise<never> => {
+        entered.resolve();
+        if (!signal) {
+          throw new Error("Transcript read is not cancellable");
+        }
+        return await new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(cancelled), { once: true });
+        });
+      };
+      const restore = vi.spyOn(coldStorage, "restoreSessionColdTranscript");
+      const open = vi.spyOn(SessionManager, "openAsync");
+      if (stage === "restore") {
+        restore.mockImplementationOnce((_scope, _assert, _prepared, _guard, signal) =>
+          waitForAbort(signal),
+        );
+      } else {
+        open.mockImplementationOnce((_target, _cwd, _limits, signal) => waitForAbort(signal));
+      }
+      try {
+        const pending = executeContextEngineMaintenance({
+          contextEngine: {
+            info: { id: "test", name: "Test Engine" },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain: async ({ runtimeContext }) =>
+              runtimeContext!.rewriteTranscriptEntries!({
+                replacements: [
+                  {
+                    entryId: "entry-1",
+                    message: { role: "user", content: "replacement", timestamp: 1 },
+                  },
+                ],
+              }),
+          },
+          sessionId: "cancelled-session",
+          sessionKey: "agent:main:cancelled-session",
+          sessionFile: "agent:main:cancelled-session",
+          reason: "compaction",
+          executionMode: "foreground",
+          abortSignal: controller.signal,
+        });
+        const rejected = expect(pending).rejects.toBe(cancelled);
+        await entered.promise;
+        controller.abort(cancelled);
+        await rejected;
+        expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+      } finally {
+        restore.mockRestore();
+        open.mockRestore();
+      }
+    },
+  );
+
   it("retires a deferred worker's retained rewrite capability after disposal and settlement", async () => {
     await withStateDirEnv("openclaw-retired-maintenance-rewrite-", async () => {
       resetCommandQueueStateForTest();
@@ -249,7 +313,7 @@ describe("runContextEngineMaintenance", () => {
           },
         });
         await expectDefined(deferred, "deferred maintenance completion");
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
 
         expect(activeRewriteResult).toEqual({ changed: true, bytesFreed: 77, rewrittenEntries: 1 });
         expect(dispose).toHaveBeenCalledOnce();
@@ -330,7 +394,7 @@ describe("runContextEngineMaintenance", () => {
         expect(result).toBeUndefined();
         await backgroundEngine.started;
         expect(maintain).toHaveBeenCalledTimes(1);
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
           sessionManager: sessionManagerFixture.current,
           replacements: [
@@ -360,13 +424,10 @@ describe("runContextEngineMaintenance", () => {
         });
 
         await foregroundTurn;
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
       } finally {
         releaseForeground.resolve();
-        await Promise.allSettled([
-          waitForDeferredTurnMaintenanceForSession(sessionKey),
-          foregroundTurn,
-        ]);
+        await Promise.allSettled([waitForSessionMaintenance(sessionKey), foregroundTurn]);
         vi.useRealTimers();
       }
     });
@@ -507,7 +568,7 @@ describe("runContextEngineMaintenance", () => {
           trigger();
           let timeout: ReturnType<typeof setTimeout> | undefined;
           const settled = await Promise.race([
-            waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => true),
+            waitForSessionMaintenance(sessionKey).then(() => true),
             new Promise<false>((resolve) => {
               timeout = setTimeout(() => resolve(false), 500);
             }),
@@ -606,7 +667,7 @@ describe("runContextEngineMaintenance", () => {
         releaseLane.resolve();
         await laneBlocker;
         await deferred;
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
 
         expect(maintain).not.toHaveBeenCalled();
         expect(engine["dispose"]).toHaveBeenCalledTimes(1);
@@ -765,7 +826,7 @@ describe("runContextEngineMaintenance", () => {
         await firstDeferred[0];
       } finally {
         releaseMaintenance.resolve();
-        await Promise.allSettled([waitForDeferredTurnMaintenanceForSession(sessionKey)]);
+        await Promise.allSettled([waitForSessionMaintenance(sessionKey)]);
         resetCommandQueueStateForTest();
         vi.useRealTimers();
       }
@@ -833,7 +894,7 @@ describe("runContextEngineMaintenance", () => {
 
         foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           events.push("foreground-before-read-checkpoint");
-          await waitForDeferredTurnMaintenanceForSession(sessionKey);
+          await waitForSessionMaintenance(sessionKey);
           events.push("foreground-read");
         });
 
@@ -851,10 +912,7 @@ describe("runContextEngineMaintenance", () => {
         expect(maintain).toHaveBeenCalledTimes(1);
       } finally {
         allowRewrite.resolve();
-        await Promise.allSettled([
-          waitForDeferredTurnMaintenanceForSession(sessionKey),
-          foregroundTurn,
-        ]);
+        await Promise.allSettled([waitForSessionMaintenance(sessionKey), foregroundTurn]);
         vi.useRealTimers();
       }
     });
@@ -901,7 +959,7 @@ describe("runContextEngineMaintenance", () => {
         await backgroundEngine.started;
         expect(maintain).toHaveBeenCalledTimes(1);
         process.emit("SIGTERM", "SIGTERM");
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         expect(onDeferredMaintenanceFailure).toHaveBeenCalledWith(
           expect.objectContaining({ message: "maintenance cleanup failed" }),
         );

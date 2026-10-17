@@ -20,15 +20,6 @@ afterEach(() => {
 });
 
 describe("extension relay host-local secret", () => {
-  it("creates a 64-hex secret on ensure and persists it privately", async () => {
-    const token = await ensureExtensionRelayToken(env);
-    expect(token).toMatch(/^[0-9a-f]{64}$/);
-    expect(fs.existsSync(secretPath)).toBe(true);
-    if (process.platform !== "win32") {
-      expect(fs.statSync(secretPath).mode & 0o777).toBe(0o600);
-    }
-  });
-
   it.each([{ name: "symlinked directory", mode: 0o750, symlink: true }])(
     "reuses a valid key without mutating its $name",
     async ({ mode, symlink }) => {
@@ -81,8 +72,12 @@ describe("extension relay host-local secret", () => {
         fs.writeFileSync(fd, `${writerToken}\n`);
       }
       const [first, second] = await tokens;
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
       expect(second).toBe(first);
       expect(readExtensionRelayToken(env)).toBe(first);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(secretPath).mode & 0o777).toBe(0o600);
+      }
       expect(fs.lstatSync(credentials).isSymbolicLink()).toBe(symlink);
       if (before) {
         expect(first).toBe(writerToken);
@@ -160,6 +155,8 @@ describe("extension relay host-local secret", () => {
       fs.chmodSync(secretPath, 0o644);
       const replacement = path.join(stateDir, "replacement");
       fs.writeFileSync(replacement, "b2".repeat(32), { mode: 0o644 });
+      // Creation modes are masked by umask; the replacement must start broad.
+      fs.chmodSync(replacement, 0o644);
       const inspected = fs.lstatSync(secretPath);
       vi.spyOn(fs, "lstatSync").mockImplementationOnce(() => {
         fs.renameSync(secretPath, path.join(stateDir, "original"));

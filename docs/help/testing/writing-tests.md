@@ -27,9 +27,12 @@ not a need for test-only exports.
 
 ## Cost budget
 
-Measure each new or materially changed file with
-`pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available.
+Measure every new or changed test file with
+`pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available;
+PRs state both.
 
+- Seconds-long tests must prove a contract no cheaper layer can. Long end-to-end
+  compositions belong in the release-only tier.
 - Target under 5 seconds of test time per file. Above 30 seconds, explain the
   contract and why no cheaper layer proves it.
 - Split files exceeding planner job budgets by owner, or consider `RELEASE_ONLY_*`
@@ -37,10 +40,11 @@ Measure each new or materially changed file with
   keep coverage without duplicate release tests. Preserve assigned configs and
   process/timer policies; product E2E/live stays separate. See
   [maintainer-tooling routing](/ci/scope-and-routing/node-test-lanes).
-- Inject clocks; avoid real timers, sleeps, and polling. Claim ports through
+- Inject clocks; do not add real timers, sleeps, or polling. Claim ports through
   `src/test-utils/port-claims.ts`, isolate each file's state, and reuse suite-level
-  Gateway/process fixtures. Import narrow APIs, not broad barrels. Fix shared
-  state instead of adding serial configs or worker pins.
+  Gateway/process fixtures; never boot one per test when a suite-level fixture
+  exists. Import narrow APIs, not broad barrels. Fix shared state; do not add
+  serial configs or worker pins.
 - For compiled subprocesses and legacy timeout helpers, follow the
   [collection/preload and timeout migration recipes](/help/testing/fixtures#compiled-subprocesses-and-timeout-helpers).
 
@@ -64,10 +68,12 @@ for export preservation, state-isolating mocks, annotations, and the shrinking b
 Before raw database reads or file snapshots, follow the
 [async close contract](/help/testing/fixtures#raw-sqlite-state-access).
 
-## Skills watchers
+<a id="skills-watchers" />
 
-Close real watchers or disable watching as described in
-[watcher cleanup](/help/testing/fixtures#skills-watchers).
+## Skills discovery
+
+Close the background worker and isolate passive refresh as described in
+[discovery cleanup](/help/testing/fixtures#skills-discovery).
 
 ## Flake triage
 

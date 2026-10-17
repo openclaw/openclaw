@@ -83,7 +83,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
       : undefined;
   if (admission && assertRequestCurrent) {
     admission.bindDatabaseAuthority({
-      databasePath: context.admission.databasePath,
+      databasePath: context.admission.identity.canonicalPath,
       assertRequest: assertRequestCurrent,
       assertAccess() {
         context.admission.assertCurrent();

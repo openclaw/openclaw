@@ -9,6 +9,7 @@ import {
 import {
   generateOAuthState,
   startProviderOAuthLoopbackCallbackServer,
+  type OAuthCallbackResult as OpenRouterOAuthCallbackResult,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   readProviderJsonResponse,
@@ -33,11 +34,6 @@ const OPENROUTER_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const OPENROUTER_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
 const OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OPENROUTER_OAUTH_PROFILE_ID = "openrouter:default";
-
-type OpenRouterOAuthCallbackResult = {
-  code: string;
-  state: string;
-};
 
 type OpenRouterOAuthCallbackServer = Awaited<
   ReturnType<typeof startProviderOAuthLoopbackCallbackServer>
@@ -281,47 +277,53 @@ async function resolveOpenRouterOAuthCode(
   }
 
   let callback: OpenRouterOAuthCallbackServer | undefined;
-  try {
-    callback = await startProviderOAuthLoopbackCallbackServer({
-      redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
-      expectedState: params.state,
-      timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
-    });
-    params.onProgress(
-      `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,
-    );
-  } catch (error) {
-    if (ctx.signal?.aborted) {
-      throw error;
-    }
-    params.onProgress("OAuth callback not detected; waiting for redirect URL...");
-  }
-
-  try {
-    await ctx.openUrl(authorizeUrl);
-    ctx.runtime.log(`Open: ${authorizeUrl}`);
-  } catch {
-    ctx.runtime.log(`Open manually: ${authorizeUrl}`);
-  }
-
-  if (!callback) {
-    return await promptForOpenRouterRedirect(ctx, params.state);
-  }
-
   let result: OpenRouterOAuthLoopbackResult;
   try {
     try {
-      result = await callback.waitForCallback();
-    } finally {
-      await callback.close();
+      callback = await startProviderOAuthLoopbackCallbackServer({
+        redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
+        expectedState: params.state,
+        timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      });
+      params.onProgress(
+        `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,
+      );
+    } catch (error) {
+      if (ctx.signal?.aborted) {
+        throw error;
+      }
+      params.onProgress("OAuth callback not detected; waiting for redirect URL...");
     }
-  } catch (error) {
-    if (ctx.signal?.aborted) {
-      throw error;
+
+    try {
+      await ctx.openUrl(authorizeUrl);
+      ctx.runtime.log(`Open: ${authorizeUrl}`);
+    } catch {
+      ctx.runtime.log(`Open manually: ${authorizeUrl}`);
     }
-    params.onProgress("OAuth callback not detected; waiting for redirect URL...");
-    return await promptForOpenRouterRedirect(ctx, params.state);
+
+    if (!callback) {
+      return await promptForOpenRouterRedirect(ctx, params.state);
+    }
+
+    try {
+      try {
+        result = await callback.waitForCallback();
+      } finally {
+        const completedCallback = callback;
+        callback = undefined;
+        await completedCallback.close();
+      }
+    } catch (error) {
+      if (ctx.signal?.aborted) {
+        throw error;
+      }
+      params.onProgress("OAuth callback not detected; waiting for redirect URL...");
+      return await promptForOpenRouterRedirect(ctx, params.state);
+    }
+  } finally {
+    await callback?.close();
   }
 
   if (result.type === "oauth_error") {

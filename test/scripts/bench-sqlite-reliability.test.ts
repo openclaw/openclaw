@@ -1,5 +1,5 @@
-// SQLite reliability proof tests cover CLI safety and one real snapshot round trip.
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
+import { on, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +31,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const makeRoot = () => tempDirs.make("openclaw-sqlite-reliability-test-");
 const nodeExecutable = resolveTestNodeExecPath();
 const nodeArgs = resolveVitestNodeArgs();
 // Windows repeats ACL checks and crash/restore copies throughout the full proof.
@@ -62,53 +63,35 @@ function runProof(args: string[], env: NodeJS.ProcessEnv = {}) {
   return result;
 }
 
-async function waitForChildReady(child: ChildProcess): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const onMessage = (message: unknown) => {
-      if (message && typeof message === "object" && "kind" in message && message.kind === "ready") {
-        cleanup();
-        resolve();
-      }
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = () => {
-      cleanup();
-      reject(new Error("writer child exited before ready"));
-    };
-    const cleanup = () => {
-      child.off("message", onMessage);
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-    child.on("message", onMessage);
-    child.on("error", onError);
-    child.on("exit", onExit);
-  });
+function expectExited(exit: { code: number | null; signal: NodeJS.Signals | null }) {
+  expect(exit.code !== null || exit.signal !== null).toBe(true);
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<{
-  code: number | null;
-  signal: NodeJS.Signals | null;
-}> {
-  return await new Promise((resolve, reject) => {
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
+function expectInterrupted(
+  proof: { exit: Parameters<typeof expectExited>[0]; stagingEntries: number },
+  expected: Record<string, unknown>,
+) {
+  expect(proof).toMatchObject({ recoveryVerified: true, ...expected });
+  expect(proof.stagingEntries).toBeGreaterThan(0);
+  expectExited(proof.exit);
+}
+
+function payload(rows: number) {
+  return { bytes: rows * COMPACTION_PAYLOAD_BYTES, idSum: (rows * (rows + 1)) / 2, rows };
+}
+
+async function waitForChildReady(child: ChildProcess): Promise<void> {
+  for await (const args of on(child, "message", { close: ["exit"] })) {
+    const message: unknown = args[0];
+    if (message && typeof message === "object" && "kind" in message && message.kind === "ready") {
+      return;
+    }
+  }
+  throw new Error("writer child exited before ready");
+}
+
+function waitForChildExit(child: ChildProcess): Promise<Parameters<typeof expectExited>[0]> {
+  return once(child, "exit").then(([code, signal]) => ({ code, signal }));
 }
 
 describe("scripts/bench-sqlite-reliability", () => {
@@ -124,10 +107,7 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   it("detects a transient WAL overrun before the file shrinks", async () => {
-    const walPath = path.join(
-      tempDirs.make("openclaw-sqlite-reliability-test-"),
-      "database.sqlite-wal",
-    );
+    const walPath = path.join(makeRoot(), "database.sqlite-wal");
     let stopRequests = 0;
 
     await expect(
@@ -153,8 +133,7 @@ describe("scripts/bench-sqlite-reliability", () => {
 
   it("rejects malformed arguments before creating state", () => {
     const unknown = runProof(["--wat"]);
-    expect(unknown.status).toBe(2);
-    expect(unknown.stdout).toBe("");
+    expect(unknown).toMatchObject({ status: 2, stdout: "" });
     expect(unknown.stderr.trim()).toBe("error: Unknown argument: --wat");
 
     expect(() => parseSqliteReliabilityCli(["--profile", "smoke", "--profile", "large"])).toThrow(
@@ -169,12 +148,10 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   reliabilitySmokeTest("proves snapshot reliability while safely reusing state", () => {
-    const stateDir = tempDirs.make("openclaw-sqlite-reliability-test-");
+    const stateDir = makeRoot();
     const previousSyncedRepository = path.join(
       stateDir,
-      "sqlite-reliability-runs",
-      "previous-run",
-      "synced-snapshots",
+      "sqlite-reliability-runs/previous-run/synced-snapshots",
     );
     const previousArtifact = path.join(previousSyncedRepository, "previous-artifact");
     fs.mkdirSync(previousSyncedRepository, { recursive: true, mode: 0o700 });
@@ -226,216 +203,113 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
     expect(result.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     expect(result.stdout).not.toContain("=missing");
     const firstReport = JSON.parse(fs.readFileSync(output, "utf8")) as ReliabilityReport;
-    expect(firstReport.concurrentRestoresVerified).toBe(2);
-    expect(firstReport.restoresVerified).toBe(5);
-    expect(
-      firstReport.crashRecoveryProof.exit.code !== null ||
-        firstReport.crashRecoveryProof.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.crashRecoveryProof.stateAfterRecovery).toEqual(
-      firstReport.crashRecoveryProof.stateBeforeKill,
-    );
-    expect(firstReport.publicationInterruptionProof.beforePublish).toMatchObject({
-      recoveryVerified: true,
+    const {
+      crashRecoveryProof: crash,
+      publicationInterruptionProof: publication,
+      indexRepairInterruptionProof: indexRepair,
+      transactionProof: transaction,
+      maintenanceProof: {
+        repositoryInterruption: repository,
+        restoreInterruption: restore,
+        vacuumInterruption: vacuum,
+        compaction,
+        postCompact,
+      },
+    } = firstReport;
+    expect(firstReport).toMatchObject({ concurrentRestoresVerified: 2, restoresVerified: 5 });
+    expectExited(crash.exit);
+    expect(crash.stateAfterRecovery).toEqual(crash.stateBeforeKill);
+    expectInterrupted(publication.beforePublish, {
       retryPublished: true,
       sourceStatePreserved: true,
       targetVerifiedAfterCrash: false,
       targetVisibleAfterCrash: false,
     });
-    expect(firstReport.publicationInterruptionProof.beforePublish.stagingEntries).toBeGreaterThan(
-      0,
-    );
-    expect(
-      firstReport.publicationInterruptionProof.beforePublish.exit.code !== null ||
-        firstReport.publicationInterruptionProof.beforePublish.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.publicationInterruptionProof.afterPublish).toMatchObject({
+    expectInterrupted(publication.afterPublish, {
       existingTargetPreserved: true,
-      recoveryVerified: true,
       sourceStatePreserved: true,
       targetVerifiedAfterCrash: true,
       targetVisibleAfterCrash: true,
     });
-    expect(firstReport.publicationInterruptionProof.afterPublish.stagingEntries).toBeGreaterThan(0);
-    expect(
-      firstReport.publicationInterruptionProof.afterPublish.exit.code !== null ||
-        firstReport.publicationInterruptionProof.afterPublish.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.indexRepairInterruptionProof.rollbackJournal).toMatchObject({
-      recoveryVerified: true,
-      repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-    });
-    expect(
-      firstReport.indexRepairInterruptionProof.rollbackJournal.journalBytesObserved,
-    ).toBeGreaterThan(0);
-    expect(
-      firstReport.indexRepairInterruptionProof.rollbackJournal.exit.code !== null ||
-        firstReport.indexRepairInterruptionProof.rollbackJournal.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.indexRepairInterruptionProof.wal).toMatchObject({
-      recoveryVerified: true,
-      repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-    });
-    expect(firstReport.indexRepairInterruptionProof.wal.walBytesObserved).toBeGreaterThan(0);
-    expect(
-      firstReport.indexRepairInterruptionProof.wal.exit.code !== null ||
-        firstReport.indexRepairInterruptionProof.wal.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.transactionProof.committedWalSentinel).toBe(true);
-    expect(firstReport.transactionProof.heldRows).toBeGreaterThan(0);
-    expect(firstReport.transactionProof.visibleAfterRestore).toBe(false);
+    for (const proof of [indexRepair.rollbackJournal, indexRepair.wal]) {
+      expect(proof).toMatchObject({
+        recoveryVerified: true,
+        repairedIndexes: ["idx_openclaw_reliability_records_identity"],
+      });
+      expectExited(proof.exit);
+    }
+    expect(indexRepair.rollbackJournal.journalBytesObserved).toBeGreaterThan(0);
+    expect(indexRepair.wal.walBytesObserved).toBeGreaterThan(0);
+    expect(transaction.committedWalSentinel).toBe(true);
+    expect(transaction.heldRows).toBeGreaterThan(0);
+    expect(transaction.visibleAfterRestore).toBe(false);
     expect(firstReport.writer.rowsCommitted).toBeGreaterThan(0);
     expect(firstReport.maintenanceProof.bloatBytes).toBe(
       VACUUM_PROOF_ROWS * COMPACTION_PAYLOAD_BYTES,
     );
-    expect(firstReport.maintenanceProof.compaction.autoVacuum.after).toBe(2);
-    expect(firstReport.maintenanceProof.compaction.freelistPages.before).toBeGreaterThan(0);
-    expect(firstReport.maintenanceProof.compaction.freelistPages.after).toBe(0);
-    expect(firstReport.maintenanceProof.compaction.reclaimedBytes).toBeGreaterThan(0);
-    expect(firstReport.maintenanceProof.compaction.walBytes.after).toBe(0);
-    expect(firstReport.maintenanceProof.vacuumInterruption.recoveryVerified).toBe(true);
-    expect(firstReport.maintenanceProof.vacuumInterruption.autoVacuumBeforeKill).toBe(0);
-    expect(firstReport.maintenanceProof.vacuumInterruption.autoVacuumAfterRecovery).toBe(0);
-    expect(
-      firstReport.maintenanceProof.vacuumInterruption.exit.code !== null ||
-        firstReport.maintenanceProof.vacuumInterruption.exit.signal !== null,
-    ).toBe(true);
-    expect(
-      firstReport.maintenanceProof.vacuumInterruption.journalBytesObserved > 0 ||
-        firstReport.maintenanceProof.vacuumInterruption.walBytesObserved > 0,
-    ).toBe(true);
-    expect(firstReport.maintenanceProof.vacuumInterruption.payloadAfterRecovery).toEqual(
-      firstReport.maintenanceProof.vacuumInterruption.payloadBeforeKill,
-    );
-    expect(firstReport.maintenanceProof.vacuumInterruption.payloadBeforeKill).toEqual({
-      bytes: VACUUM_PROOF_ROWS * COMPACTION_PAYLOAD_BYTES,
-      idSum: (VACUUM_PROOF_ROWS * (VACUUM_PROOF_ROWS + 1)) / 2,
-      rows: VACUUM_PROOF_ROWS,
-    });
-    expect(firstReport.maintenanceProof.vacuumInterruption.stateAfterRecovery).toEqual(
-      firstReport.maintenanceProof.vacuumInterruption.stateBeforeKill,
-    );
-    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending).toMatchObject({
-      crashSnapshotVerifiedAfterCrash: false,
-      crashSnapshotVisibleAfterCrash: false,
-      incompleteEntries: 1,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-      visibleSnapshotsAfterCrash: 1,
-    });
-    expect(
-      firstReport.maintenanceProof.repositoryInterruption.beforePending.stagingEntries,
-    ).toBeGreaterThan(0);
-    expect(
-      firstReport.maintenanceProof.repositoryInterruption.beforePending.exit.code !== null ||
-        firstReport.maintenanceProof.repositoryInterruption.beforePending.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.maintenanceProof.repositoryInterruption.pending).toMatchObject({
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-      visibleSnapshotsAfterCrash: 3,
-    });
-    expect(
-      firstReport.maintenanceProof.repositoryInterruption.pending.stagingEntries,
-    ).toBeGreaterThan(0);
-    expect(
-      firstReport.maintenanceProof.repositoryInterruption.pending.exit.code !== null ||
-        firstReport.maintenanceProof.repositoryInterruption.pending.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.maintenanceProof.repositoryInterruption.afterCommit).toMatchObject({
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-      visibleSnapshotsAfterCrash: 5,
-    });
-    expect(
-      firstReport.maintenanceProof.repositoryInterruption.afterCommit.stagingEntries,
-    ).toBeGreaterThan(0);
-    expect(
-      firstReport.maintenanceProof.repositoryInterruption.afterCommit.exit.code !== null ||
-        firstReport.maintenanceProof.repositoryInterruption.afterCommit.exit.signal !== null,
-    ).toBe(true);
-    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending.state).toEqual(
-      firstReport.maintenanceProof.repositoryInterruption.pending.state,
-    );
-    expect(firstReport.maintenanceProof.repositoryInterruption.pending.state).toEqual(
-      firstReport.maintenanceProof.repositoryInterruption.afterCommit.state,
-    );
-    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending.payload).toEqual(
-      firstReport.maintenanceProof.repositoryInterruption.pending.payload,
-    );
-    expect(firstReport.maintenanceProof.repositoryInterruption.pending.payload).toEqual(
-      firstReport.maintenanceProof.repositoryInterruption.afterCommit.payload,
-    );
-    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending.payload).toEqual({
-      bytes: COMPACTION_FIXTURE_ROWS * COMPACTION_PAYLOAD_BYTES,
-      idSum: (COMPACTION_FIXTURE_ROWS * (COMPACTION_FIXTURE_ROWS + 1)) / 2,
-      rows: COMPACTION_FIXTURE_ROWS,
-    });
-    expect(firstReport.maintenanceProof.restoreInterruption.snapshotBytes).toBeGreaterThan(
-      MIN_MULTICHUNK_RESTORE_BYTES,
-    );
-    expect(firstReport.maintenanceProof.restoreInterruption.beforePublish).toMatchObject({
+    expect(compaction.autoVacuum.after).toBe(2);
+    expect(compaction.freelistPages.before).toBeGreaterThan(0);
+    expect(compaction.freelistPages.after).toBe(0);
+    expect(compaction.reclaimedBytes).toBeGreaterThan(0);
+    expect(compaction.walBytes.after).toBe(0);
+    expect(vacuum.recoveryVerified).toBe(true);
+    expect(vacuum.autoVacuumBeforeKill).toBe(0);
+    expect(vacuum.autoVacuumAfterRecovery).toBe(0);
+    expectExited(vacuum.exit);
+    expect(vacuum.journalBytesObserved > 0 || vacuum.walBytesObserved > 0).toBe(true);
+    expect(vacuum.payloadAfterRecovery).toEqual(vacuum.payloadBeforeKill);
+    expect(vacuum.payloadBeforeKill).toEqual(payload(VACUUM_PROOF_ROWS));
+    expect(vacuum.stateAfterRecovery).toEqual(vacuum.stateBeforeKill);
+    for (const [proof, published, visible] of [
+      [repository.beforePending, false, 1],
+      [repository.pending, true, 3],
+      [repository.afterCommit, true, 5],
+    ] as const) {
+      expect(proof).toMatchObject({
+        crashSnapshotVerifiedAfterCrash: published,
+        crashSnapshotVisibleAfterCrash: published,
+        incompleteEntries: published ? 0 : 1,
+        repositoryVerified: true,
+        retryCreated: true,
+        sourcePayloadPreserved: true,
+        sourceStatePreserved: true,
+        visibleSnapshotsAfterCrash: visible,
+      });
+      expect(proof.stagingEntries).toBeGreaterThan(0);
+      expectExited(proof.exit);
+    }
+    expect(repository.beforePending.state).toEqual(repository.pending.state);
+    expect(repository.pending.state).toEqual(repository.afterCommit.state);
+    expect(repository.beforePending.payload).toEqual(repository.pending.payload);
+    expect(repository.pending.payload).toEqual(repository.afterCommit.payload);
+    expect(repository.beforePending.payload).toEqual(payload(COMPACTION_FIXTURE_ROWS));
+    expect(restore.snapshotBytes).toBeGreaterThan(MIN_MULTICHUNK_RESTORE_BYTES);
+    expectInterrupted(restore.beforePublish, {
       existingTargetPreserved: false,
-      recoveryVerified: true,
       repositoryVerified: true,
       retryRestored: true,
       targetVerifiedAfterCrash: false,
       targetVisibleAfterCrash: false,
     });
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.beforePublish.stagingEntries,
-    ).toBeGreaterThan(0);
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.beforePublish.exit.code !== null ||
-        firstReport.maintenanceProof.restoreInterruption.beforePublish.exit.signal !== null,
-    ).toBe(true);
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.beforePublish.stateAfterRecovery,
-    ).toEqual(firstReport.maintenanceProof.postCompact.state);
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.beforePublish.payloadAfterRecovery,
-    ).toEqual({
-      bytes: COMPACTION_FIXTURE_ROWS * COMPACTION_PAYLOAD_BYTES,
-      idSum: (COMPACTION_FIXTURE_ROWS * (COMPACTION_FIXTURE_ROWS + 1)) / 2,
-      rows: COMPACTION_FIXTURE_ROWS,
-    });
-    expect(firstReport.maintenanceProof.restoreInterruption.afterPublish).toMatchObject({
+    expect(restore.beforePublish.stateAfterRecovery).toEqual(postCompact.state);
+    expect(restore.beforePublish.payloadAfterRecovery).toEqual(payload(COMPACTION_FIXTURE_ROWS));
+    expectInterrupted(restore.afterPublish, {
       existingTargetPreserved: true,
-      recoveryVerified: true,
       repositoryVerified: true,
       retryRestored: false,
       targetVerifiedAfterCrash: true,
       targetVisibleAfterCrash: true,
     });
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.afterPublish.stagingEntries,
-    ).toBeGreaterThan(0);
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.afterPublish.exit.code !== null ||
-        firstReport.maintenanceProof.restoreInterruption.afterPublish.exit.signal !== null,
-    ).toBe(true);
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.afterPublish.stateAfterRecovery,
-    ).toEqual(firstReport.maintenanceProof.restoreInterruption.beforePublish.stateAfterRecovery);
-    expect(
-      firstReport.maintenanceProof.restoreInterruption.afterPublish.payloadAfterRecovery,
-    ).toEqual(firstReport.maintenanceProof.restoreInterruption.beforePublish.payloadAfterRecovery);
-    expect(firstReport.maintenanceProof.postCompact.restoreVerified).toBe(true);
-    expect(firstReport.maintenanceProof.postCompact.state.batches).toBeGreaterThan(0);
-    expect(firstReport.maintenanceProof.postCompact.state.rows).toBeGreaterThan(0);
-    expect(firstReport.maintenanceProof.postCompact.state.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(restore.afterPublish.stateAfterRecovery).toEqual(
+      restore.beforePublish.stateAfterRecovery,
+    );
+    expect(restore.afterPublish.payloadAfterRecovery).toEqual(
+      restore.beforePublish.payloadAfterRecovery,
+    );
+    expect(postCompact.restoreVerified).toBe(true);
+    expect(postCompact.state.batches).toBeGreaterThan(0);
+    expect(postCompact.state.rows).toBeGreaterThan(0);
+    expect(postCompact.state.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(firstReport.walBytes.limit).toBeGreaterThan(0);
     expect(firstReport.walBytes.peak).toBeGreaterThan(0);
     expect(firstReport.walBytes.peak).toBeLessThanOrEqual(firstReport.walBytes.limit);
@@ -455,8 +329,8 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
   });
 
   it("matches crash barriers across filesystem path aliases", () => {
-    const realRoot = tempDirs.make("openclaw-sqlite-reliability-test-");
-    const aliasRoot = path.join(tempDirs.make("openclaw-sqlite-reliability-test-"), "alias");
+    const realRoot = makeRoot();
+    const aliasRoot = path.join(makeRoot(), "alias");
     fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
     const repositoryPath = path.join(realRoot, "snapshots");
     const snapshotPath = path.join(repositoryPath, "snapshot");
@@ -481,10 +355,7 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
   });
 
   it("stops the writer when its parent IPC channel disconnects", async ({ signal }) => {
-    const databasePath = path.join(
-      tempDirs.make("openclaw-sqlite-reliability-test-"),
-      "writer.sqlite",
-    );
+    const databasePath = path.join(makeRoot(), "writer.sqlite");
     const writerUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.sqliteReliabilityWriter);
     const child = fork(
       fileURLToPath(writerUrl),

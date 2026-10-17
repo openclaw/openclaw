@@ -1,3 +1,4 @@
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_IN_PROGRESS_ENV,
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
@@ -51,7 +52,7 @@ export async function runPostActivationInspections(params: {
   const incomplete = (reason: string): UpdateRunResult => {
     step.advisory = {
       kind: "recoverable-maintenance",
-      message: `Deferred Doctor inspections did not complete after restart (${reason}). Run \`openclaw doctor --lint --severity-min info\` to inspect them.`,
+      message: `Deferred Doctor inspections did not complete after restart (${reason}). Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`,
     };
     defaultRuntime.error(step.advisory.message);
     return { ...params.result, steps: [...params.result.steps, step] };
@@ -61,10 +62,13 @@ export async function runPostActivationInspections(params: {
   }
   try {
     // The last target Doctor owns this policy; the replaced parent graph does not.
+    const inlineReceipt = params.result.postUpdate?.plugins?.doctorLint?.deferredInspectionCheckIds;
     const selectors = UpdateDoctorDeferredInspectionCheckIdsSchema.safeParse(
-      params.result.steps.findLast(
-        (candidate) => candidate.deferredInspectionCheckIds !== undefined,
-      )?.deferredInspectionCheckIds,
+      inlineReceipt !== undefined
+        ? inlineReceipt
+        : params.result.steps.findLast(
+            (candidate) => candidate.deferredInspectionCheckIds !== undefined,
+          )?.deferredInspectionCheckIds,
     );
     if (!selectors.success) {
       return incomplete("the target Doctor did not report usable deferred inspection selectors");
@@ -101,20 +105,23 @@ export async function runPostActivationInspections(params: {
       ]) {
         delete baseEnv[key];
       }
-      return runUtf8CommandWithTimeout(
-        [params.nodeRunner ?? resolveNodeRunner(), entryPath, ...args],
-        {
-          cwd: params.root,
-          timeoutMs: params.timeoutMs,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-          input: "",
-          maxOutputBytes: 4 * 1024 * 1024,
-          outputCapture: "head",
-          terminateOnOutputLimit: true,
-          baseEnv,
-        },
-      );
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: params.nodeRunner ?? resolveNodeRunner(),
+        entryPath,
+        execArgv: [],
+        args,
+      });
+      return runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
+        cwd: params.root,
+        timeoutMs: params.timeoutMs,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        input: "",
+        maxOutputBytes: 4 * 1024 * 1024,
+        outputCapture: "head",
+        terminateOnOutputLimit: true,
+        baseEnv,
+      });
     });
     step.exitCode = execution.code;
     step.termination = execution.termination;
@@ -155,7 +162,7 @@ export async function runPostActivationInspections(params: {
     if (report.doctorLintFindings.length > 0) {
       step.advisory = {
         kind: "recoverable-maintenance",
-        message: `Deferred Doctor inspections reported ${report.doctorLintFindings.length} advisory finding${report.doctorLintFindings.length === 1 ? "" : "s"} after restart.`,
+        message: `Deferred Doctor inspections reported ${report.doctorLintFindings.length} advisory finding${report.doctorLintFindings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`,
       };
     }
     return { ...params.result, steps: [...params.result.steps, step] };

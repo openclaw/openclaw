@@ -1,8 +1,8 @@
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
-  buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  resolveEmbeddingProviderSsrFPolicy,
   formatEmbeddingTaskText,
   normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
@@ -47,8 +47,6 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
 };
 
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
-
-// --- Gemini Embedding 2 support ---
 
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
@@ -437,7 +435,12 @@ async function resolveGeminiEmbeddingClient(
     );
   }
 
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
+  const ssrfPolicy = resolveEmbeddingProviderSsrFPolicy({
+    provider: "google",
+    api: providerConfig?.api ?? "google-generative-ai",
+    baseUrl,
+    allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+  });
   const headerOverrides: Record<string, string> = {};
   for (const [path, source] of [
     [

@@ -440,7 +440,7 @@ export async function ensureWorkerSessionPlacement(params: {
   dispatch: WorkerPlacementDispatchContract["dispatch"];
   startDispatch: (
     ...args: Parameters<WorkerPlacementDispatchContract["dispatch"]>
-  ) => Promise<WorkerSessionPlacementRecord>;
+  ) => Promise<{ release: () => void }>;
   waitForInitialPlacement: (
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
@@ -452,9 +452,15 @@ export async function ensureWorkerSessionPlacement(params: {
   onTransition?: Parameters<WorkerPlacementDispatchContract["dispatch"]>[1];
   signal?: AbortSignal;
   waitForReady?: boolean;
+  retainDispatch?: () => () => void;
 }): Promise<{ assertCurrent: () => void; release: () => void }> {
   const { request } = params;
   const prepared = await params.placements.prepareSessionPlacement(request.sessionId);
+  let releaseRequestedHandoff: (() => void) | undefined;
+  const release = () => {
+    prepared.release();
+    releaseRequestedHandoff?.();
+  };
   try {
     const read = () => {
       params.signal?.throwIfAborted();
@@ -536,7 +542,7 @@ export async function ensureWorkerSessionPlacement(params: {
       read();
     };
     if (await useRecorded()) {
-      return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+      return { assertCurrent: assertDestinationCurrent, release };
     }
     await params.prepareWorkspace(() => {
       const placement = read();
@@ -546,37 +552,48 @@ export async function ensureWorkerSessionPlacement(params: {
       return canStartDispatch(placement);
     });
     if (await useRecorded()) {
-      return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+      return { assertCurrent: assertDestinationCurrent, release };
     }
     const placement = read();
     const previousEnvironment =
       placement?.state === "failed" && placement.environmentId
         ? params.environments.get(placement.environmentId)
         : undefined;
-    const dispatch = params.waitForReady === false ? params.startDispatch : params.dispatch;
-    await dispatch(
-      {
-        ...request,
-        ...(previousEnvironment
-          ? {
-              inheritedProfile: {
-                providerId: previousEnvironment.providerId,
-                profileSnapshot: previousEnvironment.profileSnapshot,
-              },
-            }
-          : {}),
-      },
-      params.onTransition,
-      params.authorizeDispatch,
-      params.signal,
-    );
+    const dispatchRequest = {
+      ...request,
+      ...(previousEnvironment
+        ? {
+            inheritedProfile: {
+              providerId: previousEnvironment.providerId,
+              profileSnapshot: previousEnvironment.profileSnapshot,
+            },
+          }
+        : {}),
+    };
+    if (params.waitForReady === false) {
+      const handoff = await params.startDispatch(
+        dispatchRequest,
+        params.onTransition,
+        params.authorizeDispatch,
+        params.signal,
+      );
+      // Keep the requested postimage stable through the caller's final publication.
+      releaseRequestedHandoff = handoff.release;
+    } else {
+      await params.dispatch(
+        dispatchRequest,
+        params.onTransition,
+        params.authorizeDispatch,
+        params.signal,
+      );
+    }
     read();
     if (params.waitForReady !== false) {
       assertReady();
     }
-    return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+    return { assertCurrent: assertDestinationCurrent, release };
   } catch (error) {
-    prepared.release();
+    release();
     throw error;
   }
 }

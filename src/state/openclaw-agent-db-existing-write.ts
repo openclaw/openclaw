@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
@@ -17,7 +17,7 @@ const existingAgentLeaseSchema = ["schema_meta", "state_leases", "agent_database
 export function withExistingAgentLeaseWrite<T>(
   maintenance: OpenClawStateLeaseContext,
   options: OpenClawStateDatabaseOptions,
-  operation: (db: DatabaseSync) => T,
+  operation: (db: EngineConnection) => T,
 ): T {
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {

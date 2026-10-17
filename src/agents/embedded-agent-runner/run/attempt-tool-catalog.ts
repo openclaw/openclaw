@@ -1,3 +1,4 @@
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
@@ -65,7 +66,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
-    // tool hidden behind tool_call/exec is gated too; the catalog controls stay
+    // tool hidden behind dispatch_action/exec is gated too; the catalog controls stay
     // callable because they only dispatch into the gated tools.
     let effectiveTools = attempt.toolExecutionAllow
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
@@ -106,13 +107,12 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       });
     }
     if (toolSearch.compacted && !toolSearch.catalogReused) {
-      log.info(
-        codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
-          : toolSearchConfig.mode === "directory"
-            ? `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact directory surface`
-            : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
-      );
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "builtin",
+        mode: codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: toolSearch.catalogToolCount,
+      });
     }
     const deferredDirectoryToolsCallable =
       toolSearchControlsEnabledForRun &&

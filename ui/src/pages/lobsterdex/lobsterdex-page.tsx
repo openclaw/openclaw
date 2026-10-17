@@ -1,34 +1,32 @@
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
 import "../../styles/settings.css";
 
-function LobsterdexPageContent(props: { host: HTMLElement }) {
-  const host = untrack(() => props.host);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-lobsterdex-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
+
+export function LobsterdexPage() {
+  let host!: HTMLElement;
+  const cards = new Map<string, HTMLElement>();
   const context = useApplication();
-  const branding = projectSource(
-    untrack(() => context.theme),
-    {
-      read: (theme) => theme.branding,
-      subscribe: (theme, notify) => theme.subscribe(notify),
-      equality: Object.is,
-    },
-  );
-  createEffect(
-    () => context.theme,
-    (source) => branding.replaceSource(source),
+  const branding = createMemo(() =>
+    projectOwner(context.theme, (theme) => theme.branding, Object.is),
   );
   const entries = projectLobsterdex();
   const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
@@ -41,15 +39,8 @@ function LobsterdexPageContent(props: { host: HTMLElement }) {
     globalThis.clearTimeout(copyResetTimer);
   });
   onSettled(() => {
-    const prefix = "#lobsterdex-";
-    if (!location.hash.startsWith(prefix)) {
-      return undefined;
-    }
-    const palette = LOBSTER_PET_PALETTES.find(
-      (entry) => entry.id === location.hash.slice(prefix.length),
-    );
-    const card = palette ? host.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`) : null;
-    if (!card) {
+    const card = cards.get(location.hash);
+    if (!card || !host.contains(card)) {
       return undefined;
     }
     const clearHighlight = (event: AnimationEvent) => {
@@ -57,9 +48,9 @@ function LobsterdexPageContent(props: { host: HTMLElement }) {
         return;
       }
       card.classList.remove("lobsterdex-page__card--highlight");
-      card.removeEventListener("animationend", clearHighlight);
+      stopHighlight();
     };
-    card.addEventListener("animationend", clearHighlight);
+    const stopHighlight = listen(card, "animationend", { handleEvent: clearHighlight });
     card.classList.add("lobsterdex-page__card--highlight");
     let secondFrame = 0;
     const firstFrame = requestAnimationFrame(() => {
@@ -68,7 +59,7 @@ function LobsterdexPageContent(props: { host: HTMLElement }) {
     return () => {
       cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(secondFrame);
-      card.removeEventListener("animationend", clearHighlight);
+      stopHighlight();
     };
   });
 
@@ -90,17 +81,18 @@ function LobsterdexPageContent(props: { host: HTMLElement }) {
   }
 
   return (
-    <>
+    <openclaw-lobsterdex-page ref={(element) => (host = element)}>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
         </section>
       </ShellLayoutBoundary>
       <SettingsWorkspace>
-        {branding.read().lobsterdex ? (
+        {branding().read().lobsterdex ? (
           <LobsterdexView
             entries={entries.read()}
             copyFeedback={copyFeedback()}
+            onCardRef={(id, element) => cards.set(`#lobsterdex-${id}`, element)}
             onCopyLink={(paletteId) => void copyLink(paletteId)}
           />
         ) : (
@@ -121,16 +113,6 @@ function LobsterdexPageContent(props: { host: HTMLElement }) {
           </section>
         )}
       </SettingsWorkspace>
-    </>
+    </openclaw-lobsterdex-page>
   );
 }
-
-export const LobsterdexPage = defineSolidBridge(
-  "openclaw-lobsterdex-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <LobsterdexPageContent host={host} />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

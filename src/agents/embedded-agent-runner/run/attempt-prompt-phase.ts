@@ -22,7 +22,6 @@ import {
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
-import { logDecisionToolRequest } from "./attempt-decision-diagnostics.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -111,7 +110,9 @@ export async function runEmbeddedAttemptPromptPhase(
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
   const observeForegroundRequests = (
-    onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
+    onRequest: (
+      ...args: Parameters<NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>>
+    ) => void,
   ) => {
     const streamFn = activeSession.agent.streamFn;
     activeSession.agent.streamFn = (model, context, options) => {
@@ -200,10 +201,11 @@ export async function runEmbeddedAttemptPromptPhase(
       runtimeModel: runtimeInfo.model,
       systemPromptText,
       runAbortSignal: input.runAbortController.signal,
+      hasBaselineTools: promptToolPolicy.hasBaselineTools,
       setActiveSessionSystemPrompt,
-      applyPromptBuildToolsAllow: (toolsAllow, decisionIsCurrent) => {
+      applyPromptBuildToolsAllow: (toolsAllow, pruneForDecision) => {
         // Hook authority follows reachable capabilities, not just provider-visible controls.
-        return promptToolPolicy.apply(toolsAllow, decisionIsCurrent).callableToolNames;
+        return promptToolPolicy.apply(toolsAllow, pruneForDecision).callableToolNames;
       },
       prepareSystemPrompt: async (currentSystemPrompt) => {
         const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
@@ -215,6 +217,7 @@ export async function runEmbeddedAttemptPromptPhase(
         leasedSteering = lease;
       },
     });
+    input.setup.prepStages.mark("prompt-build");
     systemPromptText = sessionRuntimeState.systemPromptText;
     if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
       setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
@@ -245,6 +248,7 @@ export async function runEmbeddedAttemptPromptPhase(
       systemPromptText,
       toolResultPromptProjectionState,
     });
+    input.setup.prepStages.mark("prompt-context");
     if (runAbortController.signal.aborted) {
       throw createAbortableError(runAbortController.signal);
     }
@@ -417,6 +421,7 @@ export async function runEmbeddedAttemptPromptPhase(
       // request budget) so client tools appended by attempt-client-tools are counted.
       toolSchemaTokens: estimateToolSchemaTokenPressure(activeSession.agent.state.tools),
     });
+    input.setup.prepStages.mark("compaction-preflight");
     publishDispatchState(state);
 
     if (!state.skipPromptSubmission) {
@@ -491,52 +496,6 @@ export async function runEmbeddedAttemptPromptPhase(
         assertHostActive: promptAssembly.assertHostActive,
         withTranscriptWrite,
         getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
-        preparePrimaryModelRequest: () =>
-          promptToolPolicy.prepareForDispatch(async () => {
-            promptAssembly.decisionPrefilter.restrictionApplied = false;
-            promptAssembly.decisionPrefilter.status = "retained";
-            promptAssembly.decisionPrefilter.reason = "selection-changed";
-            const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
-              promptToolPolicy.current.effectiveTools,
-            );
-            input.runAbortController.signal.throwIfAborted();
-            promptAssembly.assertHostActive?.();
-            const refreshedPrompt = refresh?.(activeSession.agent.state.systemPrompt);
-            const projection =
-              refreshedPrompt !== undefined && sessionRuntime.prepareSystemPromptUpdate
-                ? await sessionRuntime.prepareSystemPromptUpdate(
-                    refreshedPrompt,
-                    refresh?.freshlyRendered === true,
-                  )
-                : undefined;
-            if (refreshedPrompt !== undefined && !projection) {
-              setActiveSessionSystemPrompt(refreshedPrompt);
-            }
-            return () => ({
-              tools: activeSession.agent.state.tools.slice(),
-              systemPrompt: projection?.systemPrompt ?? activeSession.agent.state.systemPrompt,
-              ...(projection
-                ? {
-                    promptUpdate: {
-                      update: projection.update,
-                      commit: () => {
-                        projection.commit();
-                        setActiveSessionSystemPrompt(projection.systemPrompt);
-                      },
-                    },
-                  }
-                : {}),
-            });
-          }),
-        onPrimaryModelRequest: (tools) => {
-          logDecisionToolRequest({
-            decision: promptAssembly.decisionPrefilter,
-            baseline: promptToolPolicy.readDecisionBaseline(),
-            readFinal: () => tools,
-            requiredNames: promptToolPolicy.decisionRequiredNames,
-            trace: runTrace,
-          });
-        },
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
         },
@@ -612,9 +571,6 @@ export async function runEmbeddedAttemptPromptPhase(
   } finally {
     activeSession[agentSessionDeferThresholdCompaction] = previousThresholdDeferral;
     stopAcceptingSteerMessages();
-    log.debug(
-      `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
-    );
   }
 
   const pendingMidTurnPrecheckRequest =

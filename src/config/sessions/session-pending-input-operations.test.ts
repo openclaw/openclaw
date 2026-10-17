@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -33,8 +33,9 @@ import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -44,6 +45,8 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
+
+afterEach(() => resetConfigRuntimeState());
 
 const scope = {
   agentId: "main",
@@ -58,6 +61,7 @@ const message = (runId: string) => ({
 });
 
 it("accepts supplied legacy completion callbacks without falling back from async completion", async () => {
+  setRuntimeConfigSnapshot({});
   const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
   const legacy = vi.fn(() => outcome);
   const recorder = {
@@ -128,7 +132,7 @@ function createFixture() {
 
 it("keeps host-created synchronous completion usable through the SDK compatibility window", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { pending } = createFixture();
+    const { database, pending } = createFixture();
     const recorder = createUserTurnTranscriptRecorder({
       message: message("host-legacy"),
       target: { ...scope, sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 } },
@@ -140,7 +144,13 @@ it("keeps host-created synchronous completion usable through the SDK compatibili
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
     expect(recorder.completeProcessing!(outcome)).toEqual(outcome);
     expect(recorder.getProcessingCompletion!()).toEqual(outcome);
+    expect(database.db.prepare("SELECT outcome_json FROM session_input_completions").get()).toEqual(
+      {
+        outcome_json: JSON.stringify(outcome),
+      },
+    );
     expect(pending()).toEqual([]);
+    expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
     await recorder.waitForPendingInputSettlement!();
   });
 });
@@ -193,7 +203,7 @@ it("shares transaction rows without retaining stale custody and returns the pers
       )
       .run(scope.sessionKey, "new-member", "owner", 2);
     const counter = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["entry", "members", "pending", "completion"],
       (sql) => {
         if (/\bfrom "session_nodes"/iu.test(sql)) {
@@ -214,7 +224,7 @@ it("shares transaction rows without retaining stale custody and returns the pers
     let staged;
     try {
       staged = mutate(input);
-      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 1 });
+      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 0 });
     } finally {
       counter.restore();
     }
@@ -240,19 +250,13 @@ it("shares transaction rows without retaining stale custody and returns the pers
       },
     ]);
 
-    const stale = stage();
-    database.db
-      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
-      .run("replacement", "cohort-input");
-    expect(() => mutate(stale)).toThrow("changed before staging committed");
-    database.db
-      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
-      .run(identity.requestHash, "cohort-input");
     const requeued = mutate(stage());
     expect(requeued.stagedInput).toEqual(staged.stagedInput);
 
-    const completionCounter = trackSqliteStatementExecutions(database.db, ["completion"], (sql) =>
-      /\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null,
+    const completionCounter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["completion"],
+      (sql) => (/\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null),
     );
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
     try {
@@ -385,38 +389,6 @@ it.each(["cancelled", "consumed", "failed"] as const)(
     });
   },
 );
-
-it("preserves synchronous SDK recorder completion until callers migrate to async", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createFixture();
-    const recorder = createUserTurnTranscriptRecorder({
-      message: message("legacy-completion"),
-      trackInputCompletion: true,
-      target: {
-        ...scope,
-        storePath: fixture.database.path,
-        sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
-      },
-    });
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      expect(
-        await recorder.stageApproved?.({ runId: "legacy-completion", assertCurrent: () => {} }),
-      ).toBe(true);
-      const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-      expect(recorder.completeProcessing?.(outcome)).toEqual(outcome);
-      expect(
-        fixture.database.db.prepare("SELECT outcome_json FROM session_input_completions").get(),
-      ).toEqual({ outcome_json: JSON.stringify(outcome) });
-      expect(fixture.pending()).toEqual([]);
-      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
-    } finally {
-      warning.mockRestore();
-      recorder.finishPendingInput?.("interrupted");
-      await recorder.waitForPendingInputSettlement?.();
-    }
-  });
-});
 
 it("retains cancellation disposition custody while accepted processing completion is waiting", async ({
   signal,

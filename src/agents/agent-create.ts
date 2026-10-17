@@ -42,7 +42,7 @@ import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
-import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import {
   createAgentIdentityConfig,
@@ -106,7 +106,7 @@ type CreateAgentParams = {
   bootstrapMain?: boolean;
   /** Replace the load-time compatibility roster when onboarding creates the first real agent. */
   bootstrapFirstAgent?: boolean;
-  /** Config revision that must still own first-agent creation under the write lock. */
+  /** Config revision that must still own creation or restoration under the write lock. */
   expectedConfigHash?: string | null;
   /** Guided staging retains the original native write receipt until creation publishes it. */
   stagedConfig?: { config: OpenClawConfig; writeSnapshot: ReadConfigFileSnapshotForWriteResult };
@@ -121,6 +121,8 @@ type CreateAgentParams = {
   transformConfig?: typeof transformConfigFileWithRetry;
   /** Revalidate delegated authority before each new persistent effect. */
   beforePersistentApply?: () => void;
+  /** Doctor may restore only the backed-up stores selected by its recovery policy. */
+  restorePaths?: readonly string[];
   /** Admit new identity input until its first successful publication. */
   assertIdentityInputAllowed?: () => void;
   /** Prepare guided staged state at the last reversible edge before config publication. */
@@ -206,7 +208,7 @@ function describeLegacySessionOutcome(outcome: LegacyMainSessionMigrationOutcome
   switch (outcome.kind) {
     case "divergent-aliases":
     case "divergent-canonical":
-      return `${outcome.kind} for ${outcome.canonicalKey ?? "the canonical session"}; preserved claims ${claims.join(", ") || "could not be reconciled"} must be quarantined`;
+      return `${outcome.kind} for ${outcome.canonicalKey ?? "the current session"}; preserved claims ${claims.join(", ") || "could not be reconciled"} must be quarantined`;
     case "legacy-json-store":
       return `legacy JSON session store ${outcome.paths?.join(", ") ?? "requires import"}`;
     case "store-unreadable":
@@ -222,8 +224,7 @@ function describeLegacySessionOutcome(outcome: LegacyMainSessionMigrationOutcome
     case "no-legacy-rows":
       return "the current session-store layout has no matching completed migration ledger";
   }
-  const unreachable: never = outcome.kind;
-  return unreachable;
+  return outcome.kind satisfies never;
 }
 
 async function evaluateMainCreationGate(
@@ -257,7 +258,7 @@ async function evaluateMainCreationGate(
     );
   }
 
-  if (resolveSharedAuthStoreOwnership().location !== "state-db") {
+  if ((await prepareSharedAuthStoreOwnership()).location !== "state-db") {
     return createError(
       "shared-auth-store-owned-by-main",
       'Cannot create agent "main" while agents/main/agent owns the shared auth store. Run openclaw doctor --fix to relocate shared auth, then retry.',
@@ -388,7 +389,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         held,
         recoveryPathMatcher,
         explicitAgentDir,
-      );
+      ).filter((pathname) => params.restorePaths?.includes(pathname) ?? true);
       if (recoveryPaths.length === 0 && held.some((entry) => entry.agentId === agentId)) {
         return createError(
           "already-exists",
@@ -445,9 +446,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             (params.stagedConfig || Object.hasOwn(params, "expectedConfigHash")) &&
             context.previousHash !== expectedConfigHash
           ) {
-            throw new ConfigMutationConflictError("config changed before first-agent creation", {
-              retryable: false,
-            });
+            throw new ConfigMutationConflictError(
+              "config changed before agent creation or restoration",
+              {
+                retryable: false,
+              },
+            );
           }
           const hasAuthoredRoster =
             params.bootstrapFirstAgent === true &&
@@ -686,7 +690,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         await resolveAgentDeletionRecoveryHoldsInWorker(
           recoveryHoldPredicate(),
           selectedPaths,
-          assertRecoveryPathCurrent,
+          params.restorePaths ? beforePersistentApply : assertRecoveryPathCurrent,
         );
       }
       return result;

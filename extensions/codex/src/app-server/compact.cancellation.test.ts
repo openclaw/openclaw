@@ -29,6 +29,7 @@ import type { CodexServerNotification } from "./protocol.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
+  createCodexTestContextEngineBinding as contextEngineBinding,
   readCodexAppServerBinding,
   resetCodexTestBindingStore,
 } from "./session-binding.test-helpers.js";
@@ -37,20 +38,6 @@ import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
 let tempDir: string;
-
-function contextEngineBinding() {
-  return {
-    schemaVersion: 1 as const,
-    engineId: "lossless-claw",
-    policyFingerprint: "policy-1",
-    projection: {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    },
-  };
-}
 
 async function createRetainedHarness(onRequest: (request: { id: number; method: string }) => void) {
   const harness = createClientHarness({
@@ -234,6 +221,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           identity: rejection === "generation" ? next : current,
           storePath: scope.storePath,
         });
+        using _ = { [Symbol.dispose]: () => recovered.release() };
         expect(recovered.binding).toEqual(binding);
         if (rejection === "generation") {
           await expect(

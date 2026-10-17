@@ -12,6 +12,7 @@ import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { sessionProcessHandlers } from "./session-processes.js";
 
 afterEach(resetProcessRegistryForTests);
+const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 it.each([
   {
@@ -42,7 +43,7 @@ it.each([
 ])(
   "projects and enforces process controls for $role with $scopes (own=$own)",
   async ({ role, scopes, own, allowed }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(stateOptions, async (state) => {
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);

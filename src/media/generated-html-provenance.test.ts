@@ -156,17 +156,27 @@ describe("generated HTML provenance worker boundary", () => {
   );
 
   it("recovers committed upsert and cleanup receipts when ordinary replies are lost", async () => {
+    const dispatch = brokerReply.dispatchSqliteWorkerJob;
     const receive = brokerReply.receiveSqliteWorkerReply;
+    const commandTypes = new WeakMap<object, string>();
     const corrupted: string[] = [];
+    vi.spyOn(brokerReply, "dispatchSqliteWorkerJob").mockImplementation((slot, job, onRejected) => {
+      if (job.request.type === "execute") {
+        const command: unknown = deserialize(job.request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          commandTypes.set(job.request, command.type);
+        }
+      }
+      return dispatch(slot, job, onRejected);
+    });
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
       if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const command: unknown = deserialize(slot.current.request.input);
+        const commandType = commandTypes.get(slot.current.request);
         if (
-          isRecord(command) &&
-          (command.type === "generatedHtmlProvenance.upsert" ||
-            command.type === "generatedHtmlProvenance.prune")
+          commandType === "generatedHtmlProvenance.upsert" ||
+          commandType === "generatedHtmlProvenance.prune"
         ) {
-          corrupted.push(command.type);
+          corrupted.push(commandType);
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
         }
       }

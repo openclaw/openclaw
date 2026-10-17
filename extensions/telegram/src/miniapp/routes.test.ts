@@ -97,13 +97,11 @@ function createRoute(
       route = params;
     },
   });
-  if (currentConfig) {
-    api.runtime.config = {
-      current: currentConfig,
-      mutateConfigFile: vi.fn(),
-      replaceConfigFile: vi.fn(),
-    };
-  }
+  api.runtime.config = {
+    current: currentConfig ?? (() => cfg),
+    mutateConfigFile: vi.fn(),
+    replaceConfigFile: vi.fn(),
+  };
   registerTelegramMiniAppRoutes(api, launchTickets);
   if (!route) {
     throw new Error("expected miniapp route registration");
@@ -253,6 +251,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     registerTelegramMiniApp(
       createTestPluginApi({
         config: cfg,
+        runtime: { config: { current: () => cfg } } as OpenClawPluginApi["runtime"],
         registerCommand: (command) => commands.push(command),
         registerHttpRoute: (route) => routes.push(route),
       }),
@@ -367,6 +366,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       registerTelegramMiniApp(
         createTestPluginApi({
           config: cfg,
+          runtime: { config: { current: () => cfg } } as OpenClawPluginApi["runtime"],
           registerCommand: (command) => commands.push(command),
         }),
       );

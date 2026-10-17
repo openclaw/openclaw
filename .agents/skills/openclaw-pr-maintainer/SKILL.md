@@ -37,7 +37,7 @@ gh issue view <issue> --repo openclaw/openclaw \
 - **Real defect:** reproduce → repair owning invariant → prove path/siblings. Simplification over symptom guard; size/LOC ≠ correctness gate.
 - **Useful PR:** improve editable branch; unsafe → authorized credited replacement before closure. Replaced ancestry → maintainer-owned replacement, never squash contributor PR.
 - **Uncertain/product decision:** state gap; no speculative merge/automatic out-of-scope close.
-- Proof + source-trust/host route: `$openclaw-testing`, [landing](references/landing.md#red-main-and-inherited-failures). Local focused proof → ready PR; PR CI = broad proof. Boxes only for uncovered environment needs, immediate grant; queues → local trusted proof, never untrusted local execution. Optional live gaps → meaningful boundary proof + limitation; explicit live, external API, authenticated-risk proof mandatory. Mocks/skips/old head ≠ live.
+- Proof + source-trust/host route: `$openclaw-testing`, [landing](references/landing.md#red-main-and-inherited-failures). Focused proof → ready PR; PR CI = broad proof. Prefer bounded local proof on a qualified, available host. Deliberate remote proof can cover expensive checks or environment gaps; queues → stop task-owned allocation, use PR CI or a safe local scope, preserve uncovered requirements. Never execute untrusted source locally. Optional live gaps → meaningful boundary proof + limitation; explicit live, external API, authenticated-risk proof mandatory. Mocks/skips/old head ≠ live.
 - Behavioral changes: [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary) + `$test-audit`. Requested behavior and repo standards: check separately.
 
 ## CODEOWNERS review
@@ -46,6 +46,8 @@ gh issue view <issue> --repo openclaw/openclaw \
 - ownership/review governance: verified active organization-admin direction also qualifies; repository admin/bypass alone does not. Neither route waives enforced reviews.
 
 ## Review and publish
+
+- Before committing or landing nontrivial code: fresh review through permitted workflow; resolve actionable findings unless user opts out. Actionable = likely or high-impact; decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with one-line reason.
 
 - Nontrivial code commit/landing: `$autoreview`; resolve verified actionable findings. Review-only: independent pass only when requested, no extra mandatory CLI pass.
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
@@ -59,5 +61,6 @@ gh issue view <issue> --repo openclaw/openclaw \
 
 - Never remove worktree holding live session cwd, including yours or subdirectories. Child `cd`/cwd override does not move parent. Retain until owner exits/releases cwd; report path.
 - Verified outcome → remove task logs, receipts, proof archives, `.crabbox`, scratch, finished worktrees via [native closeout](references/landing.md#recovery-and-closeout). No retention/archive/export/handoff just for removal.
+- Remove created worktrees once work/PR lands, unless immediately needed next; never remove a live-cwd worktree.
 - Every task: findings in chat/stdout; files only for deliverables/tool/proof/recovery needs, state purpose/reuse. Pre-merge proof mandatory; optional follow-ups never hold completion.
 - Preserve requested deliverables/retention, unfinished source + necessary recovery state, active/live/unknown owners, credentials, agent state, shared dependencies.

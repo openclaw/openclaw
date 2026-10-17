@@ -4,14 +4,22 @@ import { resolveChatSendCallerContext } from "../server-methods/gateway-client-i
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 
-/** Bind assistant media to the agent command before dispatch releases its run owner. */
+/** Prepare input and assistant media while dispatch retains the run's authority. */
 export function dispatchAgentRunWithMedia(
   dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
-  params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId">,
+  params: Pick<
+    StartAgentRunExecutionParams,
+    "cfg" | "client" | "activeSessionAgentId" | "sessionEntry"
+  > & {
+    prepared: Pick<
+      StartAgentRunExecutionParams["prepared"],
+      "lifecycleStorePath" | "imageUnderstandingModel" | "replyDispatchRuntime"
+    >;
+  },
 ) {
   const { ingressOpts, admittedRunEntry, abortController } = dispatch;
   const sessionKey = ingressOpts.sessionKey;
-  if (!sessionKey) {
+  if (!sessionKey && !params.prepared.imageUnderstandingModel) {
     return dispatchAgentRunFromGateway(dispatch);
   }
   const caller: WebchatReplyMediaRequesterContext | undefined = params.client
@@ -20,6 +28,33 @@ export function dispatchAgentRunWithMedia(
   const runContext = ingressOpts.runContext;
   // Preserve the dispatch object's execution-identity binding.
   dispatch.loadMedia = async () => {
+    const cfg = dispatch.commandRuntimeContext?.config ?? params.cfg;
+    if (params.prepared.imageUnderstandingModel) {
+      const { prepareAgentImageUnderstanding } = await import("./agent-image-understanding.js");
+      const runtime = params.prepared.replyDispatchRuntime;
+      dispatch.assertCurrent?.();
+      const input = await prepareAgentImageUnderstanding({
+        message: ingressOpts.message,
+        media: ingressOpts.media ?? [],
+        cfg,
+        agentId: params.activeSessionAgentId,
+        agentDir: runtime.agentDir,
+        workspaceDir: ingressOpts.workspaceDir ?? runtime.workspaceDir,
+        sessionKey,
+        channel: runContext?.messageChannel ?? ingressOpts.messageChannel,
+        chatType: params.sessionEntry?.chatType,
+        activeModel: params.prepared.imageUnderstandingModel,
+        execution: {
+          signal: abortController.signal,
+          assertCurrent: () => dispatch.assertCurrent?.(),
+        },
+      });
+      dispatch.assertCurrent?.();
+      Object.assign(ingressOpts, input, { imageOrder: [] });
+    }
+    if (!sessionKey) {
+      return undefined;
+    }
     const { createAssistantCommentaryMediaCustody } =
       await import("../server-methods/chat-send-commentary-media.js");
     const { createOutboundPayloadPlan } = await import("../../infra/outbound/payloads.js");
@@ -28,7 +63,8 @@ export function dispatchAgentRunWithMedia(
       incognito: dispatch.isIncognito === true,
       session: {
         agentId: params.activeSessionAgentId,
-        cfg: dispatch.commandRuntimeContext?.config ?? params.cfg,
+        cfg,
+        storePath: params.prepared.lifecycleStorePath,
         sessionKey,
         sessionLoadOptions: { agentId: params.activeSessionAgentId },
       },
@@ -71,7 +107,6 @@ export function dispatchAgentRunWithMedia(
           ingressOpts.privateCompletion ||
           ingressOpts.sessionEffects === "internal" ||
           ingressOpts.deliver === true ||
-          ingressOpts.internalDeliveryMediaUrls !== undefined ||
           !isInternalMessageChannel(ingressOpts.channel ?? ingressOpts.messageChannel)
         ) {
           return;

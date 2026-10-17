@@ -1,4 +1,5 @@
 import { MessageChannel } from "node:worker_threads";
+import { measureGatewayCloseStep } from "../../gateway/restart-trace.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
@@ -33,24 +34,30 @@ export function createGatewayRunCleanup(
   };
   const retireWatchdog = (watchdog: ShutdownHardExitWatchdog | null) => {
     if (watchdog) {
-      retainCleanup(watchdog.cancel());
+      retainCleanup(measureGatewayCloseStep("restart.close.watchdog", () => watchdog.cancel()));
     }
   };
   const joinCleanup = async () => {
-    while (pendingCleanup.size > 0) {
-      await Promise.allSettled(pendingCleanup);
-    }
+    await measureGatewayCloseStep("restart.close.retained-cleanup", async () => {
+      while (pendingCleanup.size > 0) {
+        await Promise.allSettled(pendingCleanup);
+      }
+    });
   };
   const drainProcessResources = async () => {
     // Retained callbacks remain callable after an update replaces on-disk chunks.
     if (!isForegroundUpdateClosed()) {
-      await runtime.stopActiveManagedProviderLocalServices().catch((error: unknown) => {
+      await measureGatewayCloseStep("restart.close.provider-local-services", () =>
+        runtime.stopActiveManagedProviderLocalServices(),
+      ).catch((error: unknown) => {
         cleanupFailed = true;
         logger.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
       });
     }
-    await cleanupSnapshotOperations();
-    await flushGatewayLogsBeforeExit(logger);
+    await measureGatewayCloseStep("restart.close.snapshots", cleanupSnapshotOperations);
+    await measureGatewayCloseStep("restart.close.log-flush", () =>
+      flushGatewayLogsBeforeExit(logger),
+    );
     processResourcesDrained = true;
   };
   return {
@@ -71,23 +78,23 @@ export function createGatewayRunCleanup(
     }): Promise<unknown[]> {
       const failures: unknown[] = [];
       // Every admitted owner gets its ordered retirement even if an earlier one rejects.
-      const finalizers: Array<() => void | Promise<void>> = [
-        operations.retireSignals,
-        operations.drainSignals,
-        joinCleanup,
-        operations.closeTerminalServer,
-        operations.retireHost,
-        joinCleanup,
-        operations.closeSharedState,
-        operations.releaseLock,
-        operations.clearStartupWatchdog,
-        operations.clearRequestWatchdogs,
-        joinCleanup,
-        operations.cleanupSignals,
+      const finalizers: Array<[string, () => void | Promise<void>]> = [
+        ["retire-signals", operations.retireSignals],
+        ["drain-signals", operations.drainSignals],
+        ["retained-cleanup", joinCleanup],
+        ["terminal-server", operations.closeTerminalServer],
+        ["host", operations.retireHost],
+        ["retained-cleanup", joinCleanup],
+        ["shared-state", operations.closeSharedState],
+        ["release-lock", operations.releaseLock],
+        ["startup-watchdog", operations.clearStartupWatchdog],
+        ["request-watchdogs", operations.clearRequestWatchdogs],
+        ["retained-cleanup", joinCleanup],
+        ["cleanup-signals", operations.cleanupSignals],
       ];
-      for (const operation of finalizers) {
+      for (const [name, operation] of finalizers) {
         try {
-          await operation();
+          await measureGatewayCloseStep(`restart.close.final.${name}`, operation);
         } catch (error) {
           cleanupFailed = true;
           failures.push(error);

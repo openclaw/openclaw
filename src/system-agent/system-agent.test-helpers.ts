@@ -125,7 +125,7 @@ export function readLastSystemAgentAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;
 }
 
-export function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
+function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -178,12 +178,12 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
           key: "test-key",
         } as const)
       : undefined;
-  const loadAuthProfileStoreForRuntime = (() => ({
+  const loadAuthProfileStoreForRuntimeAsync = (async () => ({
     version: 1,
     profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
   })) as never;
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
-    loadAuthProfileStoreForRuntime,
+    loadAuthProfileStoreForRuntimeAsync,
   });
   if (!configuredRoute) {
     throw new Error("missing test route");
@@ -213,7 +213,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     configuredRoute.provider === "claude-cli" ? "anthropic" : undefined,
   ].filter((id, index, ids): id is string => Boolean(id) && ids.indexOf(id) === index);
   const deps: SystemAgentVerifiedInferenceDeps = {
-    loadAuthProfileStoreForRuntime,
+    loadAuthProfileStoreForRuntimeAsync,
     resolveApiKeyForProvider: async () => resolvedAuth,
     validateAgentHarnessRuntimeArtifact: async () => true,
     loadPluginRegistrySnapshot: (() => ({

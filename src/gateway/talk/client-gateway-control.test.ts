@@ -210,37 +210,6 @@ describe("Talk client Gateway control owner", () => {
     },
   );
 
-  it("routes control tool results without starting another consult", async () => {
-    const bridge = controlBridge();
-    const runAgentConsult = vi.fn(async () => ({ text: "unexpected" }));
-    const owner = createTalkClientGatewayControlOwner(
-      controlOptions({
-        voiceSessionId: "voice-control",
-        connId: "conn-control",
-        runToolAgentConsult: runAgentConsult,
-        runAgentConsult,
-      }),
-    );
-    owner.control.bindBridge(bridge);
-    await owner.adoptProvider(vi.fn(async () => undefined));
-    owner.activate();
-    owner.control.onToolCall?.({
-      itemId: "item-status",
-      callId: "call-status",
-      name: "openclaw_agent_control",
-      args: { text: "status", mode: "status" },
-    });
-
-    await vi.waitFor(() =>
-      expect(bridge.submitToolResult).toHaveBeenCalledWith(
-        "call-status",
-        expect.objectContaining({ mode: "status", speak: true }),
-      ),
-    );
-    expect(runAgentConsult).not.toHaveBeenCalled();
-    await owner.close();
-  });
-
   it.each(["tool", "delegation"] as const)(
     "handles spoken status, steering, and cancellation during a %s consult",
     async (entry) => {

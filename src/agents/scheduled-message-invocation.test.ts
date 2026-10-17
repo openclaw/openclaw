@@ -6,7 +6,7 @@ import { prepareClawInstallSchemaVersions } from "../claws/provenance-runtime-re
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 describe("scheduled message invocation admission", () => {
@@ -41,7 +41,7 @@ describe("scheduled message invocation admission", () => {
       };
       const tools =
         surface === "embedded"
-          ? createOpenClawCodingTools({
+          ? await createOpenClawCodingToolsAsync({
               ...run,
               config,
               policyAgentId: "reader",

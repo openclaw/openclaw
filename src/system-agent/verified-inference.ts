@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   resolveCliAuthBindingFingerprint,
@@ -207,14 +207,17 @@ function systemAgentRouteIdentity(
 function loadRouteAuthProfileStore(
   route: SystemAgentVerifiedExecutionRoute,
   deps: SystemAgentVerifiedInferenceDeps,
-): AuthProfileStore {
-  return (deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime)(route.agentDir, {
-    readOnly: true,
-    migrationProvider: route.provider,
-    allowKeychainPrompt: false,
-    config: route.runConfig,
-    externalCliProviderIds: [route.provider],
-  });
+): Promise<AuthProfileStore> {
+  return (deps.loadAuthProfileStoreForRuntimeAsync ?? loadAuthProfileStoreForRuntimeAsync)(
+    route.agentDir,
+    {
+      readOnly: true,
+      migrationProvider: route.provider,
+      allowKeychainPrompt: false,
+      config: route.runConfig,
+      externalCliProviderIds: [route.provider],
+    },
+  );
 }
 
 async function resolveCurrentRuntimeOwnerFingerprint(params: {
@@ -247,7 +250,7 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (params.authProfileId) {
-    const store = loadRouteAuthProfileStore(params.route, params.deps);
+    const store = await loadRouteAuthProfileStore(params.route, params.deps);
     authProfileOwnerFingerprint = fingerprintAuthProfileOwnerShape({
       profileId: params.authProfileId,
       credential: store.profiles[params.authProfileId],
@@ -503,7 +506,7 @@ async function resolveCurrentAuthFingerprint(params: {
       params.deps.resolveCliAuthBindingFingerprint ?? resolveCliAuthBindingFingerprint;
     let resolvedAuth: ResolvedProviderAuth | undefined;
     if (params.authProfileId) {
-      const store = loadRouteAuthProfileStore(params.route, params.deps);
+      const store = await loadRouteAuthProfileStore(params.route, params.deps);
       const authCredential = store.profiles[params.authProfileId];
       const needsMaterializedSecret =
         (authCredential?.type === "api_key" && !authCredential.key) ||
@@ -549,7 +552,7 @@ async function resolveCurrentAuthFingerprint(params: {
     | { profileId: string; credential: AuthProfileStore["profiles"][string] }
     | undefined;
   if (params.authProfileId) {
-    store = loadRouteAuthProfileStore(params.route, params.deps);
+    store = await loadRouteAuthProfileStore(params.route, params.deps);
     const credential = store.profiles[params.authProfileId];
     if (!credential) {
       return undefined;

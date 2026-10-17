@@ -1,14 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
-import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import {
-  appendTranscriptMessage,
-  loadSessionEntry as loadStoredSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -65,6 +58,8 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
 };
 type AdvanceSessionDeliveryAgentRunMock =
   typeof import("../infra/session-delivery-queue-storage.js").advanceSessionDeliveryAgentRun;
+type MarkSessionDeliveryAttemptStartedMock =
+  typeof import("../infra/session-delivery-queue-storage.js").markSessionDeliveryAttemptStarted;
 type DeferSessionDeliveryMock =
   typeof import("../infra/session-delivery-queue-storage.js").deferSessionDelivery;
 type FailSessionDeliveryMock =
@@ -81,8 +76,10 @@ type CreateManagedOutgoingMediaBlocksMock =
   typeof import("./managed-image-attachments.js").createManagedOutgoingMediaBlocks;
 type AttachManagedOutgoingMediaToMessageMock =
   typeof import("./managed-image-attachments.js").attachManagedOutgoingMediaToMessage;
-type EnrichAssistantTranscriptMediaForRunMock =
-  typeof import("./server-methods/chat-transcript-persistence.js").enrichAssistantTranscriptMediaForRun;
+type SendDurableMessageBatchCoreMock =
+  typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
+type InspectDeliveryQueueReceiptMock =
+  typeof import("../infra/delivery-queue-sqlite.js").inspectDeliveryQueueReceipt;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -115,12 +112,14 @@ const mocks = vi.hoisted(() => {
         threadId: undefined,
       }),
     ),
-    loadSessionEntry:
+    loadSessionEntryAsync:
       vi.fn<
         (
           sessionKey: string,
-          options?: Parameters<typeof import("./session-utils.js").loadSessionEntry>[1],
-        ) => LoadedSessionEntry
+          options?: Parameters<
+            typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
+          >[1],
+        ) => Promise<LoadedSessionEntry>
       >(),
     deliveryContextFromSession: vi.fn<
       typeof import("../utils/delivery-context.read.js").deliveryContextFromSession
@@ -160,6 +159,10 @@ const mocks = vi.hoisted(() => {
       value: await fn(),
     })),
     withStableDeliveryPreparation: vi.fn(),
+    loadSessionEntryInWorker:
+      vi.fn<
+        typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+      >(),
     resolveSessionTarget:
       vi.fn<
         typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
@@ -180,7 +183,7 @@ const mocks = vi.hoisted(() => {
     mergeSessionDeliveryPreparedMediaBlocks: vi.fn<MergeSessionDeliveryPreparedMediaBlocksMock>(
       async (_id, _mediaUrl, blocks) => blocks,
     ),
-    markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
+    markSessionDeliveryAttemptStarted: vi.fn<MarkSessionDeliveryAttemptStartedMock>(async () => {}),
     markSessionDeliverySettlement: vi.fn(async () => {}),
     appendAssistantMessageToSessionTranscript: vi.fn<AppendAssistantMessageToSessionTranscriptMock>(
       async (params) => {
@@ -200,9 +203,8 @@ const mocks = vi.hoisted(() => {
     attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(
       async () => true,
     ),
-    enrichAssistantTranscriptMediaForRun: vi.fn<EnrichAssistantTranscriptMediaForRunMock>(
-      async () => null,
-    ),
+    sendDurableMessageBatchCore: vi.fn<SendDurableMessageBatchCoreMock>(),
+    inspectDeliveryQueueReceipt: vi.fn<InspectDeliveryQueueReceiptMock>(),
     removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
     settleCorrelatedSubagentDelivery: vi.fn(async () => {}),
     loadPendingSessionDelivery: vi.fn(),
@@ -279,6 +281,7 @@ vi.mock("../infra/session-delivery-queue-storage.js", async (importOriginal) => 
     },
   );
   mocks.loadPendingSessionDelivery.mockImplementation(actual.loadPendingSessionDelivery);
+  mocks.advanceSessionDeliveryAgentRun.mockImplementation(actual.advanceSessionDeliveryAgentRun);
   return {
     ...actual,
     advanceSessionDeliveryAgentRun: mocks.advanceSessionDeliveryAgentRun,
@@ -318,10 +321,11 @@ vi.mock("./managed-image-attachments.js", async (importOriginal) => ({
   attachManagedOutgoingMediaToMessage: mocks.attachManagedOutgoingMediaToMessage,
 }));
 
-vi.mock("./server-methods/chat-transcript-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./server-methods/chat-transcript-persistence.js")>()),
-  enrichAssistantTranscriptMediaForRun: mocks.enrichAssistantTranscriptMediaForRun,
-}));
+vi.mock("../infra/delivery-queue-sqlite.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/delivery-queue-sqlite.js")>();
+  mocks.inspectDeliveryQueueReceipt.mockImplementation(actual.inspectDeliveryQueueReceipt);
+  return { ...actual, inspectDeliveryQueueReceipt: mocks.inspectDeliveryQueueReceipt };
+});
 
 vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/main-session.js")>()),
@@ -329,7 +333,10 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Restart fixtures publish their explicit config without loading a live config file.
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  getRuntimeConfigSnapshot: mocks.getRuntimeConfig,
+}));
 
 vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/plugins/session-conversation.js")>()),
@@ -338,11 +345,6 @@ vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) =>
 
 vi.mock("../channels/plugins/session-thread-info-loaded.js", () => ({
   resolveLoadedSessionThreadInfo: mocks.parseSessionThreadInfo,
-}));
-
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: mocks.loadSessionEntry,
 }));
 
 vi.mock("../utils/delivery-context.read.js", async (importOriginal) => ({
@@ -474,16 +476,21 @@ vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
   ),
 }));
 
-vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatchCore: vi.fn(async (params: Record<string, unknown>) => {
+vi.mock("../channels/message/runtime.js", async (importOriginal) => {
+  type SendResult = Awaited<ReturnType<SendDurableMessageBatchCoreMock>>;
+  mocks.sendDurableMessageBatchCore.mockImplementation(async (params) => {
     try {
       const results = await mocks.deliverOutboundPayloads(params);
-      return { status: "sent", results };
+      return { status: "sent", results } as SendResult;
     } catch (error) {
-      return { status: "failed", error };
+      return { status: "failed", error } as SendResult;
     }
-  }),
-}));
+  });
+  return {
+    ...(await importOriginal<typeof import("../channels/message/runtime.js")>()),
+    sendDurableMessageBatchCore: mocks.sendDurableMessageBatchCore,
+  };
+});
 
 vi.mock("./server-restart-update-run.js", async () => {
   const actual = await vi.importActual<typeof import("./server-restart-update-run.js")>(
@@ -494,6 +501,7 @@ vi.mock("./server-restart-update-run.js", async () => {
 
 // mock-isolation: These producer tests use supplied rows; worker authority has its own boundary suite.
 vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntryInWorker,
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 
@@ -598,13 +606,6 @@ function setNoticeOwner(owner: string) {
 }
 
 describe("scheduleRestartSentinelWake", () => {
-  const expectedGeneratedMediaContext: RuntimeContextFragment[] = [
-    {
-      kind: "runtime-instruction",
-      text: "Deliver the generated media listed below to the user.",
-    },
-    { kind: "conversation-data", text: "Generated media:\nMEDIA:/tmp/proof.png" },
-  ];
   afterEach(async () => {
     await scheduler.stop();
     await closeOpenClawStateDatabaseAsync();
@@ -656,8 +657,12 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.getRuntimeConfig.mockReset();
     mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: ["+15550002"] } });
     configureRestartSessionEventMocks(mocks);
-    mocks.loadSessionEntry.mockReset();
-    mocks.loadSessionEntry.mockImplementation((sessionKey: string) =>
+    mocks.loadSessionEntryInWorker.mockReset().mockImplementation(async ({ key, agentId, env }) => {
+      const loaded = await mocks.loadSessionEntryAsync(key, { agentId, env });
+      return { ...loaded, agentId: loaded.agentId ?? agentId ?? "main" };
+    });
+    mocks.loadSessionEntryAsync.mockReset();
+    mocks.loadSessionEntryAsync.mockImplementation(async (sessionKey: string) =>
       sessionFixture(
         sessionKey,
         { sessionId: sessionKey, updatedAt: 0 },
@@ -701,7 +706,6 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.appendAssistantMessageToSessionTranscript.mockReset();
     mocks.createManagedOutgoingMediaBlocks.mockReset();
     mocks.attachManagedOutgoingMediaToMessage.mockReset();
-    mocks.enrichAssistantTranscriptMediaForRun.mockReset();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
     mocks.clearSentinel.mockReset();
@@ -744,9 +748,9 @@ describe("scheduleRestartSentinelWake", () => {
   it("records a non-owner update without delivery or a diagnostic wake", async () => {
     const sessionKey = "agent:main:whatsapp:direct:+15550002";
     const run = createUpdateRun({ trigger: "control-ui", origin: { sessionKey } });
-    const session = mocks.loadSessionEntry(sessionKey);
+    const session = await mocks.loadSessionEntryAsync(sessionKey);
     mocks.getRuntimeConfig.mockReturnValue({ commands: { ownerAllowFrom: ["telegram:12345"] } });
-    mocks.loadSessionEntry.mockReturnValue({
+    mocks.loadSessionEntryAsync.mockResolvedValue({
       ...session,
       cfg: { commands: { ownerAllowFrom: ["telegram:12345"] } },
     });
@@ -973,15 +977,25 @@ describe("scheduleRestartSentinelWake", () => {
     const entry = { sessionId, updatedAt: 1, lifecycleRevision: "update-lifecycle" };
     await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
     const originalMerge = mocks.mergeDeliveryContext.getMockImplementation()!;
-    const sessionUtils =
-      await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
     const delivery = await vi.importActual<typeof import("../utils/delivery-context.shared.js")>(
       "../utils/delivery-context.shared.js",
     );
     const deliveryRead = await vi.importActual<typeof import("../utils/delivery-context.read.js")>(
       "../utils/delivery-context.read.js",
     );
-    mocks.loadSessionEntry.mockImplementation(sessionUtils.loadSessionEntry);
+    const sessionWorker = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    mocks.loadSessionEntryInWorker.mockImplementation(
+      sessionWorker.loadGatewaySessionEntryReadOnlyInWorker,
+    );
+    mocks.loadSessionEntryAsync.mockImplementation((key, options) =>
+      sessionWorker.loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: mocks.getRuntimeConfig(),
+        key,
+        ...options,
+      }),
+    );
     mocks.deliveryContextFromSession.mockImplementation(deliveryRead.deliveryContextFromSession);
     mocks.mergeDeliveryContext.mockImplementation(delivery.mergeDeliveryContext);
     const updateRun = createUpdateRun({ trigger: "api", origin: { sessionKey } });
@@ -1016,7 +1030,7 @@ describe("scheduleRestartSentinelWake", () => {
       sessionMessageSubscribers: { get: () => subscribers },
       chatAbortControllers: new Map(),
     });
-    const publications: Promise<void>[] = [];
+    const publications: ReturnType<typeof publish>[] = [];
     const publicationErrors: unknown[] = [];
     const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
       if (update.target?.sessionId === sessionId) {
@@ -1305,79 +1319,325 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
   });
 
-  it("replays generated-media provenance through the owning session agent", async () => {
-    const resolveGatewayContext = () => undefined;
-    await deliverGeneratedMedia(
-      {
-        id: "session-delivery-media",
-        messageId: "image:task-1:agent-loop",
-        route: {
-          channel: "discord",
-          to: "channel:123",
-          accountId: "default",
-          chatType: "channel",
-        },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "image_generate:task-1",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "message_tool_only",
-        expectedMediaUrls: ["/tmp/proof.png"],
-        idempotencyKey: "image:task-1:agent-loop",
-      },
-      "/tmp/custom-session-delivery-state",
-      resolveGatewayContext,
-    );
+  async function enqueueGeneratedMedia(
+    overrides: Partial<Parameters<typeof createGeneratedMediaDeliveryEntry>[0]> & {
+      messageId: string;
+    },
+  ) {
+    const {
+      id: _id,
+      enqueuedAt: _enqueuedAt,
+      retryCount: _retryCount,
+      ...payload
+    } = createGeneratedMediaDeliveryEntry({
+      id: "unused",
+      idempotencyKey: overrides.messageId,
+      ...overrides,
+    });
+    const id = await mocks.enqueueSessionDelivery(payload, queueContext);
+    const entry = await mocks.loadPendingSessionDelivery(id, queueContext);
+    if (entry?.kind !== "agentTurn") {
+      throw new Error("expected queued generated media");
+    }
+    return entry as Parameters<typeof createGeneratedMediaDeliveryEntry>[0];
+  }
 
-    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
-      "agent",
-      {
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        deliver: true,
-        bestEffortDeliver: false,
-        channel: "discord",
-        accountId: "default",
-        to: "channel:123",
-        threadId: undefined,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "image_generate:task-1",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        disableMessageTool: true,
-        forceRestartSafeTools: true,
-        idempotencyKey: "image:task-1:agent-loop",
-      },
-      {
-        expectFinal: true,
-        forceSyntheticClient: true,
-        internalDeliveryMediaUrls: ["/tmp/proof.png"],
-        runtimeContextFragments: expectedGeneratedMediaContext,
-        resolveGatewayContext,
-        onAccepted: expect.any(Function),
-      },
-    );
-    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
-    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "session-delivery-media", kind: "agentTurn" }),
-      expectQueueContext("/tmp/custom-session-delivery-state"),
+  async function deliverGeneratedMediaThenCompletion(
+    entry: Parameters<typeof createGeneratedMediaDeliveryEntry>[0],
+  ) {
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow("its completion turn follows");
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    const advanced = await mocks.loadPendingSessionDelivery(entry.id, queueContext);
+    expect(advanced).toMatchObject({
+      expectedMediaUrls: [],
+      agentRunAttempt: (entry.agentRunAttempt ?? 0) + 1,
+    });
+    await deliverGeneratedMedia(advanced);
+  }
+
+  function lastAgentDispatch() {
+    const call = mocks.dispatchGatewayMethodInProcess.mock.calls.at(-1);
+    expect(call?.[0]).toBe("agent");
+    return { request: call?.[1] as Record<string, unknown>, options: call?.[2] };
+  }
+
+  it("sends generated media from the host before one ordinary completion turn", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-1:agent-loop",
+      route: { channel: "discord", to: "channel:123", accountId: "default", chatType: "channel" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+
+    await deliverGeneratedMediaThenCompletion(entry);
+
+    expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
+    expect(mocks.sendDurableMessageBatchCore.mock.calls[0]?.[0]).toMatchObject({
+      channel: "discord",
+      to: "channel:123",
+      accountId: "default",
+      payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
+      durability: "required",
+      deliveryIntentId: `generated-media-delivery:v1:${entry.id}`,
+      reusePendingDeliveryIntent: true,
+    });
+    const { request, options } = lastAgentDispatch();
+    // No restart-safe tool filter, no disabled message tool, no host media
+    // constraint: the completion turn has the requester's normal toolset.
+    expect(request).toEqual({
+      sessionKey: "agent:main:main",
+      message: expect.stringContaining("[Generated media delivered]"),
+      deliver: true,
+      bestEffortDeliver: false,
+      channel: "discord",
+      accountId: "default",
+      to: "channel:123",
+      threadId: undefined,
+      inputProvenance: entry.inputProvenance,
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "image:task-1:agent-loop:attempt:1",
+    });
+    expect(String(request.message)).toContain("Do not send these files again.");
+    expect(String(request.message).endsWith("generated image ready")).toBe(true);
+    expect(options).toEqual({
+      expectFinal: true,
+      forceSyntheticClient: true,
+      runtimeContextFragments: undefined,
+      onAccepted: expect.any(Function),
+    });
+    expect(mocks.sendDurableMessageBatchCore.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.dispatchGatewayMethodInProcess.mock.invocationCallOrder[0] ?? 0,
     );
   });
 
-  it("keeps a generated-media gateway rejection before acceptance retryable", async () => {
+  it("drains a media row rearmed by the retired agent-turn design through host delivery", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-upgrade:agent-loop",
+      message: "Deliver the caption and every structured generated attachment.",
+      expectedMediaUrls: ["/tmp/missing.png"],
+      suppressTextDelivery: true,
+    });
+    await mocks.advanceSessionDeliveryAgentRun(entry.id, undefined, queueContext);
+    const rearmed = await mocks.loadPendingSessionDelivery(entry.id, queueContext);
+    expect(rearmed).toMatchObject({ agentRunAttempt: 1, suppressTextDelivery: true });
+
+    await deliverGeneratedMediaThenCompletion(rearmed);
+
+    expect(mocks.sendDurableMessageBatchCore.mock.calls[0]?.[0]).toMatchObject({
+      payloads: [{ mediaUrls: ["/tmp/missing.png"] }],
+    });
+    const { request } = lastAgentDispatch();
+    // The retired instruction now follows a host notice that the files were sent.
+    expect(String(request.message)).toMatch(
+      /^[\s\S]*Do not send these files again\.[\s\S]*Deliver the caption/u,
+    );
+    expect(request).not.toHaveProperty("disableMessageTool");
+    expect(request).not.toHaveProperty("forceRestartSafeTools");
+  });
+
+  it("keeps a rearmed internal media row clear of the retired transcript identity", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-internal-upgrade:agent-loop",
+      route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+      expectedMediaUrls: ["/tmp/two.png"],
+    });
+    // An older release already wrote one.png under the base key, then rearmed.
+    await mocks.advanceSessionDeliveryAgentRun(entry.id, undefined, queueContext);
+
+    await deliverGeneratedMediaThenCompletion(
+      await mocks.loadPendingSessionDelivery(entry.id, queueContext),
+    );
+
+    const keys = mocks.appendAssistantMessageToSessionTranscript.mock.calls.map(
+      ([params]) => params.idempotencyKey,
+    );
+    expect(keys).toEqual([
+      "image:task-internal-upgrade:agent-loop:attempt:1:generated-media-host-transcript",
+    ]);
+    expect(keys).not.toContain("image:task-internal-upgrade:agent-loop:generated-media-transcript");
+  });
+
+  it("does not resend media after a crash between the send and the completion turn", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-crash:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+    const queueStorageActual = await vi.importActual<
+      typeof import("../infra/session-delivery-queue-storage.js")
+    >("../infra/session-delivery-queue-storage.js");
+    mocks.markSessionDeliveryAttemptStarted.mockImplementationOnce(
+      queueStorageActual.markSessionDeliveryAttemptStarted,
+    );
+    mocks.advanceSessionDeliveryAgentRun.mockRejectedValueOnce(new Error("crash after send"));
+
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow("crash after send");
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    expect(await mocks.loadPendingSessionDelivery(entry.id, queueContext)).toMatchObject({
+      deliveryStartedAt: expect.any(Number),
+    });
+
+    // The fenced replay never sends; its completed outbound receipt proves the first send.
+    mocks.inspectDeliveryQueueReceipt.mockResolvedValueOnce({
+      status: "completed",
+      pendingEntry: null,
+    } as never);
+    await deliverGeneratedMediaThenCompletion(
+      await mocks.loadPendingSessionDelivery(entry.id, queueContext),
+    );
+
+    expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it("dead-letters a host media send that may have reached the chat", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-ambiguous:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+    mocks.sendDurableMessageBatchCore.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [],
+      error: new Error("lost platform acknowledgement"),
+    } as never);
+
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow(
+      "dead-lettered after ambiguous side effects",
+    );
+
+    expect(mocks.markSessionDeliverySettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: entry.id }),
+      "moved-to-failed",
+      expectQueueContext(),
+    );
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters a media send whose outbound owner failed terminally", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-outbound-failed:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+    mocks.sendDurableMessageBatchCore.mockResolvedValueOnce({
+      status: "suppressed",
+      reason: "no_visible_result",
+    } as never);
+    mocks.inspectDeliveryQueueReceipt.mockResolvedValueOnce({
+      status: "failed",
+      pendingEntry: null,
+    } as never);
+
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow(
+      "dead-lettered after ambiguous side effects",
+    );
+
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("waits for outbound recovery that still owns the media send", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-outbound-owned:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("platform timeout"));
+    mocks.inspectDeliveryQueueReceipt.mockResolvedValueOnce({
+      status: "pending",
+      pendingEntry: null,
+    } as never);
+
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow(
+      "still owned by outbound delivery recovery",
+    );
+
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(entry.id, 1_000, expectQueueContext());
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("retries a host media send proven not to reach the chat", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-not-sent:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("channel offline"));
+
+    await expect(deliverGeneratedMedia(entry)).rejects.toMatchObject({
+      name: "SessionDeliverySafeRetryError",
+      message: "queued generated-media send did not reach the chat",
+    });
+
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("runs a failed generation as one ordinary completion turn without a media send", async () => {
+    const entry = await enqueueGeneratedMedia({ messageId: "image:task-failed:agent-loop" });
+
+    await deliverGeneratedMedia(entry);
+
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+    const { request } = lastAgentDispatch();
+    expect(request).toEqual({
+      sessionKey: "agent:main:main",
+      message: "generated image ready",
+      deliver: true,
+      bestEffortDeliver: false,
+      channel: "discord",
+      accountId: undefined,
+      to: "channel:123",
+      threadId: undefined,
+      inputProvenance: entry.inputProvenance,
+      sourceReplyDeliveryMode: "automatic",
+      idempotencyKey: "image:task-failed:agent-loop",
+    });
+  });
+
+  it("settles delivered media when only its completion turn is refused", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-refused-turn:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+      expectedMediaAttachments: { "/tmp/proof.png": { type: "image", path: "/tmp/proof.png" } },
+    });
+    mocks.dispatchGatewayMethodInProcess.mockImplementationOnce(async () => {
+      const { SessionDeliveryDeadLetteredError } =
+        await import("../infra/session-delivery-queue.records.js");
+      throw new SessionDeliveryDeadLetteredError("requester session changed");
+    });
+
+    await deliverGeneratedMediaThenCompletion(entry);
+
+    expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "moved-to-failed",
+      expect.anything(),
+    );
+  });
+
+  it("dead-letters a refused completion turn that carries no delivered media", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-refused-failure:agent-loop",
+    });
+    mocks.dispatchGatewayMethodInProcess.mockImplementationOnce(async () => {
+      const { SessionDeliveryDeadLetteredError } =
+        await import("../infra/session-delivery-queue.records.js");
+      throw new SessionDeliveryDeadLetteredError("requester session changed");
+    });
+
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow("requester session changed");
+    expect(mocks.markSessionDeliverySettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: entry.id }),
+      "moved-to-failed",
+      expectQueueContext(),
+    );
+  });
+
+  it("keeps a completion-turn rejection before acceptance retryable", async () => {
     mocks.dispatchGatewayMethodInProcess.mockRejectedValueOnce(new Error("gateway unavailable"));
 
     await expect(
       deliverGeneratedMedia({
         id: "session-delivery-media-pre-accept",
         messageId: "image:task-pre-accept:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
       }),
     ).rejects.toThrow("failed before gateway acceptance");
 
@@ -1388,8 +1648,34 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
   });
 
-  it("authorizes queued media replay for an active cron continuation", async () => {
-    mocks.loadSessionEntry.mockReturnValue(
+  it("dead-letters an interrupted completion attempt instead of replaying it", async () => {
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-interrupted",
+        messageId: "image:task-interrupted:agent-loop",
+        deliveryStartedAt: 1,
+      }),
+    ).rejects.toThrow("dead-lettered after an interrupted unproven attempt");
+
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("never resends a started host media send whose receipt is gone", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-expired-receipt:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+
+    await expect(deliverGeneratedMedia({ ...entry, deliveryStartedAt: 1 })).rejects.toThrow(
+      "dead-lettered after ambiguous side effects",
+    );
+
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("authorizes the completion turn for an active cron continuation", async () => {
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:cron:daily-media:run:run-123", {
         sessionId: "cron-run-session",
         cronRunContinuation: {
@@ -1405,202 +1691,24 @@ describe("scheduleRestartSentinelWake", () => {
       id: "session-delivery-cron-media",
       sessionKey: "agent:main:cron:daily-media:run:run-123",
       messageId: "image:cron-task:agent-loop",
-      expectedMediaUrls: ["/tmp/proof.png"],
-      suppressTextDelivery: true,
     });
 
-    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({
-        sessionKey: "agent:main:cron:daily-media:run:run-123",
-        sessionId: "cron-run-session",
-      }),
-      {
-        allowSyntheticCronRunContinuation: true,
-        expectFinal: true,
-        forceSyntheticClient: true,
-        internalDeliveryMediaUrls: ["/tmp/proof.png"],
-        runtimeContextFragments: expectedGeneratedMediaContext,
-        internalDeliverySuppressText: true,
-        onAccepted: expect.any(Function),
-      },
-    );
+    const { request, options } = lastAgentDispatch();
+    expect(request).toMatchObject({
+      sessionKey: "agent:main:cron:daily-media:run:run-123",
+      sessionId: "cron-run-session",
+    });
+    expect(options).toMatchObject({ allowSyntheticCronRunContinuation: true });
   });
 
-  it("defers a generated-media turn still owned by agent recovery", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
-    mocks.loadSessionEntry.mockReturnValue(
-      sessionFixture("agent:main:main", {
-        sessionId: "agent:main:main",
-        restartRecoveryDeliveryRunId: "recovery-run",
-        restartRecoveryDeliverySourceRunId: "image:task-owned:agent-loop",
-        updatedAt: 1,
-      }),
-    );
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-owned",
-        messageId: "image:task-owned:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("still owned by agent recovery");
-
-    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media-owned",
-      1_000,
-      expectQueueContext(),
-    );
-  });
-
-  it("retains the local fence when gateway dedupe reports another in-flight owner", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-in-flight",
-        messageId: "image:task-in-flight:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("still owned by agent recovery");
-
-    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "session-delivery-media-in-flight" }),
-      expectQueueContext(),
-    );
-    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media-in-flight",
-      1_000,
-      expectQueueContext(),
-    );
-  });
-
-  it("fails closed when a terminal agent turn has no replayable result", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
-    mocks.loadSessionEntry.mockReturnValue(
-      sessionFixture("agent:main:main", {
-        sessionId: "agent:main:main",
-        restartRecoveryTerminalRunIds: ["image:task-terminal:agent-loop"],
-        updatedAt: 1,
-      }),
-    );
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-terminal",
-        messageId: "image:task-terminal:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("dead-lettered without durable terminal evidence");
-  });
-
-  it("retries a captured empty terminal result instead of dead-lettering it", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
-    mocks.loadSessionEntry.mockReturnValue(
-      sessionFixture("agent:main:main", {
-        sessionId: "agent:main:main",
-        restartRecoveryTerminalRunIds: ["image:task-terminal-empty:agent-loop"],
-        restartRecoveryTerminalDeliveryEvidence: [
-          { runId: "image:task-terminal-empty:agent-loop", captured: true },
-        ],
-        updatedAt: 1,
-      }),
-    );
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-terminal-empty",
-        message: "generation completed",
-        messageId: "image:task-terminal-empty:agent-loop",
-        retryCount: 1,
-        lastChargedAgentRunAttempt: 0,
-        sourceReplyDeliveryMode: "message_tool_only",
-        expectedMediaUrls: [],
-      }),
-    ).rejects.toThrow("completed without a visible reply");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
-      "session-delivery-media-terminal-empty",
-      undefined,
-      expectQueueContext(),
-    );
-    expect(mocks.failSessionDelivery).not.toHaveBeenCalled();
-    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media-terminal-empty",
-      1_000,
-      expectQueueContext(),
-    );
-  });
-
-  it("dead-letters an interrupted attempt without durable agent evidence", async () => {
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-interrupted-unproven",
-        messageId: "image:task-interrupted-unproven:agent-loop",
-        deliveryStartedAt: 2,
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("interrupted unproven attempt");
-
-    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
-  });
-
-  it("does not replay private terminal media as an owning-transcript delivery", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
-    mocks.loadSessionEntry.mockReturnValue(
-      sessionFixture("agent:main:main", {
-        sessionId: "agent:main:main",
-        restartRecoveryTerminalRunIds: ["image:task-terminal-private:agent-loop"],
-        restartRecoveryTerminalDeliveryEvidence: [
-          {
-            runId: "image:task-terminal-private:agent-loop",
-            payloads: [{ visible: false, mediaUrls: ["/tmp/proof.png"] }],
-          },
-        ],
-        updatedAt: 1,
-      }),
-    );
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-terminal-private",
-        messageId: "image:task-terminal-private:agent-loop",
-        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("missed expected media");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
-      "session-delivery-media-terminal-private",
-      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
-      expectQueueContext(),
-    );
-    expect(mocks.failSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media-terminal-private",
-      expect.stringContaining("missed expected media"),
-      expectQueueContext(),
-    );
-    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media-terminal-private",
-      1_000,
-      expectQueueContext(),
-    );
-  });
-
-  it("persists internal generated audio as managed transcript content", async () => {
+  it("persists internal generated media in the owning transcript before the completion turn", async () => {
     const attachment = {
       type: "audio" as const,
       mediaUrl: "/tmp/proof.mp3",
       mimeType: "audio/mpeg",
     };
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: { payloads: [{ text: "ready", mediaUrls: [attachment.mediaUrl] }] },
-    });
-
-    await deliverGeneratedMedia({
-      id: `session-delivery-media-internal-${attachment.type}`,
-      messageId: `${attachment.type}:task-internal:agent-loop`,
+    const entry = await enqueueGeneratedMedia({
+      messageId: "audio:task-internal:agent-loop",
       route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
       expectedMediaUrls: [attachment.mediaUrl],
       expectedMediaAttachments: {
@@ -1612,21 +1720,13 @@ describe("scheduleRestartSentinelWake", () => {
       },
     });
 
-    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({ deliver: false, sourceReplyDeliveryMode: "automatic" }),
-      expect.objectContaining({ internalDeliveryMediaUrls: [attachment.mediaUrl] }),
-    );
+    await deliverGeneratedMediaThenCompletion(entry);
+
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
     expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       agentId: "main",
-      items: [
-        {
-          url: attachment.mediaUrl,
-          mimeType: attachment.mimeType,
-          trustedLocal: true,
-        },
-      ],
+      items: [{ url: attachment.mediaUrl, mimeType: attachment.mimeType, trustedLocal: true }],
       stateDir: testState.stateDir,
       localRoots: [testState.statePath("media")],
     });
@@ -1634,495 +1734,46 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         content: [],
         displayContent: [expect.objectContaining({ type: attachment.type })],
-        idempotencyKey: `${attachment.type}:task-internal:agent-loop:generated-media-transcript`,
+        idempotencyKey: "audio:task-internal:agent-loop:generated-media-host-transcript",
       }),
     );
     expect(mocks.attachManagedOutgoingMediaToMessage).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: "generated-media-transcript" }),
     );
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(lastAgentDispatch().request).toMatchObject({
+      deliver: false,
+      sourceReplyDeliveryMode: "automatic",
+    });
+    expect(
+      mocks.appendAssistantMessageToSessionTranscript.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.dispatchGatewayMethodInProcess.mock.invocationCallOrder[0] ?? 0);
   });
 
-  it("replays targetless media into the original owner transcript without duplicating artifacts", async () => {
-    const sessionId = "ops-global-session";
-    const sourceRunId = "image:task-global:agent-loop";
-    const transcriptRunId = "resumed-completion-run";
-    const mediaPath = testState.statePath("media", "tool-image-generation", "proof.png");
-    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
-    await fs.writeFile(mediaPath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
-    const opsStorePath = testState.statePath("agents", "ops", "sessions", "sessions.json");
-    const researchStorePath = testState.statePath(
-      "agents",
-      "research",
-      "sessions",
-      "sessions.json",
-    );
-    await upsertSessionEntryCore(
-      { agentId: "ops", sessionKey: "global", storePath: opsStorePath },
-      { sessionId, updatedAt: 1 },
-    );
-    await upsertSessionEntryCore(
-      { agentId: "research", sessionKey: "global", storePath: researchStorePath },
-      { sessionId: "research-global-session", updatedAt: 1 },
-    );
-    const originalContent = [
-      { type: "thinking", thinking: "Check the generated choices.", thinkingSignature: "signed" },
-      {
-        type: "text",
-        text: `Here are your choices.\nMEDIA:${mediaPath}`,
-        textSignature: "signed",
-      },
-    ];
-    await appendTranscriptMessage(
-      { agentId: "ops", sessionId, sessionKey: "global", storePath: opsStorePath },
-      {
-        eventId: "completion-reply",
-        message: {
-          role: "assistant",
-          content: originalContent,
-          stopReason: "stop",
-          __openclaw: { runId: transcriptRunId },
-        },
-      },
-    );
-    const transcriptActual = await vi.importActual<
-      typeof import("../config/sessions/transcript.js")
-    >("../config/sessions/transcript.js");
-    const transcriptPersistenceActual = await vi.importActual<
-      typeof import("./server-methods/chat-transcript-persistence.js")
-    >("./server-methods/chat-transcript-persistence.js");
-    mocks.enrichAssistantTranscriptMediaForRun.mockImplementation(
-      transcriptPersistenceActual.enrichAssistantTranscriptMediaForRun,
-    );
-    const managedMediaActual = await vi.importActual<
-      typeof import("./managed-image-attachments.js")
-    >("./managed-image-attachments.js");
-    const queueStorageActual = await vi.importActual<
-      typeof import("../infra/session-delivery-queue-storage.js")
-    >("../infra/session-delivery-queue-storage.js");
-    const { readManagedImageRecord } = await import("./managed-image-record-store.js");
-    mocks.appendAssistantMessageToSessionTranscript
-      .mockImplementationOnce(transcriptActual.appendAssistantMessageToSessionTranscript)
-      .mockImplementationOnce(transcriptActual.appendAssistantMessageToSessionTranscript);
-    mocks.createManagedOutgoingMediaBlocks.mockImplementation(
-      managedMediaActual.createManagedOutgoingMediaBlocks,
-    );
-    mocks.attachManagedOutgoingMediaToMessage
-      .mockImplementationOnce(() => {
-        throw new Error("synthetic crash after transcript append");
-      })
-      .mockImplementationOnce(managedMediaActual.attachManagedOutgoingMediaToMessage);
-    await upsertSessionEntryCore(
-      { agentId: "ops", sessionKey: "global", storePath: opsStorePath },
-      {
-        sessionId,
-        updatedAt: 1,
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry: {
-            sessionId,
-            updatedAt: 1,
-            restartRecoveryDeliverySourceRunId: sourceRunId,
-            restartRecoveryDeliveryRunId: transcriptRunId,
-          },
-          recordTerminalSource: true,
-          terminalRunId: transcriptRunId,
-          terminalDeliveryEvidence: { payloads: [{ visible: true, mediaUrls: [mediaPath] }] },
-        }),
-      },
-    );
-    const storedEntry = loadStoredSessionEntry({
-      agentId: "ops",
-      sessionKey: "global",
-      storePath: opsStorePath,
+  it("reuses prepared internal media when a transcript write is replayed", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-internal-replay:agent-loop",
+      route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+      expectedMediaUrls: ["/tmp/proof.png"],
     });
-    if (!storedEntry) {
-      throw new Error("expected persisted media owner");
-    }
-    mocks.loadSessionEntry.mockReturnValue(
-      sessionFixture("global", storedEntry, { agentId: "ops", storePath: opsStorePath }),
+    mocks.attachManagedOutgoingMediaToMessage.mockRejectedValueOnce(
+      new Error("synthetic crash after transcript append"),
     );
 
-    const queueId = await queueStorageActual.enqueueSessionDelivery(
-      {
-        kind: "agentTurn",
-        sessionKey: "global",
-        message: "generated image ready",
-        messageId: "image:task-global:agent-loop",
-        route: { channel: "webchat", to: "global", chatType: "direct" },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: [mediaPath],
-        expectedMediaAttachments: {
-          [mediaPath]: {
-            type: "image",
-            path: mediaPath,
-            name: "proof.png",
-            mimeType: "image/png",
-            sizeBytes: (await fs.stat(mediaPath)).size,
-            width: 1,
-            height: 1,
-          },
-        },
-        idempotencyKey: "image:task-global:agent-loop",
-      },
-      queueContext,
-    );
-    const firstAttempt = await queueStorageActual.loadPendingSessionDelivery(queueId, queueContext);
-    if (!firstAttempt || firstAttempt.kind !== "agentTurn") {
-      throw new Error("expected queued generated media attempt");
-    }
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValue({
-      status: "ok",
-      result: { payloads: [{ text: "ready", mediaUrls: [mediaPath] }] },
-    });
-
-    await expect(deliverGeneratedMedia(firstAttempt, testState.stateDir)).rejects.toThrow(
+    await expect(deliverGeneratedMedia(entry)).rejects.toThrow(
       "synthetic crash after transcript append",
     );
-    const replayAttempt = await queueStorageActual.loadPendingSessionDelivery(
-      queueId,
-      queueContext,
+    await deliverGeneratedMediaThenCompletion(
+      await mocks.loadPendingSessionDelivery(entry.id, queueContext),
     );
-    if (!replayAttempt || replayAttempt.kind !== "agentTurn") {
-      throw new Error("expected prepared generated media replay");
-    }
-    const firstPreparedBlocks = replayAttempt.preparedMediaBlocks?.[mediaPath];
-    expect(firstPreparedBlocks).toEqual([
-      expect.objectContaining({ type: "image", artifactId: expect.any(String) }),
-    ]);
 
-    await deliverGeneratedMedia(replayAttempt, testState.stateDir);
-    const afterReplay = await queueStorageActual.loadPendingSessionDelivery(queueId, queueContext);
-    expect(
-      afterReplay?.kind === "agentTurn" ? afterReplay.preparedMediaBlocks?.[mediaPath] : null,
-    ).toEqual(firstPreparedBlocks);
     expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledTimes(1);
-
-    const opsEvents = await loadTranscriptEvents({
-      agentId: "ops",
-      sessionId,
-      sessionKey: "global",
-      storePath: opsStorePath,
-    });
-    expect(opsEvents).toHaveLength(2);
-    expect(opsEvents[0]).toMatchObject({ type: "session", id: sessionId });
-    const messageEvent = opsEvents[1] as {
-      id?: string;
-      message?: {
-        role?: string;
-        content?: Array<Record<string, unknown>>;
-        openclawDisplayContent?: Array<Record<string, unknown>>;
-      };
-    };
-    expect(messageEvent.message).toMatchObject({
-      role: "assistant",
-      content: originalContent,
-      openclawDisplayContent: [
-        expect.objectContaining({ type: "thinking" }),
-        { type: "text", text: "Here are your choices." },
-        expect.objectContaining({ type: "image", artifactId: expect.any(String) }),
-      ],
-    });
-    expect(messageEvent.id).toBe("completion-reply");
-    expect(messageEvent.message?.openclawDisplayContent).not.toEqual([
-      { type: "text", text: path.basename(mediaPath) },
+    const appends = mocks.appendAssistantMessageToSessionTranscript.mock.calls.map(([params]) => [
+      params.idempotencyKey,
+      params.displayContent,
     ]);
-    const imageBlock = messageEvent.message?.openclawDisplayContent?.find(
-      (block) => block.type === "image",
-    );
-    const artifactId = imageBlock?.artifactId;
-    expect(artifactId).toBeTypeOf("string");
-    const parsedArtifact = managedMediaActual.parseManagedOutgoingArtifactId(String(artifactId));
-    expect(parsedArtifact).not.toBeNull();
-    const record = await readManagedImageRecord(
-      parsedArtifact?.attachmentId ?? "",
-      testState.stateDir,
-    );
-    expect(record).toMatchObject({ messageId: messageEvent.id, sessionKey: "global" });
-    await expect(
-      managedMediaActual.resolveManagedOutgoingMediaArtifactDownload({
-        sessionKey: "global",
-        agentId: "ops",
-        artifactId: String(artifactId),
-        stateDir: testState.stateDir,
-      }),
-    ).resolves.toMatchObject({ artifactId, type: "image" });
-    await expect(
-      loadTranscriptEvents({
-        agentId: "research",
-        sessionId: "research-global-session",
-        sessionKey: "global",
-        storePath: researchStorePath,
-      }),
-    ).resolves.toEqual([]);
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
-    expect(mocks.failSessionDelivery).not.toHaveBeenCalled();
-    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
-    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
-    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
-  });
-
-  it("persists proven internal media before retrying the missing subset", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: { payloads: [{ text: "first ready", mediaUrls: ["/tmp/one.png"] }] },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-internal-partial",
-        message: "generated images ready",
-        messageId: "image:task-internal-partial:agent-loop",
-        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-        expectedMediaAttachments: {
-          "/tmp/one.png": { type: "image", path: "/tmp/one.png", name: "one.png" },
-          "/tmp/two.png": { type: "image", path: "/tmp/two.png", name: "two.png" },
-        },
-      }),
-    ).rejects.toThrow("partially missed expected media: /tmp/two.png");
-
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        content: [],
-        displayContent: [expect.objectContaining({ type: "image" })],
-        storePath: "/tmp/sessions.json",
-        idempotencyKey: "image:task-internal-partial:agent-loop:generated-media-transcript",
-      }),
-    );
-    expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items: [
-          {
-            url: "/tmp/one.png",
-            filename: "one.png",
-            trustedLocal: true,
-          },
-        ],
-      }),
-    );
-    expect(mocks.mergeSessionDeliveryPreparedMediaBlocks).toHaveBeenCalledWith(
-      "session-delivery-media-internal-partial",
-      "/tmp/one.png",
-      [expect.objectContaining({ type: "image" })],
-      expectQueueContext(testState.stateDir),
-    );
-    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
-      "session-delivery-media-internal-partial",
-      expect.objectContaining({
-        expectedMediaUrls: ["/tmp/two.png"],
-        suppressTextDelivery: true,
-      }),
-      expectQueueContext(),
-    );
-  });
-
-  it("does not count private reasoning media as an owning-transcript reply", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        payloads: [{ isReasoning: true, mediaUrls: ["/tmp/proof.png"] }],
-      },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-internal-reasoning",
-        messageId: "image:task-internal-reasoning:agent-loop",
-        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("missed expected media: /tmp/proof.png");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
-      "session-delivery-media-internal-reasoning",
-      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
-      expectQueueContext(),
-    );
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    expect(mocks.createManagedOutgoingMediaBlocks).not.toHaveBeenCalled();
-  });
-
-  it("accepts a suppressed visible automatic completion notice", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        payloads: [{ text: "generation failed" }],
-        deliveryStatus: { status: "suppressed" },
-      },
-    });
-
-    await deliverGeneratedMedia({
-      id: "session-delivery-notice-suppressed",
-      message: "generation failed",
-      messageId: "image:task-notice-suppressed:agent-loop",
-      expectedMediaUrls: [],
-    });
-
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
-  });
-
-  it("checks partial automatic evidence only for media still missing", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        payloads: [{ text: "ready", mediaUrls: ["/tmp/one.png"] }, { mediaUrls: ["/tmp/two.png"] }],
-        deliveryStatus: {
-          status: "partial_failed",
-          errorMessage: "second attachment failed before send",
-          payloadOutcomes: [
-            { index: 0, status: "sent" },
-            { index: 1, status: "failed", sentBeforeError: false },
-          ],
-        },
-      },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-cross-path-partial",
-        message: "generated images ready",
-        messageId: "image:task-cross-path-partial:agent-loop",
-        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-      }),
-    ).rejects.toThrow("missed expected media: /tmp/two.png");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
-      "session-delivery-media-cross-path-partial",
-      expect.objectContaining({
-        expectedMediaUrls: ["/tmp/two.png"],
-        message: expect.stringContaining("MEDIA:/tmp/two.png"),
-        suppressTextDelivery: true,
-      }),
-      expectQueueContext(),
-    );
-    expect(mocks.advanceSessionDeliveryAgentRun.mock.calls[0]?.[1]?.message).not.toContain(
-      "/tmp/one.png",
-    );
-  });
-
-  it("dead-letters a partial send without exact per-payload evidence", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }],
-        deliveryStatus: {
-          status: "partial_failed",
-          errorMessage: "transport failed after an unknown side effect",
-        },
-      },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-partial-unclassified",
-        messageId: "image:task-partial-unclassified:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("dead-lettered after ambiguous side effects");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
-  });
-
-  it("dead-letters truncated terminal evidence before retrying missing media", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        payloads: [{ text: "earlier payload" }],
-        payloadsTruncated: true,
-        deliveryStatus: { status: "sent" },
-      },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-truncated",
-        messageId: "image:task-truncated:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("dead-lettered after truncated evidence");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
-  });
-
-  it("dead-letters a partial visible send instead of replaying it", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        payloads: [{ text: "ready", mediaUrls: ["/tmp/one.png", "/tmp/two.png"] }],
-        deliveryStatus: {
-          status: "partial_failed",
-          errorMessage: "second attachment failed after first send",
-          payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
-        },
-      },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-partial",
-        message: "generated images ready",
-        messageId: "image:task-partial:agent-loop",
-        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-      }),
-    ).rejects.toThrow("dead-lettered after ambiguous side effects");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
-  });
-
-  it("dead-letters impossible truncated messaging-tool evidence", async () => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: {
-        messagingToolSentTargets: [
-          {
-            provider: "discord",
-            to: "channel:wrong",
-            mediaUrls: ["/tmp/proof.png"],
-          },
-        ],
-        messagingToolSentTargetsTruncated: true,
-      },
-    });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-media-tool-targets-truncated",
-        messageId: "image:task-tool-targets-truncated:agent-loop",
-        sourceReplyDeliveryMode: "message_tool_only",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      kind: "aggregate-only message-tool delivery",
-      result: { didSendViaMessagingTool: true, messagingToolSentMediaUrls: ["/tmp/proof.png"] },
-    },
-    {
-      kind: "committed cron action",
-      result: { payloads: [{ text: "ready" }], successfulCronAdds: 1 },
-    },
-  ])("dead-letters $kind before a fresh attempt", async ({ result }) => {
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok", result });
-
-    await expect(
-      deliverGeneratedMedia({
-        id: "session-delivery-unsafe-side-effect",
-        messageId: "image:task-unsafe-side-effect:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
-
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(appends).toHaveLength(2);
+    expect(appends[1]).toEqual(appends[0]);
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(1);
   });
 
   it("does not dispatch a queued agentTurn continuation after the session key changes", async () => {
@@ -2151,7 +1802,9 @@ describe("scheduleRestartSentinelWake", () => {
       },
       "thread-42",
     );
-    mocks.loadSessionEntry.mockReturnValueOnce(activeEntry).mockReturnValue(replacementEntry);
+    mocks.loadSessionEntryAsync
+      .mockResolvedValueOnce(activeEntry)
+      .mockResolvedValue(replacementEntry);
 
     await wakeRestartSentinel();
 
@@ -2194,7 +1847,7 @@ describe("scheduleRestartSentinelWake", () => {
       baseSessionKey: "agent:main:telegram:group:-1003826723328",
       threadId: "13757",
     });
-    mocks.loadSessionEntry.mockReturnValue(
+    mocks.loadSessionEntryAsync.mockResolvedValue(
       sessionFixture("agent:main:telegram:group:-1003826723328:topic:13757", {
         sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
         updatedAt: 0,
@@ -2452,7 +2105,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "room-77" });
     setNoticeOwner("telegram:room-77");
     await wakeRestartSentinel();
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith(
+    expect(mocks.loadSessionEntryAsync).toHaveBeenCalledWith(
       sessionKey,
       expect.objectContaining({
         env: expect.objectContaining({ OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR }),
@@ -2582,9 +2235,9 @@ describe("scheduleRestartSentinelWake", () => {
       baseSessionKey: key === sessionKey ? baseSessionKey : key,
       threadId: key === sessionKey ? "99" : undefined,
     }));
-    const loadSession = mocks.loadSessionEntry.getMockImplementation()!;
-    mocks.loadSessionEntry.mockImplementation((key) => ({
-      ...loadSession(key),
+    const loadSession = mocks.loadSessionEntryAsync.getMockImplementation()!;
+    mocks.loadSessionEntryAsync.mockImplementation(async (key) => ({
+      ...(await loadSession(key)),
       entry: {
         sessionId: key,
         updatedAt: 0,
@@ -2712,8 +2365,8 @@ describe("scheduleRestartSentinelWake", () => {
       baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
       threadId: "$thread-event",
     });
-    mocks.loadSessionEntry
-      .mockReturnValueOnce(
+    mocks.loadSessionEntryAsync
+      .mockResolvedValueOnce(
         sessionFixture(
           "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
           {
@@ -2727,7 +2380,7 @@ describe("scheduleRestartSentinelWake", () => {
           { cfg: { commands: { ownerAllowFrom: ["room:!MixedCase:example.org"] } } },
         ),
       )
-      .mockReturnValueOnce(
+      .mockResolvedValueOnce(
         sessionFixture("agent:main:matrix:channel:!lowercased:example.org", {
           sessionId: "agent:main:matrix:channel:!lowercased:example.org",
           updatedAt: 0,

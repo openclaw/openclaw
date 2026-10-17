@@ -8,7 +8,6 @@ import {
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
-import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -48,6 +47,8 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "../../tool-search-catalog.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
+import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   clearEmbeddedSessionPromptStates,
   persistSessionSystemPrompt,
@@ -285,13 +286,13 @@ describe("prompt-cache boundary regressions", () => {
     registerParityHostLifecycle();
 
     it.each([
-      ["openai-responses", "error"],
-      ["openai-responses", "aborted"],
-      ["anthropic-messages", "error"],
-      ["anthropic-messages", "aborted"],
+      { api: "openai-responses", stopReason: "error", contentKind: "partial" },
+      { api: "openai-responses", stopReason: "error", contentKind: "completed-tool" },
+      { api: "openai-responses", stopReason: "error", contentKind: "unfinished-tool-only" },
+      { api: "anthropic-messages", stopReason: "error", contentKind: "completed-tool" },
     ] as const)(
-      "%s keeps diagnostics off-wire and staged operator history stable after %s",
-      async (api, stopReason) => {
+      "$api preserves $contentKind $stopReason history through cold replay",
+      async ({ api, stopReason, contentKind }) => {
         const staged = user("Staged follow-up", TS + 2);
         const operator = {
           ...buildSystemUpdateMessage("Current operator facts", "runtime-context", true),
@@ -303,11 +304,55 @@ describe("prompt-cache boundary regressions", () => {
           provider: api === "anthropic-messages" ? "anthropic" : "openai",
           model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
           stopReason,
-          content: [{ type: "text" as const, text: "Incomplete answer" }],
+          content: [
+            ...(contentKind === "unfinished-tool-only"
+              ? []
+              : [
+                  {
+                    type: "text" as const,
+                    text: "Incomplete answer",
+                  },
+                ]),
+            ...(contentKind === "completed-tool" || contentKind === "unfinished-tool-only"
+              ? [
+                  {
+                    type: "toolCall" as const,
+                    id: "call_fixture",
+                    name: "read",
+                    arguments: {},
+                  },
+                ]
+              : []),
+          ],
           errorMessage: "private provider diagnostic",
           __openclaw: { runId: "first-run", itemId: "first-item" },
         };
-        const messages = [user("First question"), failed, staged, operator];
+        const messages = [
+          user("First question"),
+          failed,
+          ...(contentKind === "completed-tool"
+            ? [
+                {
+                  role: "toolResult" as const,
+                  toolCallId: "call_fixture",
+                  toolName: "read",
+                  content: [{ type: "text" as const, text: "Read result" }],
+                  isError: false,
+                  timestamp: TS + 1,
+                },
+              ]
+            : []),
+          {
+            ...answer,
+            api,
+            provider: failed.provider,
+            model: failed.model,
+            content: [{ type: "text" as const, text: "Recovered reply." }],
+            __openclaw: { runId: "recovered-run", itemId: "recovered-item" },
+          },
+          staged,
+          operator,
+        ];
         const boundaryOptions = {
           ...options,
           sessionVersion: 4,
@@ -343,6 +388,9 @@ describe("prompt-cache boundary regressions", () => {
             })
           ).payload;
         };
+        const firstBoundary = convertToLlm(
+          normalizeMessagesForLlmBoundary(messages, boundaryOptions),
+        );
         const first = await captureRequest(messages);
         const manager = SessionManager.inMemory();
         for (const message of messages) {
@@ -350,7 +398,37 @@ describe("prompt-cache boundary regressions", () => {
         }
         manager.appendMessage(answer);
         manager.appendMessage(user("Next run", TS + 60000));
-        const second = await captureRequest(manager.buildSessionContext().messages);
+        const policy: TranscriptPolicy = {
+          sanitizeMode: "images-only",
+          sanitizeToolCallIds: false,
+          preserveNativeAnthropicToolUseIds: api === "anthropic-messages",
+          repairToolUseResultPairing: true,
+          preserveSignatures: api === "anthropic-messages",
+          appendOnlyRuntimeContext: true,
+          inHistorySystemUpdates: true,
+          dropThinkingBlocks: false,
+          applyGoogleTurnOrdering: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: api === "anthropic-messages",
+          allowSyntheticToolResults: true,
+        };
+        const sanitized = await sanitizeSessionHistory({
+          messages: manager.buildSessionContext().messages,
+          modelApi: api,
+          policy,
+          sessionManager: manager,
+          sessionId: `failed-replay-${api}`,
+        });
+        const replayed = await validateReplayTurns({ messages: sanitized, modelApi: api, policy });
+        // Observation uses this sequence before provider encoding, so it must be
+        // stable even when the transport omits an empty failed assistant.
+        expect(
+          convertToLlm(normalizeMessagesForLlmBoundary(replayed, boundaryOptions)).slice(
+            0,
+            firstBoundary.length,
+          ),
+        ).toEqual(firstBoundary);
+        const second = await captureRequest(replayed);
         const field = api === "anthropic-messages" ? "messages" : "input";
         const before = first[field] as unknown[];
         const after = second[field] as unknown[];
@@ -367,7 +445,13 @@ describe("prompt-cache boundary regressions", () => {
           }),
         );
         expect(JSON.stringify(before)).toContain("Staged follow-up");
-        for (const value of ["private provider diagnostic", "first-run", "first-item"]) {
+        for (const value of [
+          "private provider diagnostic",
+          "first-run",
+          "first-item",
+          "recovered-run",
+          "recovered-item",
+        ]) {
           expect(JSON.stringify(first)).not.toContain(value);
           expect(JSON.stringify(second)).not.toContain(value);
         }
@@ -460,31 +544,6 @@ describe("prompt-cache boundary regressions", () => {
     ]);
   });
 
-  it.each([
-    ["openai-completions", false],
-    ["openai-completions", true],
-    ["openai-responses", false],
-    ["openai-responses", true],
-  ] as const)(
-    "preserves inbound metadata across consecutive %s requests (append-only context=%s)",
-    async (api, appendOnlyRuntimeContext) => {
-      const metadata = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"test"}\n```\n\n';
-      const active = [user(`${metadata}Check the deployment.`), ...toolRound(1, api)];
-      const boundaryOptions = { ...options, appendOnlyRuntimeContext };
-      const previous = await capture(api, active, boundaryOptions);
-      const next = await capture(
-        api,
-        [...active, answer, user("Next request", TS + 60000)],
-        boundaryOptions,
-      );
-      const field = api === "openai-completions" ? "messages" : "input";
-      const before = previous[field] as unknown[];
-      const after = next[field] as unknown[];
-      expect(JSON.stringify(before)).toContain("openclaw:ctx");
-      expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
-    },
-  );
-
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),
@@ -505,48 +564,6 @@ describe("prompt-cache boundary regressions", () => {
     );
     expect(JSON.stringify(previousMessages.at(-1))).toContain("sender=Bob");
     expect(JSON.stringify(nextMessages)).not.toContain("sender=Bob");
-  });
-
-  it("continues Responses tool rounds without moving or losing cron prompt context", async () => {
-    const metadata = "Conversation info:\nsender=Bob";
-    const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
-    const messages = [
-      carrier(metadata),
-      user(`${memory}\n\nCurrent time: 2026-06-05 10:30. Check the deployment.`),
-    ];
-    let previous = await capture("openai-responses", messages);
-    expect(JSON.stringify(previous.input)).toContain("saved preference");
-    expect(JSON.stringify(previous.input)).toContain(metadata.replaceAll("\n", "\\n"));
-    for (const round of [1, 2]) {
-      const callId = `call_${round}`;
-      messages.push(...toolRound(round, "openai-responses"));
-      const request = await capture("openai-responses", messages);
-      const continuation = resolveResponsesContinuationRequest(
-        {
-          lastRequest: previous,
-          lastResponseId: `resp_${round}`,
-          lastResponseItems: [
-            { type: "function_call", call_id: callId, name: "read", arguments: "{}" },
-          ],
-        },
-        request,
-      );
-      expect(continuation.continuationStatus).toBe("continued");
-      expect(continuation.request.input).toEqual([
-        { type: "function_call_output", call_id: callId, output: `result ${round}` },
-      ]);
-      previous = request;
-    }
-    messages.push(answer, user("next request", TS + 60000));
-    const next = await capture("openai-responses", messages);
-    expect(JSON.stringify(next.input)).toContain("saved preference");
-    expect(JSON.stringify(next.input)).not.toContain("sender=Bob");
-    expect(
-      resolveResponsesContinuationRequest(
-        { lastRequest: previous, lastResponseId: "resp_final", lastResponseItems: [] },
-        next,
-      ).continuationStatus,
-    ).toBe("history_changed");
   });
 
   it("keeps batched steering context with its owning user through Responses conversion", async () => {

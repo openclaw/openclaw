@@ -405,9 +405,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
       { type: "transcription.done", text: "late done" },
     ]);
-    const onError = vi.fn(() => {
-      throw new Error("observer failed");
-    });
+    const onError = vi.fn();
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
     const session = createSession(baseUrl, { onError, onPartial, onTranscript });

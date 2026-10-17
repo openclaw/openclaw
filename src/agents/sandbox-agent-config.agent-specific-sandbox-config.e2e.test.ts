@@ -142,7 +142,7 @@ vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
 let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSandboxConfigForAgent;
-let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
+let resolvePreparedSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolvePreparedSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
   // Convenience wrapper keeps session-key specific sandbox context assertions compact.
@@ -241,7 +241,7 @@ describe("Agent-specific sandbox config", () => {
     ]);
     ({ resolveSandboxConfigForAgent } = configModule);
     ({ resolveSandboxContext } = contextModule);
-    ({ resolveSandboxRuntimeStatus } = runtimeModule);
+    ({ resolvePreparedSandboxRuntimeStatus } = runtimeModule);
     spawnCalls.length = 0;
   });
 
@@ -323,7 +323,7 @@ describe("Agent-specific sandbox config", () => {
     const scenarios: Array<{
       cfg: OpenClawConfig;
       sessionKey: string;
-      assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => void;
+      assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => void;
     }> = [
       {
         cfg: {
@@ -345,7 +345,7 @@ describe("Agent-specific sandbox config", () => {
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:main:main",
-        assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+        assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => {
           expect(runtime.mode).toBe("off");
           expect(runtime.sandboxed).toBe(false);
         },
@@ -370,16 +370,17 @@ describe("Agent-specific sandbox config", () => {
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:family:whatsapp:group:123",
-        assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+        assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => {
           expect(runtime.mode).toBe("all");
           expect(runtime.sandboxed).toBe(true);
         },
       },
     ];
     for (const scenario of scenarios) {
-      const runtime = resolveSandboxRuntimeStatus({
+      const runtime = resolvePreparedSandboxRuntimeStatus({
         cfg: scenario.cfg,
         sessionKey: scenario.sessionKey,
+        preparedSessionEntry: null,
       });
       scenario.assert(runtime);
     }

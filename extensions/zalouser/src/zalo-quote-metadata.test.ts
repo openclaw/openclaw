@@ -179,7 +179,10 @@ describe("Zalo payload bounds", () => {
           sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, {
             profile: "payload-bounds",
           }),
-        ).resolves.toMatchObject({ ok: true });
+        ).resolves.toMatchObject({
+          messageId: "message-1",
+          receipt: { platformMessageIds: ["message-1"] },
+        });
       },
     });
 
@@ -282,38 +285,26 @@ describe("Zalo group context cache", () => {
     return createMockApi({ getGroupInfo } as Partial<API>);
   }
 
-  it("refetches group context when the current clock is invalid", async () => {
+  it("reuses group context until its five-minute TTL expires", async () => {
     const getGroupInfo = vi.fn(async () => ({
-      gridInfoMap: { "group-invalid-clock": { groupId: "group-invalid-clock", name: "Group" } },
+      gridInfoMap: { "group-ttl": { groupId: "group-ttl", name: "Group" } },
     }));
     const api = createGroupApi(getGroupInfo);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
     await withStoredSession({
-      profile: "cache-invalid-clock",
+      profile: "cache-ttl",
       api,
       run: async () => {
-        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
-        vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
-      },
-    });
-
-    expect(getGroupInfo).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache group context when ttl expiry exceeds the Date range", async () => {
-    const getGroupInfo = vi.fn(async () => ({
-      gridInfoMap: { "group-overflow": { groupId: "group-overflow", name: "Overflow" } },
-    }));
-    const api = createGroupApi(getGroupInfo);
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-
-    await withStoredSession({
-      profile: "cache-overflow",
-      api,
-      run: async () => {
-        await resolveZaloGroupContext("cache-overflow", "group-overflow");
-        await resolveZaloGroupContext("cache-overflow", "group-overflow");
+        await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
+          groupId: "group-ttl",
+          name: "Group",
+        });
+        now.mockReturnValue(1_700_000_299_999);
+        await resolveZaloGroupContext("cache-ttl", "group-ttl");
+        expect(getGroupInfo).toHaveBeenCalledOnce();
+        now.mockReturnValue(1_700_000_300_000);
+        await resolveZaloGroupContext("cache-ttl", "group-ttl");
       },
     });
 

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   type WorkerInferenceTerminalOutcome,
@@ -9,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
@@ -87,7 +87,7 @@ function serializeTerminalOutcome(outcome: WorkerInferenceTerminalOutcome): stri
 
 /** The shared-state worker supplies the already-admitted transaction connection. */
 export function createWorkerInferenceStoreKernel(options: {
-  db: DatabaseSync;
+  db: EngineConnection;
   now: () => number;
   retention?: Partial<WorkerInferenceRetentionPolicy>;
 }) {
@@ -127,6 +127,7 @@ export function createWorkerInferenceStoreKernel(options: {
 
   const pruneTerminalTurns = (nowMs: number, preserve?: WorkerInferenceTurnIdentity): void => {
     const utf8 =
+      isPostgresSqlConnection(db) ||
       executeSqliteQueryTakeFirstSync(db, query.selectFrom("pragma_encoding").select("encoding"))
         ?.encoding === "UTF-8";
     const retained = query

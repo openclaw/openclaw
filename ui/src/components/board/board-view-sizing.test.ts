@@ -3,7 +3,13 @@ import { exactBoardWidgetHeightPx } from "../../lib/board/grid.ts";
 // Side-effect import: test-support only type-imports the component, so the
 // custom element must be registered here for mount() to render anything.
 import "./board-view.ts";
-import { boardWidget, callbacks, mount, snapshot } from "./board-view.test-support.ts";
+import {
+  boardWidget,
+  callbacks,
+  mount,
+  openBoardMenu,
+  snapshot,
+} from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -54,9 +60,8 @@ describe("board widget sizing", () => {
   it("pins preset resizing and toggles height mode from the menu", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
-    const menu = view.querySelector(".board-widget__menu");
-    const preset = view.querySelector('wa-dropdown-item[value="resize:sm"]');
-    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: preset }, bubbles: true }));
+    await openBoardMenu(view);
+    view.querySelector<HTMLButtonElement>('[data-value="resize:sm"]')!.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
         {
@@ -69,12 +74,14 @@ describe("board widget sizing", () => {
       ]),
     );
     const cell = view.querySelector("openclaw-board-widget-cell");
-    await vi.waitFor(() => expect(cell?.querySelector("wa-dropdown-item")?.disabled).toBe(false));
+    await vi.waitFor(() =>
+      expect(cell?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.disabled).toBe(false),
+    );
 
     // The menu item is a checkbox toggle: an auto widget pins to its current
     // effective height, a fixed widget returns to auto.
-    const auto = view.querySelector('wa-dropdown-item[value="height:auto"]');
-    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: auto }, bubbles: true }));
+    await openBoardMenu(view);
+    view.querySelector<HTMLButtonElement>('[data-value="height:auto"]')!.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenLastCalledWith([
         {
@@ -94,10 +101,10 @@ describe("board widget sizing", () => {
       snapshot: snapshot({ widgets: [boardWidget({ heightMode: "fixed" })] }),
       callbacks: callbacks({ applyOps }),
     });
-    const menu = view.querySelector(".board-widget__menu");
-    const auto = view.querySelector('wa-dropdown-item[value="height:auto"]');
-    expect(auto?.hasAttribute("checked")).toBe(false);
-    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: auto }, bubbles: true }));
+    await openBoardMenu(view);
+    const auto = view.querySelector<HTMLButtonElement>('[data-value="height:auto"]')!;
+    expect(auto.getAttribute("aria-checked")).toBe("false");
+    auto.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenLastCalledWith([
         {

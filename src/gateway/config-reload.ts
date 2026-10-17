@@ -42,6 +42,7 @@ import {
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
+  runAfterPluginLifecycleCommit,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
 } from "../plugins/plugin-lifecycle-lease.js";
@@ -51,10 +52,10 @@ import {
   runOutsideGatewayRootWorkAdmission,
   runWithGatewayReloadWaitingRoot,
 } from "../process/gateway-work-admission.js";
-import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { reconcileInitialConfigSource } from "./config-reload-initial-source.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
@@ -101,7 +102,14 @@ function settleCandidateApplications(
   status: RuntimeConfigWriteApplicationStatus,
 ) {
   for (const application of candidateApplications(candidate)) {
-    application.settle(status);
+    // A canonical reread may already contain an external writer's replacement.
+    application.settle(
+      status === "applied" &&
+        candidate &&
+        application.isCarriedBy?.(candidate.compareConfig) === false
+        ? "superseded"
+        : status,
+    );
   }
 }
 
@@ -173,6 +181,9 @@ export function startGatewayConfigReloader(
   let running = false;
   let stopped = false;
   let initialized = false;
+  let readyCompleted = false;
+  let initialReconcile: Promise<void> | undefined;
+  let wakeStartup: (() => void) | undefined;
   const lifecycle = new AbortController();
   const withRestartPreparation = <T>(
     ownership: GatewayConfigReloadTransactionOwnership,
@@ -283,7 +294,8 @@ export function startGatewayConfigReloader(
   });
   const readPluginInstallRecords = opts.readPluginInstallRecords ?? readCurrentInstallRecords;
   const appliedRevision = createConfigAppliedRevisionTracker({
-    onConfigApplied: opts.onConfigApplied,
+    onConfigApplied: (plan, nextConfig) =>
+      runAfterPluginLifecycleCommit(() => opts.onConfigApplied?.(plan, nextConfig)),
     onRevisionApplied: opts.onConfigRevisionApplied,
   });
 
@@ -310,28 +322,6 @@ export function startGatewayConfigReloader(
   const schedule = () => {
     scheduleAfter(pendingInProcessConfig ? 0 : settings.debounceMs);
   };
-  const prepareRestart = async (
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    ownership: GatewayConfigReloadTransactionOwnership,
-    sourceConfig: OpenClawConfig,
-  ) => {
-    try {
-      // Every accepted restart candidate validates inside its config
-      // transaction. Only downstream signal delivery may coalesce.
-      await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
-    } catch (err) {
-      if (isConfigReloadSuperseded(err)) {
-        opts.log.info(`config restart superseded: ${String(err)}`);
-      } else {
-        opts.log.error(`config restart failed: ${String(err)}`);
-      }
-      // Failed restart admission must reject the transaction. Otherwise the
-      // persisted snapshot becomes the baseline and the same config cannot retry.
-      throw err;
-    }
-  };
-
   const handleMissingSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.exists) {
       missingConfigRetries = 0;
@@ -446,7 +436,6 @@ export function startGatewayConfigReloader(
     };
     const ownership: GatewayConfigReloadTransactionOwnership = {
       isCurrent,
-      hasNewerConfig: () => source.observation.revision > initialEpoch,
       checkpoint,
       withRestartPreparation: (run) => withRestartPreparation(ownership, checkpointOwned, run),
       assertInvokerOwned,
@@ -473,7 +462,7 @@ export function startGatewayConfigReloader(
         // The next queued config is compared against the runtime actually published here.
         commitPublishedRuntimeEnv();
         onRuntimeCommitted?.();
-        opts.onRuntimeConfigCommitted?.(plan, runtimeConfig);
+        runAfterPluginLifecycleCommit(() => opts.onRuntimeConfigCommitted?.(plan, runtimeConfig));
         committedRuntimeConfig = runtimeConfig;
         acceptedSourceSnapshot = undefined;
         currentConfig = runtimeConfig;
@@ -563,19 +552,30 @@ export function startGatewayConfigReloader(
       await checkpoint();
       // Persisted content changed even when the runtime skipped applying it
       // (writer intent, reload mode off): change listeners still refresh.
-      const notifyCommitted = () => {
-        opts.log.info(
-          `config source revision ${initialEpoch} accepted (${candidate?.origin ?? "file"})`,
-        );
-        opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
-        if (changedPaths.length > 0) {
-          opts.onConfigCandidateCommitted?.({
-            path: opts.watchPath,
-            persistedHash: persistedHash ?? null,
-            changedPaths,
-          });
-        }
-      };
+      const notifyCommitted = () =>
+        runAfterPluginLifecycleCommit(async () => {
+          opts.log.info(
+            `config source revision ${initialEpoch} accepted (${candidate?.origin ?? "file"})`,
+          );
+          opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
+          if (changedPaths.length > 0) {
+            opts.onConfigCandidateCommitted?.({
+              path: opts.watchPath,
+              persistedHash: persistedHash ?? null,
+              changedPaths,
+            });
+          }
+          if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
+            try {
+              const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
+              await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
+            } catch (error) {
+              opts.log.warn(
+                `config applied, but skills discovery refresh failed: ${String(error)}`,
+              );
+            }
+          }
+        });
       const acceptConfig = async () => {
         await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,
@@ -608,7 +608,7 @@ export function startGatewayConfigReloader(
             reapplyRuntimeOverlays: ownership.reapplyRuntimeOverlays,
             runtimeRefresh: ownership.runtimeRefresh,
           };
-          notifyCommitted();
+          await notifyCommitted();
           return;
         }
         // Runtime owners publish env at their commit edge. Keep this idempotent
@@ -631,24 +631,39 @@ export function startGatewayConfigReloader(
         await publishedSource?.rollback();
         throw error;
       }
-      notifyCommitted();
+      await notifyCommitted();
     };
     if (changedPaths.length === 0 && !pluginLifecycle) {
+      if (
+        candidate &&
+        acceptedSourceSnapshot &&
+        persistedHash !== lastSourceOnly?.hash &&
+        configSourceSnapshotsMatch(sourceSnapshot, acceptedSourceSnapshot) &&
+        resolveConfigWriteFollowUp(afterWrite).mode === "auto" &&
+        !runtimeRefresh?.includeAuthStoreRefs &&
+        !runtimeRefresh?.requireImmediateApplication &&
+        !candidateApplications(candidate).some(
+          (claim) => claim.prepare || claim.requireImmediateApplication,
+        )
+      ) {
+        // The watcher can publish before the writer's notification arrives. Consume
+        // that accepted runtime, not the notification's unresolved SecretRefs.
+        await acceptCurrentRuntimeEcho(
+          initialEpoch,
+          sourceSnapshot,
+          true,
+          assertInvokerOwned,
+          candidate,
+        );
+        settleRuntimeApplication();
+        return completeApplication();
+      }
       await commitReloadBaseline();
       pluginDrain.applied();
       publishedSource?.commit?.();
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       settleRuntimeApplication();
       return completeApplication();
-    }
-
-    // Rebuild skills on the next turn so sessions do not advertise removed tools.
-    const skillsChangedPath = changedPaths.find(
-      (path) => path === "skills" || path.startsWith("skills."),
-    );
-    if (skillsChangedPath !== undefined) {
-      bumpSkillsSnapshotVersion({ reason: "config-change", changedPath: skillsChangedPath });
-      opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
     }
 
     const followUp = resolveConfigWriteFollowUp(pluginLifecycle ? undefined : afterWrite);
@@ -692,7 +707,8 @@ export function startGatewayConfigReloader(
     }
     if (plan.restartGateway) {
       await opts.onConfigChange?.(plan, nextConfig);
-      await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
+      // Rejection leaves the baseline unchanged so the same config can retry.
+      await opts.onRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       // The accepted restart owns snapshot republication at next startup.
       settleCandidateApplications(candidate, "restart-pending");
@@ -774,6 +790,7 @@ export function startGatewayConfigReloader(
     snapshot: ConfigFileSnapshot,
     runtimeApplied: boolean,
     assertLeaseOwned: () => void,
+    candidate?: GatewayConfigReloadCandidate,
   ) => {
     const sourceOnly = runtimeApplied ? undefined : lastSourceOnly;
     const runtimeRefresh = runtimeApplied ? currentRuntimeRefresh : sourceOnly?.runtimeRefresh;
@@ -813,7 +830,7 @@ export function startGatewayConfigReloader(
       if (snapshot.valid && typeof snapshot.hash === "string") {
         await updateAcceptedSnapshot(hashConfigRaw(snapshot.raw), snapshot.parsed);
       }
-    });
+    }, candidate);
     source.accept(transactionEpoch);
     if (snapshot.valid) {
       await source.acceptPaths(snapshot.includedPaths ?? []);
@@ -1144,6 +1161,8 @@ export function startGatewayConfigReloader(
         pending = false;
         schedule();
       }
+      wakeStartup?.();
+      wakeStartup = undefined;
     });
     return reload;
   }
@@ -1278,6 +1297,7 @@ export function startGatewayConfigReloader(
         }
       }
     });
+    // Keep the queue usable; the returned operation and tracked shutdown join retain the failure.
     pluginOperationTail = operation.catch(() => {});
     trackReload(operation);
     return operation;
@@ -1291,7 +1311,14 @@ export function startGatewayConfigReloader(
     log: opts.log,
     onReady: (isCurrent) => {
       opts.onWatcherReady?.();
-      trackReload(reconcileInitialSource(isCurrent));
+      initialReconcile = reconcileInitialConfigSource({
+        source,
+        isCurrent,
+        getAcceptedSource: () => ({ rawHash: currentRawHash, config: currentSourceConfig }),
+        initialIncludedPaths: opts.initialIncludedPaths,
+        log: opts.log,
+      });
+      trackReload(initialReconcile);
     },
     onObserved: (observation) => {
       opts.onConfigCandidateObserved?.();
@@ -1335,37 +1362,6 @@ export function startGatewayConfigReloader(
       scheduleAfter(0);
     },
   });
-
-  const reconcileInitialSource = async (isCurrent: () => boolean) => {
-    const observed = source.observation;
-    try {
-      const snapshot = await source.readSnapshot(observed);
-      if (!isCurrent() || source.observation !== observed) {
-        return;
-      }
-      const includedPaths = snapshot.includedPaths ?? [];
-      const initialPaths = opts.initialIncludedPaths ?? [];
-      const sameRoot = snapshot.exists
-        ? hashConfigRaw(snapshot.raw) === currentRawHash
-        : currentRawHash === null;
-      if (
-        snapshot.valid &&
-        sameRoot &&
-        initialPaths.length === includedPaths.length &&
-        initialPaths.every((path) => includedPaths.includes(path)) &&
-        (includedPaths.length === 0 ||
-          diffConfigPaths(currentSourceConfig, snapshot.sourceConfig).length === 0)
-      ) {
-        return;
-      }
-    } catch (error) {
-      if (!isCurrent() || source.observation !== observed) {
-        return;
-      }
-      opts.log.warn(`config reload initial watch check failed: ${String(error)}`);
-    }
-    source.observe();
-  };
 
   const ready = (async () => {
     const initialCandidate = opts.prepareConfigCandidate
@@ -1444,26 +1440,43 @@ export function startGatewayConfigReloader(
     }
     currentPluginInstallRecords = initialPluginInstallRecords;
     // Async preparation can outlive disk changes before the initial watch scan.
-    source.start();
     initialized = true;
+    await source.start();
+    await initialReconcile;
     if (pendingInProcessConfig || pending) {
       scheduleAfter(0);
     }
+    // A reload can queue another observation while updating watched paths. Join
+    // the existing scheduler, outside watcher refresh, until startup settles.
+    for (;;) {
+      await source.whenSettled();
+      if (stopped || (!reloadJob && !watcherReload)) {
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        wakeStartup = resolve;
+      });
+    }
+    assertSourceLive();
+    readyCompleted = true;
   })();
 
   return {
     ready,
-    isReady: () => initialized,
+    isReady: () => readyCompleted,
     applyPluginLifecycleChange,
     isReloading: () => activeReloads.size > 0,
     stop: async () => {
       stopped = true;
+      wakeStartup?.();
+      wakeStartup = undefined;
       lifecycle.abort(new GatewayConfigReloadSupersededError());
       settleCandidateApplications(pendingInProcessConfig, "stopped");
       settleCandidateApplications(activeConfigCandidate, "stopped");
       settleCandidateApplications(retryCandidate, "stopped");
       clearReloadTimer();
       await source.stop();
+      // Startup already observes ready's rejection; shutdown only needs its preparation to settle.
       await ready.catch(() => {});
       // Initial reads and explicit plugin operations share the same transaction unwind.
       await Promise.all(activeReloads);

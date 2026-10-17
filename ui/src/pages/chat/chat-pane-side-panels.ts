@@ -1,6 +1,5 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
@@ -8,16 +7,14 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
+import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import {
   ChatSessionCompanionThreads,
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
-import type { SubagentRoster } from "./chat-spawned-subagent.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
@@ -29,12 +26,10 @@ import {
   promoteSidebarPanel,
   setSidebarOpen,
   SIDEBAR_NARROW_BREAKPOINT_PX,
-  sidebarActivePanel,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
-export abstract class ChatPaneSidePanels extends ChatPaneBase {
-  private subagentBatch: { session: string; sessionId?: string; active: boolean } | undefined;
+export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
@@ -43,15 +38,13 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
   protected subagentsShowRequest?: () => string | null | undefined;
   /** The control a background panel was opened from in a narrow pane; the region takes it once. */
   protected sideFocusOrigin?: () => HTMLElement | null;
-  protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
-    this.requestUpdate();
-  });
+  readonly sessionCompanionThreads = new ChatSessionCompanionThreads();
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
     const state = this.state;
     if (state?.connected && state.client) {
       void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
     }
-    this.requestUpdate();
+    this.invalidate();
   };
 
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -83,6 +76,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     );
   }
 
+  protected toggleConversationPanel(layout: SidebarLayout): void {
+    const changeSlot = isSidebarSlotVisible(layout, "conversation") ? closeSlot : openSlot;
+    const nextLayout = changeSlot(layout, "conversation");
+    this.commitSidebarLayout(nextLayout, { dashboardPresentation: "personal" });
+    if (layout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
+    }
+  }
+
   protected requestSessionRail(intent: "open" | "toggle"): void {
     const state = this.state;
     if (!state) {
@@ -94,54 +96,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.setSessionObserverVisibility(!closing);
   }
 
-  requestSubagentsPanel(intent: "open" | "toggle"): void {
-    this.requestBackgroundPanel("subagents", intent);
-  }
-
-  protected syncSubagentsPanelPresence(
-    session: GatewaySessionRow | undefined,
-    roster: SubagentRoster,
-  ): void {
-    const state = this.state;
-    if (this.compact || !state || !session || session.archived) {
-      return;
-    }
-    const identity = JSON.stringify([resolveChatAgentId(state), session.key]);
-    if (
-      this.subagentBatch?.session !== identity ||
-      (this.subagentBatch.sessionId &&
-        session.sessionId &&
-        this.subagentBatch.sessionId !== session.sessionId)
-    ) {
-      this.subagentBatch = { session: identity, sessionId: session.sessionId, active: false };
-    } else if (session.sessionId) {
-      this.subagentBatch.sessionId = session.sessionId;
-    }
-    const batch = this.subagentBatch;
-    const active = projectSubagentStatus(
-      { ...roster, selectedSession: session, messages: state.chatMessages },
-      false,
-    ).activity.some((child) => child.listed);
-    if (active && !batch.active) {
-      // Open once per batch. A later close remains the user's choice until all
-      // children settle; the automatic reveal is not a saved session preference.
-      batch.active = true;
-      const selected = sidebarActivePanel(state.sidebarLayout);
-      const keepSelection = selected && isSidebarSlotVisible(state.sidebarLayout, selected.slot);
-      this.commitSidebarLayout(
-        openSlot(state.sidebarLayout, "subagents", { activate: !keepSelection }),
-        { persist: false },
-      );
-    } else if (
-      !active &&
-      session.hasActiveSubagentRun !== true &&
-      roster.subagentSessionsHydrated &&
-      !roster.subagentSessionsPending
-    ) {
-      batch.active = false;
-    }
-  }
-
   /** Opens the Subagents panel on one subagent, or on its list. */
   protected showSubagents(subagentKey: string | null, focus = false): void {
     const sessionKey = this.state?.sessionKey;
@@ -150,12 +104,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const take = () => {
       if (this.subagentsShowRequest === take) {
         this.subagentsShowRequest = undefined;
-        this.requestUpdate();
+        this.invalidate();
       }
       return this.state?.sessionKey === sessionKey ? subagentKey : undefined;
     };
     this.subagentsShowRequest = take;
-    this.requestUpdate();
+    this.invalidate();
     this.requestBackgroundPanel("subagents", "open");
     if (focus) {
       void this.focusSubagentsPanel();
@@ -166,14 +120,14 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const state = this.state;
     const sessionKey = state?.sessionKey;
     await customElements.whenDefined("openclaw-chat-sidebar-region");
-    this.requestUpdate();
+    this.invalidate();
     await this.updateComplete;
-    const region = this.renderRoot.querySelector("openclaw-chat-sidebar-region");
+    // The lazy sidebar owns its header DOM; wait for its commit before resolving the focus target.
+    const region = this.element.querySelector("openclaw-chat-sidebar-region");
     await region?.updateComplete;
-    const tab = region?.parentElement?.querySelector<HTMLElementTagNameMap["wa-tab"]>(
-      '[data-region-header="side"] wa-tab[active]',
+    const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
+      '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
     );
-    await tab?.updateComplete;
     if (
       this.isConnected &&
       state &&
@@ -187,8 +141,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
 
   /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
   protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
-    return this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
-      ? presentNarrowSidebarLayout(layout)
+    return this.mergedChrome || this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
+      ? presentNarrowSidebarLayout(layout, { allPanels: this.mergedChrome })
       : layout;
   }
 
@@ -210,8 +164,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
       // The panel is about to replace the view this control is in; the region,
       // which may not have loaded yet, carries focus across from it.
-      const active = this.ownerDocument.activeElement;
-      const origin = active instanceof HTMLElement && this.contains(active) ? active : null;
+      const active = this.element.ownerDocument.activeElement;
+      const origin = active instanceof HTMLElement && this.element.contains(active) ? active : null;
       const take = () => {
         if (this.sideFocusOrigin === take) {
           this.sideFocusOrigin = undefined;
@@ -260,8 +214,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       composer.editRevision === editRevision &&
       pageState.chatMessage === draft &&
       this.sessionCompanionPresented &&
-      (this.ownerDocument.activeElement === this.ownerDocument.body ||
-        this.contains(this.ownerDocument.activeElement)) &&
+      (this.element.ownerDocument.activeElement === this.element.ownerDocument.body ||
+        this.element.contains(this.element.ownerDocument.activeElement)) &&
       this.isConnected &&
       this.active &&
       this.visuallyPresented &&
@@ -269,7 +223,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const requestFocus = () => {
       if (this.sessionCompanionFocusRequest === requestFocus) {
         this.sessionCompanionFocusRequest = undefined;
-        this.requestUpdate();
+        this.invalidate();
       }
       return ownsFocus();
     };
@@ -280,11 +234,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const { ownsFocus, requestFocus } = this.captureSessionCompanionFocus(pageState);
     // The first lazy mount and the completed answer share the same input intent.
     this.sessionCompanionFocusRequest = requestFocus;
-    this.requestUpdate();
+    this.invalidate();
     await this.submitSessionCompanionQuestion(question);
     if (ownsFocus()) {
       this.sessionCompanionFocusRequest = requestFocus;
-      this.requestUpdate();
+      this.invalidate();
     }
   }
 

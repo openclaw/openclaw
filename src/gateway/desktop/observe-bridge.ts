@@ -8,6 +8,10 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "../ingress-attribution.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
 import { mintDesktopAudioObserver } from "./audio-bridge.js";
@@ -182,8 +186,15 @@ export function handleDesktopObserveUpgrade(
     return false;
   }
   const token = resource.searchParams.get("token") ?? "";
+  const ingress = getRemoteControlUiIngressContext(req);
   const entry = observerTokens.consume(token);
-  if (!entry || entry.requester?.isCurrent() === false) {
+  const isCurrent = () =>
+    hasCurrentRemoteControlUiIngress(ingress) &&
+    (!ingress ||
+      entry?.requester?.remoteIngressPrincipal?.assertCurrent ===
+        ingress.resolvePrincipal().assertCurrent) &&
+    entry?.requester?.isCurrent() !== false;
+  if (!entry || !isCurrent()) {
     entry?.audio?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
@@ -234,6 +245,7 @@ export function handleDesktopObserveUpgrade(
       closeCause = { trigger, code };
       entry.audio?.close();
       entry.requester?.signal?.removeEventListener("abort", onRequesterGone);
+      ingress?.signal.removeEventListener("abort", onRequesterGone);
       stopKeepalive();
       clearInterval(resumeTimer);
       resumeTimer = undefined;
@@ -249,6 +261,10 @@ export function handleDesktopObserveUpgrade(
     const onRequesterGone = () => closeBoth(4006, "authority_revoked", "authority-revoked");
 
     const startSplice = (browserRemainder: Buffer = Buffer.alloc(0), preauthenticated = false) => {
+      if (!isCurrent()) {
+        onRequesterGone();
+        return;
+      }
       if (preauthenticated) {
         entry.audio?.activate();
       }
@@ -258,7 +274,7 @@ export function handleDesktopObserveUpgrade(
             startPhase: preauthenticated ? "clientInit" : "version",
           });
       const forwardClientChunk = (chunk: Buffer) => {
-        if (entry.requester?.isCurrent() === false) {
+        if (!isCurrent()) {
           onRequesterGone();
           return;
         }
@@ -282,7 +298,7 @@ export function handleDesktopObserveUpgrade(
         if (closeCause || ws.readyState !== NpmWebSocket.OPEN) {
           return;
         }
-        if (entry.requester?.isCurrent() === false) {
+        if (!isCurrent()) {
           onRequesterGone();
           return;
         }
@@ -328,7 +344,8 @@ export function handleDesktopObserveUpgrade(
     );
 
     entry.requester?.signal?.addEventListener("abort", onRequesterGone, { once: true });
-    if (entry.requester?.signal?.aborted || entry.requester?.isCurrent() === false) {
+    ingress?.signal.addEventListener("abort", onRequesterGone, { once: true });
+    if (entry.requester?.signal?.aborted || !isCurrent()) {
       onRequesterGone();
       return;
     }
@@ -342,7 +359,17 @@ export function handleDesktopObserveUpgrade(
     const browser = new WebSocketPreauthPeer(ws);
     void (async () => {
       try {
-        await preauthenticateRfb({ server: desktopSocket, browser, preauth });
+        await preauthenticateRfb({
+          server: desktopSocket,
+          browser,
+          preauth,
+          signal: ingress?.signal,
+          assertCurrent: () => {
+            if (!isCurrent()) {
+              throw new Error("Desktop observer authority is no longer current");
+            }
+          },
+        });
         const remainder = browser.detach();
         entry.preauth = undefined;
         if (!closeCause) {

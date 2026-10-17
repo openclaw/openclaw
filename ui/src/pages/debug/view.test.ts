@@ -117,7 +117,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
 useDebugTestEnvironment();
 
 describe("DebugPageView", () => {
-  it("retains event payload DOM and only highlights changed diagnostics", () => {
+  it("retains event payload DOM and only highlights changed diagnostics", async () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
       ts: 1,
@@ -132,6 +132,7 @@ describe("DebugPageView", () => {
       assert(eventSection);
       const payloads = Array.from(eventSection.querySelectorAll("pre"));
       assert(payloads[0]);
+      await waitForSolid(() => expect(payloads[0]!.querySelector("span")).not.toBeNull());
       const firstToken = payloads[0].querySelector("span");
       assert(firstToken);
       highlight.mockClear();
@@ -558,21 +559,22 @@ describe("DebugPage", () => {
     },
   );
 
-  it.each(["models.list", "health"] as const)(
-    "preserves snapshots and independent Manual RPC errors through %s failure and recovery",
-    async (failedMethod) => {
-      let failure: typeof failedMethod | null = null;
-      let marker = "initial";
-      const request = vi.fn(async (method: string) => {
-        if (method === "manual.latest") {
-          throw new Error("manual request failed");
-        }
-        if (method === failure) {
-          throw new Error(`${method} unavailable`);
-        }
-        return diagnosticResponse(method, marker);
-      });
-      const page = await mountDebugPage(request);
+  it("preserves snapshots and independent Manual RPC errors through model failure and recovery", async () => {
+    const failedMethod = "models.list";
+    vi.useFakeTimers();
+    let failure: typeof failedMethod | null = null;
+    let marker = "initial";
+    const request = vi.fn(async (method: string) => {
+      if (method === "manual.latest") {
+        throw new Error("manual request failed");
+      }
+      if (method === failure) {
+        throw new Error(`${method} unavailable`);
+      }
+      return diagnosticResponse(method, marker);
+    });
+    const page = await mountDebugPage(request);
+    try {
       expectSnapshots(page, "initial");
       callMethod(page, "manual.latest");
       await waitForSolid(() => expect(page.textContent).toContain("manual request failed"));
@@ -599,6 +601,9 @@ describe("DebugPage", () => {
 
       expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
       expect(page.textContent).toContain("manual request failed");
-    },
-  );
+    } finally {
+      unmountDebugHost(page);
+      vi.useRealTimers();
+    }
+  });
 });

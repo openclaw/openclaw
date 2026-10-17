@@ -94,7 +94,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let copies = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@", "The cobalt lighthouse is ready."))
         XCTAssertTrue(copies.firstMatch.waitForExistence(timeout: 5), "Fixture reply marker is missing")
+        let retry = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Retrying… 2/3")).firstMatch
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), "Fixture retry status is missing")
         self.attachScreenshot(named: "dup-filter-streaming")
+        // The indicator groups accessibility under its phase; inspect its actual pixels for telemetry.
+        let image = try XCTUnwrap(retry.screenshot().image.cgImage)
+        let recognition = VNRecognizeTextRequest()
+        recognition.recognitionLevel = .accurate
+        recognition.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
+        let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: " ").lowercased()
+        XCTAssertTrue(
+            text.contains("485 tokens"),
+            "RETRY_TOKENS_MISSING: retry hides cumulative output tokens: \(text)")
         XCTAssertEqual(copies.count, 1, "Saved and streaming reply render duplicate copies")
 
         let stop = app.buttons["Stop response"]
@@ -124,6 +138,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
         }
+    }
+
+    func testStartupStatusShowsWaitingForResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-hold-initial-chat-run", "--openclaw-startup-status-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the project.")
+        app.buttons["chat-send-message"].tap()
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+        let waiting = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Waiting for a response…")).firstMatch
+        let showsWaiting = waiting.waitForExistence(timeout: 5)
+        self.attachScreenshot(named: "startup-status-waiting")
+        XCTAssertTrue(showsWaiting, "STARTUP_STATUS_MISSING: waiting run has no Gateway startup label")
+        app.buttons["Stop response"].tap()
+        XCTAssertTrue(waiting.waitForNonExistence(timeout: 5))
     }
 
     func testFinishedTurnShowsWaitingHelperAndOpensItsSession() throws {
@@ -796,10 +830,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for _ in 0..<12 where !latestSeededReply.isHittable {
-            app.swipeUp()
+        // A visible text leaf can be unhittable inside its accessible message container.
+        // This setup needs the reply's pixels in the viewport, not a tap target.
+        for _ in 0..<12 where !latestSeededReply.exists || !transcript.frame.contains(latestSeededReply.frame) {
+            transcript.swipeUp()
         }
-        XCTAssertTrue(latestSeededReply.isHittable)
+        XCTAssertTrue(transcript.frame.contains(latestSeededReply.frame))
+        self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply after expanding work")
 
         // Revealing the reply after expanding work does not establish live-edge following.
         let initialJumpToLatest = app.buttons["Jump to latest reply"]
@@ -997,6 +1034,35 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
+    func testTaskListLongPressOffersRefreshDismissAndClear() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-progress-card-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let card = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Plan, 1 of 3 steps done")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        // On touch the one-line header keeps only the collapse caret.
+        let actions = ["refresh", "dismiss", "clear-saved"]
+        for action in actions {
+            XCTAssertFalse(
+                app.buttons["chat-progress-card-\(action)"].exists,
+                "Task list header still has a \(action) button")
+        }
+        self.attachScreenshot(named: "task-list-card")
+
+        card.press(forDuration: 0.8)
+        for action in actions {
+            XCTAssertTrue(
+                app.buttons["chat-progress-card-\(action)"].waitForExistence(timeout: 3),
+                "Task list menu has no \(action) action")
+        }
+        self.attachScreenshot(named: "task-list-menu")
+        app.buttons["chat-progress-card-dismiss"].tap()
+        XCTAssertTrue(card.waitForNonExistence(timeout: 3))
+        self.attachScreenshot(named: "task-list-dismissed")
     }
 
     func testChatPresentationInLightAppearance() throws {

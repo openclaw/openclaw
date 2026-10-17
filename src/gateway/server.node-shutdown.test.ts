@@ -7,6 +7,7 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
@@ -369,7 +370,7 @@ test.for(["direct", "restart"] as const)(
           expect(stopDependencies).not.toHaveBeenCalled();
           expect(closeSettled).not.toHaveBeenCalled();
           releaseFinalizer.resolve();
-          await withTimeout(closing, 5_000, "Gateway shutdown");
+          await withinTest(closing, signal);
           expect(stopDependencies).toHaveBeenCalledOnce();
           expect(stopRequests).toEqual([
             {

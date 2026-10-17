@@ -74,6 +74,14 @@ suite.define(() => {
           `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,
         );
         await active.waitFor();
+        if (overflow) {
+          // Rows commit before the shared layout frame publishes the scroll mask.
+          await page
+            .locator(
+              ".sidebar-shell__body--scroll-top, .sidebar-shell__body--scroll-middle, .sidebar-shell__body--scroll-bottom",
+            )
+            .waitFor();
+        }
         const geometry = await active.evaluate((row) => {
           const sidebar = row.closest<HTMLElement>(".sidebar-shell");
           const scroller = row.closest<HTMLElement>(".sidebar-shell__body");

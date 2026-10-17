@@ -2,8 +2,13 @@
 export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
-// The CLI loads this package-root supervisor by URL instead of bundling it.
-export const vitestWorkerRuntimeAssets = ["node-host-launcher.mjs"];
+// Package-root modules loaded outside the compiled graph retain their bootstrap dependencies.
+export const vitestWorkerRuntimeAssets = [
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
+  "gateway-shutdown-budget.mjs",
+  "node-host-launcher.mjs",
+];
 
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
@@ -11,8 +16,6 @@ export const runtimeProcessDeclarationEntries = {
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
   "extensions/document-extract/document-extractor-worker-entrypoint":
     "extensions/document-extract/document-extractor-worker-entrypoint.ts",
-  "extensions/memory-core/manager-search-knn-entrypoint":
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
   "infra/postgres-sync/locks-runtime.test-support":
@@ -109,8 +112,18 @@ export const vitestWorkerDeclarationEntries = {
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",
+  "extensions/codex/doctor-closed-stdin.test-support":
+    "extensions/codex/src/doctor-closed-stdin.test-support.ts",
+  "extensions/codex/doctor-closed-stdin-entrypoint.test-support":
+    "extensions/codex/src/doctor-closed-stdin-entrypoint.test-support.ts",
+  "extensions/codex/session-history-worker-entrypoint":
+    "extensions/codex/session-history-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/manager-publication-admission-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts",
+  "extensions/memory-core/manager-publication-crash-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-publication-crash-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":
@@ -153,6 +166,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "plugins/loader-sdk-bridge-artifacts.test-support":
     "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
+  "infra/database-engine/update-preflight.runtime.test-support":
+    "src/infra/database-engine/update-preflight.runtime.test-support.ts",
   "plugins/runtime-retention-entrypoint.test-support":
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":
@@ -172,6 +187,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
+  "gateway/dashboard-session-title-runtime.test-support":
+    "src/gateway/dashboard-session-title-runtime.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "worker/worker-runtime-background-exec-entrypoints.test-support":
     "src/worker/worker-runtime-background-exec-entrypoints.test-support.ts",
@@ -179,8 +196,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/skills/library/persistence-runtime.test-support.ts",
   "snapshot/git-backup-command-runtime.test-support":
     "src/snapshot/git-backup-command-runtime.test-support.ts",
-  "state/openclaw-database-verify-runtime.test-support":
-    "src/state/openclaw-database-verify-runtime.test-support.ts",
   "state/openclaw-state-lease-runtime.test-support":
     "src/state/openclaw-state-lease-runtime.test-support.ts",
   "transcripts/library-timezone-runtime.test-support":

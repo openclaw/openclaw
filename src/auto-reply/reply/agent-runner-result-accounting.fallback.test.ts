@@ -97,7 +97,6 @@ async function createFixture(selected = diagnostic) {
       resolved: selected,
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId: `fallback-run-${id}`,
     runStartedAt: Date.now(),
@@ -140,6 +139,7 @@ it("does not persist or project a fallback for the selected model's wire identit
   const { context } = fixture;
   const entry = context.activeSessionEntry!;
   context.cfg.agents = { defaults: { model: { primary: "arcee/trinity-large-preview" } } };
+  setRuntimeConfigSnapshot(context.cfg);
   entry.fallbackNotice = {
     kind: "active",
     selectedModel: "arcee/trinity-large-preview",
@@ -182,7 +182,6 @@ it("does not persist or project a fallback for the selected model's wire identit
     buildGatewaySessionRow({
       cfg: context.cfg,
       agentId: "main",
-      skipTranscriptUsageFallback: true,
       lightweightListRow: true,
       storePath,
       store: { [context.sessionKey!]: stored },
@@ -211,6 +210,7 @@ it.each([false, true])(
     context.cfg.agents = {
       defaults: { model: { primary: `${diagnostic.provider}/${diagnostic.model}` } },
     };
+    setRuntimeConfigSnapshot(context.cfg);
     context.execution.resolved = { provider: "fallback-fixture", model: "plain" };
     context.execution.fallback.attempts = [
       {
@@ -252,7 +252,6 @@ it.each([false, true])(
       buildGatewaySessionRow({
         cfg: context.cfg,
         agentId: "main",
-        skipTranscriptUsageFallback: true,
         lightweightListRow: true,
         storePath,
         store: { [context.sessionKey!]: rowEntry },

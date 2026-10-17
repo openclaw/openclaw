@@ -1,9 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread } from "./app-server/protocol.js";
+import { CodexCatalogResponseTooLargeError } from "./app-server/rpc-error.js";
 import { CodexCatalogAvailability } from "./session-catalog-availability.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
@@ -67,6 +67,7 @@ export class CodexCatalogIndex {
   private restored = false;
   private restoring: Promise<void> | undefined;
   private closed = false;
+  private reportedOverflow: CodexCatalogResponseTooLargeError | undefined;
   private readonly currency: CodexCatalogCurrency;
   private readonly projections = new CodexCatalogProjections();
   private readonly unsubscribe: () => void;
@@ -158,6 +159,11 @@ export class CodexCatalogIndex {
   }
 
   private report(error: unknown): void {
+    const overflow = CodexCatalogResponseTooLargeError.fromError(error);
+    if (overflow && overflow === this.reportedOverflow) {
+      return;
+    }
+    this.reportedOverflow = overflow;
     if (!this.closed && !this.currency.stopForTerminalFailure(error)) {
       embeddedAgentLog.warn("Codex resident catalog background update failed", { error });
     }
@@ -446,29 +452,25 @@ export class CodexCatalogIndex {
     });
   }
 
-  upsertThread(thread: CodexThread): Promise<void> {
+  async upsertThread(thread: CodexThread): Promise<void> {
     if (this.closed) {
-      return Promise.resolve();
+      return;
     }
     try {
       this.assertCurrent();
     } catch {
       // Retiring a view must not turn an acknowledged native mutation into failure.
-      return Promise.resolve();
+      return;
     }
+    this.currency.requestNativeRefresh();
+    const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
     try {
-      this.currency.requestNativeRefresh();
-      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
-      return this.projections
-        .run(() => this.projectThread(prepared))
-        .catch((error: unknown) => {
-          if (!(error instanceof CodexCatalogProjectionCapacityError)) {
-            throw error;
-          }
-          this.report(error);
-        });
+      await this.projections.run(() => this.projectThread(prepared));
     } catch (error) {
-      return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
+      if (!(error instanceof CodexCatalogProjectionCapacityError)) {
+        throw error;
+      }
+      this.report(error);
     }
   }
 
@@ -478,15 +480,16 @@ export class CodexCatalogIndex {
     sourceOrder: number | undefined,
   ): Promise<void> {
     this.assertCurrent();
-    return this.projections.run(() =>
-      readThread(id).then((thread) => {
-        const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
-        if (prepared.id !== id) {
-          throw new Error("Codex catalog refresh returned a different thread");
-        }
-        return this.closed ? undefined : this.projectThread(prepared, sourceOrder);
-      }),
-    );
+    return this.projections.run(async () => {
+      const thread = await readThread(id);
+      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+      if (prepared.id !== id) {
+        throw new Error("Codex catalog refresh returned a different thread");
+      }
+      if (!this.closed) {
+        await this.projectThread(prepared, sourceOrder);
+      }
+    });
   }
 
   private async projectThread(
@@ -495,7 +498,7 @@ export class CodexCatalogIndex {
   ): Promise<void> {
     const projected = await projectCodexCatalogPage(
       { data: [thread] },
-      { localSessionsRoot: this.options.localSessionsRoot, sanitize: sanitizeTerminalText },
+      { localSessionsRoot: this.options.localSessionsRoot },
     );
     if (this.closed) {
       return;

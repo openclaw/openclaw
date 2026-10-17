@@ -28,6 +28,7 @@ type PruneContext = Pick<
  */
 export async function pruneSupersededSilentPairingsAfterApproval(params: {
   deviceId: string;
+  connectedDeviceIds: readonly string[];
   context: PruneContext;
   baseDir?: string;
   nowMs?: number;
@@ -35,6 +36,7 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
   const { context } = params;
   const pruned = await pruneSupersededSilentPairedDevices({
     deviceId: params.deviceId,
+    protectedDeviceIds: params.connectedDeviceIds,
     baseDir: params.baseDir,
     nowMs: params.nowMs,
     isDeviceConnected: (deviceId) => context.hasConnectedClientsForDevice?.(deviceId) ?? false,

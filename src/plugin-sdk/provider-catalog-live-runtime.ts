@@ -163,6 +163,7 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
   },
 ): Promise<readonly T[]> {
   const load = async (requestAuth: { apiKey?: string; discoveryApiKey?: string }) => {
+    let projected: readonly T[] | undefined;
     const rows = await getCachedLiveProviderModelRows({
       ...params,
       ...requestAuth,
@@ -171,11 +172,12 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
         requestAuth.discoveryApiKey === params.discoveryApiKey
           ? params.cacheKeyParts
           : undefined,
-      shouldCacheRows: (candidateRows) =>
-        params.projectRows(candidateRows, params.fallback).length > 0 ||
-        params.discoveryMode === "strict",
+      shouldCacheRows: (candidateRows) => {
+        projected = params.projectRows(candidateRows, params.fallback);
+        return projected.length > 0 || params.discoveryMode === "strict";
+      },
     });
-    return params.projectRows(rows, params.fallback);
+    return projected ?? params.projectRows(rows, params.fallback);
   };
 
   try {

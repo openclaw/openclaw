@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, onTestFinished, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
@@ -9,12 +9,29 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { recoverTerminalSessionEntryForVisibleTurn } from "../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createRestartSafeChatRequest } from "./server-methods/chat-restart-recovery.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+it("preserves interrupted recovery custody when reusing a failed session", () => {
+  const entry = {
+    sessionId: "interrupted-session",
+    updatedAt: 1,
+    status: "failed" as const,
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId: "unfinished-cycle", revision: 7, chargedAttempts: 1 },
+    restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-gateway" }],
+    restartRecoveryDeliveryRunId: "interrupted-run",
+    restartRecoveryDeliverySourceRunId: "accepted-input",
+  };
+
+  expect(recoverTerminalSessionEntryForVisibleTurn(entry)).toEqual(entry);
+});
 
 it("chat.send recovers failed and statusless work for new messages and retained retries exactly once", async () => {
   const token = "orphaned-recovery-chat-token";
@@ -34,6 +51,24 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   const priorMessage = "Finish the interrupted recovery task.";
   const nextMessage = "Then verify the new request.";
   const targetRequests: string[] = [];
+  const requestPresence: Array<{ prior: boolean; next: boolean }> = [];
+  const diagnostics: {
+    caseId?: string;
+    phase: string;
+    agentWaitStatus?: string;
+    entry?: {
+      status?: string;
+      abortedLastRun?: boolean;
+      mainRestartRecovery: boolean;
+      restartRecoveryDeliveryRunId: boolean;
+    };
+  } = { phase: "setup" };
+  onTestFailed(() => {
+    console.error(
+      "orphaned recovery diagnostics",
+      JSON.stringify({ ...diagnostics, requestPresence }),
+    );
+  });
   let responseCount = 0;
   const providerServer = createServer((request, response) => {
     void (async () => {
@@ -46,6 +81,10 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         return;
       }
       const body = Buffer.concat(chunks).toString("utf8");
+      requestPresence.push({
+        prior: body.includes(priorMessage),
+        next: body.includes(nextMessage),
+      });
       if (body.includes(priorMessage)) {
         targetRequests.push(body);
       }
@@ -102,6 +141,38 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
     await gateway.server.startupSettled;
+    const recoveryRuntime = getGatewayRecoveryRuntime();
+    if (recoveryRuntime) {
+      const dispatch = vi.spyOn(recoveryRuntime, "dispatchAgent");
+      let outcomeSummary = "[]";
+      onTestFinished(() => {
+        // The start race can finish before a later dispatch rejection, so inspect
+        // the original promise's settlement without replacing the real dispatch.
+        const outcomes = dispatch.mock.calls.flatMap(([request], index) => {
+          if (request.sessionKey !== `agent:main:dashboard:orphaned-chat-${diagnostics.caseId}`) {
+            return [];
+          }
+          const settled = dispatch.mock.settledResults[index];
+          const value: unknown = settled?.value;
+          return [
+            {
+              runId: request.idempotencyKey,
+              settlement: settled?.type,
+              status:
+                isRecord(value) && typeof value.status === "string"
+                  ? value.status.slice(0, 100)
+                  : undefined,
+              error: value instanceof Error ? value.message.slice(0, 2_000) : undefined,
+            },
+          ];
+        });
+        outcomeSummary = JSON.stringify(outcomes.slice(0, 8));
+        dispatch.mockRestore();
+      });
+      onTestFailed(() => {
+        console.error("orphaned recovery dispatch outcomes", outcomeSummary);
+      });
+    }
     const client = gateway.client;
     for (const { status, retry } of [
       { status: "failed", retry: false },
@@ -114,6 +185,11 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       const sessionId = `orphaned-chat-session-${caseId}`;
       const sourceRunId = `rejected-input-${caseId}`;
       targetRequests.length = 0;
+      requestPresence.length = 0;
+      diagnostics.caseId = caseId;
+      diagnostics.phase = "seed";
+      diagnostics.agentWaitStatus = undefined;
+      diagnostics.entry = undefined;
       const target = {
         agentId: "main",
         sessionKey,
@@ -182,6 +258,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         expect(loadSessionEntry(target)).toEqual(stranded);
       }
       const runId = retry ? sourceRunId : `new-input-after-stranded-recovery-${caseId}`;
+      diagnostics.phase = "chat.send";
       await expect(
         client.request("chat.send", {
           sessionKey,
@@ -192,20 +269,32 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         }),
       ).resolves.toMatchObject({ runId, status: retry ? "ok" : "started" });
       if (!retry) {
+        diagnostics.phase = "agent.wait";
         await vi.waitFor(
           async () => {
             const outcome = await client.request("agent.wait", { runId, timeoutMs: 30_000 });
+            diagnostics.agentWaitStatus =
+              isRecord(outcome) && typeof outcome.status === "string" ? outcome.status : undefined;
             expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "ok" });
           },
           { timeout: 30_000 },
         );
       }
+      diagnostics.phase = "session.done";
       await vi.waitFor(
         () => {
-          expect(loadSessionEntry(target)?.status).toBe("done");
+          const entry = loadSessionEntry(target);
+          diagnostics.entry = {
+            status: entry?.status,
+            abortedLastRun: entry?.abortedLastRun,
+            mainRestartRecovery: Boolean(entry?.mainRestartRecovery),
+            restartRecoveryDeliveryRunId: Boolean(entry?.restartRecoveryDeliveryRunId),
+          };
+          expect(entry?.status).toBe("done");
         },
         { timeout: 30_000 },
       );
+      diagnostics.phase = "provider-count";
       expect(targetRequests).toHaveLength(retry ? 1 : 2);
       expect(targetRequests[0]).not.toContain(nextMessage);
       if (!retry) {
@@ -216,6 +305,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       expect(recovered?.archivedAt).toBeUndefined();
       expect(recovered?.mainRestartRecovery).toBeUndefined();
       expect(recovered?.restartRecoveryRuns).toBeUndefined();
+      diagnostics.phase = "transcript";
       // Captured model-prompt metadata can repeat text without creating another user turn.
       const transcript = JSON.stringify(
         (await loadTranscriptEvents({ ...target, sessionId })).flatMap((event) =>
@@ -226,6 +316,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       );
       expect(transcript.split(priorMessage)).toHaveLength(2);
       expect(transcript.split(nextMessage)).toHaveLength(retry ? 1 : 2);
+      diagnostics.phase = "complete";
     }
   };
   await runQaGatewayFixture(

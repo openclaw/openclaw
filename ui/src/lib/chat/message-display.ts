@@ -13,7 +13,7 @@ export function resolveMessageDisplayMarkdown(
     return t("chat.messages.tooLargeToDisplay");
   }
   const markdown = normalizedMessage.content
-    .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? item.text : []))
+    .flatMap((item) => (item.type === "text" ? (item.text ?? []) : []))
     .join("\n");
   return normalizedMessage.role.toLowerCase() === "assistant"
     ? stripThinkingTags(markdown)

@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -56,6 +58,11 @@ type LlamaCppSetupPlan =
   | { kind: "chat"; candidate: LlamaCppChatCandidate; cachedPath?: string }
   | { kind: "embedding-only" };
 
+type LlamaCppSetupContext = Pick<ProviderAuthContext, "config" | "signal"> & {
+  prompter: Pick<ProviderAuthContext["prompter"], "confirm" | "note" | "progress">;
+  embeddingOnly?: boolean;
+};
+
 function formatDownloadProgress(
   label: string,
   params: { downloadedSize: number; totalSize: number; bytesPerSecond: number },
@@ -82,6 +89,13 @@ async function configuredCandidates(
   if (!provider?.localService) {
     return [];
   }
+  const mediaModels = resolveLlamaCppMediaModels(provider);
+  const candidates = provider.models
+    .filter((model) => model.id !== mediaModels?.ocr && model.id !== mediaModels?.vision)
+    .map((model) => ({ model, provider }));
+  if (candidates.length < 2) {
+    return candidates;
+  }
   const { resolveDefaultModelForAgent } = await import("openclaw/plugin-sdk/agent-runtime");
   const primary = resolveDefaultModelForAgent({
     cfg: config,
@@ -89,11 +103,9 @@ async function configuredCandidates(
     allowPluginNormalization: false,
   });
   const primaryId = primary.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
-  const mediaModels = resolveLlamaCppMediaModels(provider);
-  return provider.models
-    .filter((model) => model.id !== mediaModels?.ocr && model.id !== mediaModels?.vision)
-    .map((model) => ({ model, provider }))
-    .toSorted((a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId));
+  return candidates.toSorted(
+    (a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId),
+  );
 }
 
 async function isFile(filePath: string): Promise<boolean> {
@@ -252,7 +264,7 @@ function resolveEmbeddingSetup(config: ProviderAuthContext["config"], cacheDir: 
 }
 
 async function resolveSetupPlan(
-  ctx: ProviderAuthContext,
+  ctx: LlamaCppSetupContext,
   candidates: LlamaCppChatCandidate[],
   embeddingModelIsDefault: boolean,
   localMemoryIntent: boolean,
@@ -260,6 +272,9 @@ async function resolveSetupPlan(
   asset: LlamaServerAsset,
   runtimeNote?: string,
 ): Promise<LlamaCppSetupPlan | undefined> {
+  if (ctx.embeddingOnly) {
+    return await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
+  }
   let candidate = candidates[0];
   const configuredPath = candidate
     ? await resolveCachedCandidate(candidate, ctx.signal)
@@ -367,25 +382,14 @@ async function resolveSetupPlan(
     return undefined;
   }
 
-  if (
-    localMemoryIntent &&
-    existing &&
-    (!existing.localService || (await configuredCandidates(ctx.config)).length > 0)
-  ) {
-    await ctx.prompter.note(
-      "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
-      "Setup skipped",
-    );
-    return undefined;
-  }
-
-  if (localMemoryIntent) {
+  const embeddingPlan = await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
+  if (embeddingPlan) {
     const consent = await ctx.prompter.confirm({
       message: `${runtimeNote ? `${runtimeNote} ` : ""}Install a verified ${asset.backend.toUpperCase()} llama.cpp server on Gateway host ${os.hostname()} and download only ${describeEmbeddingDownload(embeddingModelIsDefault)}? Your chat model will stay unchanged.`,
       initialValue: false,
     });
     if (consent) {
-      return { kind: "embedding-only" };
+      return embeddingPlan;
     }
   }
 
@@ -393,7 +397,24 @@ async function resolveSetupPlan(
   return undefined;
 }
 
-export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
+async function resolveEmbeddingOnlyPlan(
+  ctx: LlamaCppSetupContext,
+  candidates: LlamaCppChatCandidate[],
+  localMemoryIntent: boolean,
+): Promise<LlamaCppSetupPlan | undefined> {
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (localMemoryIntent && existing && (!existing.localService || candidates.length > 0)) {
+    await ctx.prompter.note(
+      "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
+      "Setup skipped",
+    );
+    return undefined;
+  }
+
+  return localMemoryIntent ? { kind: "embedding-only" } : undefined;
+}
+
+export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
   const mediaModels = resolveLlamaCppMediaModels(managedExisting);
@@ -434,7 +455,9 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     return { profiles: [] };
   }
 
-  const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
+  const progress = ctx.prompter.progress(
+    `${ctx.embeddingOnly && runtimeNote ? `${runtimeNote}\n` : ""}Preparing managed llama.cpp server…`,
+  );
   try {
     // Decide install/reuse before fetching GGUFs, preserving validating self-built
     // servers on older macOS. prepareManagedLlamaServer revalidates the installed
@@ -522,4 +545,40 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
       { cause: error },
     );
   }
+}
+
+export async function configureLlamaCppNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveContext,
+) {
+  if (ctx.opts.llamaCppEmbeddingOnly !== true) {
+    throw new Error(
+      "Managed llama.cpp non-interactive setup requires --llama-cpp-embedding-only to consent to downloading the embedding model and verified server runtime.",
+    );
+  }
+  const result = await runLlamaCppSetup({
+    config: ctx.config,
+    embeddingOnly: true,
+    prompter: {
+      async confirm() {
+        throw new Error("Non-interactive embedding-only setup cannot prompt.");
+      },
+      async note(message) {
+        throw new Error(message);
+      },
+      progress(label) {
+        ctx.runtime.log(label);
+        return { update: ctx.runtime.log, stop: ctx.runtime.log };
+      },
+    },
+  });
+  if (!result.configPatch) {
+    throw new Error(
+      'Set memory.search.provider to "local" (globally or for an enabled agent), then retry embedding-only setup.',
+    );
+  }
+  const config = mergeDeep(ctx.config, result.configPatch, {
+    undefinedValues: "replace",
+  });
+  // SAFETY: both inputs are typed config values; replace preserves auth patch deletion markers.
+  return config as ProviderAuthMethodNonInteractiveContext["config"];
 }

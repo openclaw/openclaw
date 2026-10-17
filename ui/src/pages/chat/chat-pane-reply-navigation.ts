@@ -104,7 +104,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     this.activeReplyNavigation = navigation;
     this.replyNavigationSessionKey = sessionKey;
     this.replyNavigationId = messageId;
-    this.requestUpdate();
+    this.invalidate();
     try {
       while (
         !state.chatMessages.some((message) => persistedMessageEntryId(message) === messageId)
@@ -114,7 +114,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         }
         if (!state.chatHistoryPagination.hasMore) {
           state.lastError = t("chat.messages.originalUnavailable");
-          state.requestUpdate?.();
           return;
         }
         const loaded = await this.loadOlderMessages();
@@ -124,7 +123,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         if (!loaded) {
           if (!state.chatHistoryPagination.hasMore && !state.lastError) {
             state.lastError = t("chat.messages.originalUnavailable");
-            state.requestUpdate?.();
           }
           return;
         }
@@ -132,7 +130,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       if (!isCurrent()) {
         return;
       }
-      this.requestUpdate();
+      this.invalidate();
       await this.updateComplete;
       if (isCurrent()) {
         this.transcript.revealMessage(messageId);
@@ -140,7 +138,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     } finally {
       if (this.activeReplyNavigation === navigation) {
         this.resetReplyNavigation();
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   };

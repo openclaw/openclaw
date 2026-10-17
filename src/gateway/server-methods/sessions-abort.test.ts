@@ -159,21 +159,24 @@ test("sessions.abort finds a retired store only reachable through its determinis
   expect(activeRun.controller.signal.aborted).toBe(true);
 });
 
-test.each(["main"])("sessions.abort still resolves the %s agent store", async (agentId) => {
-  const result = await directSessionReq("sessions.abort", {
-    key: `agent:${agentId}:missing`,
-  });
+test.each(["main"])(
+  "sessions.abort does not provision the %s agent store when no run exists",
+  async (agentId) => {
+    const result = await directSessionReq("sessions.abort", {
+      key: `agent:${agentId}:missing`,
+    });
 
-  expect(result).toMatchObject({
-    ok: true,
-    payload: { ok: true, abortedRunId: null, status: "no-active-run" },
-  });
-  expect(
-    fs.existsSync(
-      resolveOpenClawAgentSqlitePath({
-        agentId,
-        env: { OPENCLAW_STATE_DIR: requireStateDir() },
-      }),
-    ),
-  ).toBe(true);
-});
+    expect(result).toMatchObject({
+      ok: true,
+      payload: { ok: true, abortedRunId: null, status: "no-active-run" },
+    });
+    expect(
+      fs.existsSync(
+        resolveOpenClawAgentSqlitePath({
+          agentId,
+          env: { OPENCLAW_STATE_DIR: requireStateDir() },
+        }),
+      ),
+    ).toBe(false);
+  },
+);

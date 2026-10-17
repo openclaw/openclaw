@@ -97,7 +97,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
     throw new Error(
-      `Package publication recovery is pending. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+      `Package publication recovery is pending. Run openclaw update repair. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
     );
   }
   assertPackageActivationLayout(anchor);
@@ -125,7 +125,9 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
     [record.descriptor.previous.identity, record.descriptor.candidate.identity].includes(
       packageActivationIdentity(installKey, true),
     ) &&
-    inspectPackageActivationLease(record.descriptor.authority).changed
+    (inspectPackageActivationLease(record.descriptor.authority).changed ||
+      (record.phase === "publication-complete" &&
+        packageActivationIdentity(installKey, true) === record.descriptor.candidate.identity))
   ) {
     return undefined;
   }
@@ -135,7 +137,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   }
   if (record.phase !== "publication-complete") {
     throw new Error(
-      `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+      `Package publication is incomplete; its original continuation cannot run. Run openclaw update repair. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
   return record;
@@ -159,7 +161,7 @@ export function assertNoPendingPackageActivation(
     return;
   }
   throw new Error(
-    `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+    `Package publication recovery is pending. Run openclaw update repair. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
 }
 
@@ -310,7 +312,15 @@ export async function settlePendingPackageActivation(
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
   const leaseIdentityChanged = leaseWasMissing || lease.changed;
-  if (options?.onlyStaleLease && !leaseIdentityChanged) {
+  // A completed publication can settle through the same verified repair owner even on this lease.
+  if (
+    options?.onlyStaleLease &&
+    !leaseIdentityChanged &&
+    !(
+      initial.phase === "publication-complete" &&
+      replacementIdentity === initial.descriptor.candidate.identity
+    )
+  ) {
     return undefined;
   }
   const previousIdentity =
@@ -341,7 +351,7 @@ export async function settlePendingPackageActivation(
       initial.intent === null &&
       initial.publications.length === 0) ||
       initial.phase === "aborted");
-  const publicationNotStarted = !identities && !leaseIdentityChanged && unusedPreparation;
+  const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
   if (
     !complete &&
     !publicationNotStarted &&
@@ -349,19 +359,23 @@ export async function settlePendingPackageActivation(
     !(
       leaseIdentityChanged &&
       (unusedPreparation ||
-        (initial.phase === "publication-complete" &&
-          replacementIdentity === initial.descriptor.previous.identity) ||
+        (!identities &&
+          initial.phase === "publication-complete" &&
+          replacementIdentity === previousIdentity) ||
         initial.phase === "superseded")
     ) &&
-    [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
-      replacementIdentity,
-    )
+    [previousIdentity, candidateIdentity].includes(replacementIdentity)
   ) {
+    if (identities) {
+      throw new Error(
+        "Remounted previous package has unfinished publication; use the original recovery owner.",
+      );
+    }
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   if (options?.dryRun) {
-    if (externalPublication) {
+    if (externalPublication || (identities && unusedPreparation)) {
       await verifyPackagePublicationSettlement(
         initial,
         () => journal.assertCurrent(initial),
@@ -370,7 +384,7 @@ export async function settlePendingPackageActivation(
     }
     return {
       operationId: initial.descriptor.operationId,
-      reason,
+      reason: identities && unusedPreparation ? "publication-not-started" : reason,
       retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
       detail: undefined,
       warning: undefined,
@@ -415,7 +429,7 @@ export async function settlePendingPackageActivation(
       if (complete && receipt) {
         return finish(receipt);
       }
-      if (publicationNotStarted) {
+      if (publicationNotStarted && !identities) {
         const owner = createPublicationOwner(anchor, journal, assertReplacement, initial);
         if (initial.phase === "prepared") {
           try {
@@ -448,7 +462,7 @@ export async function settlePendingPackageActivation(
           replacementIdentity,
           settled: true,
         };
-      if (externalPublication) {
+      if (externalPublication || (identities && unusedPreparation)) {
         const verified = await verifyPackagePublicationSettlement(
           initial,
           assertCurrent,
@@ -462,7 +476,9 @@ export async function settlePendingPackageActivation(
         assertReplacement = verified.assertUnchanged;
         assertArchiveCurrent = verified.assertInstalledUnchanged;
         settlement = {
-          kind: "publication-settled-external-change",
+          kind: unusedPreparation
+            ? "publication-not-started"
+            : "publication-settled-external-change",
           replacementIdentity,
           settled: true,
           detail: receipt?.detail ?? verified.detail,

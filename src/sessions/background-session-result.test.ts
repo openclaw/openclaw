@@ -16,6 +16,7 @@ import { sessionMutationHandlers } from "../gateway/server-methods/sessions-muta
 import { callGatewayHandler } from "../gateway/server-methods/skills.test-helpers.js";
 import {
   closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -31,6 +32,7 @@ describe("commitBackgroundResultToSession", () => {
     afterEach(async () => {
       for (const root of tempDirs.dirs) {
         await closeOpenClawAgentDatabasesAsync(root);
+        closeOpenClawAgentDatabasesForTest(root);
       }
       cleanup();
     }),

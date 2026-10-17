@@ -115,6 +115,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
@@ -126,6 +127,7 @@ async function startHandoffAndReadCommand(params: {
   commandArgv: string[] | undefined;
   recoveryCommandArgv: string[];
   triageCommandArgv: string[];
+  triageContextCommand: string;
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -139,6 +141,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    ...(params.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
     admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
@@ -161,6 +164,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv?: string[];
     recoveryCommandArgv: string[];
     triageCommandArgv: string[];
+    triageContextCommand: string;
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -177,6 +181,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv: helperParams.commandArgv,
     recoveryCommandArgv: helperParams.recoveryCommandArgv,
     triageCommandArgv: helperParams.triageCommandArgv,
+    triageContextCommand: helperParams.triageContextCommand,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -204,6 +209,8 @@ describe("managed service update handoff command", () => {
       argv1: path.join(current, "openclaw.mjs"),
       channel: "beta",
     });
+    expect(prepared.triageCommandArgv.slice(-3)).toEqual(["triage", "--json", "--non-interactive"]);
+    expect(prepared.triageContextCommand).toContain("openclaw triage --run --update-result");
     for (const argv of [
       prepared.commandArgv,
       prepared.recoveryCommandArgv,
@@ -542,6 +549,15 @@ describe("managed service update handoff command", () => {
       const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
       expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
       expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves full integrity selection=%s across the detached handoff",
+    async (fullIntegrityCheck) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", fullIntegrityCheck });
+      expect(result.commandArgv?.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
+      expect(result.command.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
     },
   );
 

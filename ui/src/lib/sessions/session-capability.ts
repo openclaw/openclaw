@@ -8,6 +8,7 @@ import type {
   SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
+  SessionsRecoverParams,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
@@ -30,9 +31,9 @@ import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts"
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
 import type {
-  GitHubPublicationController,
+  GitHubPublicationOwner,
   GitHubPublicationPresentationBinding,
-} from "./github-publication-controller.ts";
+} from "./github-publication-owner.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionReconcileOptions } from "./reconcile.ts";
@@ -218,8 +219,7 @@ export type SessionCapability = {
     // The lazy presentation supplies code; this session owner keeps operation custody.
     attach: (
       row: GatewaySessionRow,
-      changed: () => void,
-      Controller: typeof GitHubPublicationController,
+      Owner: typeof GitHubPublicationOwner,
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
@@ -291,6 +291,8 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
+  /** Roster activity lasts until the shared run owner settles, including final output delivery. */
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   /** Schedules background list refreshes without replacing queued foreground queries. */
@@ -306,7 +308,7 @@ export type SessionCapability = {
     options?: { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
+  recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (
     targets: SessionsPatchManyParams["targets"],
@@ -390,7 +392,6 @@ export type SessionCapability = {
   ) => Promise<SessionsBranchesSwitchResult>;
   /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
   groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
-  /** Generation of the catalog/defaults snapshot used by group-target routes. */
   /** Whether group defaults are current enough for a group-target route. */
   groupsStatus: () => SessionGroupDefaultsStatus;
   /** Invalidates the connection-owned group catalog before an explicit route retry. */

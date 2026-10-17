@@ -5,8 +5,10 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -21,11 +23,16 @@ const snapshot = captureEnv([
   "GITHUB_TOKEN",
   "PREVIEW_SERVICE_TOKEN",
   "GIT_CONFIG_PARAMETERS",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 afterEach(() => {
   snapshot.restore();
+  vi.unstubAllEnvs();
   storeMocks.readSecretStoreExecEnvironment.mockReset();
 });
 
@@ -69,7 +76,110 @@ function prepare(
 }
 
 describe("exec GitHub identity", () => {
+  it("keeps the executing agent's OAuth credentials and excludes all App keys when borrowing tool policy", async () => {
+    const root = tempDirs.make("native-exec-credential-owner-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("FACTORY_APP_PEM", "synthetic-system-signing-key");
+    vi.stubEnv("SIBLING_APP_PEM", "synthetic-sibling-signing-key");
+    const app = {
+      appId: 101,
+      installationId: 202,
+      accountId: 303,
+      repositories: [{ id: 404, fullName: "example/project" }],
+      permissions: { contents: "read" as const },
+      keyVersion: "synthetic-v1",
+    };
+    const config: OpenClawConfig = {
+      tools: {
+        exec: { host: "gateway", mode: "full" },
+        github: {
+          kind: "app-installation",
+          profileId: "ghp_33333333333333333333333333333333",
+          app: {
+            ...app,
+            privateKey: { source: "env", provider: "default", id: "FACTORY_APP_PEM" },
+          },
+        },
+      },
+      agents: {
+        entries: {
+          worker: {
+            tools: { github: { kind: "oauth", profileId: "ghp_11111111111111111111111111111111" } },
+          },
+          policy: { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } },
+          signer: {
+            tools: {
+              github: {
+                kind: "app-installation",
+                profileId: "ghp_44444444444444444444444444444444",
+                app: {
+                  ...app,
+                  privateKey: { source: "store", provider: "default", id: "SIBLING_APP_PEM" },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    storeMocks.readSecretStoreExecEnvironment.mockResolvedValue({ env: {} });
+    const prepared = prepareGitHubToolEnvironment({ config, agentId: "worker" });
+    const profileDir = prepared.localIdentityEnv.GH_CONFIG_DIR!;
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(profileDir, "hosts.yml"),
+      "github.com:\n  oauth_token: synthetic-executing-agent\n",
+      { mode: 0o600 },
+    );
+    const tools = createOpenClawCodingTools({
+      agentId: "worker",
+      policyAgentId: "policy",
+      sessionKey: "agent:policy:main",
+      runSessionKey: "agent:worker:main",
+      config,
+      workspaceDir: root,
+      exec: { notifyOnExit: false, allowBackground: false },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const tool = tools.find(({ name }) => name === "exec");
+    expect(tool).toBeDefined();
+    const script = path.join(root, "identity.cjs");
+    await fs.writeFile(
+      script,
+      "process.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, systemKey: process.env.FACTORY_APP_PEM, siblingKey: process.env.SIBLING_APP_PEM }))",
+    );
+    const result = await tool!.execute("native-owner", {
+      command: [process.execPath, script].map((value) => JSON.stringify(value)).join(" "),
+    });
+    expect(result.details).toMatchObject({
+      status: "completed",
+      aggregated: JSON.stringify({
+        token: "synthetic-executing-agent",
+        systemKey: "",
+        siblingKey: "",
+      }),
+    });
+    expect(storeMocks.readSecretStoreExecEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeNames: ["SIBLING_APP_PEM"] }),
+    );
+  });
+
   it("fetches missing partial-clone blobs without launching automatic maintenance", async () => {
+    // This fixture tests repository author inheritance, not the invoking session's override.
+    for (const key of [
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+    ]) {
+      deleteTestEnvValue(key);
+    }
     const root = tempDirs.make("agent-git-maintenance-");
     const origin = path.join(root, "origin");
     const clone = path.join(root, "partial");

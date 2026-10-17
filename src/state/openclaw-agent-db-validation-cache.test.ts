@@ -1,32 +1,36 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { assert, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError,
 } from "./agent-database-admission-error.js";
-import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
-} from "./openclaw-agent-db-contract.js";
+  withReceiptFixture,
+  independentWorkerReceipt,
+  observeValidationPragmas,
+} from "./agent-validation.test-support.js";
+import {
+  loadOpenClawAgentCanonicalValidationReceipt,
+  recordOpenClawAgentCanonicalValidation,
+} from "./openclaw-agent-canonical-validation-receipt.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   hasOpenClawAgentReadOnlySchema,
 } from "./openclaw-agent-db-readonly-open.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
-import { stageOpenClawAgentDatabaseSchemaExtension } from "./openclaw-agent-db-schema-extension.worker.js";
-import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   adoptOpenClawAgentDatabaseSchema,
   adoptOpenClawAgentDatabaseValidation,
@@ -49,79 +53,177 @@ import {
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 
-async function withReceiptFixture(
-  populated: boolean,
-  run: (
-    database: OpenClawAgentDatabase,
-    options: OpenClawAgentDatabaseOptions,
-  ) => void | Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const options = { agentId: "main", env };
-    let database = openOpenClawAgentDatabase(options);
-    if (populated) {
-      database.db.exec(`INSERT INTO session_nodes
-        (session_key, current_session_id, entry_json, updated_at)
-        VALUES ('agent:main:existing', 'existing', '{"sessionId":"existing","updatedAt":1}', 1);
-        UPDATE session_nodes SET entry_valid = 1;
-        DELETE FROM session_canonical_validation_pending;`);
-      invalidateOpenClawAgentDatabaseValidation(database.path);
-      closeOpenClawAgentDatabaseByPath(database.path);
-      database = openOpenClawAgentDatabase(options);
-    }
-    await run(database, options);
-  });
-}
+const observedValidationDirectories = vi.hoisted(
+  () => [] as Array<{ directory: string; notify: (filename?: string) => void; active: boolean }>,
+);
+// mock-isolation: Drive identity invalidation deterministically without native watcher timing.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+    const observer = { directory, notify, active: true };
+    observedValidationDirectories.push(observer);
+    return {
+      close: () => {
+        observer.active = false;
+      },
+    };
+  },
+}));
 
 describe("canonical proof on physical database validation", () => {
-  it("publishes known derived DDL without repeating agent admission", async () => {
-    await withReceiptFixture(false, (database, options) => {
-      const reader = openOpenClawAgentDatabaseReadOnly(options);
-      if (!reader.found) {
-        throw new Error("Expected independent reader");
-      }
-      const previous = getOpenClawAgentDatabaseValidation(database)!;
-      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
-      expect(retainedReader).toBeDefined();
-      try {
-        runSqliteImmediateTransactionSync(database.db, () => {
-          stageOpenClawAgentDatabaseSchemaExtension(database.db);
-          database.db.exec("CREATE TABLE derived_vectors(id TEXT PRIMARY KEY, vector BLOB)");
-        });
-        const observation = trackSqliteStatementExecutions(database.db, ["sql"], () => "sql");
-        const readerObservation = trackSqliteStatementExecutions(
-          reader.database.db,
-          ["sql"],
-          () => "sql",
+  it.each(["ordinary close", "fixture retirement"] as const)(
+    "handles a removed fixture's queued observation after %s",
+    async (cleanup) => {
+      await withReceiptFixture(false, async (database) => {
+        const captured = captureOpenClawAgentDatabaseReadValidation(database)!;
+        const successor = independentWorkerReceipt(database);
+        const root = path.dirname(database.path);
+        const observer = observedValidationDirectories.findLast(
+          (candidate) => candidate.active && candidate.directory === root,
         );
-        try {
-          const current = refreshOpenClawAgentDatabaseSchema(database, () => {});
-          expect(() => retainedReader!.assertCurrent()).not.toThrow();
-          expect(current.valid).toBe(previous.valid);
-          expect(current.schema?.facts.tables.has("derived_vectors")).toBe(true);
-          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
-          expect(
-            getAdmittedSqliteSchemaFacts(reader.database.db)?.tables.has("derived_vectors"),
-          ).toBe(true);
-          expect(observation.counts.sql).toBe(0);
-          expect(readerObservation.counts.sql).toBe(0);
-        } finally {
-          readerObservation.restore();
-          observation.restore();
+        expect(observer).toBeDefined();
+        expect(successor.receiptId).not.toBe(captured.validation.receiptId);
+        expect(successor.valid).not.toBe(captured.validation.valid);
+        expect(successor.canonicalReady).not.toBe(captured.validation.canonicalReady);
+
+        await closeOpenClawAgentDatabasesAsync(root);
+        expect(observer!.active).toBe(true);
+        expect(Atomics.load(new Int32Array(captured.validation.valid), 0)).toBe(1);
+        if (cleanup === "fixture retirement") {
+          closeOpenClawAgentDatabasesForTest(root);
+          expect(observer!.active).toBe(false);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
         }
-        // Unclassified DDL still invalidates the agent contract.
-        database.db.exec("DROP TABLE derived_vectors");
-        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+        fs.rmSync(root, { recursive: true, force: true });
+
+        // Model a worker publishing a new receipt after dev:ino/birthtime reuse,
+        // without depending on the host filesystem's inode allocation policy.
+        const target = {
+          agentId: database.agentId,
+          path: path.join(path.dirname(root), "successor", path.basename(database.path)),
+        };
+        const publish = captureOpenClawAgentDatabaseValidationTransfer(target);
+        expect(publish(successor.identity, successor)).toBe(true);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(target)?.valid).toBe(successor.valid);
+        expect(Atomics.load(new Int32Array(successor.valid), 0)).toBe(1);
+
+        // Deliver even after close: a queued callback must not find retired path trust.
+        observer!.notify(path.basename(database.path));
+        expect(Atomics.load(new Int32Array(successor.valid), 0)).toBe(
+          cleanup === "fixture retirement" ? 1 : 0,
+        );
+      });
+    },
+  );
+
+  it.each(["observation", "reader admission"] as const)(
+    "retains read validation across native close and detects replacement through %s",
+    async (invalidation) => {
+      await withReceiptFixture(false, (database) => {
+        const captured = captureOpenClawAgentDatabaseReadValidation(database);
+        expect(captured?.canonicalPath).toBe(database.path);
+        const realpath = vi.spyOn(fs.realpathSync, "native");
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        try {
+          const warm = captureOpenClawAgentDatabaseReadValidation(database);
+          expect(warm?.validation.receiptId).toBe(captured?.validation.receiptId);
+          captured!.assertCurrent();
+          warm!.assertCurrent();
+          expect(realpath).not.toHaveBeenCalled();
+          expect(stat).not.toHaveBeenCalled();
+        } finally {
+          realpath.mockRestore();
+          stat.mockRestore();
+          syncBuiltinESMExports();
+        }
+        closeOpenClawAgentDatabaseByPath(database.path);
+        expect(
+          observedValidationDirectories.some(
+            (observer) => observer.active && observer.directory === path.dirname(database.path),
+          ),
+        ).toBe(true);
+        expect(captureOpenClawAgentDatabaseReadValidation(database)?.validation.receiptId).toBe(
+          captured?.validation.receiptId,
+        );
+        const replacement = `${database.path}.replacement`;
+        fs.copyFileSync(database.path, replacement);
+        fs.renameSync(replacement, database.path);
+        expect(Atomics.load(new Int32Array(captured!.validation.valid), 0)).toBe(1);
+        expect(captureOpenClawAgentDatabaseReadValidation(database)?.validation.receiptId).toBe(
+          captured?.validation.receiptId,
+        );
+        if (invalidation === "reader admission") {
+          expect(captureOpenClawAgentDatabaseReadValidation(database, "admission")).toBeUndefined();
+        } else {
+          for (const observer of observedValidationDirectories) {
+            if (observer.active && observer.directory === path.dirname(database.path)) {
+              observer.notify(path.basename(database.path));
+            }
+          }
+        }
+        expect(() => captured!.assertCurrent()).toThrow(
+          "Session reader validation is no longer current",
+        );
+        expect(Atomics.load(new Int32Array(captured!.validation.valid), 0)).toBe(0);
+        expect(
+          observedValidationDirectories.some(
+            (observer) => observer.active && observer.directory === path.dirname(database.path),
+          ),
+        ).toBe(false);
+      });
+    },
+  );
+
+  it("rejects a replaced file at receiver and queued write admission before observation", async () => {
+    await withReceiptFixture(false, async (database, options) => {
+      const captured = captureOpenClawAgentDatabaseReadValidation(database)!;
+      closeOpenClawAgentDatabaseByPath(database.path);
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const first = runOpenClawAgentWriteAdmission(options, async () => {
+        entered.resolve();
+        await resume.promise;
+      });
+      await entered.promise;
+      let effect = false;
+      const queued = runOpenClawAgentWriteAdmission(options, () => {
+        effect = true;
+      });
+      void queued.catch(() => undefined);
+      try {
+        const replacement = `${database.path}.replacement`;
+        fs.copyFileSync(database.path, replacement);
+        fs.renameSync(replacement, database.path);
+        const opened = openOpenClawAgentDatabaseReadOnly(options);
+        expect(opened.found).toBe(true);
+        if (opened.found) {
+          try {
+            expect(adoptOpenClawAgentDatabaseValidation(opened.database, captured.validation)).toBe(
+              false,
+            );
+          } finally {
+            opened.database.close();
+          }
+        }
+        resume.resolve();
+        await first;
+        await expect(queued).rejects.toThrow(
+          "Agent database target changed before write admission",
+        );
+        expect(effect).toBe(false);
       } finally {
-        reader.database.close();
+        resume.resolve();
+        await Promise.allSettled([first, queued]);
       }
     });
   });
-
   it("shares republished schema proof with restart readers through a directory symlink", async () => {
     await withReceiptFixture(true, (database) => {
       const aliasDir = path.join(path.dirname(database.path), "reader-alias");
@@ -151,21 +253,7 @@ describe("canonical proof on physical database validation", () => {
 
   it("shares admitted schema without marker queries while retaining explicit revocation", async () => {
     await withReceiptFixture(false, (database, options) => {
-      const observe = (db: DatabaseSync) =>
-        trackSqliteStatementExecutions(
-          db,
-          ["data_version", "schema_version", "user_version"],
-          (sql) => {
-            if (/FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)) {
-              return "data_version";
-            }
-            const name = /^PRAGMA (data_version|schema_version|user_version);?$/iu.exec(sql)?.[1];
-            return name === "data_version" || name === "schema_version" || name === "user_version"
-              ? name
-              : null;
-          },
-        );
-      const warm = observe(database.db);
+      const warm = observeValidationPragmas(database.db);
       try {
         runSqliteReadOperationSync(database.db, () => {
           expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
@@ -186,10 +274,10 @@ describe("canonical proof on physical database validation", () => {
       }
 
       const reader = openOpenClawAgentDatabaseReadOnly(options);
-      if (!reader.found) {
-        throw new Error("Expected independent reader");
+      if (!reader.found || isPostgresSqlConnection(reader.database.db)) {
+        throw new Error("Expected independent SQLite reader");
       }
-      const cold = observe(reader.database.db);
+      const cold = observeValidationPragmas(reader.database.db);
       try {
         expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true);
         expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
@@ -205,7 +293,7 @@ describe("canonical proof on physical database validation", () => {
       const writer = new DatabaseSync(database.path);
       try {
         writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
-        const observation = observe(database.db);
+        const observation = observeValidationPragmas(database.db);
         try {
           expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
           expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
@@ -220,6 +308,45 @@ describe("canonical proof on physical database validation", () => {
       }
       invalidateOpenClawAgentDatabaseSchema(database);
       expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+    });
+  });
+
+  it("repairs missing additive schema during refresh without losing existing sessions", async () => {
+    await withReceiptFixture(true, (database, options) => {
+      const reader = openOpenClawAgentDatabaseReadOnly(options);
+      if (!reader.found) {
+        throw new Error("Expected independent reader");
+      }
+      const previousFacts = getOpenClawAgentDatabaseValidation(database)?.schema?.facts;
+      assert(previousFacts, "Expected native schema facts before refresh");
+      const previousSchemaVersion = previousFacts.schemaVersion;
+      try {
+        database.db.exec("DROP TABLE session_reactions");
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+
+        refreshOpenClawAgentDatabaseSchema(database, () => {});
+
+        expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+        const published = getAdmittedSqliteSchemaFacts(reader.database.db);
+        expect(published?.schemaVersion).toBeGreaterThan(previousSchemaVersion);
+        expect(published?.tables.has("session_reactions")).toBe(true);
+        expect(
+          reader.database.db.prepare("SELECT message_id FROM session_reactions").all(),
+        ).toEqual([]);
+        expect(
+          reader.database.db
+            .prepare(
+              "SELECT current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
+            )
+            .get("agent:main:existing"),
+        ).toEqual({
+          current_session_id: "existing",
+          entry_json: '{"sessionId":"existing","updatedAt":1}',
+          updated_at: 1,
+        });
+      } finally {
+        reader.database.close();
+      }
     });
   });
 
@@ -249,7 +376,7 @@ describe("canonical proof on physical database validation", () => {
           expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
           expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
           expect(
-            getOpenClawAgentDatabaseValidation(database)?.schema?.facts.tables.has(
+            getOpenClawAgentDatabaseValidation(database)?.schema?.facts?.tables.has(
               "late_reader_fixture",
             ),
           ).toBe(true);
@@ -310,20 +437,6 @@ describe("canonical proof on physical database validation", () => {
       });
     },
   );
-
-  function independentWorkerReceipt(database: OpenClawAgentDatabase) {
-    const receipt = getOpenClawAgentDatabaseValidation(database);
-    if (!receipt) {
-      throw new Error("Expected physical validation receipt");
-    }
-    // A native first opener can establish proof before the host has any receipt.
-    return {
-      ...receipt,
-      receiptId: randomUUID(),
-      valid: receipt.valid.slice(0),
-      canonicalReady: receipt.canonicalReady.slice(0),
-    };
-  }
 
   it.each(["exact", "sibling-family"] as const)(
     "releases closed reader metadata by %s without revoking parent proof or unselected aliases",
@@ -439,11 +552,14 @@ describe("canonical proof on physical database validation", () => {
           const received = independentWorkerReceipt(database);
           closeOpenClawAgentDatabaseByPath(database.path);
           clearOpenClawAgentDatabaseValidationCache(database.path);
+          revokeSqliteDatabaseAdmissionsForPath(database.path);
           const reader = openOpenClawAgentDatabaseReadOnly(options);
           if (!reader.found || !received.schema) {
             throw new Error("Expected a canonical reader and an independently admitted receipt");
           }
           try {
+            // Native fixture supplies the cold read-admission step performed by the worker.
+            loadOpenClawAgentCanonicalValidationReceipt(reader.database);
             expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
             if (cache === "empty") {
               clearOpenClawAgentDatabaseValidationCache(database.path);
@@ -757,6 +873,9 @@ describe("canonical proof on physical database validation", () => {
           state === "empty" || state === "durable handoff",
         );
         if (state === "durable handoff") {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          invalidateOpenClawAgentCanonicalValidation(database);
+          expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
           expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
         }
       });

@@ -18,11 +18,6 @@ export * from "./config-form.node.shared.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-const jsonTextareaState = new WeakMap<
-  HTMLTextAreaElement,
-  { sourceValue: unknown; fallback: string; pathKey: string }
->();
-
 export function SensitiveToggleButton(props: {
   path: Array<string | number>;
   state: SensitiveRenderState;
@@ -227,12 +222,14 @@ export function JsonTextareaControl(props: {
     setControlValidity(target, message, ".cfg-json-editor");
   const updateValidity = (target: HTMLTextAreaElement) => {
     let message = "";
+    let candidate: unknown;
     const raw = target.value.trim();
     if (!raw && props.isRequired) {
       message = t("configForm.invalidJson");
     } else if (raw) {
       try {
-        if (!isSupportedConfigValueValid(props.schema, JSON.parse(raw))) {
+        candidate = JSON.parse(raw);
+        if (!isSupportedConfigValueValid(props.schema, candidate)) {
           message = t("configForm.invalidJson");
         }
       } catch {
@@ -240,7 +237,7 @@ export function JsonTextareaControl(props: {
       }
     }
     setValidity(target, message);
-    return !message;
+    return { valid: !message, candidate };
   };
   createEffect(
     () => ({
@@ -248,8 +245,7 @@ export function JsonTextareaControl(props: {
       fallback: renderedFallback(),
       pathKey: JSON.stringify(props.path.filter((segment) => typeof segment === "string")),
     }),
-    (current) => {
-      const previous = jsonTextareaState.get(textarea);
+    (current, previous) => {
       // Equal autosave acknowledgments must not erase invalid JSON still being edited.
       if (
         !previous ||
@@ -261,7 +257,6 @@ export function JsonTextareaControl(props: {
         textarea.value = current.fallback;
         setValidity(textarea, "");
       }
-      jsonTextareaState.set(textarea, current);
     },
   );
   const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {
@@ -300,19 +295,13 @@ export function JsonTextareaControl(props: {
         }
       }}
       onChange={(event) => {
-        if (props.sensitiveState.isRedacted || !updateValidity(event.currentTarget)) {
+        if (props.sensitiveState.isRedacted) {
           return;
         }
         const target = event.currentTarget;
-        const raw = target.value.trim();
-        if (!raw) {
-          commitJsonValue(target, undefined);
-          return;
-        }
-        try {
-          commitJsonValue(target, JSON.parse(raw));
-        } catch {
-          // Preserve the draft until it is valid JSON.
+        const next = updateValidity(target);
+        if (next.valid) {
+          commitJsonValue(target, next.candidate);
         }
       }}
     />

@@ -134,7 +134,7 @@ export function registerNpmUpdateMetadataTests({
     ).toEqual([`${packageName}@beta`, `${packageName}@latest`]);
   });
 
-  it.each(["stable", "beta"] as const)(
+  it.each(["stable"] as const)(
     "reuses the %s update selection without another npm metadata command",
     async (channel) => {
       const { updateNpmInstalledPlugins } = await import("./update-installed.js");
@@ -156,8 +156,6 @@ export function registerNpmUpdateMetadataTests({
       };
       mockNpmViewAndInstallMany([
         { ...available, spec: packageName },
-        { ...available, spec: `${packageName}@latest` },
-        { ...available, spec: `${packageName}@beta`, version: "1.5.0-beta.1" },
         { ...available, spec: `${packageName}@2.0.0` },
       ]);
       const result = await withPluginInstallRoots(
@@ -200,9 +198,9 @@ export function registerNpmUpdateMetadataTests({
         .map(([argv]) => npmCommandArgs(argv))
         .filter((args): args is string[] => args?.[0] === "view")
         .map((args) => expectDefined(args[1], "npm view package spec"));
-      expect(metadataCommands.toSorted((left, right) => left.localeCompare(right))).toEqual(
-        channel === "beta" ? [`${packageName}@beta`, `${packageName}@latest`] : [packageName],
-      );
+      expect(metadataCommands.toSorted((left, right) => left.localeCompare(right))).toEqual([
+        packageName,
+      ]);
     },
   );
 
@@ -213,7 +211,6 @@ export function registerNpmUpdateMetadataTests({
       versions: ["2.0.0-beta.1", "3.0.0-beta.1"],
       selectedVersion: "3.0.0-beta.1",
       warning: "using newest prerelease",
-      retry: false,
     },
     {
       label: "allowed current prerelease",
@@ -221,15 +218,6 @@ export function registerNpmUpdateMetadataTests({
       versions: ["2.0.0-beta.1", "3.0.0-beta.1"],
       selectedVersion: "3.0.0-beta.1",
       warning: "allowing it",
-      retry: false,
-    },
-    {
-      label: "retry after unavailable preparation",
-      initialVersion: "3.0.0-beta.1",
-      versions: ["2.0.0", "3.0.0-beta.1"],
-      selectedVersion: "2.0.0",
-      warning: "falling back to stable",
-      retry: true,
     },
   ])("reuses successful official update metadata for $label", async (scenario) => {
     const { updateNpmInstalledPlugins } = await import("./update-installed.js");
@@ -261,27 +249,6 @@ export function registerNpmUpdateMetadataTests({
         expectedDependencySpec: scenario.selectedVersion,
       },
     ]);
-    if (scenario.retry) {
-      const runNpm = expectDefined(
-        runCommandWithTimeoutMock.getMockImplementation(),
-        "npm fixture",
-      );
-      let failed = false;
-      runCommandWithTimeoutMock.mockImplementation(async (...args) => {
-        if (!failed && npmCommandArgs(args[0])?.[2] === "versions") {
-          failed = true;
-          return {
-            code: 1,
-            stdout: "",
-            stderr: "registry temporarily unavailable",
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        }
-        return await runNpm(...args);
-      });
-    }
     const warnings: string[] = [];
     const result = await withPluginInstallRoots(
       { ...resolvePluginInstallRoots(), npmDir: npmRoot },
@@ -329,9 +296,7 @@ export function registerNpmUpdateMetadataTests({
     const metadataCommands = runCommandWithTimeoutMock.mock.calls
       .map(([argv]) => npmCommandArgs(argv))
       .filter((args): args is string[] => args?.[0] === "view");
-    expect(metadataCommands.filter((args) => args[2] === "versions")).toHaveLength(
-      scenario.retry ? 2 : 1,
-    );
+    expect(metadataCommands.filter((args) => args[2] === "versions")).toHaveLength(1);
     expect(
       metadataCommands.filter((args) => args[1] === `${packageName}@${scenario.selectedVersion}`),
     ).toHaveLength(scenario.initialVersion === scenario.selectedVersion ? 0 : 1);

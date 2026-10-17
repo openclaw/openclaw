@@ -1,9 +1,6 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -13,48 +10,6 @@ import {
   saveSettings,
   setSettingsChangeListener,
 } from "./settings.ts";
-
-it.each([{ agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" }])(
-  "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",
-  async ({ agentId, savedAgentId, basePath, suffix }) => {
-    const pathname = buildControlUiSessionPath({
-      namespace: "chat",
-      sessionKey: `agent:${agentId}:main`,
-      exactKey: true,
-      basePath,
-    });
-    expect(pathname).toBe(`${basePath}/chat/${agentId}`);
-    const requested = { pathname: `${pathname}${suffix}`, search: "?draft=keep", hash: "#pane" };
-    let currentLocation: RouteLocation = requested;
-    const replace = vi.fn((location: RouteLocation) => {
-      currentLocation = location;
-    });
-    const gateway = {
-      snapshot: { phase: "connecting", client: null, hello: null },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["gateway"];
-    const initialLocationReady = resolveInitialApplicationLocation({
-      location: requested,
-      basePath,
-      sessionKey: `agent:${savedAgentId}:main`,
-      selectedAgentId: savedAgentId,
-      gateway,
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
-
-    await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as ApplicationContext,
-      enabled: false,
-      history: { location: () => currentLocation, replace },
-      initialLocationReady,
-    });
-
-    expect(currentLocation).toEqual(requested);
-    expect(replace).not.toHaveBeenCalled();
-    expect(gateway.subscribe).not.toHaveBeenCalled();
-  },
-);
 
 it("routes a canonical global session through its persisted agent owner", async () => {
   const subscribe = vi.fn(() => () => undefined);
@@ -134,42 +89,6 @@ it("falls back when the persisted agent is absent from the Gateway roster", asyn
   ).resolves.toEqual({ pathname: "/chat/dummy", search: "", hash: "" });
 });
 
-it("replaces a confirmed-missing remembered session with the agent main route", async () => {
-  const request = vi.fn(async () => ({ ok: false as const }));
-
-  await expect(
-    resolveInitialApplicationLocation({
-      location: { pathname: "/", search: "?draft=hello", hash: "" },
-      basePath: "",
-      sessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client: { request },
-          hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
-        },
-        subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext["gateway"],
-      agentsList: () => ({
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "research" }],
-      }),
-      signal: new AbortController().signal,
-    }),
-  ).resolves.toEqual({ pathname: "/chat/research", search: "?draft=hello", hash: "" });
-  expect(request).toHaveBeenCalledExactlyOnceWith(
-    "sessions.resolve",
-    {
-      key: "agent:research:thread:12345678-0000-4000-8000-000000000001",
-      agentId: "research",
-      allowMissing: true,
-    },
-    { signal: expect.any(AbortSignal) },
-  );
-});
-
 it("refreshes a cached roster and its default before accepting a remembered agent", async () => {
   const cachedList: AgentsListResult = {
     defaultId: "retired",
@@ -236,7 +155,7 @@ it("validates a remembered session again after the Gateway client changes", asyn
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
   const pending = resolveInitialApplicationLocation({
-    location: { pathname: "/", search: "", hash: "" },
+    location: { pathname: "/", search: "?draft=hello", hash: "" },
     basePath: "",
     sessionKey: rememberedKey,
     gateway,
@@ -256,7 +175,11 @@ it("validates a remembered session again after the Gateway client changes", asyn
   };
   finishFirstRequest?.({ ok: true, key: rememberedKey, agentId: "research" });
 
-  await expect(pending).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
+  await expect(pending).resolves.toEqual({
+    pathname: "/chat/research",
+    search: "?draft=hello",
+    hash: "",
+  });
   expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
     "sessions.resolve",
     { key: rememberedKey, agentId: "research", allowMissing: true },

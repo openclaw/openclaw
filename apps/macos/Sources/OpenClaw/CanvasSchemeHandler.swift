@@ -74,9 +74,6 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         do {
             let data = try Data(contentsOf: resolvedFile)
             let mime = CanvasScheme.mimeType(forExtension: resolvedFile.pathExtension)
-            let servedPath = resolvedFile.path
-            canvasLogger.debug(
-                "served \(session, privacy: .public)/\(path, privacy: .public) -> \(servedPath, privacy: .public)")
             return (mime, data)
         } catch {
             let failedPath = resolvedFile.path

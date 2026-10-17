@@ -1,10 +1,7 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."cron_run_receipts" (
+CREATE TABLE "cron_run_receipts" (
+  "cursor_id" bigint NOT NULL,
   "receipt_id" text COLLATE "C" NOT NULL,
   "store_key" text COLLATE "C" NOT NULL,
   "job_id" text COLLATE "C" NOT NULL,
@@ -24,8 +21,8 @@ CREATE TABLE "openclaw_state"."cron_run_receipts" (
   CHECK ((("status" = 'running') AND "finished_at_ms" IS NULL) OR (("status" != 'running') AND "finished_at_ms" IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX "idx_cron_run_receipts_active_job" ON "openclaw_state"."cron_run_receipts" (("store_key") ASC NULLS FIRST, ("job_id") ASC NULLS FIRST) WHERE ("status" = 'running');
+CREATE UNIQUE INDEX "cron_run_receipts_cursor_id_idx" ON "cron_run_receipts" (("cursor_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_cron_run_receipts_job_history" ON "openclaw_state"."cron_run_receipts" (("store_key") ASC NULLS FIRST, ("job_id") ASC NULLS FIRST, ("started_at_ms") DESC NULLS LAST, ("receipt_id") DESC NULLS LAST);
+CREATE UNIQUE INDEX "idx_cron_run_receipts_active_job" ON "cron_run_receipts" (("store_key") ASC NULLS FIRST, ("job_id") ASC NULLS FIRST) WHERE ("status" = 'running');
 
-COMMIT;
+CREATE INDEX "idx_cron_run_receipts_job_history" ON "cron_run_receipts" (("store_key") ASC NULLS FIRST, ("job_id") ASC NULLS FIRST, ("started_at_ms") DESC NULLS LAST, ("receipt_id") DESC NULLS LAST);

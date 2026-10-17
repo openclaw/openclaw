@@ -11,9 +11,9 @@ import type {
 } from "../infra/state-migrations.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
-  readConfigPreflightSnapshot,
+  createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
@@ -53,16 +53,23 @@ const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legac
 export async function runDoctorConfigPreflight(
   options: DoctorConfigPreflightOptions = {},
 ): Promise<DoctorConfigPreflightResult> {
+  await using snapshots = createConfigPreflightSnapshotReader();
+  let result: DoctorConfigPreflightResult;
   // Reuse child imports for this state operation; every read still acquires fresh admission.
   if (options.migrateState !== false && options.doctorOnlyStateMigrations === true) {
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-    return await withSqliteReadOnlyWorkerScope(() => runDoctorConfigPreflightOperation(options));
+    result = await withSqliteReadOnlyWorkerScope(() =>
+      runDoctorConfigPreflightOperation(options, snapshots),
+    );
+  } else {
+    result = await runDoctorConfigPreflightOperation(options, snapshots);
   }
-  return await runDoctorConfigPreflightOperation(options);
+  return { ...result, pluginCache: await snapshots.takePluginCache(result.pluginMetadataSnapshot) };
 }
 
 async function runDoctorConfigPreflightOperation(
   options: DoctorConfigPreflightOptions,
+  snapshots: ReturnType<typeof createConfigPreflightSnapshotReader>,
 ): Promise<DoctorConfigPreflightResult> {
   if (!options.retiredStateAdmitted) {
     assertDoctorRetiredStateAdmission();
@@ -119,7 +126,7 @@ async function runDoctorConfigPreflightOperation(
   });
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
     await measurePreflightStep("config-snapshot", async () =>
-      readConfigPreflightSnapshot({
+      snapshots.read({
         purpose: "doctor",
         allowCurrentPluginMetadata,
         includePluginMetadata: options.preparePluginMetadataSnapshot === true,
@@ -148,6 +155,7 @@ async function runDoctorConfigPreflightOperation(
   configSnapshotRead = await readConfigSnapshotForPreflight(!stateDirMigrations);
   const recovery = await prepareDoctorConfigRecovery({
     enabled: options.repairPrefixedConfig === true && !skipLegacyParentConfigWrite,
+    stateMigrationsRequested,
     snapshotRead: configSnapshotRead,
     planRepair: planScopedConfigRepair,
     readSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -181,6 +189,12 @@ async function runDoctorConfigPreflightOperation(
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
   }
+  if (options.doctorOnlyStateMigrations === true && stateDirMigrations) {
+    const { repairRetiredDoctorState } = await import("./doctor-retired-state-repair.js");
+    noteDoctorStateMigrationResult(
+      await measurePreflightStep("retired-state-repair", () => repairRetiredDoctorState()),
+    );
+  }
   if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
     // Plugin and legacy-state repairs can inspect sessions during config preflight.
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
@@ -202,6 +216,7 @@ async function runDoctorConfigPreflightOperation(
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
+  let pluginConvergenceWarnings: string[] = [];
   if (stateDirMigrations) {
     const refreshed = await prepareDoctorMigrationPlugins({
       cfg: automaticConfigRepair?.config ?? baseConfig,
@@ -218,9 +233,10 @@ async function runDoctorConfigPreflightOperation(
           inspection,
         ),
     });
-    configSnapshotRead = refreshed;
+    pluginConvergenceWarnings = refreshed.warnings;
+    configSnapshotRead = refreshed.snapshotRead;
     pluginMetadata.invalidate();
-    snapshot = refreshed.snapshot;
+    snapshot = refreshed.snapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
     // Core migrations use the validated runtime projection; plugins retain source locators.
@@ -360,6 +376,7 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
+    ...(pluginConvergenceWarnings.length > 0 ? { warnings: pluginConvergenceWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),

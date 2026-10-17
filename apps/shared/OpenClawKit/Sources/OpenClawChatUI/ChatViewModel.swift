@@ -125,6 +125,11 @@ public final class OpenClawChatViewModel {
     var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
     var progressCardStoreAvailable: Bool?
+    var progressCardRefreshAvailable = false
+    var progressCardRefreshPending = false
+    @ObservationIgnored
+    var progressCardRefreshTask: Task<Void, Never>?
+    var progressCardRefreshIntent: (key: String, baseline: Int, accepted: Bool)?
     @ObservationIgnored
     var progressCardGeneration: UInt64 = 0
     @ObservationIgnored
@@ -137,7 +142,7 @@ public final class OpenClawChatViewModel {
     public private(set) var sessionKey: String {
         didSet {
             syncContextUsageFraction()
-            syncActiveSessionRunIDsFromCurrentSession()
+            syncActiveSessionMetadata()
         }
     }
 
@@ -150,9 +155,16 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var streamingAssistantText: String?
+    /// What the Gateway says the selected run is doing before its first output.
+    var runStartup: ChatRunStartup?
+    var runStartupStatus: String? {
+        self.runStartup?.runID == self.liveUsageRunID ? self.runStartup?.status : nil
+    }
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
+    // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
+    var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
@@ -615,6 +627,7 @@ public final class OpenClawChatViewModel {
         self.retireQuestionAuthority()
         self.resetSessionReactions()
         self.isTransportDetached = true
+        self.invalidateProgressCardTarget()
         self.sidebarData?.invalidate(clear: true)
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }
@@ -776,6 +789,7 @@ extension OpenClawChatViewModel {
     }
 
     func clearStreamingActivity() {
+        self.runStartup = nil
         self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
     }
@@ -969,9 +983,6 @@ extension OpenClawChatViewModel {
             return
         }
         let context = self.beginHistoryRequest()
-        self.logDiagnostic(
-            "chat.ui foreground refresh sessionKey=\(context.session.key) "
-                + "pending=\(self.pendingRunCount)")
         let refresh = await refreshHistoryAfterRun(historyRequest: context)
         guard self.isCurrentSession(context.session) else { return }
         if refresh.applied,
@@ -1251,6 +1262,7 @@ extension OpenClawChatViewModel {
         self.narration = ChatNarration()
         self.isShowingCachedTranscript = false
         self.hasAppliedLiveHistory = false
+        self.retainedActiveSession = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()

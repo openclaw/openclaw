@@ -94,6 +94,7 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
   if (
     (type === "cron.scheduleUnowned" ||
       type === "cron.recordFailureAlertOutcome" ||
+      type === "cron.recordFailureRepairSettlement" ||
       type === "cron.maintainHistory") &&
     !maintenance
   ) {
@@ -137,6 +138,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
+    case "cron.recordFailureRepairSettlement":
     case "cron.save":
     case "cron.saveChanges":
     case "cron.registerQuarantine":
@@ -242,11 +244,15 @@ export function executeCronStateCommand(
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
+    case "cron.recordFailureRepairSettlement":
       if (!maintenance) {
         throw new Error("Cron maintenance worker is not prepared");
       }
       if (command.type === "cron.maintainHistory") {
         return maintenance.maintainCronRunHistoryInWorker(database, command.input);
+      }
+      if (command.type === "cron.recordFailureRepairSettlement") {
+        return maintenance.recordCronFailureRepairSettlementInWorker(database, command.input);
       }
       return command.type === "cron.scheduleUnowned"
         ? maintenance.scheduleUnownedCronJobsInWorker(database, command.input)

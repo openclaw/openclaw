@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -80,6 +81,7 @@ export async function withModelFallbackWorkspace<T>(
   try {
     return await fn({ agentDir, workspaceDir });
   } finally {
+    clearRuntimeConfigSnapshot();
     await closeOpenClawAgentDatabasesAsync(root);
     await fs.rm(root, { recursive: true, force: true });
   }

@@ -55,7 +55,6 @@ suite.define(() => {
       gatewayOwners.push(gatewayOwner);
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1",
         providerMode: "mock-openai",
         providerBaseUrl: "http://127.0.0.1:9/v1",
@@ -187,7 +186,7 @@ suite.define(() => {
             await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 
             await page.locator("#new-session-where-trigger").click();
-            const place = page.locator("wa-popover.new-session-page__where-popover");
+            const place = page.locator(".oc-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
             const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
 

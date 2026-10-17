@@ -1,7 +1,12 @@
-import type { WorkboardCard, WorkboardSessionsBoardView } from "@openclaw/workboard-contract";
+import type {
+  WorkboardCard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardView,
+} from "@openclaw/workboard-contract";
 import { readStringParam } from "openclaw/plugin-sdk/core";
 import { captureLocalStateMutationGuard } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
 import {
@@ -28,6 +33,16 @@ import {
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+const cardsListFilterSchema = z.object({
+  sessionKey: z.string().trim().min(1).optional(),
+  after: z
+    .object({
+      position: z.number().finite(),
+      createdAt: z.number().finite(),
+      id: z.string().min(1),
+    })
+    .optional(),
+});
 const CLI_OWNER_METHODS = new Set([
   "workboard.cards.list",
   "workboard.cards.create",
@@ -38,7 +53,7 @@ const CLI_OWNER_METHODS = new Set([
 
 function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoardView | undefined {
   const unknownParam = Object.keys(input).find(
-    (key) => key !== "boardId" && key !== "view" && key !== "sinceRevision",
+    (key) => key !== "boardId" && key !== "view" && key !== "sinceRevision" && key !== "after",
   );
   if (unknownParam) {
     throw new Error(`Unknown Sessions board read field: ${unknownParam}.`);
@@ -70,6 +85,27 @@ function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoa
     }
   }
   return view;
+}
+
+function sessionsBoardPage(
+  result: WorkboardSessionsBoardRead,
+  after?: string,
+): WorkboardSessionsBoardRead {
+  const previous =
+    after === undefined ? -1 : result.sessions.findIndex((session) => session.key === after);
+  if (after !== undefined && previous < 0) {
+    throw new Error("This Sessions board page has changed. Refresh the board to continue.");
+  }
+  const start = previous + 1;
+  const sessions = result.sessions.slice(start, start + 100);
+  return {
+    ...result,
+    sessions,
+    total: result.sessions.length,
+    ...(start + sessions.length < result.sessions.length
+      ? { nextCursor: sessions.at(-1)!.key }
+      : {}),
+  };
 }
 
 /**
@@ -211,23 +247,37 @@ export function registerWorkboardGatewayMethods(params: {
     register(`workboard.cards.${method}`, WRITE_SCOPE, ({ params: input }) =>
       redactCardResult(mutate(readId(input), input)),
     );
+  const prepareWorkspaceInput = async (
+    request: GatewayMethodContext,
+    value: unknown,
+    kind: "create" | "patch" | "decompose",
+  ) => {
+    const input = withoutWorkboardWorkspaceAccess(value);
+    const access = await resolveGatewayWorkspaceMutationAccess(request, input);
+    return kind === "decompose"
+      ? withWorkboardDecomposeWorkspaceAccess(input, access)
+      : kind === "create" || containsWorkboardWorkspaceMutation(input)
+        ? withWorkboardWorkspaceAccess(input, access)
+        : input;
+  };
   const dispatchCards = createWorkboardDispatchHandler({ api, store });
 
   register("workboard.cards.list", READ_SCOPE, async ({ params: input }) => {
-    const result = await store.listCards(input.boardId);
+    const { sessionKey, after } = cardsListFilterSchema.parse(input);
+    const result = await store.listCards(input.boardId, sessionKey, after);
     const since = input.sinceRevision;
-    return isRecord(since) &&
+    return after === undefined &&
+      isRecord(since) &&
       since.epoch === result.revision.epoch &&
       since.revision === result.revision.revision &&
-      since.boardId === result.revision.boardId
+      since.boardId === result.revision.boardId &&
+      since.sessionKey === result.revision.sessionKey
       ? { unchanged: true, revision: result.revision }
       : result;
   });
   for (const method of ["create", "captureSession"] as const) {
     register(`workboard.cards.${method}`, WRITE_SCOPE, async (request) => {
-      const input = withoutWorkboardWorkspaceAccess(request.params);
-      const access = await resolveGatewayWorkspaceMutationAccess(request, input);
-      const prepared = withWorkboardWorkspaceAccess(input, access);
+      const prepared = await prepareWorkspaceInput(request, request.params, "create");
       return redactCardResult(
         method === "create"
           ? store.create(prepared, undefined, request.sessionMutationCommitGuard)
@@ -236,18 +286,9 @@ export function registerWorkboardGatewayMethods(params: {
     });
   }
   register("workboard.cards.update", WRITE_SCOPE, async (request) => {
-    const patch = withoutWorkboardWorkspaceAccess(readPatch(request.params));
-    const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
+    const patch = await prepareWorkspaceInput(request, readPatch(request.params), "patch");
     const expectedUpdatedAt = readExpectedUpdatedAt(request.params);
-    return redactCardResult(
-      store.update(
-        readId(request.params),
-        containsWorkboardWorkspaceMutation(patch)
-          ? withWorkboardWorkspaceAccess(patch, access)
-          : patch,
-        { expectedUpdatedAt },
-      ),
-    );
+    return redactCardResult(store.update(readId(request.params), patch, { expectedUpdatedAt }));
   });
   register("workboard.cards.start", WRITE_SCOPE, (request) =>
     dispatchCards(request, { supportsMaxStarts: false, directCard: true }),
@@ -288,13 +329,9 @@ export function registerWorkboardGatewayMethods(params: {
   cardMutation("unblock", (id) => store.unblock(id));
   register("workboard.cards.bulk", WRITE_SCOPE, async (request) => {
     const input = withoutWorkboardWorkspaceAccess(request.params);
-    const patch = withoutWorkboardWorkspaceAccess(readPatch(request.params));
-    const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
     const result = await store.bulkUpdate({
       ...input,
-      patch: containsWorkboardWorkspaceMutation(patch)
-        ? withWorkboardWorkspaceAccess(patch, access)
-        : patch,
+      patch: await prepareWorkspaceInput(request, readPatch(request.params), "patch"),
     });
     return { cards: result.cards.map(redactClaimToken) };
   });
@@ -322,20 +359,25 @@ export function registerWorkboardGatewayMethods(params: {
     return params.sessionsBoard;
   };
   register("workboard.sessionsBoard.read", READ_SCOPE, async (request) => {
+    const after =
+      request.params.after === undefined
+        ? undefined
+        : readStringParam(request.params, "after", { required: true });
     const result = await sessionsBoard().read(
       readStringParam(request.params, "boardId", { required: true }),
       sessionsBoardView(request.params),
       sessionsBoardCaller(request),
     );
     const since = request.params.sinceRevision;
-    return isRecord(since) &&
+    return after === undefined &&
+      isRecord(since) &&
       result.revision &&
       since.epoch === result.revision.epoch &&
       since.revision === result.revision.revision &&
       since.boardId === result.revision.boardId &&
       since.scope === result.revision.scope
       ? { unchanged: true, revision: result.revision }
-      : result;
+      : sessionsBoardPage(result, after);
   });
   register("workboard.sessionsBoard.update", WRITE_SCOPE, async (request) => {
     const input = request.params;
@@ -347,12 +389,14 @@ export function registerWorkboardGatewayMethods(params: {
       board: await sessionsBoard().update(boardId, input.patch, sessionsBoardCaller(request)),
     };
   });
-  register("workboard.sessionsBoard.move", WRITE_SCOPE, (request) =>
-    sessionsBoard().move(
-      readStringParam(request.params, "boardId", { required: true }),
-      readStringParam(request.params, "sessionKey", { required: true }),
-      readStringParam(request.params, "columnId", { required: true }),
-      sessionsBoardCaller(request),
+  register("workboard.sessionsBoard.move", WRITE_SCOPE, async (request) =>
+    sessionsBoardPage(
+      await sessionsBoard().move(
+        readStringParam(request.params, "boardId", { required: true }),
+        readStringParam(request.params, "sessionKey", { required: true }),
+        readStringParam(request.params, "columnId", { required: true }),
+        sessionsBoardCaller(request),
+      ),
     ),
   );
   register("workboard.boards.archive", WRITE_SCOPE, async ({ params: input }) => ({
@@ -369,24 +413,18 @@ export function registerWorkboardGatewayMethods(params: {
     return { ...result, card: redactClaimToken(result.card) };
   });
   register("workboard.cards.specify", WRITE_SCOPE, async (request) => {
-    const input = withoutWorkboardWorkspaceAccess(request.params);
-    const access = await resolveGatewayWorkspaceMutationAccess(request, input);
     return redactCardResult(
       store.specify(
         readId(request.params),
-        containsWorkboardWorkspaceMutation(input)
-          ? withWorkboardWorkspaceAccess(input, access)
-          : input,
+        await prepareWorkspaceInput(request, request.params, "patch"),
         null,
       ),
     );
   });
   register("workboard.cards.decompose", WRITE_SCOPE, async (request) => {
-    const input = withoutWorkboardWorkspaceAccess(request.params);
-    const access = await resolveGatewayWorkspaceMutationAccess(request, input);
     const result = await store.decompose(
       readId(request.params),
-      withWorkboardDecomposeWorkspaceAccess(input, access),
+      await prepareWorkspaceInput(request, request.params, "decompose"),
       null,
     );
     return {

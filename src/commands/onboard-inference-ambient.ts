@@ -20,8 +20,8 @@ export type InferenceBackendCandidate = {
   /** One-line provenance, e.g. "logged in", "ANTHROPIC_API_KEY set". */
   detail: string;
   /**
-   * true: credentials verified; false: definitively logged out; undefined:
-   * unknown (e.g. macOS keychain-backed logins we must not prompt for here).
+   * Whether passive discovery found usable credential material. Activation still
+   * verifies it; undefined means the login state cannot be read without prompting.
    */
   credentials?: boolean;
 };

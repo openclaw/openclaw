@@ -1,26 +1,26 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
-import type { CodexDynamicToolCallResponse } from "./protocol.js";
+import type {
+  CodexDynamicToolCallResponse,
+  CodexDynamicToolCallOutputContentItem,
+} from "./protocol.js";
 
 export function toTranscriptToolResult(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  const contentItems = Array.isArray(response.contentItems) ? response.contentItems : [];
   const result: Record<string, unknown> = {
     ...response,
-    content: contentItems.map(toTranscriptToolResultContentItem),
+    content: response.contentItems.map(toTranscriptToolResultContentItem),
   };
   delete result.contentItems;
   delete result.success;
   return result;
 }
 
-function toTranscriptToolResultContentItem(item: unknown): Record<string, unknown> {
-  if (!item || typeof item !== "object") {
-    return { type: "text", text: "" };
-  }
-  const record = item as Record<string, unknown>;
+function toTranscriptToolResultContentItem(
+  record: CodexDynamicToolCallOutputContentItem,
+): Record<string, unknown> {
   if (record.type === "inputText") {
     return { type: "text", text: typeof record.text === "string" ? record.text : "" };
   }

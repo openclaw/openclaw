@@ -1,11 +1,20 @@
-import { For, createMemo, createRenderEffect, onCleanup } from "solid-js";
+import {
+  For,
+  createEffect,
+  createMemo,
+  createRenderEffect,
+  createUniqueId,
+  onCleanup,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -15,14 +24,14 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { hasComposerContent, solidTemplate } from "./chat-composer-controls.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
   displayQueue?: ChatQueueDisplayItem[];
+  connected?: boolean;
   offline?: boolean;
   canAbort?: boolean;
   canRemoveServerQueued?: boolean;
@@ -42,11 +51,9 @@ type ChatQueueReorder = {
 const DRAG_MIME = "application/x-openclaw-queued-message";
 const DRAG_OVER_CLASS = "chat-queue__item--drop-target";
 const KEYBOARD_EDIT_FOCUS_ATTRIBUTE = "data-edit-keyboard-focus";
-const QUEUE_ROW_CONTROL_SELECTOR =
-  "a, button, input, select, textarea, wa-dropdown, wa-dropdown-item";
+const QUEUE_ROW_CONTROL_SELECTOR = "a, button, input, select, textarea";
 const QUEUE_DRAG_SCROLL_EDGE = 24;
 const QUEUE_DRAG_SCROLL_MAX_SPEED = 12;
-const mountedQueueEditInputs = new WeakSet<HTMLTextAreaElement>();
 const queueMentionInputs = new WeakMap<HTMLTextAreaElement, HumanMentionInput>();
 // The leading glyph identifies the object, not its transient delivery state.
 // Row tone, badges, and actions carry failure, review, reconnect, and steer.
@@ -133,22 +140,23 @@ function fitQueueEditInput(textarea: HTMLTextAreaElement): void {
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
-function mountQueueEditInput(element: Element | undefined, value: string): void {
+function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void {
   // Seed each mounted editor once so rerenders cannot overwrite user input or selection.
-  if (element instanceof HTMLTextAreaElement && !mountedQueueEditInputs.has(element)) {
-    mountedQueueEditInputs.add(element);
-    element.value = value;
-    queueMicrotask(() => {
-      if (element.isConnected) {
-        fitQueueEditInput(element);
-        element.focus();
-        element.setSelectionRange(value.length, value.length);
-      }
-    });
-  }
+  element.value = value;
+  queueMicrotask(() => {
+    if (element.isConnected) {
+      fitQueueEditInput(element);
+      element.focus();
+      element.setSelectionRange(value.length, value.length);
+    }
+  });
 }
 
-function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
+function sendStateLabel(
+  item: ChatQueueItem,
+  offline: boolean,
+  connected: boolean | undefined,
+): string | null {
   if (
     offline &&
     item.sendState !== "failed" &&
@@ -164,7 +172,9 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
     case "executing-command":
       return t("chat.queue.states.runningCommand");
     case "waiting-reconnect":
-      return t("chat.queue.states.waitingForReconnect");
+      return isChatSendReconnecting(item.sendState, connected)
+        ? t("chat.queue.states.waitingForReconnect")
+        : null;
     case "unconfirmed":
     case "held":
       return t("chat.queue.states.needsReview");
@@ -242,17 +252,13 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
             data-scrollable={visibleQueue().length > 3 ? "true" : "false"}
             data-at-start="true"
             data-at-end={visibleQueue().length > 3 ? "false" : "true"}
-            onDragOver={(event: DragEvent) => {
-              if (
-                event.dataTransfer?.types.includes(DRAG_MIME) &&
-                event.currentTarget instanceof HTMLElement
-              ) {
+            onDragOver={(event) => {
+              if (event.dataTransfer?.types.includes(DRAG_MIME)) {
                 updateQueueDragAutoScroll(event.currentTarget, event.clientY);
               }
             }}
-            onDragLeave={(event: DragEvent) => {
+            onDragLeave={(event) => {
               if (
-                event.currentTarget instanceof HTMLElement &&
                 event.relatedTarget instanceof Node &&
                 event.currentTarget.contains(event.relatedTarget)
               ) {
@@ -261,14 +267,12 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
               stopQueueDragAutoScroll();
             }}
             onDrop={stopQueueDragAutoScroll}
-            onScroll={(event: Event) => {
+            onScroll={(event) => {
               const scroll = event.currentTarget;
-              if (scroll instanceof HTMLElement) {
-                scroll.dataset.atStart = String(scroll.scrollTop <= 1);
-                scroll.dataset.atEnd = String(
-                  scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 1,
-                );
-              }
+              scroll.dataset.atStart = String(scroll.scrollTop <= 1);
+              scroll.dataset.atEnd = String(
+                scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 1,
+              );
             }}
           >
             <For each={visibleQueue()} keyed={(item) => item.id}>
@@ -293,11 +297,13 @@ function ChatQueueItem(rowProps: {
   controls: ChatQueueProps;
   reorder: ChatQueueReorder;
 }) {
+  const menuId = createUniqueId();
+  let menu!: MenuHandle;
+  let pointerSelection = false;
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
   const edit = createMemo(() => rowProps.controls.queuedEdit);
-  const authorAvatar = createMemo(() => renderChatAuthorAvatar(item().sender));
-  const hasAuthorAvatar = createMemo(() => hasComposerContent(authorAvatar()));
+  const hasAuthorAvatar = createMemo(() => Boolean(formatSenderLabel(item().sender)));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );
@@ -315,10 +321,15 @@ function ChatQueueItem(rowProps: {
     () =>
       !item().serverQueued &&
       !failed() &&
-      (rowProps.controls.offline || item().sendState === "waiting-reconnect"),
+      (rowProps.controls.offline === true ||
+        isChatSendReconnecting(item().sendState, rowProps.controls.connected)),
   );
   const stateLabel = createMemo(() =>
-    sendStateLabel(item(), !item().serverQueued && rowProps.controls.offline === true),
+    sendStateLabel(
+      item(),
+      !item().serverQueued && rowProps.controls.offline === true,
+      rowProps.controls.connected,
+    ),
   );
   const steered = createMemo(() => item().queueMode === "steer" && stateLabel() === null);
   const busy = createMemo(() => item().sendState === "executing-command");
@@ -354,6 +365,20 @@ function ChatQueueItem(rowProps: {
   );
   const segment = createMemo(() => reorder().segments.find((ids) => ids.includes(item().id)) ?? []);
   const moveIndex = createMemo(() => segment().indexOf(item().id));
+  let keyboardMoveHandle: HTMLButtonElement | undefined;
+  createEffect(reorder, () => {
+    const handle = keyboardMoveHandle;
+    keyboardMoveHandle = undefined;
+    // Keyed moves can blur descendants after the handler's microtask. Restore
+    // the retained handle only after this reorder projection commits its DOM.
+    if (
+      handle?.isConnected &&
+      !handle.disabled &&
+      handle.ownerDocument.activeElement === handle.ownerDocument.body
+    ) {
+      handle.focus({ preventScroll: true });
+    }
+  });
   const move = createMemo(() => rowProps.controls.onQueueMove);
   // Queue-level: once any row can move, every row's own state icon becomes the
   // handle so text stays on one x without adding a second grabber column.
@@ -372,17 +397,9 @@ function ChatQueueItem(rowProps: {
         ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
         : ""),
   );
-  const itemClass = createMemo(
-    () =>
-      `chat-queue__item${hasAuthorAvatar() ? "" : " chat-queue__item--no-avatar"}${previewUrl() ? " chat-queue__item--with-images" : ""}${steered() ? " chat-queue__item--steered" : ""}${
-        failed() ? " chat-queue__item--failed" : ""
-      }${reconnecting() ? " chat-queue__item--reconnect" : ""}${
-        editing() ? " chat-queue__item--editing" : ""
-      }`,
-  );
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
-      class={`chat-queue__action chat-queue__${action}`}
+      class={["chat-queue__action", `chat-queue__${action}`]}
       type="button"
       disabled={disabled}
       aria-label={t(`chat.queue.${action}QueuedMessage`)}
@@ -400,12 +417,22 @@ function ChatQueueItem(rowProps: {
   // diagnostic grows the attached tray without disturbing its action rail.
   return (
     <div
-      class={itemClass()}
+      class={[
+        "chat-queue__item",
+        {
+          "chat-queue__item--no-avatar": !hasAuthorAvatar(),
+          "chat-queue__item--with-images": Boolean(previewUrl()),
+          "chat-queue__item--steered": steered(),
+          "chat-queue__item--failed": failed(),
+          "chat-queue__item--reconnect": reconnecting(),
+          "chat-queue__item--editing": editing(),
+        },
+      ]}
       data-chat-queue-item={item().id}
-      onClick={(event: MouseEvent) => {
+      onClick={(event) => {
         const row = event.currentTarget;
         const target = event.target;
-        if (!(row instanceof Element) || !(target instanceof Element)) {
+        if (!(target instanceof Element)) {
           return;
         }
         if (!canEdit() || target.closest(QUEUE_ROW_CONTROL_SELECTOR)) {
@@ -414,9 +441,9 @@ function ChatQueueItem(rowProps: {
           queueDoubleClickEditRows.add(row);
         }
       }}
-      onDblClick={(event: MouseEvent) => {
+      onDblClick={(event) => {
         const row = event.currentTarget;
-        if (!canEdit() || !(row instanceof Element) || !queueDoubleClickEditRows.has(row)) {
+        if (!canEdit() || !queueDoubleClickEditRows.has(row)) {
           return;
         }
         queueDoubleClickEditRows.delete(row);
@@ -471,7 +498,7 @@ function ChatQueueItem(rowProps: {
             }
           }}
           onDragEnd={stopQueueDragAutoScroll}
-          onKeyDown={(event: KeyboardEvent) => {
+          onKeyDown={(event) => {
             if (!canMove()) {
               return;
             }
@@ -485,19 +512,10 @@ function ChatQueueItem(rowProps: {
             const targetId = segment()[moveIndex() + delta];
             if (targetId) {
               const handle = event.currentTarget;
+              if (handle instanceof HTMLButtonElement) {
+                keyboardMoveHandle = handle;
+              }
               move()?.(item().id, targetId);
-              // A keyed DOM move can blur its focused descendant. Preserve the
-              // same handle for repeated arrow presses after the queued commit.
-              queueMicrotask(() => {
-                if (
-                  handle instanceof HTMLButtonElement &&
-                  handle.isConnected &&
-                  !handle.disabled &&
-                  handle.ownerDocument.activeElement === handle.ownerDocument.body
-                ) {
-                  handle.focus({ preventScroll: true });
-                }
-              });
             }
           }}
         >
@@ -515,7 +533,7 @@ function ChatQueueItem(rowProps: {
           <QueueWaitingIcon />
         </span>
       )}
-      <LitContent value={authorAvatar()} />
+      <ChatAuthorAvatar sender={item().sender} />
       {previewUrl() && images() ? (
         <img
           class="chat-queue__images"
@@ -537,36 +555,32 @@ function ChatQueueItem(rowProps: {
             mountQueueEditInput(element, edit()?.editingText ?? item().text);
           }}
           aria-label={t("chat.queue.editQueuedMessage")}
-          onBeforeInput={(event: InputEvent) => {
-            if (event.currentTarget instanceof HTMLTextAreaElement) {
-              queueMentionInputs.set(event.currentTarget, {
-                value: event.currentTarget.value,
-                start: event.currentTarget.selectionStart,
-                end: event.currentTarget.selectionEnd,
-                inputType: event.inputType,
-              });
-            }
+          onBeforeInput={(event) => {
+            queueMentionInputs.set(event.currentTarget, {
+              value: event.currentTarget.value,
+              start: event.currentTarget.selectionStart,
+              end: event.currentTarget.selectionEnd,
+              inputType: event.inputType,
+            });
           }}
-          onInput={(event: Event) => {
-            if (event.currentTarget instanceof HTMLTextAreaElement) {
-              const textarea = event.currentTarget;
-              fitQueueEditInput(textarea);
-              const currentMentions = mentions();
-              if (currentMentions?.length) {
-                edit()?.onEditChange?.(
+          onInput={(event) => {
+            const textarea = event.currentTarget;
+            fitQueueEditInput(textarea);
+            const currentMentions = mentions();
+            if (currentMentions?.length) {
+              edit()?.onEditChange?.(
+                textarea.value,
+                updateHumanMentions(
+                  mentionText(),
                   textarea.value,
-                  updateHumanMentions(
-                    mentionText(),
-                    textarea.value,
-                    currentMentions,
-                    queueMentionInputs.get(textarea),
-                  ),
-                );
-              } else {
-                edit()?.onEditChange?.(textarea.value);
-              }
-              queueMentionInputs.delete(textarea);
+                  currentMentions,
+                  queueMentionInputs.get(textarea),
+                ),
+              );
+            } else {
+              edit()?.onEditChange?.(textarea.value);
             }
+            queueMentionInputs.delete(textarea);
           }}
           onKeyDown={(event: KeyboardEvent) => {
             if (isComposingKeyboardEvent(event)) {
@@ -597,13 +611,11 @@ function ChatQueueItem(rowProps: {
           ) : null}
           {stateLabel() && (!failed() || !item().sendError) ? (
             <span
-              class={
-                failed()
-                  ? "chat-queue__badge"
-                  : reconnecting()
-                    ? "chat-queue__badge chat-queue__badge--reconnect"
-                    : "chat-queue__state"
-              }
+              class={{
+                "chat-queue__badge": failed() || reconnecting(),
+                "chat-queue__badge--reconnect": !failed() && reconnecting(),
+                "chat-queue__state": !failed() && !reconnecting(),
+              }}
               title={reconnecting() ? item().sendError : undefined}
             >
               {stateLabel()}
@@ -656,38 +668,40 @@ function ChatQueueItem(rowProps: {
           </openclaw-tooltip>
         )}
         {editing() || !editable() ? null : (
-          <wa-dropdown
+          <Menu
+            id={`chat-queue-${menuId}`}
             class="chat-queue__overflow"
             placement="top-end"
-            onWa-select={(event: CustomEvent<{ item: Element & { value?: string } }>) => {
-              const selectedItem = event.detail.item;
-              if (selectedItem.value === "edit" && canEdit()) {
-                const dropdown = event.currentTarget;
-                const row =
-                  dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
-                const keyboard = selectedItem.matches(":focus-visible");
-                markQueueEditFocus(row, keyboard);
+            label={t("chat.queue.moreActions")}
+            triggerClass="chat-queue__more"
+            trigger={<Icon name="moreHorizontal" />}
+            disabled={!canEdit()}
+            items={[
+              {
+                id: "edit",
+                label: t("chat.queue.editQueuedMessage"),
+                icon: <Icon name="pencil" />,
+                disabled: !canEdit(),
+                attributes: {
+                  onClick: (event) => {
+                    // Programmatic menu focus can retain :focus-visible after a pointer click.
+                    pointerSelection = event.detail > 0;
+                  },
+                },
+              },
+            ]}
+            ref={(handle) => {
+              menu = handle;
+            }}
+            onSelect={(selected) => {
+              const keyboard = !pointerSelection;
+              pointerSelection = false;
+              if (selected.id === "edit" && canEdit()) {
+                markQueueEditFocus(menu.overlay.surface.closest(".chat-queue__item"), keyboard);
                 edit()?.onEdit?.(item().id);
               }
             }}
-          >
-            <button
-              slot="trigger"
-              class="chat-queue__more"
-              type="button"
-              disabled={!canEdit()}
-              aria-label={t("chat.queue.moreActions")}
-              onDblClick={(event: MouseEvent) => event.stopPropagation()}
-            >
-              <Icon name="moreHorizontal" />
-            </button>
-            <wa-dropdown-item value="edit" disabled={!canEdit()}>
-              <span slot="icon" aria-hidden="true">
-                <Icon name="pencil" />
-              </span>
-              {t("chat.queue.editQueuedMessage")}
-            </wa-dropdown-item>
-          </wa-dropdown>
+          />
         )}
       </span>
       {mentions()?.length ? (
@@ -717,8 +731,4 @@ function ChatQueueItem(rowProps: {
       ) : null}
     </div>
   );
-}
-
-export function renderChatQueue(props: ChatQueueProps) {
-  return solidTemplate(renderChatQueueSolid, props);
 }

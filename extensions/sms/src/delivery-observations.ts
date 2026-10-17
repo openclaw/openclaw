@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSmsRuntime } from "./runtime.js";
 import { resolveTwilioMessageSid } from "./twilio.js";
@@ -63,10 +63,6 @@ function resolveDeliveryStatus(form: Record<string, string>): string {
   );
 }
 
-function hashAccountSid(accountSid: string): string {
-  return createHash("sha256").update(accountSid).digest("hex");
-}
-
 function fingerprintObservation(params: {
   source: SmsDeliveryObservationSource;
   messageSid: string;
@@ -74,17 +70,15 @@ function fingerprintObservation(params: {
   errorCode?: string;
   rawDlrDoneDate?: string;
 }): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        params.source,
-        params.messageSid,
-        params.status,
-        params.errorCode ?? "",
-        params.rawDlrDoneDate ?? "",
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      params.source,
+      params.messageSid,
+      params.status,
+      params.errorCode ?? "",
+      params.rawDlrDoneDate ?? "",
+    ]),
+  );
 }
 
 function deliveryRecordKey(params: {
@@ -92,9 +86,7 @@ function deliveryRecordKey(params: {
   accountSidHash: string;
   messageSid: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`)
-    .digest("hex");
+  return sha256Hex(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`);
 }
 
 function openDeliveryStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
@@ -232,7 +224,7 @@ async function recordSmsDeliveryObservation(params: {
     throw new Error("SMS delivery observations require plugin state comparisons.");
   }
   const accountId = params.account.accountId;
-  const accountSidHash = hashAccountSid(params.account.accountSid);
+  const accountSidHash = sha256Hex(params.account.accountSid);
   const key = deliveryRecordKey({
     accountId,
     accountSidHash,
@@ -321,7 +313,7 @@ export async function listRecentSmsDeliveryRecords(
   if (limit <= 0) {
     return [];
   }
-  const accountSidHash = hashAccountSid(account.accountSid);
+  const accountSidHash = sha256Hex(account.accountSid);
   return (await store.entries())
     .map((entry) => entry.value)
     .filter(

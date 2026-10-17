@@ -10,11 +10,8 @@ export function createPreparedProjectionMethods(read: () => unknown) {
       key: record.target.key,
       sessionId: record.entry.sessionId,
     })),
-    withPreparedExactRows: vi.fn(
-      async (_queries: unknown, consume: (read: unknown) => unknown) => ({
-        kind: "complete" as const,
-        value: consume(read()),
-      }),
+    withPreparedExactRows: vi.fn(async (_queries: unknown, consume: (read: unknown) => unknown) =>
+      consume(read()),
     ),
   };
   return methods;

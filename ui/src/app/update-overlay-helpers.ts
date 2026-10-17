@@ -7,6 +7,7 @@ import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
@@ -40,10 +41,7 @@ export type UpdateFailureTriage = {
 
 type UpdateOutcomeRecord = { id: string | null; timestampMs: number | null };
 
-export type UpdateTriageAdmission = {
-  isCurrent: () => boolean;
-  admit: () => boolean;
-};
+export type UpdateTriageAdmission = CustodianTurnAdmission;
 
 const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   dirty: "updates.failureReasons.dirty",

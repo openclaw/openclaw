@@ -36,7 +36,7 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type {
@@ -188,8 +188,10 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Wake fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionStoreInWorker: async () => 0,
 }));
 
 describe("requester settle wake product flow", () => {
@@ -830,7 +832,11 @@ describe("requester settle wake product flow", () => {
             expect(append).not.toHaveBeenCalled();
             if (acceptNextChild) {
               expect(
-                countActiveDescendantRunsFromRuns(subagentRuns, MAIN_REQUESTER_SESSION_KEY, "main"),
+                buildScopedSubagentRunReadIndexFromRuns(
+                  subagentRuns,
+                  MAIN_REQUESTER_SESSION_KEY,
+                  "main",
+                ).countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY),
               ).toBe(1);
               expect(registry.getSubagentRunByRunId(beta.runId)).toMatchObject({
                 requesterTurnRunId: undefined,
@@ -883,7 +889,11 @@ describe("requester settle wake product flow", () => {
             expect(visibleFinals).toBe(1);
             expect(sendMessageMock).not.toHaveBeenCalled();
             expect(
-              countActiveDescendantRunsFromRuns(subagentRuns, MAIN_REQUESTER_SESSION_KEY, "main"),
+              buildScopedSubagentRunReadIndexFromRuns(
+                subagentRuns,
+                MAIN_REQUESTER_SESSION_KEY,
+                "main",
+              ).countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY),
             ).toBe(0);
             if (attachRequesterFinal) {
               expect(append).toHaveBeenCalledExactlyOnceWith("completion delivered");
@@ -957,6 +967,7 @@ describe("requester settle wake product flow", () => {
       expect(getAgentCalls()).toHaveLength(0);
 
       await vi.advanceTimersByTimeAsync(retiredAfterMs);
+      await flushOwnedWork();
       await registry.testing.sweepOnceForTests();
       await flushOwnedWork();
       expect(registry.getSubagentRunByRunId(child.runId)).toBeUndefined();

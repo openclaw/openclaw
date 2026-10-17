@@ -5,6 +5,8 @@ import { registerBackupCommand } from "./register.backup.js";
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
   backupGitLogCommand: vi.fn(),
+  backupGitRestoreCommand: vi.fn(),
+  backupGitVerifyCommand: vi.fn(),
   backupRestoreCommand: vi.fn(),
   backupSqliteCreateCommand: vi.fn(),
   backupSqliteListCommand: vi.fn(),
@@ -22,8 +24,11 @@ vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
 }));
 
+// mock-isolation: Argument parsing must not open database owners or launch backup workers.
 vi.mock("../../commands/backup-git.js", () => ({
   backupGitLogCommand: mocks.backupGitLogCommand,
+  backupGitRestoreCommand: mocks.backupGitRestoreCommand,
+  backupGitVerifyCommand: mocks.backupGitVerifyCommand,
 }));
 
 vi.mock("../../commands/backup-restore.js", () => ({
@@ -81,6 +86,29 @@ describe("registered backup routes", () => {
       args: "sqlite list --repository /tmp/snapshots --json",
       command: mocks.backupSqliteListCommand,
       options: { repository: "/tmp/snapshots", json: true },
+    },
+    {
+      args: "git restore --repository /tmp/backups --store team-reports --target /tmp/restored.sqlite --json",
+      command: mocks.backupGitRestoreCommand,
+      options: {
+        repository: "/tmp/backups",
+        store: "team-reports",
+        target: "/tmp/restored.sqlite",
+        ref: "HEAD",
+        global: false,
+        json: true,
+      },
+    },
+    {
+      args: "git verify --repository /tmp/backups --store workboard --json",
+      command: mocks.backupGitVerifyCommand,
+      options: {
+        repository: "/tmp/backups",
+        store: "workboard",
+        ref: "HEAD",
+        global: false,
+        json: true,
+      },
     },
   ])("dispatches backup $args", async ({ args, command, options }) => {
     const program = new Command();

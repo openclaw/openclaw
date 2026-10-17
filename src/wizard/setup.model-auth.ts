@@ -9,11 +9,13 @@ import {
   resolveOnboardingSetupTarget,
 } from "../commands/onboard-agent-target.js";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { readSetupConfigAuthority } from "./setup.shared.js";
 
 export type SetupModelAuthCandidate = {
   config: OpenClawConfig;
@@ -113,9 +115,15 @@ export async function runSetupModelAuthStep(params: {
   stateDir?: string;
   pendingAgent?: { name: string; workspaceDir: string };
   preserveExistingModelSelection?: boolean;
+  assertCurrent?: () => void;
 }): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime } = params;
   const env = params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined;
+  const assertCurrent =
+    params.assertCurrent ??
+    (opts.authChoice === "skip" || opts.authChoice === "custom-api-key"
+      ? undefined
+      : (await readSetupConfigAuthority(env)).assertCurrent);
   let nextConfig = params.stagedCandidate?.config ?? params.config;
   let replacementBaseConfig = params.config;
   let authProfiles: PreparedAuthChoiceResult["authProfiles"] =
@@ -253,6 +261,7 @@ export async function runSetupModelAuthStep(params: {
     const agentScopedModels = nextConfig.agents?.ownership === "explicit";
     let authResult: PreparedAuthChoiceResult;
     try {
+      assertCurrent?.();
       authResult = await prepareAuthChoice({
         authChoice,
         config: agentScopedModels ? prepareAgentModelDefaults(nextConfig, target) : nextConfig,
@@ -264,6 +273,7 @@ export async function runSetupModelAuthStep(params: {
         setDefaultModel: true,
         preserveExistingDefaultModel: true,
         env,
+        assertCurrent,
         opts: {
           ...opts,
           token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
@@ -273,7 +283,11 @@ export async function runSetupModelAuthStep(params: {
       // Provider setup failures (missing CLI login, unreachable endpoint, ...)
       // must not kill the whole wizard: earlier answers only persist later, so
       // re-prompt instead. Explicit --auth-choice callers still fail loudly.
-      if (error instanceof WizardCancelledError || !authChoiceFromPrompt) {
+      if (
+        error instanceof WizardCancelledError ||
+        error instanceof ConfigMutationConflictError ||
+        !authChoiceFromPrompt
+      ) {
         throw error;
       }
       await prompter.note(

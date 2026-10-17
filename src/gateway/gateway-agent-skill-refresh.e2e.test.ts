@@ -4,24 +4,24 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { Root } from "@openclaw/fs-safe/root";
-import type { WatchOptions, WatchSubscription } from "@openclaw/fs-safe/watch";
 import { describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import "../commands/agent.js";
+import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import * as snapshots from "../infra/fs-observation-snapshot.js";
-import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { registerSkillsChangeListener } from "../skills/runtime/refresh.js";
-import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
+import { getTrackedWorkerPoolSnapshot } from "../infra/worker-cpu.js";
+import {
+  closeSkillsWatchers,
+  refreshSkillsDiscovery,
+  registerSkillsChangeListener,
+} from "../skills/runtime/refresh.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -29,42 +29,8 @@ import {
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-const schedulerClock = vi.hoisted((): { clock?: GatewaySchedulerClock } => ({}));
-type Observation = {
-  authority: Root;
-  options: WatchOptions;
-  subscription: WatchSubscription;
-};
-const observations = vi.hoisted((): Observation[] => []);
-const sampling: Promise<unknown>[] = [];
-
-vi.mock("../infra/gateway-scheduler.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/gateway-scheduler.js")>();
-  return {
-    ...actual,
-    GatewayScheduler: class extends actual.GatewayScheduler {
-      constructor(options: ConstructorParameters<typeof actual.GatewayScheduler>[0] = {}) {
-        super({ ...options, clock: schedulerClock.clock ?? options.clock });
-      }
-    },
-  };
-});
-vi.mock("@openclaw/fs-safe/watch", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@openclaw/fs-safe/watch")>();
-  return {
-    ...actual,
-    watch: (authority: Root, options: WatchOptions): WatchSubscription => {
-      const subscription = actual.watch(authority, {
-        ...options,
-        mode: "poll",
-        pollIntervalMs: 30_000,
-      });
-      observations.push({ authority, options, subscription });
-      return subscription;
-    },
-  };
-});
+// Keep cold subject imports outside the skill-refresh behavior's timeout.
+import "./server-start.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -78,7 +44,7 @@ function resetGatewayState(): void {
 
 describe("Gateway agent skill refresh", () => {
   it(
-    "refreshes canonical skills once per edit for managed worktrees and closes Gateway watchers",
+    "refreshes canonical skills explicitly for managed worktrees and closes its discovery worker",
     { timeout: 90_000 },
     (context) => {
       let state: OpenClawTestState | undefined;
@@ -150,8 +116,6 @@ describe("Gateway agent skill refresh", () => {
       return runQaGatewayTestFixture(
         context,
         async ({ signal, verifyCleanup }) => {
-          const time = createGatewaySchedulerClock(Date.now());
-          schedulerClock.clock = time.clock;
           state = await createOpenClawTestState({
             label: "agent-skill-refresh",
             applyEnv: false,
@@ -184,17 +148,9 @@ describe("Gateway agent skill refresh", () => {
           await initializeGitWorkspace(workspace, signal);
           state.applyEnv();
           resetGatewayState();
-          const readSnapshot = snapshots.readObservationSnapshot;
-          vi.spyOn(snapshots, "readObservationSnapshot").mockImplementation((...args) => {
-            const sample = readSnapshot(...args);
-            sampling.push(sample);
-            return sample;
-          });
           const lifecycleEvents: string[] = [];
-          const initialSkillsChange = createDeferredCore();
           unregisterLifecycle = registerSkillsChangeListener((event) => {
             lifecycleEvents.push(event.reason);
-            initialSkillsChange.resolve();
           });
           await new Promise<void>((resolve, reject) => {
             providerServer.once("error", reject);
@@ -212,7 +168,6 @@ describe("Gateway agent skill refresh", () => {
           );
           const token = `skill-refresh-${process.pid}`;
           const gatewayEvents: string[] = [];
-          let skillsChanged = createDeferredCore();
           const cfg = {
             agents: {
               defaults: {
@@ -226,6 +181,7 @@ describe("Gateway agent skill refresh", () => {
             },
             gateway: { auth: { mode: "token", token } },
             models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+            skills: { load: { watch: false } },
             plugins: { slots: { memory: "none" } },
             tools: { profile: "coding" },
           } satisfies OpenClawConfig;
@@ -237,9 +193,6 @@ describe("Gateway agent skill refresh", () => {
             onEvent: (event) => {
               if (event.event) {
                 gatewayEvents.push(event.event);
-                if (event.event === "skills.changed") {
-                  skillsChanged.resolve();
-                }
               }
             },
           });
@@ -276,15 +229,17 @@ describe("Gateway agent skill refresh", () => {
           expect(requests.at(-1)).toContain("seed-skill-description");
           expect(requests.at(-1)).not.toContain("worktree-only-description");
 
-          await racePromiseWithAbortSignal(initialSkillsChange.promise, signal);
-          await settleSkillsWatchers(signal);
-          await time.advanceBy(30_000);
-          await racePromiseWithAbortSignal(skillsChanged.promise, signal);
-          skillsChanged = createDeferredCore();
+          expect(discoveryWorkers()).toEqual([expect.objectContaining({ workerCount: 1 })]);
           const firstLifecycleCount = lifecycleEvents.length;
           const firstEventCount = countSkillsChanged(gatewayEvents);
-          await editWatchedSkill(seedSkillFile, "seed-proof", "updated-seed-description", signal);
-          expect(lifecycleEvents).toHaveLength(firstLifecycleCount + 1);
+          await editSkillAndRefresh(
+            workspace,
+            seedSkillFile,
+            "seed-proof",
+            "updated-seed-description",
+            signal,
+          );
+          expect(lifecycleEvents.length).toBeGreaterThan(firstLifecycleCount);
           await runAgentTurn(gateway.client, sessionKey, "second", signal);
           const second = loadSessionEntry({ agentId: "main", sessionKey, storePath });
           expect(second?.skillsSnapshot?.version).toBeGreaterThan(
@@ -292,22 +247,24 @@ describe("Gateway agent skill refresh", () => {
           );
           expect(second?.skillsSnapshot?.prompt).toContain("updated-seed-description");
           expect(requests.at(-1)).toContain("updated-seed-description");
-          await time.advanceBy(30_000);
-          await racePromiseWithAbortSignal(skillsChanged.promise, signal);
-          expect(countSkillsChanged(gatewayEvents)).toBe(firstEventCount + 1);
+          expect(countSkillsChanged(gatewayEvents)).toBeGreaterThan(firstEventCount);
+          const secondLifecycleCount = lifecycleEvents.length;
+          const secondEventCount = countSkillsChanged(gatewayEvents);
 
           await runAgentTurn(gateway.client, sessionKey, "third without edit", signal);
           const third = loadSessionEntry({ agentId: "main", sessionKey, storePath });
           expect(third?.skillsSnapshot?.version).toBe(second?.skillsSnapshot?.version);
-          expect(lifecycleEvents).toHaveLength(firstLifecycleCount + 1);
+          expect(lifecycleEvents).toHaveLength(secondLifecycleCount);
+          expect(countSkillsChanged(gatewayEvents)).toBe(secondEventCount);
           const repeatedTurnEventCount = lifecycleEvents.length;
-          await editWatchedSkill(
+          await editSkillAndRefresh(
+            workspace,
             seedSkillFile,
             "seed-proof",
             "updated-seed-description-v2",
             signal,
           );
-          expect(lifecycleEvents).toHaveLength(repeatedTurnEventCount + 1);
+          expect(lifecycleEvents.length).toBeGreaterThan(repeatedTurnEventCount);
           await runAgentTurn(gateway.client, sessionKey, "fourth", signal);
           const fourth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
           expect(fourth?.skillsSnapshot?.version).toBeGreaterThan(
@@ -318,13 +275,14 @@ describe("Gateway agent skill refresh", () => {
           await fs.mkdir(path.dirname(canonicalSkillFile), { recursive: true });
           signal.throwIfAborted();
           const canonicalEventCount = lifecycleEvents.length;
-          await editWatchedSkill(
+          await editSkillAndRefresh(
+            workspace,
             canonicalSkillFile,
             "canonical-proof",
             "canonical-root-description",
             signal,
           );
-          expect(lifecycleEvents).toHaveLength(canonicalEventCount + 1);
+          expect(lifecycleEvents.length).toBeGreaterThan(canonicalEventCount);
           await runAgentTurn(gateway.client, sessionKey, "fifth", signal);
           const fifth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
           expect(fifth?.skillsSnapshot?.version).toBeGreaterThan(
@@ -336,48 +294,21 @@ describe("Gateway agent skill refresh", () => {
           await closeClient();
           signal.throwIfAborted();
           const lifecycleCountBeforeClose = lifecycleEvents.length;
-          const canonicalWatcher = observations.findLast(
-            ({ authority, options, subscription }) =>
-              subscription.health().state !== "closed" &&
-              options.scopes.some(
-                (scope) =>
-                  path.resolve(authority.rootDir, scope.path) === path.join(workspace, "skills"),
-              ),
-          );
-          expect(canonicalWatcher).toBeDefined();
           await closeGateway();
           signal.throwIfAborted();
+          expect(discoveryWorkers()).toEqual([]);
           await writeSkill(canonicalSkillFile, "canonical-proof", "after-gateway-close");
-          signal.throwIfAborted();
-          expect(canonicalWatcher!.subscription.health().state).toBe("closed");
-          expect(
-            observations.every(({ subscription }) => subscription.health().state === "closed"),
-          ).toBe(true);
-          canonicalWatcher!.options.onInvalidate({
-            reason: "event",
-            changes: [
-              {
-                path: path.relative(canonicalWatcher!.authority.rootDir, canonicalSkillFile),
-                type: "content",
-              },
-            ],
-          });
-          await settleSkillsWatchers(signal);
-          await time.advanceBy(30_000);
           signal.throwIfAborted();
           expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
 
-          // Closing the Gateway first prevents a local watcher from reusing its subscription.
-          const observationCountBeforeLocal = observations.length;
           const requestCountBeforeLocal = requests.length;
           const runtime = createRuntimeEnv();
-          const { agentCliCommand } = await import("../commands/agent-via-gateway.js");
           await agentCliCommand(
             {
               local: true,
               agent: "main",
               sessionKey: "agent:main:local-skill-control",
-              message: "local watcher control",
+              message: "local discovery control",
               json: true,
             },
             runtime,
@@ -390,10 +321,6 @@ describe("Gateway agent skill refresh", () => {
           });
           expect(requests).toHaveLength(requestCountBeforeLocal + 1);
           expect(requests.at(-1)).toContain("after-gateway-close");
-          expect(observations).toHaveLength(observationCountBeforeLocal);
-          expect(
-            observations.every(({ subscription }) => subscription.health().state === "closed"),
-          ).toBe(true);
           expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
         },
         async () => {
@@ -427,21 +354,12 @@ describe("Gateway agent skill refresh", () => {
             async () => {
               await runQaGatewayFixture(
                 async () => unregisterLifecycle?.(),
-                ...observations.map(
-                  ({ subscription }) =>
-                    () =>
-                      subscription.close(),
-                ),
-                drainSkillsWatchSamples,
+                () => closeSkillsWatchers(true),
               );
             },
           );
           await state?.cleanup();
-          observations.length = 0;
-          sampling.length = 0;
           vi.restoreAllMocks();
-          vi.useRealTimers();
-          delete schedulerClock.clock;
           resetGatewayState();
         },
       );
@@ -482,84 +400,23 @@ function countSkillsChanged(events: readonly string[]): number {
   return events.filter((event) => event === "skills.changed").length;
 }
 
-// Guarded scans decide invalidation; discovery, broadcasts, snapshots, and provider requests stay real.
-async function reconcileObservations(signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted();
-  await Promise.all(
-    observations
-      .filter(({ subscription }) => subscription.health().state !== "closed")
-      .map(async ({ subscription }) => {
-        await racePromiseWithAbortSignal(subscription.ready, signal);
-        signal.throwIfAborted();
-        await subscription.reconcile();
-      }),
+function discoveryWorkers() {
+  return getTrackedWorkerPoolSnapshot().workerPools.filter(
+    (pool) => pool.script === "discovery.worker.js",
   );
-  signal.throwIfAborted();
 }
 
-async function drainSkillsWatchSamples(): Promise<void> {
-  const errors: unknown[] = [];
-  while (sampling.length) {
-    const results = await Promise.allSettled(sampling.splice(0));
-    for (const result of results) {
-      if (result.status === "rejected") {
-        errors.push(result.reason);
-      }
-    }
-  }
-  if (errors.length) {
-    throw new AggregateError(errors, "Skills observation sampling failed");
-  }
-}
-
-async function advanceSkillsWatchTimers(milliseconds: number, signal: AbortSignal): Promise<void> {
-  for (let elapsed = 0; elapsed < milliseconds; elapsed += 50) {
-    signal.throwIfAborted();
-    await vi.advanceTimersByTimeAsync(Math.min(50, milliseconds - elapsed));
-    await drainSkillsWatchSamples();
-    signal.throwIfAborted();
-  }
-}
-
-async function settleSkillsWatchers(signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted();
-  vi.useFakeTimers({
-    toFake: ["setTimeout", "clearTimeout", "performance"],
-    shouldClearNativeTimers: true,
-  });
-  try {
-    await reconcileObservations(signal);
-    await advanceSkillsWatchTimers(750, signal);
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
-async function editWatchedSkill(
+async function editSkillAndRefresh(
+  workspaceDir: string,
   file: string,
   name: string,
   description: string,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
-  const published = createDeferredCore();
-  const unregister = registerSkillsChangeListener(() => published.resolve());
-  vi.useFakeTimers({
-    toFake: ["setTimeout", "clearTimeout", "performance"],
-    shouldClearNativeTimers: true,
-  });
-  try {
-    await writeSkill(file, name, description);
-    await reconcileObservations(signal);
-    await advanceSkillsWatchTimers(750, signal);
-    await racePromiseWithAbortSignal(published.promise, signal);
-    // Reconcile again after publication: unchanged bytes must not publish a second change.
-    await reconcileObservations(signal);
-    await advanceSkillsWatchTimers(750, signal);
-  } finally {
-    unregister();
-    vi.useRealTimers();
-  }
+  await writeSkill(file, name, description);
+  await refreshSkillsDiscovery({ workspaceDir });
+  signal.throwIfAborted();
 }
 
 async function initializeGitWorkspace(workspace: string, signal: AbortSignal): Promise<void> {

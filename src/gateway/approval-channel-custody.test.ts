@@ -1,5 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import type { SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareApprovalChannelCustody } from "./approval-channel-custody.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,13 +15,14 @@ const mocks = vi.hoisted(() => ({
   supportsScopedPluginReviewers: { value: false },
 }));
 
+// mock-isolation: Custody tests supply account and approver fixtures without loading channel plugins.
 vi.mock("../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: () => ({
-    config: {
-      listAccountIds: mocks.listAccountIds,
-      defaultAccountId: mocks.defaultAccountId,
-    },
-  }),
+  getLoadedChannelPlugin: (() => {
+    const plugin = {
+      config: { listAccountIds: mocks.listAccountIds, defaultAccountId: mocks.defaultAccountId },
+    };
+    return () => plugin;
+  })(),
   resolveChannelApprovalCapability: () =>
     mocks.hasApproverSettings.value
       ? {
@@ -58,7 +64,7 @@ describe("prepareApprovalChannelCustody", () => {
     mocks.supportsScopedPluginReviewers.value = false;
   });
 
-  it("selects source-bound, targeted, and uniquely authorized accounts", () => {
+  it("selects source-bound, targeted, and uniquely authorized accounts", async () => {
     const cases: {
       cfg?: OpenClawConfig;
       source?: { turnSourceChannel: string; turnSourceAccountId: string };
@@ -102,7 +108,7 @@ describe("prepareApprovalChannelCustody", () => {
       }));
       for (const [accountId, authorized] of Object.entries(expected)) {
         expect(
-          prepareApprovalChannelCustody({
+          await prepareApprovalChannelCustody({
             cfg,
             approvalKind: "exec",
             reviewer: reviewer(accountId),
@@ -113,7 +119,73 @@ describe("prepareApprovalChannelCustody", () => {
     }
   });
 
-  it("checks plugin reviewer custody against the pending request", () => {
+  it("invalidates unbound incognito custody after the memory delivery account changes", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-custody";
+    const sessionId = "incognito-custody";
+    const location = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: "/synthetic/approval-channel-custody" },
+      }),
+    };
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const authority = { assertCurrent() {}, authorize() {} };
+    const delivery = (accountId: string): SessionDeliveryState => ({
+      kind: "external",
+      route: { channel: "telegram", accountId },
+      context: { channel: "telegram", accountId },
+      origin: { provider: "telegram", accountId },
+    });
+    const custody = prepareApprovalChannelCustody({
+      cfg: { session: { store: location.path } },
+      approvalKind: "exec",
+      reviewer: reviewer("ops"),
+    });
+    const pending = {
+      ...request({ command: "printf approval" }),
+      request: { command: "printf approval", sessionKey },
+    };
+    try {
+      const storage = expectDefined(actor.storage, "memory actor storage");
+      readSessionActorStorageResult(
+        await storage.mutate(
+          {
+            type: "session.metadata.initialize",
+            input: {
+              scope: { agentId: "main", storePath: location.path, sessionKey, sessionId },
+              entry: { sessionId, updatedAt: 1, incognito: true, delivery: delivery("ops") },
+            },
+          },
+          authority,
+        ),
+      );
+      expect(await custody?.authorizes(pending)).toBe(true);
+      expect(custody?.isCurrent(pending)).toBe(true);
+
+      readSessionActorStorageResult(
+        await storage.mutate(
+          {
+            type: "session.entry.patch",
+            input: { operation: { kind: "fields", patch: { delivery: delivery("default") } } },
+          },
+          authority,
+        ),
+      );
+      expect(custody?.isCurrent(pending)).toBe(false);
+      expect(await custody?.authorizes(pending)).toBe(false);
+    } finally {
+      custody?.[Symbol.dispose]();
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
+    }
+  });
+
+  it("checks plugin reviewer custody against the pending request", async () => {
     mocks.authorize.mockImplementation(({ request: pending }) => ({
       authorized: pending?.request.policySubject?.pluginKey === "calendar",
     }));
@@ -135,14 +207,14 @@ describe("prepareApprovalChannelCustody", () => {
       expiresAtMs: 2,
     });
 
-    expect(custody?.authorizes(pending("calendar"))).toBe(true);
-    expect(custody?.authorizes(pending("other"))).toBe(false);
+    expect(await custody?.authorizes(pending("calendar"))).toBe(true);
+    expect(await custody?.authorizes(pending("other"))).toBe(false);
     expect(mocks.authorize).toHaveBeenCalledWith(
       expect.objectContaining({ request: pending("calendar") }),
     );
   });
 
-  it("requires a channel capability to enforce configured plugin reviewers", () => {
+  it("requires a channel capability to enforce configured plugin reviewers", async () => {
     const cfg = {
       approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
     } as OpenClawConfig;
@@ -166,7 +238,7 @@ describe("prepareApprovalChannelCustody", () => {
 
     mocks.supportsScopedPluginReviewers.value = true;
     expect(
-      prepareApprovalChannelCustody({
+      await prepareApprovalChannelCustody({
         cfg,
         approvalKind: "plugin",
         reviewer: slackReviewer,
@@ -174,7 +246,7 @@ describe("prepareApprovalChannelCustody", () => {
     ).toBe(true);
   });
 
-  it("grants owner custody only for system changes on channels without approver settings", () => {
+  it("grants owner custody only for system changes on channels without approver settings", async () => {
     const ircSender = { channel: "irc", accountId: "default", senderId: "alice" };
     const cfg: OpenClawConfig = { commands: { ownerAllowFrom: ["irc:alice"] } };
     const change = request({ command: "set config logging.level to info" });
@@ -191,7 +263,7 @@ describe("prepareApprovalChannelCustody", () => {
         reviewer: { ...ircSender, senderId },
       });
       if (allowed) {
-        expect(custody?.authorizes(change)).toBe(true);
+        expect(await custody?.authorizes(change)).toBe(true);
       } else {
         expect(custody).toBeNull();
       }

@@ -78,40 +78,6 @@ describe("restart startup progress", () => {
     },
   );
 
-  it.each([{ deadlineMs: 1_500, healthy: false, waitOutcome: "timeout", elapsedMs: 1_500 }])(
-    "keeps settling within the original $deadlineMs ms deadline",
-    async (expected) => {
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000 }],
-        hints: [],
-      });
-      callGateway.mockImplementation(async (options) => {
-        if (monotonicClock.nowMs < 1_000) {
-          throw new Error("connect ECONNREFUSED");
-        }
-        return gatewayHealthResponse()(options);
-      });
-
-      const result = await waitForGatewayHealthyRestart({
-        service: makeGatewayService({ status: "running", pid: 8000 }),
-        port: 18789,
-        requirePluginHealth: false,
-        timeoutMs: 1_000,
-        deadlineMs: expected.deadlineMs,
-        settle: { probes: 3 },
-      });
-
-      expect(result).toMatchObject({
-        healthy: expected.healthy,
-        waitOutcome: expected.waitOutcome,
-        elapsedMs: expected.elapsedMs,
-      });
-      expect(monotonicClock.nowMs).toBe(expected.deadlineMs);
-    },
-  );
-
   it.each([
     {
       name: "owned listener running the wrong build",

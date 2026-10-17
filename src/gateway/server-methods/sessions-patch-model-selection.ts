@@ -24,10 +24,12 @@ import { createModelVisibilityPolicy } from "../../agents/model-visibility-polic
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
+import { prepareSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
+import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -37,10 +39,7 @@ import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.j
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
-import {
-  prepareSessionWorkerPlacementPatchError,
-  resolveSessionWorkerPlacementPatchError,
-} from "./sessions-shared.js";
+import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
 
 export function persistSessionPatchModelSelection(params: {
   callerScopes: readonly string[];
@@ -237,6 +236,9 @@ export function resolveSessionNativeRuntimeRestriction(params: {
   agentId: string;
   sessionKey: string;
   entry: Parameters<typeof resolveAgentHarnessSessionExecutionRestriction>[0]["entry"];
+  preparedSessionCapabilityEntry?: Parameters<
+    typeof resolveAgentHarnessSessionExecutionRestriction
+  >[0]["preparedSessionCapabilityEntry"];
   persistedEntry: SessionEntry | undefined;
   harness: AgentHarness;
   provider: string;
@@ -290,9 +292,11 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   callerCanConsent?: boolean;
   expectedEntry?: SessionEntry;
   hydrateThinkingCatalog?: boolean;
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   validateModelSelection?: () => ErrorShape | undefined;
 }): Promise<
-  { ok: true; validate?: () => ErrorShape | undefined } | { ok: false; error: ErrorShape }
+  | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
+  | { ok: false; error: ErrorShape }
 > {
   const invalid = (message: string) => ({
     ok: false as const,
@@ -305,6 +309,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   }
   let validateRuntime: (() => string | undefined) | undefined;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
+  let releaseEnvironment: (() => void) | undefined;
   const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
   const modelError = params.validateModelSelection?.();
   if (modelError) {
@@ -338,6 +343,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         ...model,
         catalog: params.catalog ?? [],
         hydrateThinkingCatalog: params.hydrateThinkingCatalog,
+        prepareNativeCatalog: params.prepareNativeCatalog,
         rawRuntime:
           typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
         sessionEntry: {
@@ -351,6 +357,15 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       applyModelRuntimeDirective(params.entry, choice.runtime);
       validateRuntime = choice.validateRuntimeSelection;
       const harness = choice.harness;
+      if (
+        choice.runtime.kind === "set" &&
+        choice.runtime.runtime !== "openclaw" &&
+        params.callerCanConsent === true &&
+        hasRememberedNativeRuntimeConsent(params.cfg, params.agentId, choice.runtime.runtime)
+      ) {
+        params.entry.permissionMode = "full";
+        params.entry.sandboxMode = "off";
+      }
       if (grantingConsent) {
         if (
           !harness ||
@@ -362,7 +377,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         params.entry.nativeRuntimeConsent = harness.id;
       }
       if (harness) {
-        validateEnvironment = () =>
+        const environment = await prepareSessionCapabilityRead(() =>
           resolveSessionNativeRuntimeRestriction({
             operation: "selection",
             cfg: params.cfg,
@@ -374,7 +389,10 @@ export async function prepareSessionPatchRuntimeSelection(params: {
             provider: model.provider,
             modelId: model.model,
             callerCanConsent: params.callerCanConsent === true,
-          });
+          }),
+        );
+        validateEnvironment = environment.read;
+        releaseEnvironment = environment.release;
       }
     }
   }
@@ -388,7 +406,14 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     patch: params.patch,
     validateModelRuntime: true,
   };
-  const validate = (preparedPlacement?: { error: string | undefined }) => {
+  let placementValidation:
+    | Awaited<ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>>
+    | undefined;
+  const release = () => {
+    releaseEnvironment?.();
+    placementValidation?.release();
+  };
+  const validate = () => {
     try {
       assertRequiredWorkerSelection(params.cfg, {
         agentRuntime: params.entry.agentRuntimeOverride,
@@ -401,29 +426,30 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     if (policyError) {
       return policyError;
     }
-    const message =
-      validateRuntime?.() ??
-      (preparedPlacement
-        ? preparedPlacement.error
-        : placementParams
-          ? resolveSessionWorkerPlacementPatchError(placementParams)
-          : undefined);
+    const message = validateRuntime?.() ?? placementValidation?.validate();
     return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
   };
-  const error = validate({
-    error: placementParams
-      ? await prepareSessionWorkerPlacementPatchError(placementParams)
-      : undefined,
-  });
-  return error
-    ? { ok: false, error }
-    : {
-        ok: true,
-        ...(params.validateModelSelection ||
-        params.patch.agentRuntime !== undefined ||
-        params.patch.model !== undefined ||
-        grantingConsent
-          ? { validate }
-          : {}),
-      };
+  try {
+    placementValidation = placementParams
+      ? await prepareSessionWorkerPlacementPatchValidation(placementParams)
+      : undefined;
+    const error = validate();
+    if (error) {
+      release();
+      return { ok: false, error };
+    }
+    return {
+      ok: true,
+      ...(params.validateModelSelection ||
+      params.patch.agentRuntime !== undefined ||
+      params.patch.model !== undefined ||
+      grantingConsent
+        ? { validate }
+        : {}),
+      ...(releaseEnvironment || placementValidation ? { release } : {}),
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }

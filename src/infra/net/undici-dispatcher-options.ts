@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import net from "node:net";
+import { floorPositiveFiniteNumber as normalizedTimeout } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
@@ -114,12 +115,6 @@ function createUndiciOriginDispatcher(
   return options.connections === 1
     ? createUndiciClient(origin, options)
     : createUndiciPool(origin, options);
-}
-
-function normalizedTimeout(timeoutMs?: number): number | undefined {
-  return timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
-    : undefined;
 }
 
 export function buildHttp1AgentOptions(

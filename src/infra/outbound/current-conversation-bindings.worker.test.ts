@@ -916,6 +916,16 @@ it("runs the V2 account manager's complete persistence lifecycle in workers", as
       toStoredTargetKind: (kind) => kind,
       toSessionBindingTargetKind: (kind) => kind,
     });
+    for (const method of [
+      "getByConversationId",
+      "listBySessionKey",
+      "bindConversation",
+      "touchConversation",
+      "unbindConversation",
+      "unbindBySessionKey",
+    ]) {
+      expect(manager).not.toHaveProperty(method);
+    }
     openOpenClawStateDatabase();
     const hostSql = observeHostDataSql();
     try {

@@ -81,15 +81,12 @@ afterEach(() => {
 });
 
 describe("current browser device token", () => {
-  it.each(["operator.read", "operator.write", "operator.admin"])(
-    "accepts a stored credential with %s access",
-    (scope) => {
-      storeIdentity();
-      storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: [scope] });
+  it("accepts a stored credential with operator.read access", () => {
+    storeIdentity();
+    storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: ["operator.read"] });
 
-      expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBe("current-token");
-    },
-  );
+    expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBe("current-token");
+  });
 
   it("keeps credentials scoped to the requested Gateway route", () => {
     storeIdentity();

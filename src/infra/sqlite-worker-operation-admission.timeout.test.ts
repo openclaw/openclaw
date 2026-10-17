@@ -12,9 +12,42 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import { settleSqliteWorkerOperationContext } from "./sqlite-worker-operation-settlement.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("rolls back when broker custody is revoked after the host grant but before native use", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("CREATE TABLE proof (value INTEGER)");
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    custody.retire();
+    return "ok";
+  });
+  try {
+    expect(() =>
+      withSqliteWorkerOperationAdmission(
+        { port: admission.port, requestCustody: custody.descriptor },
+        () =>
+          runSqliteImmediateTransactionSync(database, () => {
+            database.exec("INSERT INTO proof VALUES (1)");
+            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          }),
+      ),
+    ).toThrow("request custody is revoked");
+    expect(admit).toHaveBeenCalledOnce();
+    expect(database.prepare("SELECT * FROM proof").all()).toEqual([]);
+  } finally {
+    admission.finish();
+    database.close();
+  }
+});
 
 it.each(["transaction", "commit"] as const)(
   "keeps a non-cron $stage write waiting past one second without an explicit deadline",
@@ -151,6 +184,60 @@ it("refuses a host grant whose policy preparation crosses the deadline", () => {
       ),
     ).toThrow(expect.objectContaining({ name: "SqliteWorkerAdmissionTimeoutError" }));
     expect(beforeRelease).not.toHaveBeenCalled();
+    expect(admission.failure).toBeUndefined();
+  } finally {
+    admission.finish();
+  }
+});
+
+it("grants a deadline admission while the host thread runs fake timers ahead of the worker clock", () => {
+  // Fake hrtime starts at zero; run it past the real clock the worker used for its deadline.
+  const aheadOfRealClockMs = Number(process.hrtime.bigint() / 1_000_000n) + 60_000;
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(aheadOfRealClockMs);
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      requestSqliteWorkerOperationAdmission({
+        stage: "commit",
+        facts: undefined,
+        deadlineMs: 1_000,
+      }),
+    );
+    expect(admit).toHaveBeenCalledOnce();
+    expect(admission.failure).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    admission.finish();
+  }
+});
+
+it("grants a deadline admission when the host thread clock origin is ahead of the worker's", () => {
+  // Bun starts process.hrtime at zero per thread; a worker spawned after Gateway
+  // startup reads a clock far behind the host that services its admission.
+  let now = process.hrtime.bigint();
+  vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    now += 60_000_000_000n;
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      requestSqliteWorkerOperationAdmission({
+        stage: "transaction",
+        facts: undefined,
+        deadlineMs: 1_000,
+      }),
+    );
+    expect(admit).toHaveBeenCalledOnce();
     expect(admission.failure).toBeUndefined();
   } finally {
     admission.finish();

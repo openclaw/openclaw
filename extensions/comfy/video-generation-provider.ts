@@ -29,12 +29,9 @@ export function buildComfyVideoGenerationProvider(): VideoGenerationProvider {
     label: "ComfyUI",
     defaultModel: DEFAULT_COMFY_MODEL,
     models: [DEFAULT_COMFY_MODEL],
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, agentDir }) =>
-      isComfyCapabilityConfigured({
-        cfg,
-        agentDir,
-        capability: "video",
-      }),
+      isComfyCapabilityConfigured({ cfg, agentDir, capability: "video" }),
     isConfiguredAsync: ({ cfg, agentDir }) =>
       isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "video" }),
     capabilities: {

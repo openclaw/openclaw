@@ -6,9 +6,9 @@ import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import type { ConfigSnapshotMock } from "./commands.test-harness.js";
-import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => ({ valid: true, parsed: {} })),
@@ -22,10 +22,6 @@ const validateConfigObjectWithPluginsMock = vi.hoisted(() =>
 );
 const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
-const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
-const parseConfigPathMock = vi.hoisted(() => vi.fn());
-const setConfigValueAtPathMock = vi.hoisted(() => vi.fn());
-const unsetConfigValueAtPathMock = vi.hoisted(() => vi.fn(() => true));
 const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
   vi.fn<(...args: never[]) => string | null>(() => null),
 );
@@ -45,8 +41,9 @@ vi.mock("../../agents/bash-tools.js", () => ({
   createExecTool: vi.fn(),
 }));
 
+// mock-isolation: Exercise command authorization without sandbox backends or session storage.
 vi.mock("../../agents/sandbox.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+  resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -75,13 +72,7 @@ vi.mock("../../channels/registry.js", () => ({
   normalizeChannelId: vi.fn((value?: string) => value),
 }));
 
-vi.mock("../../config/config-paths.js", () => ({
-  getConfigValueAtPath: getConfigValueAtPathMock,
-  parseConfigPath: parseConfigPathMock,
-  setConfigValueAtPath: setConfigValueAtPathMock,
-  unsetConfigValueAtPath: unsetConfigValueAtPathMock,
-}));
-
+// mock-isolation: exercise config write authorization against fixture state, not operator config.
 vi.mock("../../config/config.js", () => {
   const transformConfigFileWithRetry = async (params: {
     afterWrite?: unknown;
@@ -107,17 +98,6 @@ vi.mock("../../config/config.js", () => {
     });
     const afterWrite = params.afterWrite ?? { mode: "auto" };
     await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
-    return {
-      path: snapshot.path ?? "/tmp/openclaw.json",
-      previousHash,
-      persistedHash: "persisted-hash",
-      snapshot,
-      nextConfig: transformed.nextConfig,
-      result: transformed.result,
-      attempts: 1,
-      afterWrite,
-      followUp: { action: "none" },
-    };
   };
   return {
     readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -162,100 +142,66 @@ vi.mock("./channel-context.js", () => ({
   resolveChannelAccountId: vi.fn(() => undefined),
 }));
 
-vi.mock("./config-commands.js", () => ({
-  parseConfigCommand: vi.fn((raw: string) => {
-    if (!raw.startsWith("/config")) {
-      return null;
-    }
-    const parts = raw.trim().split(/\s+/);
-    const action = parts[1];
-    if (action === "show" || action === "get") {
-      return { action: "show", path: parts.slice(2).join(" ") || undefined };
-    }
-    if (action === "set") {
-      const assignment = raw.slice(raw.indexOf(" set ") + 5).trim();
-      const equalsIndex = assignment.indexOf("=");
-      return {
-        action: "set",
-        path: assignment.slice(0, equalsIndex),
-        value: JSON.parse(assignment.slice(equalsIndex + 1)),
-      };
-    }
-    if (action === "unset") {
-      return { action: "unset", path: parts.slice(2).join(" ") };
-    }
-    return { action: "error", message: "Invalid /config syntax." };
-  }),
-}));
-
 vi.mock("./config-write-authorization.js", () => ({
   resolveConfigWriteDeniedText: resolveConfigWriteDeniedTextMock,
 }));
 
-vi.mock("./debug-commands.js", () => ({
-  parseDebugCommand: vi.fn((raw: string) => {
-    if (!raw.startsWith("/debug")) {
-      return null;
-    }
-    const parts = raw.trim().split(/\s+/);
-    const action = parts[1];
-    if (action === "set") {
-      const assignment = raw.slice(raw.indexOf(" set ") + 5).trim();
-      const equalsIndex = assignment.indexOf("=");
-      return {
-        action: "set",
-        path: assignment.slice(0, equalsIndex),
-        value: JSON.parse(assignment.slice(equalsIndex + 1)),
-      };
-    }
-    if (action === "unset") {
-      return { action: "unset", path: parts.slice(2).join(" ") };
-    }
-    return { action: "show" };
-  }),
-}));
-
 function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsParams {
-  const ctx = {
-    Body: commandBody,
-    CommandBody: commandBody,
-    CommandSource: "text",
-    CommandAuthorized: true,
-    Provider: "whatsapp",
-    Surface: "whatsapp",
-    SessionKey: "agent:main:main",
-  } as MsgContext;
-
-  return {
-    ctx,
-    cfg,
-    command: {
+  return commandFixture(
+    commandBody.trim(),
+    {
+      cfg,
+      ctx: {
+        Body: commandBody,
+        CommandBody: commandBody,
+        CommandSource: "text",
+        CommandAuthorized: true,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SessionKey: "agent:main:main",
+      },
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      workspaceDir: "/tmp",
+      provider: "whatsapp",
+      model: "test-model",
+      sessionEntry: undefined,
+    },
+    {
       surface: "whatsapp",
       channel: "whatsapp",
       channelId: "whatsapp",
-      ownerList: [],
       senderIsOwner: false,
-      isAuthorizedSender: true,
       senderId: "user-1",
-      rawBodyNormalized: commandBody.trim(),
-      commandBodyNormalized: commandBody.trim(),
       from: "user-1",
       to: "bot-1",
     },
-    directives: parseInlineSessionDirectives(""),
-    elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:main",
-    agentId: "main",
-    workspaceDir: "/tmp",
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "whatsapp",
-    model: "test-model",
-    contextTokens: 0,
-    isGroup: false,
-  };
+  );
+}
+
+function ownerParams(commandBody: string): HandleCommandsParams {
+  const params = buildParams(commandBody, {
+    commands: { text: true, [commandBody.startsWith("/debug") ? "debug" : "config"]: true },
+    channels: { whatsapp: { allowFrom: ["*"] } },
+  });
+  params.command.senderIsOwner = true;
+  return params;
+}
+
+function webParams(commandBody: string, scopes: string[]): HandleCommandsParams {
+  const params = buildParams(commandBody, { commands: { config: true, text: true } });
+  Object.assign(params.ctx, {
+    Provider: "webchat",
+    Surface: "webchat",
+    GatewayClientScopes: scopes,
+  });
+  Object.assign(params.command, {
+    channel: "webchat",
+    channelId: "webchat",
+    surface: "webchat",
+    senderIsOwner: true,
+  });
+  return params;
 }
 
 describe("command gating", () => {
@@ -268,71 +214,28 @@ describe("command gating", () => {
       issues: [],
     });
     getConfigOverridesMock.mockReturnValue({});
-    getConfigValueAtPathMock.mockImplementation((target: unknown, path: string[]) => {
-      let current = target as Record<string, unknown> | undefined;
-      for (const segment of path) {
-        if (!current || typeof current !== "object") {
-          return undefined;
-        }
-        current = current[segment] as Record<string, unknown> | undefined;
-      }
-      return current;
-    });
-    parseConfigPathMock.mockImplementation((raw: string) => ({
-      ok: true,
-      path: raw.split("."),
-    }));
-    setConfigValueAtPathMock.mockImplementation(
-      (target: Record<string, unknown>, path: string[], value: unknown) => {
-        let cursor: Record<string, unknown> = target;
-        for (const segment of path.slice(0, -1)) {
-          const next = cursor[segment];
-          if (!next || typeof next !== "object") {
-            cursor[segment] = {};
-          }
-          cursor = cursor[segment] as Record<string, unknown>;
-        }
-        const leaf = path[path.length - 1];
-        if (leaf) {
-          cursor[leaf] = value;
-        }
-      },
-    );
-    unsetConfigValueAtPathMock.mockReturnValue(true);
   });
 
-  it("blocks disabled bash", async () => {
+  it.each([
+    [false, true, "bash is disabled"],
+    [true, false, "elevated is not available"],
+  ] as const)("blocks bash (enabled=%s, elevated=%s)", async (bash, allowed, expected) => {
     const result = await handleBashChatCommand({
       ctx: {
         Body: "/bash echo hi",
         CommandBody: "/bash echo hi",
         SessionKey: "agent:main:main",
       } as MsgContext,
-      cfg: { commands: { bash: false } } as OpenClawConfig,
-      sessionKey: "agent:main:main",
-      isGroup: false,
-      elevated: { enabled: true, allowed: true, failures: [] },
-    });
-    expect(result.text).toContain("bash is disabled");
-  });
-
-  it("blocks bash when elevated access is unavailable", async () => {
-    const result = await handleBashChatCommand({
-      ctx: {
-        Body: "/bash echo hi",
-        CommandBody: "/bash echo hi",
-        SessionKey: "agent:main:main",
-      } as MsgContext,
-      cfg: { commands: { bash: true } } as OpenClawConfig,
+      cfg: { commands: { bash } },
       sessionKey: "agent:main:main",
       isGroup: false,
       elevated: {
         enabled: true,
-        allowed: false,
-        failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
+        allowed,
+        failures: allowed ? [] : [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
       },
     });
-    expect(result.text).toContain("elevated is not available");
+    expect(result.text).toContain(expected);
   });
 
   it("blocks a stale owner snapshot before reading or writing config", async () => {
@@ -347,43 +250,26 @@ describe("command gating", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
-  it("blocks disabled config", async () => {
-    const params = buildParams("/config show", {
+  it.each([
+    ["config", handleConfigCommand],
+    ["debug", handleDebugCommand],
+  ] as const)("blocks disabled %s", async (name, handler) => {
+    const params = buildParams(`/${name} show`, {
       commands: { config: false, debug: false, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
-    const result = await handleConfigCommand(params, true);
-    expect(result?.reply?.text).toContain("/config is disabled");
-  });
-
-  it("blocks disabled debug", async () => {
-    const params = buildParams("/debug show", {
-      commands: { config: false, debug: false, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
-    const result = await handleDebugCommand(params, true);
-    expect(result?.reply?.text).toContain("/debug is disabled");
-  });
-
-  it("blocks authorized non-owners from /config show and /debug show", async () => {
-    const configParams = buildParams("/config show", {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    const configResult = await handleConfigCommand(configParams, true);
-    expect(configResult).toEqual({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
+    params.command.senderIsOwner = true;
+    const result = await handler(params, true);
+    expect(result?.reply?.text).toContain(`/${name} is disabled`);
+  });
 
-    const debugParams = buildParams("/debug show", {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    const debugResult = await handleDebugCommand(debugParams, true);
-    expect(debugResult).toEqual({
+  it.each([
+    ["config", handleConfigCommand],
+    ["debug", handleDebugCommand],
+  ] as const)("blocks authorized non-owners from /%s show", async (name, handler) => {
+    const params = ownerParams(`/${name} show`);
+    params.command.senderIsOwner = false;
+    expect(await handler(params, true)).toEqual({
       shouldContinue: false,
       reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
@@ -394,20 +280,12 @@ describe("command gating", () => {
       valid: true,
       parsed: { messages: { ackReaction: ":)" } },
     });
-    const configParams = buildParams("/config show messages.ackReaction", {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    configParams.command.senderIsOwner = true;
+    const configParams = ownerParams("/config show messages.ackReaction");
     const configResult = await handleConfigCommand(configParams, true);
     expect(configResult?.reply?.text).toContain("⚙️ Config");
     expect(configResult?.reply?.text).toContain('":)"');
 
-    const debugParams = buildParams("/debug show", {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    debugParams.command.senderIsOwner = true;
+    const debugParams = ownerParams("/debug show");
     const debugResult = await handleDebugCommand(debugParams, true);
     expect(debugResult?.reply?.text).toContain("Debug overrides");
   });
@@ -471,11 +349,7 @@ describe("command gating", () => {
         },
       },
     });
-    const params = buildParams("/config show", {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
+    const params = ownerParams("/config show");
 
     const result = await handleConfigCommand(params, true);
     const output = result?.reply?.text ?? "";
@@ -514,11 +388,7 @@ describe("command gating", () => {
         },
       },
     });
-    const params = buildParams("/config show gateway.auth.token", {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
+    const params = ownerParams("/config show gateway.auth.token");
 
     const result = await handleConfigCommand(params, true);
     const output = result?.reply?.text ?? "";
@@ -526,28 +396,6 @@ describe("command gating", () => {
     expect(output).toContain("Config gateway.auth.token");
     expect(output).toContain(REDACTED_SENTINEL);
     expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623");
-  });
-
-  it("redacts secret-shaped values from /config set acknowledgements", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      valid: true,
-      parsed: { gateway: { auth: { mode: "token" } } },
-    });
-    const params = buildParams(
-      '/config set gateway.auth.token="OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623"',
-      {
-        commands: { config: true, text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-    );
-    params.command.senderIsOwner = true;
-
-    const result = await handleConfigCommand(params, true);
-    const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Config updated: gateway.auth.token=");
-    expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain("OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623");
   });
 
   it("redacts secret-shaped fields from /debug show replies", async () => {
@@ -566,11 +414,7 @@ describe("command gating", () => {
         ackReaction: ":)",
       },
     });
-    const params = buildParams("/debug show", {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
+    const params = ownerParams("/debug show");
 
     const result = await handleDebugCommand(params, true);
     const output = result?.reply?.text ?? "";
@@ -582,22 +426,22 @@ describe("command gating", () => {
     expect(output).not.toContain("OPENCLAW_DEBUG_SHOW_CANARY_BOT_TOKEN_65623");
   });
 
-  it("redacts secret-shaped values from /debug set acknowledgements", async () => {
-    const params = buildParams(
-      '/debug set gateway.auth.token="OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623"',
-      {
-        commands: { debug: true, text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-    );
-    params.command.senderIsOwner = true;
-
-    const result = await handleDebugCommand(params, true);
+  it.each([
+    ["config", handleConfigCommand, "Config updated"],
+    ["debug", handleDebugCommand, "Debug override set"],
+  ] as const)("redacts /%s set acknowledgements", async (name, handler, label) => {
+    if (name === "config") {
+      readConfigFileSnapshotMock.mockResolvedValue({
+        valid: true,
+        parsed: { gateway: { auth: { mode: "token" } } },
+      });
+    }
+    const secret = `OPENCLAW_${name.toUpperCase()}_SET_CANARY_TOKEN_65623`;
+    const result = await handler(ownerParams(`/${name} set gateway.auth.token="${secret}"`), true);
     const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Debug override set: gateway.auth.token=");
+    expect(output).toContain(`${label}: gateway.auth.token=`);
     expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain("OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623");
+    expect(output).not.toContain(secret);
   });
 
   it("blocks disallowed /config set writes", async () => {
@@ -664,16 +508,7 @@ describe("command gating", () => {
   });
 
   it("enforces gateway client permissions for /config commands", async () => {
-    const baseCfg = { commands: { config: true, text: true } } as OpenClawConfig;
-
-    const blockedParams = buildParams('/config set messages.ackReaction=":)"', baseCfg);
-    blockedParams.ctx.Provider = "webchat";
-    blockedParams.ctx.Surface = "webchat";
-    blockedParams.ctx.GatewayClientScopes = ["operator.write"];
-    blockedParams.command.channel = "webchat";
-    blockedParams.command.channelId = "webchat";
-    blockedParams.command.surface = "webchat";
-    blockedParams.command.senderIsOwner = true;
+    const blockedParams = webParams('/config set messages.ackReaction=":)"', ["operator.write"]);
     const blockedResult = await handleConfigCommand(blockedParams, true);
     expect(blockedResult?.shouldContinue).toBe(false);
     expect(blockedResult?.reply?.text).toContain("requires operator.admin");
@@ -682,14 +517,7 @@ describe("command gating", () => {
       valid: true,
       parsed: { messages: { ackReaction: ":)" } },
     });
-    const showParams = buildParams("/config show messages.ackReaction", baseCfg);
-    showParams.ctx.Provider = "webchat";
-    showParams.ctx.Surface = "webchat";
-    showParams.ctx.GatewayClientScopes = ["operator.write"];
-    showParams.command.channel = "webchat";
-    showParams.command.channelId = "webchat";
-    showParams.command.surface = "webchat";
-    showParams.command.senderIsOwner = true;
+    const showParams = webParams("/config show messages.ackReaction", ["operator.write"]);
     const showResult = await handleConfigCommand(showParams, true);
     expect(showResult?.shouldContinue).toBe(false);
     expect(showResult?.reply?.text).toContain("Config messages.ackReaction");
@@ -698,14 +526,10 @@ describe("command gating", () => {
       valid: true,
       parsed: { messages: { ackReaction: ":)" } },
     });
-    const setParams = buildParams('/config set messages.ackReaction=":D"', baseCfg);
-    setParams.ctx.Provider = "webchat";
-    setParams.ctx.Surface = "webchat";
-    setParams.ctx.GatewayClientScopes = ["operator.write", "operator.admin"];
-    setParams.command.channel = "webchat";
-    setParams.command.channelId = "webchat";
-    setParams.command.surface = "webchat";
-    setParams.command.senderIsOwner = true;
+    const setParams = webParams('/config set messages.ackReaction=":D"', [
+      "operator.write",
+      "operator.admin",
+    ]);
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
@@ -717,7 +541,6 @@ describe("command gating", () => {
   });
 
   it("does not write config when /config unset misses", async () => {
-    unsetConfigValueAtPathMock.mockReturnValue(false);
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
       parsed: { messages: {} },

@@ -1,14 +1,29 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { ensureMemoryEntryOriginsSchema } from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
+import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
+import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
+import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  assertAgentDeletionJournalAvailable,
+  ensureAgentDatabaseLeaseSchema,
+  ensureSecretStoreSchema,
+} from "./openclaw-state-db-schema-additive.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
@@ -17,25 +32,7 @@ import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
-
-const trailingSchema = vi.hoisted(() => ({
-  tableName: "future_lazy_state",
-  sql: "CREATE TABLE IF NOT EXISTS future_lazy_state (id TEXT PRIMARY KEY) STRICT;",
-}));
-
-vi.mock("./openclaw-state-schema.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-state-schema.js")>();
-  return {
-    ...actual,
-    OPENCLAW_STATE_SCHEMA_SQL: `${actual.OPENCLAW_STATE_SCHEMA_SQL}\n${trailingSchema.sql}\n`,
-  };
-});
-
-import {
-  assertAgentDeletionJournalAvailable,
-  ensureAgentDatabaseLeaseSchema,
-  ensureSecretStoreSchema,
-} from "./openclaw-state-db-schema-additive.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -44,13 +41,58 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("keeps secret-store first use from installing later additive schema", () => {
+const { openDatabase } = useSqliteSchemaTestFixture();
+
+it.each([
+  {
+    name: "audit lifecycle binding",
+    schema: OPENCLAW_STATE_SCHEMA_SQL,
+    ensure: ensureExecutionOwnerLifecycleBindingSchema,
+  },
+  {
+    name: "goal receipt",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureSessionGoalOperationsSchema,
+  },
+  {
+    name: "board",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureOpenClawAgentBoardSchemaInTransaction,
+  },
+  {
+    name: "memory origin",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureMemoryEntryOriginsSchema,
+  },
+  {
+    name: "memory provenance",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureMemoryChunkProvenance,
+  },
+])("never issues persistent DDL on first or repeated warm $name use", ({ schema, ensure }) => {
+  const database = openDatabase(schema);
+  const observation = observeHostDataSql();
+  try {
+    for (let call = 0; call < 2; call += 1) {
+      database.exec("BEGIN IMMEDIATE");
+      ensure(database);
+      database.exec("COMMIT");
+    }
+    expect(
+      observation.queries.filter((sql) => classifySqliteMutation(sql, "batch").mainSchemaChange),
+    ).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+});
+
+it("installs only the secret-store table and index on first use", () => {
   const database = new DatabaseSync(":memory:");
   try {
     ensureSecretStoreSchema(database);
     const names = database
-      .prepare("SELECT name FROM sqlite_schema WHERE name IN (?, ?, ?) ORDER BY name")
-      .all("secret_store_entries", "secret_store_entries_live_idx", trailingSchema.tableName)
+      .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
+      .all()
       .map((row) => row.name);
 
     expect(names).toEqual(["secret_store_entries", "secret_store_entries_live_idx"]);
@@ -143,7 +185,7 @@ it("adds the caption retry index to populated same-version state without changin
            ('meeting', 'start', 1, 'caption', 'Final caption', 1),
            ('meeting', 'start', 2, NULL, 'Unidentified caption', NULL);
   `);
-  const readState = (db: DatabaseSync) => ({
+  const readState = (db: EngineConnection) => ({
     sessions: db.prepare("SELECT * FROM meeting_transcript_sessions ORDER BY session_id").all(),
     utterances: db.prepare("SELECT * FROM meeting_transcript_utterances ORDER BY sequence").all(),
     metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
@@ -152,7 +194,7 @@ it("adds the caption retry index to populated same-version state without changin
   const before = readState(database.db);
   expect(before.version).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
   const indexName = "idx_meeting_transcript_utterances_id";
-  const readIndex = (db: DatabaseSync) =>
+  const readIndex = (db: EngineConnection) =>
     db
       .prepare('SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?')
       .get("meeting_transcript_utterances", indexName);
@@ -161,7 +203,7 @@ it("adds the caption retry index to populated same-version state without changin
   }).replace(/CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id\b[^;]*;/u, "");
   expect(() =>
     assertSqliteSchemaContains(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       database.path,
       previousSchema,
       OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,

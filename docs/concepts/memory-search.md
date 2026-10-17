@@ -11,6 +11,38 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
+engine remains experimental. Search uses engine-local text ranking, so scores and ordering
+can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
+trigram tokenizer, and `vector` for semantic search. Explicit
+`memory.search.provider: "none"` enables keyword-only search without `vector`;
+memory status reports this as `fts-only`. See
+[PostgreSQL memory search](/concepts/memory#postgresql-memory-search) for lifecycle
+behavior and [Database engines](/reference/database-engines#search-on-postgresql)
+for extension setup.
+
+On PostgreSQL, both body keywords and filename/path lookup use the admitted
+index. Source and selected-agent scope restrict candidates before the result
+limit; semantic retrieval also filters the embedding model. Text uses native
+full-text ranking; semantic retrieval uses exact
+cosine distance over a derived float32 vector projection. Hybrid search keeps
+the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
+scores. A phrase with nearby terms can rank above scattered terms without
+promising identical ordering across engines.
+
+PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
+at most 200 hits, and bound each snippet to 700 characters. Larger queries return
+an actionable error before search. Memory transcript recall retains its existing
+200-candidate window followed by session visibility checks; it does not promise
+complete recall beyond that window or SQL-level session permission filtering.
+
+The result-count argument is `maxResults` (an integer of at least 1). The tool
+also accepts `max_results` and `limit` as aliases. If several are supplied,
+`maxResults` takes precedence over `max_results`, which takes precedence over
+`limit`, regardless of argument order. Only the selected value is validated;
+an invalid higher-priority value is rejected rather than falling back to a valid
+alias. The advertised tool schema continues to use `maxResults`.
+
 When indexing Markdown, the builtin engine attaches a heading-only chunk to the
 following content chunk. This keeps short headings from taking search result slots
 on their own while preserving section context and source line references. A final
@@ -35,7 +67,7 @@ explicitly:
 {
   memory: {
     search: {
-      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "lmstudio", "github-copilot", "openai-compatible"
+      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "omlx", "lmstudio", "github-copilot", "openai-compatible"
     },
   },
 }
@@ -76,19 +108,22 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 ## Supported providers
 
-| Provider          | ID                  | Needs API key | Notes                             |
-| ----------------- | ------------------- | ------------- | --------------------------------- |
-| Bedrock           | `bedrock`           | No            | Uses the AWS credential chain     |
-| DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
-| Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
-| GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
-| LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
-| Ollama            | `ollama`            | No            | Local/self-hosted server          |
-| OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
-| OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
+| Provider                | ID                  | Needs API key | Notes                                   |
+| ----------------------- | ------------------- | ------------- | --------------------------------------- |
+| Bedrock                 | `bedrock`           | No            | Uses the AWS credential chain           |
+| DeepInfra               | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`             |
+| Gemini                  | `gemini`            | Yes           | Supports image/audio indexing           |
+| GitHub Copilot          | `github-copilot`    | No            | Uses your Copilot subscription          |
+| Local                   | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB         |
+| LM Studio               | `lmstudio`          | No            | Local/self-hosted server                |
+| Mistral                 | `mistral`           | Yes           | Default model `mistral-embed`           |
+| Ollama                  | `ollama`            | No            | Local/self-hosted server                |
+| [oMLX](/providers/omlx) | `omlx`              | No            | Apple Silicon; explicit embedding model |
+| OpenAI                  | `openai`            | Depends       | API key or eligible Codex OAuth         |
+| OpenAI-compatible       | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint       |
+| Voyage                  | `voyage`            | Yes           | Default model `voyage-4-large`          |
+
+To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
 ## How search works
 
@@ -99,7 +134,7 @@ flowchart LR
     Q["Query"] --> E["Embedding"]
     Q --> T["Tokenize"]
     E --> VS["Vector search"]
-    T --> BM["BM25 search"]
+    T --> BM["Text search"]
     VS --> M["Weighted merge"]
     BM --> M
     M --> D["Recency and importance"]
@@ -109,12 +144,13 @@ flowchart LR
 
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
-- **BM25 keyword search** matches exact terms (IDs, error strings, config
+- **Keyword search** matches exact terms (IDs, error strings, config
   keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
   rebuilding existing indexes, including notes that mix those forms across words.
   Search first requires every query term. Only when neither body nor filename
   search finds a match does it retry body search once with any query term and
-  language-specific keyword expansion, ranked by BM25. This recovers answers
+  language-specific keyword expansion. SQLite ranks by BM25; PostgreSQL uses its
+  native full-text rank or trigram similarity. This recovers answers
   without broadening a keyword query that already has matches.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,
@@ -124,7 +160,7 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
-The builtin engine then applies deterministic ranking:
+The builtin engine then applies fixed ranking rules:
 
 ```text
 hybrid relevance × recency decay × importance multiplier
@@ -157,7 +193,9 @@ Hybrid ranking also scores retrieved keyword candidates from their stored
 embeddings when they fall outside the top vector candidates. This keeps a
 strong keyword answer eligible when many similar notes fill the vector window.
 
-## Deterministic trigger recall
+<a id="deterministic-trigger-recall" />
+
+## Rule-based trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
 message with short trigger phrases stored on indexed entries. Strong matches
@@ -200,7 +238,7 @@ vectors. Verify the provider's model, then rebuild with
 
 ## Improving search quality
 
-Two deterministic ranking passes are enabled by default for hybrid search.
+Two rule-based ranking passes are enabled by default for hybrid search.
 
 ### Recency decay
 

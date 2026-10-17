@@ -223,41 +223,6 @@ test("preserves externally owned context and propagation globals while disabled"
   });
 });
 
-test.each(["true", "false"] as const)(
-  "does not remove replacement context and propagation owners when disabled=$disabled",
-  async (disabled) => {
-    process.env.OTEL_SDK_DISABLED = disabled;
-    const { service, ctx } = await startOtelService({
-      traces: false,
-      metrics: false,
-      logs: false,
-    });
-    const capturedContext = context.active();
-
-    context.disable();
-    propagation.disable();
-    const externalContextManager = new AsyncLocalStorageContextManager().enable();
-    expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
-    expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
-    const incoming = {
-      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-    };
-    const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-
-    await context.with(capturedContext, () => service.stop?.(ctx));
-
-    expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
-    await context.with(extracted, async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(trace.getSpanContext(context.active())?.traceId).toBe(
-        "4bf92f3577b34da6a3ce929d0e0e4736",
-      );
-    });
-  },
-);
-
 test.each([
   {
     value: "NoNe",

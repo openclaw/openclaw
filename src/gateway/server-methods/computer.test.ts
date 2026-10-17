@@ -5,6 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayComputerService } from "../desktop/computer-service.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { computerHandlers } from "./computer.js";
 import type {
   GatewayClient,
@@ -81,6 +82,62 @@ const snapshot = {
 };
 
 describe("Gateway computer RPC", () => {
+  it("retains one ingress execution owner across origin-free RPCs and fences deferred input", async () => {
+    const grant = new AbortController();
+    const binding = createRemoteControlUiIngressTestContext({
+      audienceId: "computer-grant",
+      signal: grant.signal,
+    });
+    const clientForRequest = () => {
+      const client = createClient();
+      delete client.connId;
+      const principal = binding.resolvePrincipal();
+      client.authenticatedUserProfile = principal.authenticatedUserProfile;
+      client.connectionSignal = new AbortController().signal;
+      client.internal = {
+        remoteIngressPrincipal: principal,
+        operatorRoleActor: principal.operatorRoleActor,
+      };
+      return client;
+    };
+    expect(await invoke("computer.status", {}, undefined, { client: clientForRequest() })).toEqual([
+      true,
+      { available: false, configured: false },
+    ]);
+    const owners: string[] = [];
+    const entered = createDeferredCore();
+    const prepared = createDeferredCore();
+    const sideEffect = vi.fn();
+    const service = {
+      status: vi.fn(),
+      invoke: async (request: Parameters<GatewayComputerService["invoke"]>[0]) => {
+        owners.push(request.owner);
+        expect(request.ownerSignal).toBe(grant.signal);
+        if (owners.length === 2) {
+          entered.resolve();
+          await prepared.promise;
+        }
+        request.assertCurrent();
+        sideEffect();
+        return {};
+      },
+    };
+    expect(
+      (await invoke("computer.invoke", snapshot, service, { client: clientForRequest() }))?.[0],
+    ).toBe(true);
+    const pending = invoke(
+      "computer.invoke",
+      { ...snapshot, idempotencyKey: "snapshot-two" },
+      service,
+      { client: clientForRequest() },
+    );
+    await entered.promise;
+    grant.abort();
+    prepared.resolve();
+    expect((await pending)?.[0]).toBe(false);
+    expect(owners[0]).toBe(owners[1]);
+    expect(sideEffect).toHaveBeenCalledOnce();
+  });
   it("separates readable capability discovery from computer input authority", () => {
     expect(authorizeOperatorScopesForMethod("computer.status", ["operator.read"])).toEqual({
       allowed: true,

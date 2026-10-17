@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveMainSessionResumePolicy } from "./main-session-restart-recovery-resume-policy.js";
+import {
+  textContent,
+  makeUserMessage,
+  toolCall,
+  codeModeCheckpointMessage,
+  codeModeWaitCallMessage,
+} from "./main-session-restart-recovery-transcript.test-support.js";
 
 vi.mock("../code-mode-control-tools.js", () => ({
   CODE_MODE_EXEC_TOOL_NAME: "exec",
@@ -18,7 +25,7 @@ vi.mock("../run-termination.js", () => ({
 function asyncDeliveryMessage(text: string, itemId: string): Record<string, unknown> {
   return {
     role: "assistant",
-    content: [{ type: "text", text }],
+    content: textContent(text),
     stopReason: "stop",
     phase: "final_answer",
     openclawAsyncDelivery: { itemId },
@@ -39,7 +46,7 @@ function resolvePolicy(params: {
   deliveryToolCallId?: string;
 }) {
   return resolveMainSessionResumePolicy(
-    params.messages ?? [{ role: "user", content: "finish the interrupted work" }],
+    params.messages ?? [makeUserMessage("finish the interrupted work")],
     false,
     "source-turn",
     params.beforeAgentReplyState,
@@ -49,42 +56,22 @@ function resolvePolicy(params: {
   );
 }
 
-function codeModeCheckpoint(params: {
-  replaySafe: boolean;
-  runId?: string;
-  status?: "completed" | "failed" | "waiting";
-}) {
-  return {
-    role: "toolResult",
-    toolName: "exec",
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({
-          status: params.status ?? "waiting",
-          replaySafe: params.replaySafe,
-          ...(params.runId ? { runId: params.runId } : {}),
-        }),
-      },
-    ],
-  };
-}
-
-function codeModeWait(runId = "code-run") {
-  return {
-    role: "assistant",
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", id: "wait-call", name: "wait", arguments: { runId } }],
-  };
-}
-
 describe("resolveMainSessionResumePolicy former terminal states", () => {
   it.each([
     { deliveryReceiptState: "terminal-pending" as const },
     { beforeAgentReplyState: "pending" as const },
     { beforeAgentReplyState: "handled-reply" as const },
     { beforeAgentReplyState: "handled-unrecoverable" as const },
-    { messages: [codeModeCheckpoint({ replaySafe: true, runId: "code-run" }), codeModeWait()] },
+    {
+      messages: [
+        codeModeCheckpointMessage("exec", {
+          status: "waiting",
+          replaySafe: true,
+          runId: "code-run",
+        }),
+        codeModeWaitCallMessage("code-run", "wait-call"),
+      ],
+    },
   ])("retains reconciliation restrictions under full access: %j", (params) => {
     expect(resolvePolicy({ ...params, fullAccess: true })).toMatchObject({
       action: "resume",
@@ -103,13 +90,11 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
   it("retains replay restrictions when final-phase async delivery follows a side-effecting call", () => {
     expect(
       resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
+        makeUserMessage("finish the interrupted work"),
         {
           role: "assistant",
           stopReason: "toolUse",
-          content: [
-            { type: "toolCall", id: "call-bash", name: "bash", arguments: { command: "true" } },
-          ],
+          content: [toolCall("call-bash", "bash", { command: "true" })],
         },
         asyncDeliveryMessage("The background check finished.", "async-after-exec"),
       ]),

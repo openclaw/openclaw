@@ -7,6 +7,8 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import * as cliCredentials from "../agents/cli-credentials.js";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedAuthProfileCredential,
@@ -14,8 +16,11 @@ import {
 } from "../agents/execution-auth-binding.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
+import * as codexRuntimePlugin from "../commands/codex-runtime-plugin-install.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as installRecordCommit from "../plugins/install-record-commit.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -34,6 +39,9 @@ import {
   pluginRecord,
 } from "./verified-inference.test-support.js";
 
+// mock-isolation: Activation fixtures never initialize the embedded agent runtime.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+
 export const tempDirs = createTempDirTracker();
 export const modelRef = "openai/gpt-5.4-mini";
 export const credential = {
@@ -41,7 +49,7 @@ export const credential = {
   provider: "openai",
   key: "fixture-saved-key",
 } as const;
-type RunParams = Parameters<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>[0];
+type RunParams = Parameters<typeof embeddedAgent.runEmbeddedAgent>[0];
 
 export async function fixture(
   options: {
@@ -55,6 +63,7 @@ export async function fixture(
     secretRef?: boolean;
     signal?: AbortSignal;
     codex?: boolean;
+    nativeCatalogEnabled?: boolean;
     subscription?: boolean;
     homeScope?: "agent" | "user";
     modelTarget?: "utility";
@@ -136,7 +145,12 @@ export async function fixture(
   if (options.codex) {
     (config.plugins!.entries ??= {}).codex = {
       enabled: true,
-      config: { appServer: { homeScope: options.homeScope } },
+      config: {
+        appServer: { homeScope: options.homeScope },
+        ...(options.nativeCatalogEnabled !== undefined
+          ? { sessionCatalog: { enabled: options.nativeCatalogEnabled } }
+          : {}),
+      },
     };
   }
   const providerModels = config.models;
@@ -180,6 +194,52 @@ export async function fixture(
   };
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.providers.push({ pluginId: "openai", provider, source: "test" });
+  if (options.codex) {
+    pluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        conversationToolPolicySupport: "exact",
+        authBinding: {
+          fingerprint: async (params) => {
+            const profile = params.authProfileStore.profiles[params.authProfileId];
+            if (!profile) {
+              return undefined;
+            }
+            if (profile.type === "oauth") {
+              return fingerprintAuthProfileCredential({
+                profileId: params.authProfileId,
+                credential: profile,
+              });
+            }
+            const resolvedAuth = await resolveAuth({
+              provider: "openai",
+              cfg: params.config,
+              agentDir: params.agentDir,
+              workspaceDir: workspace,
+              profileId: params.authProfileId,
+              lockedProfile: true,
+              modelId: "gpt-5.4-mini",
+              modelApi: "openai-responses",
+              secretSentinels: true,
+            });
+            return fingerprintResolvedAuthProfileCredential({
+              profileId: params.authProfileId,
+              credential: profile,
+              resolvedAuth,
+            });
+          },
+        },
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Fixture setup uses the injected inference runner");
+        },
+      },
+    });
+  }
   // Credential checks must use the same prepared provider as setup authentication.
   // Otherwise the real resolver cold-loads unrelated bundled setup plugins.
   const resolveAuth = (input: Parameters<typeof resolveApiKeyForProviderCore>[0]) =>
@@ -253,26 +313,29 @@ export async function fixture(
       },
     };
   };
-  const run = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(async (params) =>
-    reply(params),
-  );
-  // Revalidation must reload the same prepared provider used by login and the probe.
+  const run = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async (params) => reply(params));
+  // Every setup generation resolves the same provider used by login and the probe.
   vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
+  vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(run);
+  const resolvePluginMetadataSnapshot = vi
+    .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+    .mockImplementation(metadata.bind);
+  vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(
+    async (params) => pluginMetadata.resolvePluginMetadataSnapshot(params),
+  );
+  const readCodexCliActiveApiKey = vi
+    .spyOn(cliCredentials, "readCodexCliActiveApiKey")
+    .mockReturnValue(null);
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],
     resolveManifestProviderAuthChoice: () => choice,
     resolveManifestProviderAuthChoices: () => [choice],
-    resolvePluginMetadataSnapshot: metadata.bind,
     resolveApiKeyForProvider: resolveAuth,
-    runEmbeddedAgent: run,
   };
   if (options.codex) {
-    deps.readCodexCliActiveApiKey = () => null;
-    deps.ensureCodexRuntimePlugin = async ({ cfg: candidateConfig }) => ({
-      ok: true,
-      cfg: candidateConfig,
-      required: false,
-    });
+    vi.spyOn(codexRuntimePlugin, "ensureCodexRuntimePluginForModelSelection").mockImplementation(
+      async ({ cfg }) => ({ ok: true, cfg, required: false }),
+    );
     deps.loadPluginRegistrySnapshot = () => ({
       plugins: [pluginRecord("openai"), pluginRecord("codex")],
     });
@@ -285,22 +348,29 @@ export async function fixture(
   }
   const prompter = createWizardPrompter();
   if (options.restartRequired) {
-    deps.transformConfigWithPendingPluginInstalls = async (params) => {
-      const { transformConfigWithPendingPluginInstalls } =
-        await import("../plugins/install-record-commit.js");
-      const result = await transformConfigWithPendingPluginInstalls(params);
-      return {
-        ...result,
-        followUp: { mode: "restart", requiresRestart: true, reason: "Plugin source changed" },
-      };
-    };
+    const transform = installRecordCommit.transformConfigWithPendingPluginInstalls;
+    vi.spyOn(installRecordCommit, "transformConfigWithPendingPluginInstalls").mockImplementation(
+      async (params) => {
+        const result = await transform(params);
+        return {
+          ...result,
+          followUp: { mode: "restart", requiresRestart: true, reason: "Plugin source changed" },
+        };
+      },
+    );
   }
   const activate = (
     kind: Parameters<typeof activateSetupInference>[0]["kind"] = "provider-auth",
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "agentId" | "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
+      | "agentId"
+      | "apiKey"
+      | "signal"
+      | "onActivationCompletion"
+      | "modelTarget"
+      | "modelRef"
+      | "automaticSetup"
     > = {},
   ) =>
     metadata.run(() =>
@@ -330,6 +400,7 @@ export async function fixture(
   return {
     activate,
     detect,
+    runWithMetadata: metadata.run,
     agentDir,
     before,
     config,
@@ -339,8 +410,11 @@ export async function fixture(
     reply,
     resolveAuth,
     run,
+    resolvePluginMetadataSnapshot,
+    readCodexCliActiveApiKey,
     login,
     prompter,
     deps,
+    pluginRegistry,
   };
 }

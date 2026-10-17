@@ -6,11 +6,11 @@ import {
   type SqliteWorkerOperationContext,
 } from "../infra/sqlite-worker-operation-settlement.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   capturePluginStateReadDependencies,
@@ -41,6 +41,9 @@ function observe() {
   const changes: PluginStateChange[] = [];
   const current = new Map<string, SqliteCommittedFact<PluginStateRow>>();
   const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
+    if (change.kind === "pending" || change.kind === "settled") {
+      return;
+    }
     changes.push(change);
     if (change.kind === "committed") {
       for (const [key, fact] of change.receipt.facts) {
@@ -124,7 +127,7 @@ describe("plugin state committed facts", () => {
           namespace: "sibling",
         });
         await store.register("first", { count: 1 });
-        const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+        const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
         const initial = await store.entries();
         expect(initial).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).toHaveBeenCalledOnce();
@@ -134,9 +137,34 @@ describe("plugin state committed facts", () => {
         expect(await store.entries()).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).not.toHaveBeenCalled();
 
+        const asyncSibling = createPluginStateKeyedStore("receipt-test", {
+          ...options,
+          namespace: "sibling",
+        });
+        const pendingReads: Array<ReturnType<typeof store.entries>> = [];
+        const stopPending = pluginStatePublication.subscribeFacts((change) => {
+          if (change.kind === "pending" && pendingReads.length === 0) {
+            pendingReads.push(store.entries());
+          }
+        });
+        try {
+          await asyncSibling.register("other", false);
+          expect(pendingReads).toHaveLength(1);
+          expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 1 } }]);
+          expect(dispatch).not.toHaveBeenCalled();
+          dispatch.mockClear();
+          await store.register("first", { count: 2 });
+          expect(pendingReads).toHaveLength(1);
+          expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 2 } }]);
+          expect(dispatch).toHaveBeenCalledOnce();
+          dispatch.mockClear();
+        } finally {
+          stopPending();
+        }
+
         native.register("second", { count: 2 });
         expect(await store.entries()).toMatchObject([
-          { key: "first", value: { count: 1 } },
+          { key: "first", value: { count: 2 } },
           { key: "second", value: { count: 2 } },
         ]);
         expect(dispatch).toHaveBeenCalledOnce();
@@ -163,7 +191,7 @@ describe("plugin state committed facts", () => {
       native.register("expiring", true, { ttlMs: 10_000 });
       native.register("permanent", true);
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["expiring", "permanent"]);
-      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
       now += 10_000;
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["permanent"]);
       expect(dispatch).not.toHaveBeenCalled();
@@ -188,7 +216,7 @@ describe("plugin state committed facts", () => {
       const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
       const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
       await store.register("key", { count: 1 });
-      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
       const read = async (expected: { count: number } | undefined) => {
         dispatch.mockClear();
         expect(await store.lookup("key")).toEqual(expected);
@@ -231,6 +259,48 @@ describe("plugin state committed facts", () => {
       } finally {
         captured.release();
       }
+    });
+  });
+
+  it("keeps cached reads coherent after conditional writes and capacity rollback", async () => {
+    await withOpenClawTestState({ label: "plugin-state-conditional-receipts" }, async ({ env }) => {
+      const options = {
+        namespace: "receipts",
+        maxEntries: 1,
+        overflowPolicy: "reject-new" as const,
+        env,
+      };
+      const worker = createPluginStateKeyedStore<number>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<number>("receipt-test", options);
+      const read = async (expected: number | undefined) => {
+        expect(await worker.lookup("key")).toBe(expected);
+        expect((await worker.observe("key")).value).toBe(expected);
+        expect(await worker.lookup("overflow")).toBeUndefined();
+        expect((await worker.observe("overflow")).value).toBeUndefined();
+        expect((await worker.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
+          expected === undefined ? [] : [{ key: "key", value: expected }],
+        );
+      };
+
+      await read(undefined);
+      expect(await worker.registerIfAbsent("key", 1)).toBe(true);
+      await read(1);
+      expect(native.registerIfAbsent("key", 2)).toBe(false);
+      expect(await worker.registerIfAbsent("key", 3)).toBe(false);
+      await read(1);
+      expect(() => native.registerIfAbsent("overflow", 4)).toThrow("1-row limit");
+      await read(1);
+      await expect(worker.registerIfAbsent("overflow", 5)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await read(1);
+
+      expect(native.delete("key")).toBe(true);
+      await read(undefined);
+      expect(native.registerIfAbsent("key", 6)).toBe(true);
+      await read(6);
+      clearPluginStateStoreForTests();
+      await read(undefined);
     });
   });
 

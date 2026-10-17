@@ -53,6 +53,7 @@ describe("session store availability", () => {
           entries: { main: {}, ops: {} },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "main", env, storePath, sessionKey: "agent:main:main" },
         { sessionId: "main-session", updatedAt: 1 },
@@ -88,6 +89,7 @@ describe("session store availability", () => {
         session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
       };
 
+      setRuntimeConfigSnapshot(cfg);
       const result = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env });
 
       // The missing configured candidate must be skipped, not returned as
@@ -107,6 +109,7 @@ describe("session store availability", () => {
         session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
       };
 
+      setRuntimeConfigSnapshot(cfg);
       expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env })).toEqual({
         available: false,
         reason: "database-missing",
@@ -125,6 +128,7 @@ describe("session store availability", () => {
           entries: { ops: {}, research: {} },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "ops", env, storePath, sessionKey: "agent:ops:main" },
         { sessionId: "ops-session", updatedAt: 1 },

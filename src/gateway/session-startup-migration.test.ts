@@ -20,7 +20,6 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
-import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +27,7 @@ import * as gatewayLock from "../infra/gateway-lock.js";
 import * as gatewayOwner from "../infra/gateway-owner-lease.js";
 import * as stateOwner from "../infra/gateway-state-owner.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -87,18 +87,23 @@ describe("runStartupSessionMaintenanceForTest", () => {
         for (let boot = 0; boot < 2; boot++) {
           await closeOpenClawAgentDatabasesAsync();
           closeOpenClawAgentDatabasesForTest(stateDir);
+          if (boot === 0) {
+            for (const agentId of agentIds) {
+              revokeSqliteDatabaseAdmissionsForPath(
+                resolveOpenClawAgentSqlitePath({ agentId, env }),
+              );
+            }
+          }
           started.mockClear();
           const log = makeLog();
           await runStartupSessionMaintenanceForTest({ cfg, env, log });
           for (const agentId of agentIds) {
-            const read = withCanonicalSessionValidationDeferral(() =>
-              loadExactSessionEntryReadOnly({
-                agentId,
-                env,
-                sessionKey: `agent:${agentId}:first-turn`,
-              }),
-            );
-            expect(read).toEqual({ kind: "complete", value: undefined });
+            const read = loadExactSessionEntryReadOnly({
+              agentId,
+              env,
+              sessionKey: `agent:${agentId}:first-turn`,
+            });
+            expect(read).toBeUndefined();
             expect(
               withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, {
                 agentId,
@@ -354,19 +359,17 @@ describe("runStartupSessionMaintenanceForTest", () => {
           ),
         ).toBe(true);
         expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
-        if (layout === "default") {
-          const history = await readSessionMessagesPageWithStatsAsync(scope, {
-            maxMessages: 10,
-            offset: 0,
-          });
-          expect(history.messages).toEqual([
-            expect.objectContaining({ role: "user", content: "retained history" }),
-          ]);
-        }
         await runGatewaySessionStartupMaintenance({ databases, log });
 
         const reopened = openOpenClawAgentDatabase(options);
         expect(sessionTranscriptIndexNeedsReconcile(reopened.db, scope.sessionId)).toBe(false);
+        const history = await readSessionMessagesPageWithStatsAsync(scope, {
+          maxMessages: 10,
+          offset: 0,
+        });
+        expect(history.messages).toEqual([
+          expect.objectContaining({ role: "user", content: "retained history" }),
+        ]);
         expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
         expect(log.warn).not.toHaveBeenCalled();
         if (layout !== "default") {

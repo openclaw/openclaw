@@ -71,8 +71,6 @@ async function setTheme(page: Page, mode: "dark" | "light") {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
 }
@@ -234,7 +232,9 @@ suite.define(() => {
         }
         await pollLocatorText(hero).toBe("Pacino");
         await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
-        const selectedAgent = picker.locator("wa-dropdown-item[data-agent-option][data-selected]");
+        const selectedAgent = picker.locator(
+          ".agent-select__option[data-agent-option][data-selected]",
+        );
         await pollLocatorText(selectedAgent).toContain("Pacino");
         await expect
           .poll(() => selectedAgent.evaluate((element) => document.activeElement === element))

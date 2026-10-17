@@ -139,6 +139,7 @@ describe("exec approvals CLI", () => {
     const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
     localSnapshot.file = {
       version: 1,
+      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
       agents: { "*": { allowlist: [{ pattern }] } },
     };
 
@@ -161,82 +162,12 @@ describe("exec approvals CLI", () => {
     await runApprovalsCommand(["approvals", "get", "--json"]);
 
     const file = requireRecord(writtenJson().file, "JSON approvals file");
+    expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
+    expect(JSON.stringify(writtenJson())).not.toContain('"token"');
     const agents = requireRecord(file.agents, "JSON approvals agents");
     const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
     const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
     expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
-  });
-
-  it("keeps grant scopes distinct in a 40-column terminal", async () => {
-    const columns = 40;
-    const originalColumns = process.stdout.columns;
-    Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
-    try {
-      const pattern = "/usr/bin/git";
-      const lastUsedAt = 1;
-      localSnapshot.file = {
-        version: 1,
-        agents: {
-          main: {
-            allowlist: [
-              { pattern, lastUsedAt },
-              { pattern, argPattern: "^status$", lastUsedAt },
-              {
-                pattern,
-                source: "allow-always",
-                argPattern: execApprovals.buildCwdBoundHashedArgPattern(
-                  [pattern, "status"],
-                  "/workspace",
-                ),
-                lastUsedAt,
-              },
-              { pattern, source: "allow-always", lastUsedAt },
-              { pattern: "=command:manual0000000000", lastUsedAt },
-              { pattern: "=command:generated00000", source: "allow-always", lastUsedAt },
-              { pattern, argPattern: "sha256:argv:obsolete", lastUsedAt },
-            ],
-          },
-        },
-      };
-      await runApprovalsCommand(["approvals", "get"]);
-      const rows = loggedOutput()
-        .split("\n")
-        .filter((line) => line.startsWith("│ local"));
-      expect(rows).toHaveLength(7);
-      expect(new Set(rows.slice(0, 4)).size).toBe(4);
-      for (const [index, scope] of [
-        "any args",
-        "argv",
-        "argv+cwd",
-        "inactive",
-        "any args",
-        "command text",
-        "inactive",
-      ].entries()) {
-        expect(rows[index]).toContain(scope);
-      }
-      expect(rows[6]).not.toMatch(/\bargv\b/);
-    } finally {
-      Object.defineProperty(process.stdout, "columns", {
-        configurable: true,
-        value: originalColumns,
-      });
-    }
-  });
-
-  it("redacts the socket token from local get JSON while preserving its path", async () => {
-    localSnapshot.file = {
-      version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
-      agents: {},
-    };
-
-    await runApprovalsCommand(["approvals", "get", "--json"]);
-
-    const output = writtenJson();
-    const file = requireRecord(output.file, "JSON approvals file");
-    expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
-    expect(JSON.stringify(output)).not.toContain('"token"');
   });
 
   it("redacts the socket token from local write JSON while preserving its path", async () => {

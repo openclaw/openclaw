@@ -1,5 +1,4 @@
-import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -33,6 +32,7 @@ function projectDemand(
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>,
   excludeSessionId?: string,
 ): ReadonlyMap<string, number> {
+  const config = sources.resolveGatewayContext()?.getRuntimeConfig();
   const demand = new Map<string, number>();
   const countedEnvironments = new Set<string>();
   for (const [scope, identities] of admissions.targets) {
@@ -40,6 +40,7 @@ function projectDemand(
       const placement = placements.get(identity);
       if (
         !placement ||
+        scope !== resolveSessionStorePathForScope(placement, config) ||
         placement.sessionId === excludeSessionId ||
         placement.state !== "active" ||
         placement.executionMode !== "worker-turn" ||
@@ -50,21 +51,6 @@ function projectDemand(
           sessionId: placement.sessionId,
         })
       ) {
-        continue;
-      }
-      const target = {
-        storePath: scope,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-      };
-      const metadata = captureSessionEntryMetadataRead(target);
-      const entry = metadata
-        ? metadata.readCurrent()
-        : loadExactSessionEntryReadOnly({
-            ...target,
-            projection: "list",
-          })?.entry;
-      if (entry?.sessionId !== placement.sessionId) {
         continue;
       }
       const environment = sources.environments.get(placement.environmentId);

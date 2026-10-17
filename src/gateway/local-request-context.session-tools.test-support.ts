@@ -7,6 +7,7 @@ import {
 import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { persistAgentSessionMessage } from "../agents/sessions/agent-session-transcript.js";
+import type { AgentSessionEvent } from "../agents/sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
@@ -203,9 +204,9 @@ export async function withDelayedSessionToolsSteering(
     message: PersistedUserTurnMessage;
     recorder: UserTurnTranscriptRecorder;
   }> = [];
-  const listeners = new Set<(event: unknown) => void>();
+  const listeners = new Set<(event: AgentSessionEvent) => unknown>();
   const settled = createDeferredCore();
-  const emit = (event: unknown) => {
+  const emit = (event: AgentSessionEvent) => {
     for (const listener of listeners) {
       listener(event);
     }

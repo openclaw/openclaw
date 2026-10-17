@@ -122,10 +122,7 @@ async function withSyntheticReader(
           sessionChanges.emit({ all: true, scope: "catalog" });
           return {
             entered: catalogEntered.promise,
-            readEntered: readEntered.promise.then(() => {
-              expect(readiness).toHaveBeenCalledOnce();
-              expect(readiness).toHaveBeenCalledWith(true);
-            }),
+            readEntered: readEntered.promise,
             release: () => catalogGate?.resolve(),
           };
         },

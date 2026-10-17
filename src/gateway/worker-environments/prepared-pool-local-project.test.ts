@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { RECEIPT, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";

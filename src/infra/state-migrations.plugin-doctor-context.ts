@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   inspectAcpSessionClaimsForDoctor,
@@ -20,7 +19,10 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.worker.js";
-import { dedupeSessionStoreTargetsBySqliteTarget } from "../config/sessions/targets.js";
+import {
+  dedupeSessionStoreTargetsBySqliteTarget,
+  type SessionStoreTarget as DoctorSessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";
 import {
@@ -53,6 +55,7 @@ import {
   resolveVerifiedSessionSource,
 } from "./deferred-plugin-session-sources.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -63,8 +66,6 @@ import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 type SessionEvidenceResult = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
 >[number];
-type DoctorSessionStoreTarget = { agentId: string; storePath: string };
-
 type SessionSourceEvidence = { imported: boolean; sessionIds: ReadonlySet<string> };
 
 function hasUnimportedSessionIdentity(params: {
@@ -111,7 +112,12 @@ function hasUnimportedSessionIdentity(params: {
           const index = receipt.sources.find((source) => source.path === path.resolve(storePath));
           if (
             !index ||
-            !resolveVerifiedSessionSource(index, { agentId, storePath, sqlitePath }, params.env)
+            !resolveVerifiedSessionSource(
+              index,
+              { agentId, storePath, sqlitePath },
+              params.env,
+              new Map(),
+            )
           ) {
             throw new Error(`Retained plugin session index requires Doctor repair: ${storePath}`);
           }
@@ -334,7 +340,7 @@ async function repairPluginStateEntriesForDoctor(params: {
     authority.assertCurrent();
     assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
   };
-  const validate = (db: DatabaseSync) => {
+  const validate = (db: EngineConnection) => {
     for (const { entry } of rows) {
       const query = getPluginStateKysely(db)
         .selectFrom("plugin_state_entries")

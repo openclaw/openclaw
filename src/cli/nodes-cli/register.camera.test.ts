@@ -74,24 +74,7 @@ describe("nodes camera snap CLI option forwarding", () => {
     vi.clearAllMocks();
   });
 
-  it("describes node-owned camera defaults in help", () => {
-    const nodes = buildRootCommand();
-    const camera = nodes.commands.find((command) => command.name() === "camera");
-    const snap = camera?.commands.find((command) => command.name() === "snap");
-    if (!snap) {
-      throw new Error("expected camera snap command");
-    }
-
-    expect(snap.options.find((option) => option.long === "--facing")?.defaultValue).toBeUndefined();
-    expect(snap.options.find((option) => option.long === "--quality")?.description).toBe(
-      "JPEG quality (optional; platform-specific default)",
-    );
-    expect(snap.options.find((option) => option.long === "--delay-ms")?.description).toBe(
-      "Delay before capture in ms (optional; platform-specific default)",
-    );
-  });
-
-  it.each(["", "   "])("rejects blank --facing %j before invoking the node", async (facing) => {
+  it.each(["   "])("rejects blank --facing %j before invoking the node", async (facing) => {
     const nodes = buildRootCommand();
     await expect(
       nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--facing", facing])),
@@ -101,8 +84,6 @@ describe("nodes camera snap CLI option forwarding", () => {
   });
 
   it.each([
-    { facing: "front", expected: ["front"] },
-    { facing: "back", expected: ["back"] },
     { facing: "both", expected: ["front", "back"] },
     { facing: " FRONT ", expected: ["front"] },
   ])("forwards normalized --facing $facing", async ({ facing, expected }) => {

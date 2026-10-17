@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -28,7 +28,7 @@ const SOURCE_PREFIX = "notifications.mentions.source.";
 const SOURCE_END = "notifications.mentions.source/";
 
 /** The existing machine-state primary key owns lookup; this feature creates no schema. */
-export function readMentionStoreHead(database: DatabaseSync): MentionStoreHead {
+export function readMentionStoreHead(database: EngineConnection): MentionStoreHead {
   const admitted = getSqliteDatabaseAdmission(database, headAdmission);
   if (admitted) {
     return admitted;
@@ -47,7 +47,7 @@ export function readMentionStoreHead(database: DatabaseSync): MentionStoreHead {
 
 export function readMentionStoreSnapshot(
   revision: number,
-  database: DatabaseSync,
+  database: EngineConnection,
 ): MentionStoreSnapshot | undefined {
   const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
   if (getSqliteDatabaseAdmission(database, headAdmission)?.revision === revision) {
@@ -124,7 +124,7 @@ export function readMentionStoreSnapshot(
 
 /** Called only inside the owning SQLite write transaction. */
 export function writeMentionStoreChanges(
-  database: DatabaseSync,
+  database: EngineConnection,
   head: MentionStoreHead,
   changes: ReadonlyMap<string, MentionStoreSource | undefined>,
 ): MentionStoreHead {

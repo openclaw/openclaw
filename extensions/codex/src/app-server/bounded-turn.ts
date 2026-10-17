@@ -13,7 +13,7 @@ import {
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
@@ -67,7 +67,7 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 };
 
 export type CodexBoundedTurnOptions = {
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 
@@ -85,7 +85,10 @@ type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode:
 class CodexBoundedTurnTimeoutError extends Error {
   override name = "TimeoutError";
 
-  constructor(taskLabel: string, timeoutMs: number) {
+  constructor(
+    taskLabel: string,
+    readonly timeoutMs: number,
+  ) {
     const bound = timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`;
     super(`codex app-server ${taskLabel} turn timed out after ${bound}`);
   }

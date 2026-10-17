@@ -13,6 +13,7 @@ import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
 } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectInFlightRunSnapshot } from "../../gateway/chat-inflight-snapshot.js";
 import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
@@ -105,6 +106,7 @@ it.each(policyCases)(
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
         tools: { profile, alsoAllow },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const attempt = await attemptFor(state, config, agent, "full");
       try {
@@ -213,6 +215,7 @@ it.for(["complete", "revoke"] as const)(
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdPromptReply: true,
         receiptEndpoint: receipts.endpoint,
@@ -309,6 +312,7 @@ it.for([
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdModeControl: true,
         receiptEndpoint: receipts.endpoint,
@@ -427,6 +431,7 @@ it.each(["cancel", "timeout", "revoke"] as const)(
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdNewSession: true,
       });
@@ -505,6 +510,7 @@ it.each([
         ...restrictions,
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const attempt = await attemptFor(state, config, "opencode", "full");
       try {
@@ -537,6 +543,7 @@ it.each([
           ...(mandatorySandbox === "exec" ? { exec: { host: "sandbox" as const } } : {}),
         },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const attempt = await attemptFor(state, config, "opencode", "full");
       try {

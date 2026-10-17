@@ -45,7 +45,7 @@ function resolveLlmTaskModelRef(params: {
   }
 
   const cfg = params.api.config;
-  const aliasIndex = cfg ? buildModelAliasIndex({ cfg, defaultProvider }) : undefined;
+  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
   const resolved = resolveModelRefFromString({
     cfg,
     raw: rawModel,
@@ -72,14 +72,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = api.pluginConfig ?? {};
 
-      const defaultsModel = api.config?.agents?.defaults?.model;
+      const defaultsModel = api.config.agents?.defaults?.model;
       const primary =
         typeof defaultsModel === "string"
           ? normalizeOptionalString(defaultsModel)
           : normalizeOptionalString(defaultsModel?.primary);
-      const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
-      const primaryModel =
-        typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+      const primaryProvider = primary?.split("/")[0];
+      const primaryModel = primary?.split("/").slice(1).join("/");
 
       const requestProvider = normalizeOptionalString(params.provider);
       const configuredProvider = normalizeOptionalString(pluginCfg.defaultProvider);

@@ -1,6 +1,6 @@
 import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { App } from "@modelcontextprotocol/ext-apps";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -10,7 +10,7 @@ import { createSolidApplicationContextProvider } from "../test-helpers/solid-app
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { bindMcpAppResourceHandlers, OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
-import { McpAppConfirm } from "./mcp-app-confirm.ts";
+import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
@@ -19,7 +19,7 @@ import {
   type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import type { McpAppViewElement } from "./mcp-app-view-owner.ts";
 import { McpAppView } from "./mcp-app-view.tsx";
 
 const transportMocks = vi.hoisted(() => ({ next: undefined as (() => unknown) | undefined }));
@@ -54,20 +54,11 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   document.body.append(root, frame);
   frame.checkVisibility = () => true;
   let disposed = false;
-  let prompted = createDeferred();
-  const [revision, setRevision] = createSignal(0);
-  const confirmation = new McpAppConfirm(() => {
-    setRevision((value) => value + 1);
-    flush();
-    prompted.resolve();
-  });
+  const confirmation = createMcpAppConfirm();
   const mounted = mountSolid(
     () =>
       createComponent(McpAppConfirmation, {
         confirmation,
-        get revision() {
-          return revision();
-        },
       }),
     { container: root },
   );
@@ -113,9 +104,8 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   try {
     for (const action of ["Cancel", "Open", "retire"] as const) {
       frame.focus();
-      prompted = createDeferred();
       const opening = open();
-      await Promise.race([prompted.promise, opening]);
+      await waitForSolid(() => expect(mounted.getByRole("alertdialog")).toBeDefined());
       const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]');
       expect(dialog).not.toBeNull();
       expect(dialog!.textContent).toContain("Parts library");
@@ -209,6 +199,23 @@ it("negotiates extension capabilities and preserves rich request metadata over t
       "openai/deepLink": { url: "/parts?q=bolt" },
       "openai/modelContext": null,
     });
+    for (const block of [
+      { type: "text", text: 1 },
+      { type: "image", data: 1, mimeType: "image/png" },
+      { type: "resource_link", uri: 1, name: "Part" },
+      { type: "resource_link", uri: "parts://bolt", name: 1 },
+      { type: "resource", resource: { uri: 1, text: "Part" } },
+      { type: "resource", resource: { uri: "parts://bolt", text: 1 } },
+      { type: "resource", resource: { uri: "parts://bolt", blob: 1 } },
+    ]) {
+      await expect(
+        app.request(
+          { method: "ui/message", params: { role: "user", content: [block] } },
+          z.object({ isError: z.boolean().optional() }),
+        ),
+      ).rejects.toThrow("Invalid params for ui/message");
+    }
+    expect(received).not.toHaveBeenCalled();
     const content = [
       {
         type: "text" as const,

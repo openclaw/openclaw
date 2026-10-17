@@ -99,6 +99,14 @@ export function createSessionManagerPublicationHooks(params: {
           entryPublication.flatMap((receipt) => Array.from(receipt.facts.keys())),
           new Map(),
           unchanged,
+          undefined,
+          new Map(
+            entryPublication.flatMap((receipt) =>
+              [...receipt.facts].flatMap(([key, fact]) =>
+                fact.kind === "postimage" ? [[key, fact.value.entry] as const] : [],
+              ),
+            ),
+          ),
         );
       }
       pending.transcript.begin(transcriptPublication);

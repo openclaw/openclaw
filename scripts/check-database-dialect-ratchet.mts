@@ -35,7 +35,12 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     );
     const counts = (rows: ReturnType<typeof inventory>, group: DialectGroup) =>
       new Map(
-        rows.map((row) => [row.file, row.matches.filter((match) => match.group === group).length]),
+        rows.map((row) => [
+          row.file,
+          row.matches.filter(
+            (match) => match.group === group && !(group === "engine-maintenance" && match.owner),
+          ).length,
+        ]),
       );
     const total = (fileCounts: ReadonlyMap<string, number>) =>
       [...fileCounts.values()].reduce((sum, count) => sum + count, 0);
@@ -66,12 +71,25 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       }
     }
     const owners = head.reduce(
-      (sum, row) => sum + row.matches.filter((match) => match.owner).length,
+      (sum, row) =>
+        sum +
+        row.matches.filter((match) => match.owner && match.construct === "json-string-set").length,
       0,
     );
     console.log(
       `SQLite string-set owner: ${owners} mechanical occurrences in ${scope} (included above).`,
     );
+    const primitiveOwners = head.flatMap((row) =>
+      row.matches
+        .filter((match) => match.owner && match.group === "engine-maintenance")
+        .map((match) => `${row.file}:${match.line}:${match.column} ${match.construct} (owner)`),
+    );
+    console.log(
+      `SQLite primitive owners: ${primitiveOwners.length} engine-maintenance matches in ${scope} (excluded from comparison).`,
+    );
+    for (const match of primitiveOwners) {
+      console.log(match);
+    }
     if (
       reportRatchetFailures(
         failures,

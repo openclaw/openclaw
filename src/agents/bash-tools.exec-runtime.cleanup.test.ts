@@ -26,6 +26,10 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+// mock-isolation: Process lifecycle tests use synthetic destinations; durable notification behavior has its own owner suite.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  patchSessionEntryCore: async () => null,
+}));
 const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -305,8 +309,7 @@ it.each([
     const entered = createDeferred();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
-    const cleanupFailure =
-      "sandbox artifact cleanup failed: API_TOKEN = computeToken(); Authorization: Bearer sk-fixture1234567890";
+    const cleanupFailure = "sandbox artifact cleanup failed";
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput): Promise<ManagedRun> => ({
       activity: { resultSettled: true, lastOutputAtMs: Date.now() },
       runId: input.runId ?? "test-run",

@@ -129,7 +129,7 @@ describe("zalouser doctor state migration", () => {
       ...legacy,
       createdAt,
     });
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it("archives legacy credentials without restoring an explicitly cleared profile", async () => {
@@ -173,7 +173,7 @@ describe("zalouser doctor state migration", () => {
       "Archived revoked Zalo Personal credential legacy source for profile work",
       expect.stringContaining("Archived Zalo Personal credentials legacy source"),
     ]);
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it("does not inspect agent session stores when zalouser has never been configured", async () => {
@@ -222,6 +222,7 @@ describe("zalouser doctor state migration", () => {
         sessionId: "session-1",
         updatedAt: 1,
         chatType: "direct",
+        skillsSnapshot: { prompt: "Retained session skill context", skills: [] },
         delivery: normalizeSessionDeliveryState({
           context: { channel: "zalouser", accountId: "default" },
         }),
@@ -251,7 +252,11 @@ describe("zalouser doctor state migration", () => {
     );
     expect(entries.has(legacyKey)).toBe(false);
     expect(entries.has(groupKey)).toBe(true);
-    expect(entries.get(canonicalKey)).toMatchObject({ sessionId: "session-1", chatType: "direct" });
+    expect(entries.get(canonicalKey)).toMatchObject({
+      sessionId: "session-1",
+      chatType: "direct",
+      skillsSnapshot: { prompt: "Retained session skill context", skills: [] },
+    });
   });
 
   it("keeps the freshest session when identity links collapse legacy peers", async () => {

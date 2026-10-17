@@ -115,17 +115,17 @@ describe("memory-core doctor QMD migration", () => {
     ]) {
       await expect(fs.readFile(path.join(qmdHome, relativePath), "utf8")).resolves.toBe("derived");
     }
-    await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
+    await fs.access(canonicalAgentFile);
     await expect(fs.readFile(retainedResetTranscript, "utf8")).resolves.toContain(
       "Retained reset transcript recall fact",
     );
     expect((await buildSessionEntry(retainedResetTranscript))?.content).toBe(
       "User: Retained reset transcript recall fact",
     );
-    await expect(fs.access(invalidAgentQmdHome)).resolves.toBeUndefined();
-    await expect(fs.access(path.join(externalModels, "model.bin"))).resolves.toBeUndefined();
+    await fs.access(invalidAgentQmdHome);
+    await fs.access(path.join(externalModels, "model.bin"));
     expect((await fs.lstat(symlinkHome)).isSymbolicLink()).toBe(true);
-    await expect(fs.access(path.join(symlinkHomeTarget, "index.sqlite"))).resolves.toBeUndefined();
+    await fs.access(path.join(symlinkHomeTarget, "index.sqlite"));
     await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
       changes: [],
@@ -247,9 +247,9 @@ describe("memory-core doctor QMD migration", () => {
         `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${malformedLockPath}`,
       ],
     });
-    await expect(fs.access(globalLockPath)).resolves.toBeUndefined();
+    await fs.access(globalLockPath);
     await expect(fs.readFile(malformedLockPath, "utf8")).resolves.toBe("{");
     expect((await fs.lstat(symlinkLockPath)).isSymbolicLink()).toBe(true);
-    await expect(fs.access(symlinkTargetPath)).resolves.toBeUndefined();
+    await fs.access(symlinkTargetPath);
   });
 });

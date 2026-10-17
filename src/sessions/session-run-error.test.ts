@@ -67,6 +67,7 @@ describe("recordGatewaySessionRunFailure", () => {
       customType: "run-failed-before-reply",
       content,
       display: true,
+      excludeFromContext: true,
       details: { runId: "failed-run", error: diagnostic },
     });
   });

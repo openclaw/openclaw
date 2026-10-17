@@ -1,3 +1,4 @@
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import {
@@ -102,14 +103,14 @@ function closeAgentDatabaseExecution({
     }
   }
   throwSqliteLifecycleErrors(errors, "Agent database cleanup failed");
-  if (identity && checkpoint) {
+  if (identity && (checkpoint || (database && isPostgresSqlConnection(database.db)))) {
     return {
       identity: {
         key: `file:${identity.physicalIdentity}`,
         canonicalPath: identity.nativeLocation,
       },
       incarnation: identity.incarnation,
-      checkpoint,
+      ...(checkpoint ? { checkpoint } : {}),
     };
   }
   return undefined;

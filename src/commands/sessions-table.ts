@@ -46,6 +46,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry) {
     responseUsage: entry?.responseUsage,
     groupActivation: entry?.groupActivation,
     inputTokens: entry?.inputTokens,
+    usageReport: entry?.usageReport,
     outputTokens: entry?.outputTokens,
     totalTokens: entry?.totalTokens,
     totalTokensFresh: entry?.totalTokensFresh,

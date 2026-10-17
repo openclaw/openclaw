@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
@@ -93,6 +94,19 @@ it("does not admit another route when the authored broker is unavailable", async
   vi.mocked(openSystemdBroker).mockRejectedValue(new Error("broker unavailable"));
   expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
   expect(openSystemdBroker).toHaveBeenCalledOnce();
+  expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
+});
+
+it("preserves unsettled transport probe cleanup instead of admitting a fallback", async () => {
+  const failure = new CommandProcessCleanupError();
+  vi.mocked(execFileUtf8).mockRejectedValueOnce(failure);
+  await expect(
+    admitSystemdServiceReadBinding(
+      { ...env, DBUS_SESSION_BUS_ADDRESS: "unix:path=/custom/unsettled-bus" },
+      performance.now() + 1000,
+    ),
+  ).rejects.toBe(failure);
+  expect(openSystemdBroker).not.toHaveBeenCalled();
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
 });
 

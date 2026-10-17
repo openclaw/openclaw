@@ -1,5 +1,6 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
+import { isDeepStrictEqual } from "node:util";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
@@ -30,6 +31,10 @@ import {
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
 import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "../../ingress-attribution.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
@@ -181,7 +186,11 @@ export function resolveGatewayConnectPolicyFailure(
       return { kind: "origin", reason: originCheck.reason };
     }
   }
-  if (!isGatewayAuthPolicyCurrent(state.authPolicy)) {
+  // Pending handshakes must not issue credentials under a superseded role policy.
+  if (
+    !isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles) ||
+    !isGatewayAuthPolicyCurrent(state.authPolicy)
+  ) {
     return { kind: "auth" };
   }
   if (
@@ -274,10 +283,34 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     close(1008, "invalid role");
     return undefined;
   }
-  // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
+  // Default-deny, except signed ingress requests may select their live grant ceiling.
   // Note: If the client does not present a device identity, we can't bind scopes to a paired
   // device/token, so we will clear scopes after auth to avoid self-declared permissions.
   const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+  const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  if (remoteIngress) {
+    const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
+      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      : role !== "operator"
+        ? "Remote Control UI ingress only admits the operator role."
+        : !connectParams.device
+          ? "Remote Control UI ingress requires a signed device identity."
+          : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
+            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            : !roleScopesAllow({
+                  role,
+                  requestedScopes: scopes,
+                  allowedScopes: remoteIngress.operatorScopeCeiling,
+                })
+              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              : undefined;
+    if (denied) {
+      markHandshakeFailure("remote-control-ui-admission-denied");
+      sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, denied);
+      close(1008, truncateCloseReason(denied));
+      return undefined;
+    }
+  }
   connectParams.role = role;
   connectParams.scopes = scopes;
 

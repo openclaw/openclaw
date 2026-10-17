@@ -7,6 +7,7 @@ import type {
 import type { SessionEntryReplacement, TranscriptEvent } from "./session-accessor.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionNativeBindingParticipants } from "./session-native-binding.types.js";
+import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
@@ -14,6 +15,7 @@ export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 export type SessionEntryReplacementCommit = {
+  sources?: SessionSourcePredicate[];
   nativeBindings?: SessionNativeBindingParticipants;
   expectedRows: Map<string, ResolvedSessionEntryRow>;
   labelOwnerKeys: string[];

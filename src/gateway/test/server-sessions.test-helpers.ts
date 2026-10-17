@@ -121,10 +121,6 @@ const sessionCleanupMocks = vi.hoisted(() => ({
   stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
-const bootstrapCacheMocks = vi.hoisted(() => ({
-  clearBootstrapSnapshot: vi.fn(),
-}));
-
 const sessionHookMocks = vi.hoisted(() => ({
   hasInternalHookListeners: vi.fn(() => true),
   triggerInternalHook: vi.fn(async (_eventValue: unknown) => {}),
@@ -201,16 +197,6 @@ vi.mock("../../auto-reply/reply/session-reset-cleanup.js", async () => {
   return {
     ...actual,
     stopSessionResetSubagents: sessionCleanupMocks.stopSessionResetSubagents,
-  };
-});
-
-vi.mock("../../agents/bootstrap-cache.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/bootstrap-cache.js")>(
-    "../../agents/bootstrap-cache.js",
-  );
-  return {
-    ...actual,
-    clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
   };
 });
 
@@ -320,7 +306,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     clearConfigCache();
     sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
-    bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
@@ -581,6 +566,7 @@ export async function directSessionReq<TPayload = unknown>(
     client?: SessionsHandlerOptions["client"];
     isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
+    hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{
@@ -657,6 +643,7 @@ export async function directSessionReq<TPayload = unknown>(
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
     sessionMutationAuthorization: opts?.sessionMutationAuthorization,
+    hasCurrentClientAuthority: opts?.hasCurrentClientAuthority,
   });
   await flushPendingSessionsChangedEvents(context);
   if (!result) {
@@ -685,7 +672,6 @@ export function setSessionLifecycleHookRunnerForTest(runner: HookRunner | undefi
 }
 
 export {
-  bootstrapCacheMocks,
   sessionHookMocks,
   beforeResetHookMocks,
   sessionLifecycleHookMocks,

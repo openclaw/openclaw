@@ -1,10 +1,11 @@
 /** Read loaded service commands without loading units or reading their environment files. */
-import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { pathEntryExists } from "../infra/path-existence.js";
+import { classifyGatewayCommand } from "./inspect-markers.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { execSystemctl, execSystemctlUser } from "./systemd-exec.js";
+import { readSystemdServiceCommandLocation } from "./systemd-service-files.js";
 
 const INSPECTION_TIMEOUT_MS = 15_000;
 
@@ -14,21 +15,30 @@ export type LoadedSystemdUnit = {
   execStart: string;
 };
 
-async function exists(file: string): Promise<boolean> {
-  try {
-    await fs.lstat(file);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
+export async function isLoadedSystemdMaintenanceCommand(
+  unit: LoadedSystemdUnit,
+  scope: "user" | "system",
+  env: GatewayServiceEnv,
+): Promise<boolean> {
+  // Display text loses argv boundaries. Confirm maintenance commands from the
+  // loaded definition without reading credentials; unknown commands stay guarded.
+  const location = await readSystemdServiceCommandLocation(env, {
+    scope,
+    unitName: unit.name,
+    unitPath: unit.fragmentPath,
+  });
+  return (
+    location.kind === "command" &&
+    classifyGatewayCommand(location.command.programArguments) === "maintenance"
+  );
 }
 
-async function hasManager(scope: "user" | "system", env: GatewayServiceEnv): Promise<boolean> {
+export async function hasSystemdManager(
+  scope: "user" | "system",
+  env: GatewayServiceEnv,
+): Promise<boolean> {
   if (scope === "system") {
-    return Boolean(env.DBUS_SYSTEM_BUS_ADDRESS) || (await exists("/run/systemd/system"));
+    return Boolean(env.DBUS_SYSTEM_BUS_ADDRESS) || (await pathEntryExists("/run/systemd/system"));
   }
   if (env.DBUS_SESSION_BUS_ADDRESS || env.SUDO_USER) {
     return true;
@@ -36,8 +46,8 @@ async function hasManager(scope: "user" | "system", env: GatewayServiceEnv): Pro
   const runtimeDir = env.XDG_RUNTIME_DIR || `/run/user/${process.geteuid?.()}`;
   return (
     path.isAbsolute(runtimeDir) &&
-    ((await exists(path.join(runtimeDir, "systemd/private"))) ||
-      (await exists(path.join(runtimeDir, "bus"))))
+    ((await pathEntryExists(path.join(runtimeDir, "systemd/private"))) ||
+      (await pathEntryExists(path.join(runtimeDir, "bus"))))
   );
 }
 
@@ -101,7 +111,7 @@ export async function listLoadedSystemdUnits(
   scope: "user" | "system",
   env: GatewayServiceEnv,
 ): Promise<LoadedSystemdUnit[]> {
-  if (!(await hasManager(scope, env))) {
+  if (!(await hasSystemdManager(scope, env))) {
     return [];
   }
   const run = (args: string[]) =>

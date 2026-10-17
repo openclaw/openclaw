@@ -35,7 +35,10 @@ import {
   resolveNextResponsesEncryptedContentAttempt,
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
-import { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
+import {
+  independentResponsesRequest,
+  responsesRequestLifecycle,
+} from "../transports/openai-responses-request-lifecycle.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { CompletedResponse } from "../transports/openai-responses-stream-types-internal.js";
 import {
@@ -366,7 +369,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       };
       const transport = options?.transport || "auto";
       let websocketAuthority: CodexWebSocketAuthority | undefined;
-      if (!transportHost.requiresManagedTransport(model)) {
+      if (!transportHost.requiresManagedTransport(model, "fetch")) {
         try {
           websocketAuthority = resolveCodexWebSocketAuthority({
             transport,
@@ -487,7 +490,11 @@ export const streamOpenAICodexResponses: StreamFunction<
                   .byteLength,
               }),
             );
-            if (transport === "auto" && options?.sessionId) {
+            if (
+              transport === "auto" &&
+              options?.sessionId &&
+              !independentResponsesRequest.has(options)
+            ) {
               addCodexWebSocketSseFallback(
                 websocketState.sseFallbacks,
                 options.sessionId,
@@ -532,21 +539,24 @@ export const streamOpenAICodexResponses: StreamFunction<
 
         let attemptResponse: Response;
         try {
+          const requestFetch = independentResponsesRequest.has(options)
+            ? transportHost.buildModelFetch(model)
+            : (buildManagedModelFetch(model, transportHost) ?? fetch);
+          if (!requestFetch) {
+            throw new Error("Independent ChatGPT requests require a host model fetch");
+          }
           const lifecycle = responsesRequestLifecycle.get(options);
           if (lifecycle) {
             await lifecycle.beforeDispatch(activeSignal);
             activeSignal?.throwIfAborted();
             lifecycle.assertCurrent();
           }
-          attemptResponse = await (buildManagedModelFetch(model, transportHost) ?? fetch)(
-            resolveCodexUrl(model.baseUrl),
-            {
-              method: "POST",
-              headers: sseHeaders,
-              body: sseBody,
-              signal: activeSignal,
-            },
-          );
+          attemptResponse = await requestFetch(resolveCodexUrl(model.baseUrl), {
+            method: "POST",
+            headers: sseHeaders,
+            body: sseBody,
+            signal: activeSignal,
+          });
         } catch (error) {
           if (error instanceof Error) {
             if (
@@ -644,9 +654,6 @@ export const streamOpenAICodexResponses: StreamFunction<
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
       compactRequest?.reject(normalizedError);
-      for (const block of output.content.filter((candidate) => candidate.type === "toolCall")) {
-        delete block.partialJson;
-      }
       const providerRefusal = readCodexProviderRefusal(normalizedError);
       if (providerRefusal) {
         appendAssistantMessageDiagnostic(output, {
@@ -697,6 +704,9 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   } satisfies OpenAICodexResponsesOptions;
   copyResponsesCompactRequest(options, resolvedOptions);
   responsesPromptObserver.copy(options, resolvedOptions);
+  if (independentResponsesRequest.has(options)) {
+    independentResponsesRequest.set(resolvedOptions);
+  }
   const lifecycle = responsesRequestLifecycle.get(options);
   if (lifecycle) {
     responsesRequestLifecycle.set(resolvedOptions, lifecycle);
@@ -851,10 +861,10 @@ function createWebSocketTransportError(message: string, cause?: Error): Error {
 }
 
 async function connectWebSocket(
-  url: string,
-  headers: Headers,
+  authority: CodexWebSocketAuthority,
   signal?: AbortSignal,
 ): Promise<WebSocketLike> {
+  const { url, headers, transportHost } = authority;
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
     throw new Error("WebSocket transport is not available in this runtime");
@@ -868,7 +878,10 @@ async function connectWebSocket(
     let socket: WebSocketLike;
 
     try {
-      socket = new WebSocketCtor(url, { headers: wsHeaders });
+      // The cached socket outlives the turn; its native resources must not retain that turn.
+      socket = transportHost.runInDetachedAsyncContext(
+        () => new WebSocketCtor(url, { headers: wsHeaders }),
+      );
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
@@ -923,7 +936,6 @@ async function acquireWebSocket(
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
-  const { url, headers } = authority;
   const lease = (socket: WebSocketLike, entry?: CachedWebSocketConnection) => ({
     socket,
     entry,
@@ -943,7 +955,7 @@ async function acquireWebSocket(
     },
   });
   if (!sessionId) {
-    return lease(await connectWebSocket(url, headers, signal));
+    return lease(await connectWebSocket(authority, signal));
   }
 
   const cached = state.sessionCache.get(sessionId);
@@ -967,7 +979,7 @@ async function acquireWebSocket(
       return lease(cached.socket, cached);
     }
     if (cached.busy) {
-      return lease(await connectWebSocket(url, headers, signal));
+      return lease(await connectWebSocket(authority, signal));
     }
 
     if (!isWebSocketReusable(cached.socket)) {
@@ -977,7 +989,7 @@ async function acquireWebSocket(
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(authority, signal);
   const entry: CachedWebSocketConnection = {
     socket,
     authority,
@@ -1191,10 +1203,11 @@ async function processWebSocketStream(
   onRequestSent?: (request: RequestBody) => void,
   activitySignal?: AbortSignal,
 ): Promise<CompletedResponse | null | undefined> {
+  // Independent requests must neither consume nor replace the parent's cached continuation.
   const { socket, entry, release } = await acquireWebSocket(
     state,
     authority,
-    options?.sessionId,
+    independentResponsesRequest.has(options) ? undefined : options?.sessionId,
     options?.signal,
   );
   let keepConnection = true;
@@ -1322,7 +1335,7 @@ async function readChatGptResponsesErrorTextLimited(
     signal?.removeEventListener("abort", onAbort);
     if (!completed) {
       // This provider module is browser-safe, so keep error-body cleanup on Web APIs.
-      await cancel();
+      void cancel();
     }
     try {
       reader.releaseLock();

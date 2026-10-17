@@ -88,7 +88,7 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   host: WorkerTaskHost;
   bootstrapError: () => Error | undefined;
   runInContext: <T>(operation: () => T) => T;
-  unavailableError: (message: string) => Error;
+  unavailableError: (message: string, cause?: unknown) => Error;
   onStarted: (worker: WorkerLifecycle) => void;
   onMessage: (message: unknown) => void;
   onFailure: (error: Error, nativeFailure?: true) => void;
@@ -171,8 +171,12 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
       params.onMessage(message);
     }
   });
-  worker.on("error", (error) => params.onFailure(params.unavailableError(String(error)), true));
-  worker.on("messageerror", (error) => params.onFailure(params.unavailableError(String(error))));
+  worker.on("error", (error) =>
+    params.onFailure(params.unavailableError(String(error), error), true),
+  );
+  worker.on("messageerror", (error) =>
+    params.onFailure(params.unavailableError(String(error), error)),
+  );
   worker.once("exit", (code) => {
     releaseWorkerNativeSectionsOnExit(slot.nativeSections);
     const wasCounted = counted;

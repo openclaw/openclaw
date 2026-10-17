@@ -107,7 +107,7 @@ export async function openSidebarPinMenu(page: Page, entry = "route:dashboards")
     .locator("openclaw-app-sidebar:visible")
     .locator(`[data-sidebar-entry="${entry}"]`);
   await row.locator("a, button").first().click({ button: "right" });
-  const menu = page.locator("wa-dropdown.sidebar-rail-pin-menu");
+  const menu = page.locator(".sidebar-rail-pin-menu");
   await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
   return menu;
 }

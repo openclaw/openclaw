@@ -5,12 +5,12 @@ import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
+  immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
-  countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -26,11 +26,11 @@ import {
   getSubagentRunsSnapshotForChildSession,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
-  withSubagentRunReadSnapshot,
+  prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
-import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
@@ -66,11 +66,27 @@ export function buildSubagentSessionListReadIndex(
     (sessionKeys
       ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
       : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
+  // Liveness copies carry runtime ownership; shared display facts must never acquire it.
   return buildSubagentRunReadIndexFromRuns({
     runs,
     inMemoryRuns: sessionKeys
-      ? [...runs.keys()].flatMap((runId) => subagentRuns.get(runId) ?? [])
-      : subagentRuns.values(),
+      ? [...runs.keys()].flatMap((runId) => {
+          const entry = subagentRuns.get(runId);
+          return entry
+            ? [
+                copySubagentRunRuntimeOwner(
+                  entry,
+                  Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+                ),
+              ]
+            : [];
+        })
+      : Array.from(subagentRuns.values(), (entry) =>
+          copySubagentRunRuntimeOwner(
+            entry,
+            Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
+          ),
+        ),
     now,
   });
 }
@@ -108,26 +124,11 @@ export async function countPendingDescendantRuns(
   assertCurrent: () => void,
 ): Promise<number> {
   assertCurrent();
-  const count = await withSubagentRunReadSnapshot(
-    subagentRuns,
-    (snapshot) => {
-      assertCurrent();
-      const sessionKeys = collectSubagentSessionReadKeys([rootSessionKey], snapshot.values());
-      return {
-        runIds: [...snapshot.values()]
-          .filter((entry) => sessionKeys.has(entry.childSessionKey.trim()))
-          .map((entry) => entry.runId),
-        sessionKeys: [],
-      };
-    },
-    (_selection, runs) => {
-      assertCurrent();
-      return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey);
-    },
-    { sessionKeys: [rootSessionKey], descendants: true },
-  );
+  await prepareSubagentSessionListReadCache();
   assertCurrent();
-  return count;
+  return buildSubagentSessionListReadIndex(Date.now(), [rootSessionKey]).countPendingDescendantRuns(
+    rootSessionKey,
+  );
 }
 
 export async function resolveRequesterForChildSession(
@@ -179,7 +180,15 @@ export function listSubagentRunsForRequester(
   options?: Parameters<typeof listRunsForRequesterFromRuns>[2],
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
-  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
+  const lookup = getSubagentSessionReadLookup(subagentRuns);
+  return listRunsForRequesterFromRuns(
+    subagentRuns,
+    requesterSessionKey,
+    options,
+    lookup
+      .selectReadScope([requesterSessionKey], lookup, false)
+      .map((runId) => subagentRuns.get(runId)!),
+  );
 }
 
 export async function getLatestSubagentRunByChildSessionKey(

@@ -11,12 +11,12 @@ import {
   CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
   buildCodexAppServerInitializeTimeoutError,
   CodexAppServerStartupError,
+  resolveCodexStartupTimeoutMs,
 } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
-  reconcileCodexComputerUseStartArtifacts,
 } from "./auth-bridge.js";
 import {
   CodexAppServerAuthProfileUnavailableError,
@@ -38,8 +38,10 @@ import {
   withCodexAppServerAcquireDeadline,
 } from "./client-startup-retry.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
-import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
+import type { CodexAppServerStartOptions, CodexPluginConfig } from "./config-contracts.js";
 import {
+  resolveCodexAppServerRequestTimeoutMs,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
 } from "./config-runtime.js";
@@ -74,15 +76,9 @@ import {
   getOrCreateSharedClientEntry,
   closeSharedClientEntryIfUnclaimed,
   getSharedCodexAppServerClientState,
-  observeAcquire,
-  observeSharedClientAcquire,
-  recordSharedClientAcquireBoundary,
   ownCodexStartup,
   rekeySharedClientEntry,
   retireSharedCodexAppServerClientIfCurrent,
-  retirePendingSharedClientEntryIfUnclaimed,
-  waitForUnclaimedSharedClientStartup,
-  type CodexAppServerAcquireObservation,
   type CodexAppServerStartupLifetime,
   type SharedCodexAppServerClientEntry,
   type SharedCodexAppServerClientStartup,
@@ -93,8 +89,6 @@ import {
   type CodexAppServerClientProcessIdentity,
 } from "./spawn-identity.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
-
-export type { CodexAppServerAcquireObservation } from "./shared-client-lifecycle.js";
 
 export {
   retireSharedCodexAppServerClientIfCurrent,
@@ -118,13 +112,11 @@ type CodexAppServerClientStartupOptions = Omit<
     | "timeoutMs"
     | "abandonSignal"
     | "onStartedClient"
-    | "onAcquireObservation"
     | "assertCurrent"
     | "assertCurrentAsync"
   > & {
     lifetime: CodexAppServerStartupLifetime;
     authProfileId: string | null | undefined;
-    onStartingClient?: (starting: Promise<CodexAppServerClient>) => void;
     onInitializedClient?: () => void;
     /** False asks this acquisition to join an already owned fallback startup. */
     onManagedFallback?: (startOptions: CodexAppServerStartOptions) => boolean;
@@ -142,7 +134,6 @@ async function prepareCodexAppServerClient(options?: CodexAppServerClientOptions
   };
   assertCurrent();
   const startedAt = performance.now();
-  observeAcquire(options, { boundary: "context" });
   const context = await withCodexAppServerAcquireDeadline(
     options?.timeoutMs ?? 0,
     ownCodexStartup(lifetime, resolveCodexAppServerClientStartContext(options, startedAt)),
@@ -182,7 +173,7 @@ export function readCodexAppServerClientDesktopGeneration(
 
 export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   timeoutMs?: number;
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
@@ -197,7 +188,6 @@ export type CodexAppServerClientOptions = {
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
-  onAcquireObservation?: (observation: CodexAppServerAcquireObservation) => void;
   abandonSignal?: AbortSignal;
   /** Caller authority for startup of an isolated, caller-owned client. */
   assertCurrent?: () => void;
@@ -343,7 +333,6 @@ async function resolveCodexAppServerClientStartContext(
       : {}),
     authRequirement,
     config: options?.config,
-    pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),
   });
   return {
@@ -397,11 +386,11 @@ export function releaseCodexAppServerClientLease(lease: CodexAppServerClientLeas
 export type CodexAppServerLeasedRequestOptions = {
   timeoutMs: number;
   signal?: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent?: () => void;
   withCurrent?: (write: () => void) => Promise<void>;
 };
 
-/** Shares a deadline and live lease check across one operation's requests. */
+/** Shares a deadline and caller authority across one operation's requests. */
 export async function withCodexAppServerClientRequestScope<T>(params: {
   lease: CodexAppServerClientLease;
   options?: CodexAppServerClientOptions;
@@ -418,6 +407,15 @@ export async function withCodexAppServerClientRequestScope<T>(params: {
   const timeoutMs = params.options?.timeoutMs ?? 60_000;
   const deadline = performance.now() + timeoutMs;
   const signal = params.signal ?? params.options?.abandonSignal;
+  const assertCurrent = params.options?.assertCurrent;
+  const assertCurrentAsync = params.options?.assertCurrentAsync;
+  const withCurrent = assertCurrentAsync
+    ? async (write: () => void) => {
+        await assertCurrentAsync();
+        assertCurrent?.();
+        write();
+      }
+    : undefined;
   const requestOptions = () => {
     if (signal?.aborted) {
       throw new CodexAppServerStartupError("aborted", "Codex app-server request aborted");
@@ -429,35 +427,12 @@ export async function withCodexAppServerClientRequestScope<T>(params: {
     return {
       timeoutMs: remainingTimeoutMs,
       ...(signal ? { signal } : {}),
+      ...(assertCurrent ? { assertCurrent } : {}),
+      ...(withCurrent ? { withCurrent } : {}),
     };
   };
-  let scopeActive = true;
-  const assertCurrent = () => {
-    if (!scopeActive || params.lease.client !== client) {
-      throw new CodexAppServerStartupError("aborted", "Codex app-server request scope is closed");
-    }
-  };
-  try {
-    requestOptions();
-    return await params.run(client, () => {
-      assertCurrent();
-      return {
-        ...requestOptions(),
-        assertCurrent,
-        ...(params.options?.assertCurrentAsync
-          ? {
-              withCurrent: async (write: () => void) => {
-                await params.options?.assertCurrentAsync?.();
-                assertCurrent();
-                write();
-              },
-            }
-          : {}),
-      };
-    });
-  } finally {
-    scopeActive = false;
-  }
+  requestOptions();
+  return await params.run(client, requestOptions);
 }
 
 async function acquireSharedCodexAppServerClient(
@@ -469,7 +444,6 @@ async function acquireSharedCodexAppServerClient(
   const { context, lifetime, abandonSignal, startedAt, assertCurrent } =
     await prepareCodexAppServerClient(options);
   assertCurrent();
-  observeAcquire(options, { boundary: "entry-selection" });
   const { usesNativeAuth, ...startContext } = context;
   const {
     agentDir,
@@ -497,10 +471,8 @@ async function acquireSharedCodexAppServerClient(
   });
   const key = keyFor(startOptions);
   const entry = getOrCreateSharedClientEntry(state, key);
-  entry.startupAbort ??= new AbortController();
   entry.closeWhenIdle = false;
   const releasePendingAcquire = retainSharedClientEntry(entry, "pendingAcquires");
-  const stopAcquireObservations = observeSharedClientAcquire(entry, options);
   const startedCallback = options?.onStartedClient;
   if (startedCallback) {
     entry.onStartedClientCallbacks.add(startedCallback);
@@ -509,26 +481,10 @@ async function acquireSharedCodexAppServerClient(
     }
   }
   const stopStartedClientNotifications = () => {
-    stopAcquireObservations();
     if (startedCallback) {
       entry.onStartedClientCallbacks.delete(startedCallback);
     }
   };
-  let cleanupAbandonSignal: (() => void) | undefined;
-  if (options?.abandonSignal) {
-    const abandon = () => {
-      // Release this acquire before cleanup checks ownership; only other
-      // pending callers should keep the startup client alive.
-      stopStartedClientNotifications();
-      releasePendingAcquire();
-      retirePendingSharedClientEntryIfUnclaimed(entry);
-    };
-    options.abandonSignal.addEventListener("abort", abandon, { once: true });
-    cleanupAbandonSignal = () => options.abandonSignal?.removeEventListener("abort", abandon);
-    if (options.abandonSignal.aborted) {
-      abandon();
-    }
-  }
   const startup =
     entry.startup ??
     (entry.startup = createSharedCodexAppServerClientStartup({
@@ -539,7 +495,9 @@ async function acquireSharedCodexAppServerClient(
       authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
       runtimeArtifactMode,
       expectedRuntimeArtifact: options?.expectedRuntimeArtifact,
-      abandonSignal: entry.startupAbort.signal,
+      timeoutMs: resolveCodexStartupTimeoutMs({
+        requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(options?.pluginConfig),
+      }),
       config: options?.config,
     }));
   try {
@@ -551,7 +509,7 @@ async function acquireSharedCodexAppServerClient(
       () => buildCodexAppServerInitializeTimeoutError(entry.client),
     );
     const client = await withCodexAppServerAcquireDeadline(
-      timeoutMs,
+      resolveRemainingAcquireTimeout(timeoutMs, startedAt),
       startup.ready,
       abandonSignal,
       "codex app-server authentication timed out",
@@ -577,12 +535,6 @@ async function acquireSharedCodexAppServerClient(
     }
     return client;
   } catch (error) {
-    // This deadline belongs to one waiter, not the shared physical client.
-    // Release first so only the final claimant can tear down stalled startup.
-    releasePendingAcquire();
-    retirePendingSharedClientEntryIfUnclaimed(entry);
-    observeAcquire(options, { boundary: "cleanup" });
-    await waitForUnclaimedSharedClientStartup(entry);
     if (isSharedCodexFallbackJoinError(error)) {
       return acquireSharedCodexAppServerClient(
         { ...options, timeoutMs: resolveRemainingAcquireTimeout(timeoutMs, startedAt) },
@@ -591,7 +543,6 @@ async function acquireSharedCodexAppServerClient(
     }
     throw error;
   } finally {
-    cleanupAbandonSignal?.();
     stopStartedClientNotifications();
     releasePendingAcquire();
   }
@@ -607,12 +558,6 @@ function createSharedCodexAppServerClientStartup(
     params.lifetime,
     startInitializedCodexAppServerClient({
       ...params,
-      onAcquireObservation: ({ boundary }) => {
-        recordSharedClientAcquireBoundary(params.entry, boundary);
-      },
-      onStartingClient: (starting) => {
-        params.entry.startupTransport = starting;
-      },
       onStartedClient: (startedClient) => {
         const state = getSharedCodexAppServerClientState();
         // Rejected candidates must never retain a reverse path to their replacement.
@@ -630,13 +575,13 @@ function createSharedCodexAppServerClientStartup(
         for (const callback of params.entry.onStartedClientCallbacks) {
           callback(startedClient);
         }
-        retirePendingSharedClientEntryIfUnclaimed(params.entry);
       },
       onInitializedClient: () => initialized.resolve(),
     }).then(
       (client) => {
         const state = getSharedCodexAppServerClientState();
         params.entry.client = client;
+        params.entry.ready = true;
         params.entry.hasOwnedThreads = () => hasCodexAppServerThreadOwnership(client);
         // Unsupported managed candidates close before fallback starts. Only the
         // ready client's closure may remove the shared acquisition entry.
@@ -648,9 +593,14 @@ function createSharedCodexAppServerClientStartup(
             state.clients.delete(entry.key);
           }
         });
+        refreshSharedClientIdleRetirement(client);
         return client;
       },
       (error: unknown) => {
+        const state = getSharedCodexAppServerClientState();
+        if (state.clients.get(params.entry.key) === params.entry) {
+          state.clients.delete(params.entry.key);
+        }
         initialized.reject(error);
         throw error;
       },
@@ -673,7 +623,6 @@ export async function createIsolatedCodexAppServerClient(
   assertCurrent();
   const timeoutMs = options?.timeoutMs ?? 0;
   const { usesNativeAuth, ...startContext } = context;
-  observeAcquire(options, { boundary: "entry-selection", startup: "isolated" });
   return await ownCodexStartup(
     lifetime,
     startInitializedCodexAppServerClient({
@@ -689,7 +638,6 @@ export async function createIsolatedCodexAppServerClient(
       abandonSignal,
       assertCurrent: options?.assertCurrent,
       assertCurrentAsync: options?.assertCurrentAsync,
-      onAcquireObservation: options?.onAcquireObservation,
       onStartedClient: (client) => {
         const state = getSharedCodexAppServerClientState();
         state.isolatedClients.add(client);
@@ -778,6 +726,7 @@ async function startInitializedCodexAppServerClientOnce(
       if (abandonSignal.aborted) {
         throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
       }
+      resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
     };
     const ownsIsolatedCodexHome =
       params.requestedStartOptions.homeScope !== "user" &&
@@ -785,14 +734,16 @@ async function startInitializedCodexAppServerClientOnce(
     try {
       // Desktop updates during startup are best effort; the next acquisition
       // observes the new fingerprint without draining unrelated active turns.
-      await reconcileCodexComputerUseStartArtifacts({
-        startOptions,
-        agentDir: params.agentDir,
-        pluginConfig: params.pluginConfig,
-        ...(desktopGeneration ? { desktopGeneration } : {}),
-        assertCurrent: assertStartupCurrent,
-        ownsIsolatedCodexHome,
-      });
+      await waitForStartup(() =>
+        reconcileCodexComputerUseStartArtifacts({
+          startOptions,
+          agentDir: params.agentDir,
+          pluginConfig: params.pluginConfig,
+          ...(desktopGeneration ? { desktopGeneration } : {}),
+          assertCurrent: assertStartupCurrent,
+          ownsIsolatedCodexHome,
+        }),
+      );
     } catch (error) {
       if (isCodexComputerUseCandidateArtifactsUnavailableError(error)) {
         if (index + 1 < startOptionsCandidates.length) {
@@ -806,14 +757,16 @@ async function startInitializedCodexAppServerClientOnce(
       throw error;
     }
     const runtimeArtifactModule = params.runtimeArtifactMode
-      ? await import("./runtime-artifact.js")
+      ? await waitForStartup(() => import("./runtime-artifact.js"))
       : undefined;
     const runtimeArtifactBeforeStart = runtimeArtifactModule
-      ? await runtimeArtifactModule.captureCodexAppServerRuntimeArtifactBeforeStart({
-          startOptions,
-          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
-          signal: abandonSignal,
-        })
+      ? await waitForStartup(() =>
+          runtimeArtifactModule.captureCodexAppServerRuntimeArtifactBeforeStart({
+            startOptions,
+            spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
+            signal: abandonSignal,
+          }),
+        )
       : undefined;
     if (
       runtimeArtifactModule &&
@@ -833,26 +786,26 @@ async function startInitializedCodexAppServerClientOnce(
     let starting: Promise<CodexAppServerClient> | undefined;
     let client: CodexAppServerClient;
     try {
-      observeAcquire(params, { boundary: "transport-registration" });
       client = await waitForStartup(() => {
         starting = CodexAppServerClient.start(startOptions, async () => {
           await params.assertCurrentAsync?.();
           assertStartupCurrent();
           resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
         });
-        params.onStartingClient?.(starting);
         return starting;
       });
-    } catch (error) {
+    } catch (initialError) {
       // A timed-out registration may settle later; it cannot publish a live
       // client after the acquisition owner has already released its claim.
+      let error = initialError;
       if (starting) {
-        observeAcquire(params, { boundary: "cleanup" });
         await ownCodexStartup(
           params.lifetime,
           starting.then(
             (lateClient) => lateClient.closeAndWait(),
-            () => {},
+            (startupError: unknown) => {
+              error = startupError;
+            },
           ),
         );
       }
@@ -881,7 +834,6 @@ async function startInitializedCodexAppServerClientOnce(
       });
       assertStartupCurrent();
       params.onStartedClient?.(client);
-      observeAcquire(params, { boundary: "initialize" });
       try {
         await waitForStartup(
           () => client.initialize(),
@@ -910,7 +862,6 @@ async function startInitializedCodexAppServerClientOnce(
       }
       assertStartupCurrent();
       params.onInitializedClient?.();
-      observeAcquire(params, { boundary: "catalog-observation" });
       await waitForStartup(() =>
         observeCodexCatalogClient(client, {
           startOptions: params.requestedStartOptions,
@@ -918,16 +869,17 @@ async function startInitializedCodexAppServerClientOnce(
         }),
       );
 
-      observeAcquire(params, { boundary: "runtime-binding" });
       let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
       if (runtimeArtifactModule && runtimeArtifactBeforeStart) {
-        runtimeArtifact = await runtimeArtifactModule.finalizeCodexAppServerRuntimeArtifact({
-          before: runtimeArtifactBeforeStart,
-          startOptions,
-          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
-          runtimeIdentity: client.getRuntimeIdentity(),
-          signal: abandonSignal,
-        });
+        runtimeArtifact = await waitForStartup(() =>
+          runtimeArtifactModule.finalizeCodexAppServerRuntimeArtifact({
+            before: runtimeArtifactBeforeStart,
+            startOptions,
+            spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
+            runtimeIdentity: client.getRuntimeIdentity(),
+            signal: abandonSignal,
+          }),
+        );
         if (
           params.expectedRuntimeArtifact &&
           (runtimeArtifact.id !== params.expectedRuntimeArtifact.id ||
@@ -953,7 +905,6 @@ async function startInitializedCodexAppServerClientOnce(
       );
 
       assertStartupCurrent();
-      observeAcquire(params, { boundary: "auth-handoff" });
       const authHandoff = await waitForStartup(() =>
         applyCodexAppServerAuthProfile({
           client,
@@ -1005,11 +956,9 @@ async function startInitializedCodexAppServerClientOnce(
       }
       assertStartupCurrent();
       ready = true;
-      observeAcquire(params, { boundary: "ready" });
       return client;
     } finally {
       if (!ready) {
-        observeAcquire(params, { boundary: "cleanup" });
         await ownCodexStartup(params.lifetime, client.closeAndWait());
       }
     }

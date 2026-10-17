@@ -336,7 +336,7 @@ test("propagates the exported model span across two OTLP services with one roote
     });
     emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
     emit({ type: "run.started", ...base, trace: runTrace });
-    const outboundTraceparent = runModelCallAndCaptureTraceparent({
+    const outboundTraceparent = await runModelCallAndCaptureTraceparent({
       ...base,
       callId: "call-live-bridge",
       trace: runTrace,

@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import {
   backfillSessionConversations,
   ensureSessionAdditiveColumns,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 describe("agent DB conversation migration", () => {
   const databases: Array<{ close: () => void }> = [];
@@ -14,6 +17,43 @@ describe("agent DB conversation migration", () => {
     for (const database of databases.splice(0)) {
       database.close();
     }
+  });
+
+  it("covers every installed same-version column in admission facts", () => {
+    const { DatabaseSync } = requireNodeSqlite();
+    using canonical = new DatabaseSync(":memory:");
+    canonical.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    using database = new DatabaseSync(":memory:");
+    // Every canonical table exists but has no projections. This catches a future
+    // ensureColumn call even if it was not added to the admission declarations.
+    for (const { name } of canonical
+      .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all()) {
+      database.exec(`CREATE TABLE "${String(name)}" (probe TEXT)`);
+    }
+    ensureSessionAdditiveColumns(database);
+    const installed = captureSqliteSchemaFacts(database).tableSql;
+    expect(hasPendingAgentStartupColumns(installed)).toBe(false);
+    let additions = 0;
+    for (const [table, sql] of installed) {
+      for (const { name } of database.prepare(`PRAGMA table_info("${table}")`).all()) {
+        if (name === "probe") {
+          continue;
+        }
+        additions += 1;
+        const missing = new Map(installed);
+        // Model an older writer's catalog, without changing unrelated tables.
+        missing.set(
+          table,
+          sql!.replace(new RegExp(`,\\s*${String(name)} (TEXT|INTEGER)`, "u"), ""),
+        );
+        expect(hasPendingAgentStartupColumns(missing), `${table}.${String(name)}`).toBe(true);
+        expect(canonical.prepare(`PRAGMA table_info("${table}")`).all()).toContainEqual(
+          expect.objectContaining({ name }),
+        );
+      }
+    }
+    expect(additions).toBeGreaterThan(0);
   });
 
   it("adds nullable route context without advancing the schema version", () => {

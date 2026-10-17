@@ -8,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
+  pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -366,8 +367,9 @@ suite.define(() => {
         await gateway.rejectDeferred("connect", mismatch);
         await page.waitForFunction(
           () =>
-            sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
-              "replacement-build" &&
+            JSON.parse(
+              sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null",
+            )?.buildId === "replacement-build" &&
             sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads") === "2",
         );
 
@@ -445,7 +447,9 @@ suite.define(() => {
         const failedRecovery = page.locator(".sidebar-update-card--floating .sidebar-update-card");
         await expect.poll(() => failedRecovery.getByRole("button").isEnabled()).toBe(true);
         await expect.poll(() => failedRecovery.textContent()).toContain("Retry now");
-        await expect.poll(() => failedRecovery.textContent()).toContain("Gateway reconnects");
+        await expect
+          .poll(() => failedRecovery.textContent())
+          .toContain("Could not refresh. Check your connection and try again.");
         expect(documentRequests).toHaveLength(documentCountBeforeFailedProbe);
         expect(
           await failedRecovery.evaluate(
@@ -462,8 +466,23 @@ suite.define(() => {
         ]);
 
         await waitForConnect();
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        // Manual refresh preserves the shared build target, so this document
+        // defers its automatic reload until that target's 30-second guard expires.
+        const guardRemainingMs = await page.evaluate(() => {
+          const guard = JSON.parse(
+            sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")!,
+          ) as { at: number };
+          return guard.at + 30_000 - Date.now();
+        });
+        expect(guardRemainingMs).toBeGreaterThan(0);
         await gateway.rejectDeferred("connect", mismatch);
+        await page.clock.runFor(guardRemainingMs - 1);
+        expect(documentRequests).toHaveLength(3);
+        await page.clock.runFor(1);
         await expect.poll(() => documentRequests.length).toBe(4);
+        await page.clock.resume();
         await waitForConnect();
         await gateway.resolveDeferred("connect");
 
@@ -494,7 +513,7 @@ suite.define(() => {
         ).toEqual(
           Array.from({ length: 4 }, () => ({
             cacheControl: "no-cache",
-            fromWorker: false,
+            fromWorker: serviceWorker === "normal",
             status: 200,
           })),
         );

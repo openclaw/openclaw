@@ -34,25 +34,6 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     } as OpenClawConfig;
   }
 
-  function cfgWithDefaultHeartbeat(
-    session: string,
-    target: string | null = "slack",
-  ): OpenClawConfig {
-    const heartbeat = target === null ? { session } : { session, target };
-    return {
-      session: {
-        mainKey: "work",
-        store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
-      },
-      agents: {
-        defaults: {
-          heartbeat,
-        },
-        entries: { ops: {} },
-      },
-    } as OpenClawConfig;
-  }
-
   function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -90,6 +71,19 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     }
   });
 
+  it("does not recover an absent incognito heartbeat target from a legacy store", async () => {
+    const sessionKey = "agent:ops:dashboard:incognito-heartbeat";
+    const cfg = cfgWithSession(sessionKey);
+    writeStore(cfg, {
+      [sessionKey]: { sessionId: "legacy-incognito", updatedAt: 1 },
+    });
+
+    const warnings = await describeHeartbeatSessionTargetIssues(cfg);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`resolved to ${sessionKey}`);
+    expect(warnings[0]).toContain("has no entry");
+  });
+
   it("does not warn when an explicit heartbeat recipient does not need session history", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
     const agent = cfg.agents?.entries?.ops;
@@ -115,35 +109,31 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
-  it.each([
-    {
-      name: "every agent sharing heartbeat defaults",
-      configuredAgentIds: ["main", "ops"],
-      heartbeatAgentId: undefined,
-      expectedAgentIds: ["main", "ops"],
-    },
-  ])(
-    "warns for missing sessions owned by $name",
-    async ({ configuredAgentIds, heartbeatAgentId, expectedAgentIds }) => {
-      const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
-      if (!cfg.agents?.defaults?.heartbeat) {
-        throw new Error("expected test config to include default heartbeat config");
-      }
-      cfg.agents.entries = Object.fromEntries(configuredAgentIds.map((id) => [id, {}]));
-      cfg.agents.defaults.heartbeat.agentId = heartbeatAgentId;
-      writeStore(cfg, {});
+  it("warns for missing sessions owned by every agent sharing heartbeat defaults", async () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        mainKey: "work",
+        store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+      agents: {
+        defaults: {
+          heartbeat: { session: "slack:channel:c123", target: "slack" },
+        },
+        entries: { main: {}, ops: {} },
+      },
+    };
+    writeStore(cfg, {});
 
-      const warnings = await describeHeartbeatSessionTargetIssues(cfg);
+    const warnings = await describeHeartbeatSessionTargetIssues(cfg);
 
-      expect(warnings).toHaveLength(expectedAgentIds.length);
-      for (const [index, agentId] of expectedAgentIds.entries()) {
-        expect(warnings[index]).toContain(
-          `Agent ${agentId} heartbeat.session pins slack:channel:c123`,
-        );
-        expect(warnings[index]).toContain(`resolved to agent:${agentId}:slack:channel:c123`);
-      }
-    },
-  );
+    expect(warnings).toHaveLength(2);
+    for (const [index, agentId] of ["main", "ops"].entries()) {
+      expect(warnings[index]).toContain(
+        `Agent ${agentId} heartbeat.session pins slack:channel:c123`,
+      );
+      expect(warnings[index]).toContain(`resolved to agent:${agentId}:slack:channel:c123`);
+    }
+  });
 
   it("warns when the default owner target has no configured owner route", async () => {
     const cfg = cfgWithSession("slack:channel:c123", null);

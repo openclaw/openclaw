@@ -449,11 +449,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       loadedSession &&
       sessionEntry &&
       captureYieldedMainSessionContinuation({
-        cfg,
-        agentId: targetAgentId,
-        sessionKey: canonicalKey,
-        storePath: loadedSession.storePath,
         entry: sessionEntry,
+        requester: { agentId: targetAgentId, sessionKey: canonicalKey },
       })
         ? {
             runId: yieldedRunId,

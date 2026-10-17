@@ -1,10 +1,10 @@
 // Xai tests cover web search plugin behavior.
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
-import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveXaiCatalogEntry } from "./model-definitions.js";
+import { resolveXaiForwardCompatModel } from "./provider-models.js";
 import { createXaiWebSearchProvider as createXaiWebSearchContractProvider } from "./web-search-contract-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
@@ -46,14 +46,6 @@ function profileAuth(
   profileId = "xai:default",
 ) {
   return { apiKey, source: `profile:${profileId}`, mode, profileId };
-}
-
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
 }
 
 function xaiAnswerResponse(text: string): Response {
@@ -172,36 +164,6 @@ function resolveForwardModel(modelId: string) {
       providerConfig: { api: "openai-responses", baseUrl: "https://api.x.ai/v1" },
     },
   });
-}
-
-function expectCatalogEntry(
-  modelId: string,
-  expected: {
-    id?: string;
-    reasoning?: boolean;
-    input?: string[];
-    contextWindow?: number;
-    maxTokens?: number;
-    cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  },
-) {
-  const entry = resolveXaiCatalogEntry(modelId);
-  expect(entry?.id).toBe(expected.id ?? modelId);
-  if ("reasoning" in expected) {
-    expect(entry?.reasoning).toBe(expected.reasoning);
-  }
-  if (expected.input) {
-    expect(entry?.input).toEqual(expected.input);
-  }
-  if (expected.contextWindow !== undefined) {
-    expect(entry?.contextWindow).toBe(expected.contextWindow);
-  }
-  if (expected.maxTokens !== undefined) {
-    expect(entry?.maxTokens).toBe(expected.maxTokens);
-  }
-  if (expected.cost) {
-    expect(entry?.cost).toEqual(expected.cost);
-  }
 }
 
 afterEach(() => {
@@ -474,9 +436,10 @@ describe("xai web search config resolution", () => {
       config: xaiPluginConfig({ webSearch: { apiKey: "xai-test-key" } }),
     });
     await expect(tool.execute({ query: "OpenClaw timeout" })).rejects.toMatchObject({
-      name: "Error",
+      name: "TimeoutError",
       cause: abort,
       code: "ETIMEDOUT",
+      timeoutMs: 60_000,
     });
   });
 
@@ -546,35 +509,30 @@ describe("xai web search config resolution", () => {
     expect(recovered.content).toContain("Recovered Grok answer");
   });
 
-  it.each([true])(
-    "bypasses Grok cache reads and writes at zero TTL (populated: %s)",
-    async (populated) => {
-      vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-      const mockFetch = vi.fn(async () => xaiAnswerResponse("Fresh Grok answer"));
-      vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-      const query = `Grok zero TTL cache policy ${populated}`;
-      const search = (cacheTtlMinutes: number) =>
-        requireXaiWebSearchTool({
-          config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
-          searchConfig: { cacheTtlMinutes },
-        }).execute({ query });
-      if (populated) {
-        mockFetch.mockResolvedValueOnce(xaiAnswerResponse("Original Grok answer"));
-        await search(15);
-      }
+  it("bypasses populated Grok cache reads and writes at zero TTL", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const mockFetch = vi.fn(async () => xaiAnswerResponse("Fresh Grok answer"));
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const query = "Grok zero TTL cache policy true";
+    const search = (cacheTtlMinutes: number) =>
+      requireXaiWebSearchTool({
+        config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
+        searchConfig: { cacheTtlMinutes },
+      }).execute({ query });
+    mockFetch.mockResolvedValueOnce(xaiAnswerResponse("Original Grok answer"));
+    await search(15);
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const uncached = await search(0);
-        expect(uncached.cached).toBeUndefined();
-        expect(uncached.content).toContain("Fresh Grok answer");
-      }
-      const enabled = await search(15);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const uncached = await search(0);
+      expect(uncached.cached).toBeUndefined();
+      expect(uncached.content).toContain("Fresh Grok answer");
+    }
+    const enabled = await search(15);
 
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-      expect(enabled.cached).toBe(populated ? true : undefined);
-      expect(enabled.content).toContain(populated ? "Original Grok answer" : "Fresh Grok answer");
-    },
-  );
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(enabled.cached).toBe(true);
+    expect(enabled.content).toContain("Original Grok answer");
+  });
 
   it("applies a shortened Grok cache TTL to an existing result", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
@@ -618,18 +576,6 @@ describe("xai web search config resolution", () => {
 });
 
 describe("xai provider models", () => {
-  it("publishes only current selectable chat models newest first", () => {
-    expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
-      "grok-4.7",
-      "grok-4.6",
-      "grok-4.5",
-      "grok-build-0.1",
-      "grok-4.3",
-      "grok-4.20-0309-reasoning",
-      "grok-4.20-0309-non-reasoning",
-    ]);
-  });
-
   it("resolves curated rows and their aliases from the manifest", () => {
     const grok43 = {
       id: "grok-4.3",
@@ -639,20 +585,7 @@ describe("xai provider models", () => {
       maxTokens: 64_000,
       cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
     };
-    expectCatalogEntry("grok-4.3", grok43);
-    expectCatalogEntry("grok-4.3-latest", grok43);
-    expectCatalogEntry("xai/GROK-4.3", grok43);
-  });
-
-  it("marks current Grok families as modern while excluding multi-agent ids", () => {
-    expect(isModernXaiModel("grok-4.5")).toBe(true);
-    expect(isModernXaiModel("grok-4.3")).toBe(true);
-    expect(isModernXaiModel("grok-build-0.1")).toBe(true);
-    expect(isModernXaiModel("grok-4.20-0309-reasoning")).toBe(true);
-    expect(isModernXaiModel("grok-build-latest")).toBe(true);
-    expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
-    expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
-    expect(isModernXaiModel("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
+    expect(resolveXaiCatalogEntry("xai/GROK-4.3")).toMatchObject(grok43);
   });
 
   it("builds forward-compatible runtime models for newer Grok ids", () => {

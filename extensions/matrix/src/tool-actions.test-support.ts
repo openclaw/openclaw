@@ -29,12 +29,12 @@ vi.mock("./matrix/read-policy.js", () => ({
   withAuthorizedMatrixReadTarget: mocks.withAuthorizedMatrixReadTarget,
 }));
 
-vi.mock("./matrix/actions/messages.js", () => ({
+vi.mock("./matrix/actions/messages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/actions/messages.js")>()),
   deleteMatrixMessage: mocks.deleteMatrixMessage,
   editMatrixMessage: mocks.editMatrixMessage,
   readMatrixMessage: mocks.readMatrixMessage,
   readMatrixMessages: mocks.readMatrixMessages,
-  sendMatrixMessage: mocks.sendMatrixMessage,
 }));
 vi.mock("./matrix/actions/room.js", () => ({
   getMatrixMemberInfo: mocks.getMatrixMemberInfo,
@@ -55,9 +55,11 @@ vi.mock("./matrix/actions/verification.js", () => ({
   listMatrixVerifications: mocks.listMatrixVerifications,
 }));
 
-vi.mock("./matrix/send.js", () => {
+vi.mock("./matrix/send.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./matrix/send.js")>()),
     reactMatrixMessage: mocks.reactMatrixMessage,
+    sendMessageMatrix: mocks.sendMatrixMessage,
   };
 });
 

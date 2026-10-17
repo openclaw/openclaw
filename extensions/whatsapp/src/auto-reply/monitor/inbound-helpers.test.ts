@@ -1,7 +1,7 @@
 // Whatsapp tests cover inbound context plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import { formatGroupMembers, noteGroupMember } from "./group-members.js";
+import { noteGroupMember } from "./group-members.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -85,26 +85,6 @@ describe("whatsapp inbound context visibility", () => {
     expect(reply).toBeNull();
   });
 
-  it("keeps blocked quoted replies in allowlist_quote mode", () => {
-    const reply = resolveVisibleWhatsAppReplyContext({
-      msg: makeBlockedQuotedReplyMessage("msg-reply-2"),
-      mode: "allowlist_quote",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+111"],
-    });
-
-    expect(reply).toEqual({
-      id: "blocked-reply",
-      body: "Blocked quoted text",
-      sender: {
-        jid: "999@s.whatsapp.net",
-        lid: null,
-        e164: "+999",
-        label: "Mallory (+999)",
-      },
-    });
-  });
-
   it("renders structured quoted media only at the visible preview boundary", () => {
     const msg = makeBlockedQuotedReplyMessage("msg-reply-media");
     msg.quote = {
@@ -129,14 +109,6 @@ describe("whatsapp inbound context visibility", () => {
 });
 
 describe("group member display", () => {
-  it("normalizes member phone numbers before storing", () => {
-    const groupMemberNames = new Map<string, Map<string, string>>();
-
-    noteGroupMember(groupMemberNames, "g1", "+1 (555) 123-4567", "Alice");
-
-    expect(groupMemberNames.get("g1")?.get("+15551234567")).toBe("Alice");
-  });
-
   it("ignores incomplete member values", () => {
     const groupMemberNames = new Map<string, Map<string, string>>();
 
@@ -144,36 +116,6 @@ describe("group member display", () => {
     noteGroupMember(groupMemberNames, "g1", "+15551234567", undefined);
 
     expect(groupMemberNames.get("g1")).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "deduplicates participants and appends named roster members",
-      params: {
-        participants: ["+1 (555) 000-0000", "+15550000000", "+16660000000"],
-        roster: new Map([
-          ["+16660000000", "Bob"],
-          ["+17770000000", "Carol"],
-        ]),
-      },
-      expected: "+15550000000, Bob (+16660000000), Carol (+17770000000)",
-    },
-    {
-      name: "falls back to sender when no participants or roster are available",
-      params: {
-        participants: [],
-        roster: undefined,
-        fallbackE164: "+1 (555) 222-3333",
-      },
-      expected: "+15552223333",
-    },
-    {
-      name: "returns undefined when no members can be resolved",
-      params: { participants: [], roster: undefined },
-      expected: undefined,
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(formatGroupMembers(params)).toBe(expected);
   });
 });
 

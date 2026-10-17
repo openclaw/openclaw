@@ -3,6 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -103,13 +104,14 @@ describe("Telegram retained message history", () => {
     beforeCompare = undefined;
     beforeMove = undefined;
     afterMove = undefined;
-    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
+    const openKeyedStore: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>(
       options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
-    ): PluginStateKeyedStore<T> => {
-      const store = createPluginStateKeyedStoreForTests<T>("telegram", {
-        ...options,
-        env: state.env,
-      });
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = createPluginStateKeyedStoreV2ForTests<T>(
+        "telegram",
+        { ...options, env: state.env },
+        { assertCurrent() {} },
+      );
       if (options.retention !== "retained") {
         return store;
       }
@@ -131,7 +133,9 @@ describe("Telegram retained message history", () => {
         },
       };
     };
-    setTelegramRuntime(createPluginRuntimeMock({ state: { openKeyedStore } }));
+    setTelegramRuntime(
+      createPluginRuntimeMock({ state: { openKeyedStore, openKeyedStoreV2: openKeyedStore } }),
+    );
   });
 
   afterEach(async () => {

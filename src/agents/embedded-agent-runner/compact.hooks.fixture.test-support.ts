@@ -63,6 +63,10 @@ export function expectedNativeCompactionOptions(
   return {
     nativeCompactionRequest,
     preparedModelRuntime: expect.any(Object),
-    sourceAuthority: { assertActive: expect.any(Function), operatorAuthority: undefined },
+    sourceAuthority: {
+      assertActive: expect.any(Function),
+      prepareDispatch: expect.any(Function),
+      operatorAuthority: undefined,
+    },
   };
 }

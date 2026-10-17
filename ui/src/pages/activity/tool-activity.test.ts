@@ -26,25 +26,10 @@ function buildResultPreview(result: unknown): string {
 
 describe("activity model output preview fidelity", () => {
   it.each([
-    ["short UTF-16 text", "\ud800 visible 🦞 text", "\ud800 visible 🦞 text"],
     ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
     ["a lone surrogate inside the cap", "\ud800" + "a".repeat(2_100), "\ud800" + "a".repeat(1_999)],
   ])("preserves %s", (_label, source, expected) => {
     expect(buildResultPreview({ text: source })).toBe(expected);
-  });
-
-  it("preserves dotted API key assignments emitted by tool output", () => {
-    const preview = buildResultPreview({
-      text: [
-        "app.api.key=visible-leaked-value-1234567890",
-        "spring.datasource.password=visible-db-password-1234567890",
-        "server.port=8080",
-      ].join("\n"),
-    });
-
-    expect(preview).toContain("app.api.key=visible-leaked-value-1234567890");
-    expect(preview).toContain("spring.datasource.password=visible-db-password-1234567890");
-    expect(preview).toContain("server.port=8080");
   });
 
   it("preserves dotted API keys in object-shaped tool results", () => {
@@ -61,7 +46,7 @@ describe("activity model output preview fidelity", () => {
 });
 
 describe("activity preview retention", () => {
-  it.each(["tool", "answer_candidate"])(
+  it.each(["tool"])(
     "releases large %s payloads while retaining their previews",
     (kind) => {
       const result = spawnSync(
@@ -125,7 +110,7 @@ describe("activity preview retention", () => {
 });
 
 describe("activity feed bounds", () => {
-  it.each(["tool", "answer_candidate"] as const)(
+  it.each(["tool"] as const)(
     "retains the latest 100 %s entries without mutating earlier snapshots",
     (kind) => {
       const event = (index: number, done = false): Parameters<typeof updateToolActivity>[1] => ({

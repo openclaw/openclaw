@@ -5,7 +5,7 @@ import {
   readPersonalGitHubPublicationInDatabase,
   type PersonalGitHubPublicationRow,
 } from "../../gateway/github-personal-publication-store.worker.js";
-import { readGitHubPublicationSessionLifecycle } from "../../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../../state/github-publication-session-lifecycles.worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -59,9 +59,12 @@ export async function seedPersonalGitHubDeletionReceipt(key: string, sessionId: 
     receipt: readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
       requestId: row.request_id,
     }),
-    lifecycle: readGitHubPublicationSessionLifecycle({
-      publicationKind: "personal",
-      requestId: row.request_id,
-    }),
+    lifecycle: readGitHubPublicationSessionLifecycle(
+      {
+        publicationKind: "personal",
+        requestId: row.request_id,
+      },
+      openOpenClawStateDatabase().db,
+    ),
   });
 }

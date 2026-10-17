@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
 type TestSessionEntry = {
@@ -24,6 +24,7 @@ type TestSessionEntry = {
 };
 
 type EmbeddedAgentArgs = {
+  config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
@@ -86,13 +87,15 @@ function createAgentRuntime(
       sessionKey: string;
       fallbackEntry?: TestSessionEntry;
       replaceEntry?: boolean;
-      prepare: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+      prepare: (
+        entry: TestSessionEntry,
+      ) => Partial<TestSessionEntry> | null | Promise<Partial<TestSessionEntry> | null>;
     }) => {
       const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
       if (!existing) {
         return null;
       }
-      const patch = params.prepare({ ...existing });
+      const patch = await params.prepare({ ...existing });
       if (!patch) {
         return existing;
       }
@@ -204,7 +207,7 @@ async function runGenerateVoiceResponse(
     senderIsOwner?: boolean;
   },
 ) {
-  const voiceConfig = VoiceCallConfigSchema.parse({
+  const voiceConfig = normalizeVoiceCallConfig({
     responseTimeoutMs: 5000,
   });
   const coreConfig = {} as OpenClawConfig;
@@ -542,7 +545,7 @@ describe("generateVoiceResponse", () => {
       contextTokens: 123,
       authProfileOverride: "old-auth-profile",
     };
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       responseModel: "openai/gpt-4.1-nano",
       responseTimeoutMs: 5000,
     });
@@ -596,7 +599,7 @@ describe("generateVoiceResponse", () => {
       modelProvider: "openai",
       modelSelectionLocked: true,
     };
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       responseModel: "openai/gpt-4.1-nano",
       responseTimeoutMs: 5000,
     });
@@ -648,7 +651,7 @@ describe("generateVoiceResponse", () => {
         },
       },
     };
-    const voiceConfig = VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 });
+    const voiceConfig = normalizeVoiceCallConfig({ responseTimeoutMs: 5000 });
 
     const result = await generateVoiceResponse({
       voiceConfig,
@@ -711,7 +714,7 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Matrix context."}' },
     ]);
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       agentId: "voice",
       responseTimeoutMs: 5000,
     });
@@ -751,7 +754,7 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Main context."}' },
     ]);
-    const voiceConfig = VoiceCallConfigSchema.parse({
+    const voiceConfig = normalizeVoiceCallConfig({
       agentId: "voice",
       responseTimeoutMs: 5000,
     });
@@ -780,7 +783,7 @@ describe("generateVoiceResponse", () => {
 
     await expect(
       generateVoiceResponse({
-        voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice" }),
+        voiceConfig: normalizeVoiceCallConfig({ agentId: "voice" }),
         coreConfig: {},
         agentRuntime: runtime,
         callId: "call-unowned",
@@ -798,7 +801,11 @@ describe("generateVoiceResponse", () => {
     expect(sessionStore).toEqual({});
   });
 
-  it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
+  it.each([
+    { policy: "finite allowlist", tools: { allow: ["web_search"] } },
+    { policy: "empty configured allowlist", tools: { allow: [] } },
+    { policy: "allowlist with a deny", tools: { allow: ["web_search", "read"], deny: ["read"] } },
+  ])("keeps the routed agent's $policy in conversation config across turns", async ({ tools }) => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: '{"spoken":"No tools needed."}' },
     ]);
@@ -806,14 +813,14 @@ describe("generateVoiceResponse", () => {
       agents: {
         entries: {
           voice: {
-            tools: { allow: [] },
+            tools,
           },
         },
       },
-    } as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
-    const result = await generateVoiceResponse({
-      voiceConfig: VoiceCallConfigSchema.parse({
+    const params = {
+      voiceConfig: normalizeVoiceCallConfig({
         agentId: "main",
         responseModel: "ollama/qwen2.5:1.5b",
         responseTimeoutMs: 5000,
@@ -826,12 +833,20 @@ describe("generateVoiceResponse", () => {
       senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
-    });
+    } satisfies Parameters<typeof generateVoiceResponse>[0];
 
-    expect(result.text).toBe("No tools needed.");
-    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.agentId).toBe("voice");
-    expect(args.toolsAllow).toStrictEqual([]);
-    expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
+    for (const userMessage of ["hello there", "continue"]) {
+      const result = await generateVoiceResponse({ ...params, userMessage });
+      expect(result.text).toBe("No tools needed.");
+    }
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    for (const [args] of runEmbeddedAgent.mock.calls) {
+      expect(args.agentId).toBe("voice");
+      expect(args.config).toBe(coreConfig);
+      // Runtime toolsAllow has turn lifetime, even when copied from persistent config.
+      expect(args.toolsAllow).toBeUndefined();
+      expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
+    }
   });
 });

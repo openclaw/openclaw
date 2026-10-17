@@ -6,6 +6,13 @@ import {
   setupPwSessionConnectionTest,
 } from "./pw-session.connection.test-support.js";
 
+// These fixtures count native-inventory browser sessions; keep the connection's
+// one-time headless probe out of them.
+vi.mock("./pw-session-webauthn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session-webauthn.js")>()),
+  isHeadlessChromium: async () => false,
+}));
+
 const { connectOverCdpSpy, getChromeWebSocketUrlSpy, markPageRefBlocked, markTargetBlocked, pwAi } =
   setupPwSessionConnectionTest();
 

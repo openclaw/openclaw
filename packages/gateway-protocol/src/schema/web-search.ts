@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const text = Type.String({ minLength: 1, maxLength: 512, pattern: "\\S" });
 const selection = {
@@ -16,13 +17,7 @@ export const WebSearchTestParamsSchema = closedObject({
   providerId: Type.Optional(text),
 });
 const route = closedObject({
-  kind: Type.Union([
-    Type.Literal("native"),
-    Type.Literal("external"),
-    Type.Literal("managed"),
-    Type.Literal("disabled"),
-    Type.Literal("unavailable"),
-  ]),
+  kind: stringLiteralUnion(["native", "external", "managed", "disabled", "unavailable"]),
   provider: Type.Optional(text),
   label: text,
   reason: Type.Optional(Type.String()),
@@ -50,13 +45,13 @@ export const WebSearchStatusResultSchema = closedObject({
       installed: Type.Boolean(),
       available: Type.Boolean(),
       requiresCredential: Type.Boolean(),
-      credentialSource: Type.Union([
-        Type.Literal("config"),
-        Type.Literal("secretRef"),
-        Type.Literal("env"),
-        Type.Literal("auth-profile"),
-        Type.Literal("none"),
-        Type.Literal("missing"),
+      credentialSource: stringLiteralUnion([
+        "config",
+        "secretRef",
+        "env",
+        "auth-profile",
+        "none",
+        "missing",
       ]),
       credential: Type.Optional(PluginCredentialDescriptorSchema),
       credentialPath: Type.Optional(text),
@@ -70,7 +65,7 @@ const citation = closedObject({ url: Type.String(), title: Type.Optional(Type.St
 export const WebSearchTestResultSchema = closedObject({
   provider: text,
   latencyMs: Type.Number({ minimum: 0 }),
-  status: Type.Union([Type.Literal("ok"), Type.Literal("error")]),
+  status: stringLiteralUnion(["ok", "error"]),
   error: Type.Optional(Type.String()),
   content: Type.Optional(Type.String()),
   results: Type.Optional(

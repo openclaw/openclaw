@@ -1098,7 +1098,7 @@ describe("uninstallPlugin", () => {
     }
     expect(plan.directoryRemoval).toEqual({ target: pluginDir });
     expect(plan.actions.directory).toBe(false);
-    await expect(fs.access(pluginDir)).resolves.toBeUndefined();
+    await fs.access(pluginDir);
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
@@ -2246,7 +2246,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: false,
     });
-    await expect(fs.access(outsideDir)).resolves.toBeUndefined();
+    await fs.access(outsideDir);
   });
 
   it("deletes tracked managed install paths even when they are not the default target", async () => {
@@ -2383,7 +2383,7 @@ describe("uninstallPlugin", () => {
       directory: true,
     });
     await expectPathAccessState(installPath, "missing");
-    await expect(fs.access(path.join(installParent, "keep.txt"))).resolves.toBeUndefined();
+    await fs.access(path.join(installParent, "keep.txt"));
   });
 
   it("does not delete symlinked git install targets that resolve outside the managed git root", async () => {
@@ -2412,7 +2412,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: false,
     });
-    await expect(fs.access(outsideDir)).resolves.toBeUndefined();
+    await fs.access(outsideDir);
     const linkStat = await fs.lstat(installPath);
     expect(linkStat.isSymbolicLink()).toBe(true);
   });

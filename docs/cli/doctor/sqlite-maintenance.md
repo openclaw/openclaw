@@ -141,8 +141,14 @@ unreferenced JSONL inputs. Completing the plugin migration archives those origin
 with the same identity and byte checks as indexed transcripts. A transcript's
 `.trajectory-path.json` pointer moves with it. If an earlier settlement archived the
 transcript but left its receipt-verified pointer behind, the next `doctor --fix`
-archives the pointer too. Files created after capture and changed originals are
-verified separately before settlement.
+archives the pointer too. Receipt-bound trajectory pointers whose runtime target
+is missing are archived as protected diagnostics; missing trajectory artifacts
+are retired from the active receipt. Conversation transcripts remain protected.
+Files created after capture and changed originals are verified separately before settlement.
+Startup checks only the receipt's binding to the current database, without hashing
+retained sources or searching their archives. Doctor owns that verification.
+An expired startup recovery lease is released and reacquired before admission and
+config recovery retry.
 File-era session path repair preserves those originals until their verified import
 receipts finish archival, even after the pending plugin migration records clear.
 Retries and read-only checks reuse the verified receipt, including transcripts
@@ -180,6 +186,16 @@ the receipt's recorded hashes. It records that repair in the existing receipt
 without recreating `sessions.json` or replaying session metadata. Hash-matching
 sources continue through import; changed or unverifiable sources remain protected
 and are listed by path. Preserve those files for inspection.
+
+When a retained primary JSONL is missing, Doctor import and recovery compare its
+recorded byte length and SHA-256 with the owning session's canonical SQLite JSONL
+prefix. An exact match settles that source with a warning in the existing receipt,
+preserving newer SQLite events and allowing later plugin repairs to finish. A verified
+archived original remains usable through the normal archive path. Row counts and
+trajectory archives alone do not prove the missing primary's contents. If the bytes
+cannot be proven (including when import normalization changed their representation),
+the source remains unresolved: preserve the receipt and restore the named primary
+from a verified backup before rerunning recovery.
 
 A session directory does not need a legacy `sessions.json` to recover its history.
 Doctor derives session ownership from verified transcript headers and SQLite. For

@@ -8,6 +8,7 @@ import {
   type SessionResourceOwner,
 } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
@@ -28,10 +29,11 @@ const MAX_HTTP_CONTINUATION_READY_ENTRIES = 1000;
 const MAX_HTTP_CONTINUATION_RETAINED_BYTES = 64 * 1024 * 1024;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
-export type ResponsesContinuationRequest = Record<string, unknown> & {
-  input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
-  previous_response_id?: string;
-};
+export type ResponsesContinuationRequest = Record<string, unknown> &
+  Pick<OpenAIResponsesRequestParams, "service_tier" | "max_output_tokens"> & {
+    input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
+    previous_response_id?: string;
+  };
 export type ResponsesSteeringContinuationMode = "automatic" | "required-input";
 export type ResponsesContinuationState = {
   lastRequest: ResponsesContinuationRequest;

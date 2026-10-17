@@ -233,9 +233,7 @@ export function registerWorkspacePreparationTests({
           ensureAgentWorkspace({ dir: createdDir, ensureBootstrapFiles: true }),
         ).rejects.toThrow("Workspace filesystem changed");
         expect(await fs.readdir(createdDir)).toEqual([]);
-        await expect(
-          fs.access(path.join(displacedDir, DEFAULT_AGENTS_FILENAME)),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(displacedDir, DEFAULT_AGENTS_FILENAME));
       } finally {
         replaceCreatedRoot.mockRestore();
       }

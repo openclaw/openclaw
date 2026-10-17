@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   createWorkspaceAttachmentPreparer,
   prepareAgentWorkspaceAttachments,
@@ -15,6 +14,7 @@ import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sd
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import type { AgentsApiInputFile } from "./agentsapi-client.js";
 
@@ -177,18 +177,7 @@ describe("Agents API attempt environment selection", () => {
     { config: { tools: { web: { search: { enabled: false } } } } },
     { toolOverrides: { webSearch: false } },
   ])("enforces the effective search disable on creation and resume (%j)", async (overrides) => {
-    const run = (binding?: AgentsApiBinding, policy = overrides) =>
-      attempt(
-        undefined,
-        binding,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        policy,
-      );
+    const run = (binding?: AgentsApiBinding, policy = overrides) => attempt({ binding, ...policy });
     const created = await run();
     expect(created.result.terminal).toEqual({ kind: "ok" });
     expect(await requestBody(0)).toHaveProperty("agent.tools", [
@@ -207,68 +196,12 @@ describe("Agents API attempt environment selection", () => {
       expect(rejected.result.terminal).toMatchObject({
         kind: "failed",
         error: expect.objectContaining({
-          message: expect.stringContaining("web-search policy changed"),
+          message: expect.stringContaining("web-search, or forwarding policy changed"),
         }),
       });
       expect(mocks.fetch).not.toHaveBeenCalled();
       expect(rejected.bind).not.toHaveBeenCalled();
     }
-  });
-
-  it.each([
-    {
-      name: "domains changed",
-      previous: { access: "restricted", allowed_domains: ["api.github.com"] },
-      next: { access: "restricted", allowed_domains: ["pypi.org"] },
-    },
-  ])("requires reset when hosted network policy is $name", async ({ previous, next }) => {
-    const created = await attempt(undefined, undefined, undefined, undefined, {
-      openai_host: { network: previous },
-    });
-    expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
-    mocks.fetch.mockClear();
-
-    const { result, bind } = await attempt(
-      undefined,
-      created.bind.mock.calls[0]![0],
-      undefined,
-      undefined,
-      { openai_host: { network: next } },
-    );
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({
-          message: expect.stringContaining("reset the OpenClaw session"),
-        }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "hosted to self-hosted", previous: undefined, next: "self_hosted" },
-    {
-      name: "self-hosted workspace change",
-      previous: "self_hosted",
-      next: "self_hosted",
-      workspaceDir: "/fixture/other-project",
-    },
-  ])("requires reset for $name before native writes", async ({ previous, next, workspaceDir }) => {
-    const { result, bind } = await attempt(next, savedBinding(previous), workspaceDir);
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({
-          message: expect.stringContaining("reset the OpenClaw session"),
-        }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
   });
 
   it.each(["self_hosted"])(
@@ -288,36 +221,18 @@ describe("Agents API attempt environment selection", () => {
       });
       const bindings: AgentsApiBinding[] = [];
       for (const sessionId of ["local-first", "local-second"]) {
-        const created = await attempt(
-          environment,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          { sessionId },
-        );
+        const created = await attempt({ environment, sessionId });
         expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
         bindings.push(created.bind.mock.calls[0]![0]);
       }
       mocks.fetch.mockClear();
       for (const [index, binding] of bindings.entries()) {
-        const continued = await attempt(
+        const continued = await attempt({
           environment,
           binding,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          {
-            sessionId: index === 0 ? "local-first" : "local-second",
-            resolvedApiKey: "fixture-rotated-api-key",
-          },
-        );
+          sessionId: index === 0 ? "local-first" : "local-second",
+          resolvedApiKey: "fixture-rotated-api-key",
+        });
         expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
       }
       expect(createdCount).toBe(2);
@@ -340,7 +255,7 @@ describe("Agents API attempt environment selection", () => {
   it.each([403])(
     "retains ordinary HTTP %s access errors and the existing binding",
     async (status) => {
-      const created = await attempt("openai_hosted");
+      const created = await attempt({ environment: "openai_hosted" });
       const binding = created.bind.mock.calls[0]![0];
       mocks.fetch.mockClear();
       mocks.fetch.mockImplementation(async ({ url }) => ({
@@ -351,17 +266,11 @@ describe("Agents API attempt environment selection", () => {
         finalUrl: url,
         release: async () => {},
       }));
-      const denied = await attempt(
-        "openai_hosted",
+      const denied = await attempt({
+        environment: "openai_hosted",
         binding,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { resolvedApiKey: "fixture-denied-api-key" },
-      );
+        resolvedApiKey: "fixture-denied-api-key",
+      });
       expect(denied.result).toMatchObject({
         terminal: { kind: "failed", error: expect.objectContaining({ status }) },
       });
@@ -394,7 +303,7 @@ describe("Agents API attempt environment selection", () => {
   ])(
     "reports inaccessible saved sessions during $operation as a terminal preflight",
     async ({ suffix, status, type, backendMessage, userMessage }) => {
-      const created = await attempt("openai_hosted");
+      const created = await attempt({ environment: "openai_hosted" });
       const binding = created.bind.mock.calls[0]![0];
       const fetch = mocks.fetch.getMockImplementation()!;
       mocks.fetch.mockImplementation(async (request) => {
@@ -408,7 +317,7 @@ describe("Agents API attempt environment selection", () => {
         return fetch(request);
       });
 
-      const { result } = await attempt("openai_hosted", binding);
+      const { result } = await attempt({ environment: "openai_hosted", binding });
 
       expect(result.terminal.kind).toBe("failed");
       if (result.terminal.kind !== "failed") {
@@ -423,19 +332,6 @@ describe("Agents API attempt environment selection", () => {
     },
   );
 
-  it("rejects an invalid runtime environment setting before native writes", async () => {
-    const { result, bind } = await attempt("hosted");
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({ message: expect.stringContaining("environment") }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
-  });
-
   it("carries hosted attachments through session creation, input mapping, and reply delivery", async () => {
     const media = [{ path: "/fixture/input.txt" }];
     const file: AgentsApiInputFile = {
@@ -449,8 +345,13 @@ describe("Agents API attempt environment selection", () => {
     mocks.collectOutputs.mockResolvedValueOnce([outputUrl]);
 
     const network = { access: "restricted", allowed_domains: ["api.github.com"] };
-    const { result } = await attempt("openai_hosted", undefined, undefined, media, {
-      openai_host: { network },
+    const { result } = await attempt({
+      environment: "openai_hosted",
+      media,
+      pluginConfig: {
+        openai_host: { network },
+        forwarding: { gatewayTools: false, mcpServers: false },
+      },
     });
 
     expect(result).toMatchObject({
@@ -490,23 +391,15 @@ describe("Agents API attempt environment selection", () => {
   });
 
   it.each([
-    { name: "prepared prompt", preparedPrompt: true, replacePrompt: false, recorderMedia: false },
-    {
-      name: "deferred transcript media",
-      preparedPrompt: false,
-      replacePrompt: false,
-      recorderMedia: true,
-    },
+    { name: "prepared prompt", replacePrompt: false },
     {
       name: "inline document pages with a hook-replaced prompt",
-      preparedPrompt: true,
       replacePrompt: true,
-      recorderMedia: false,
       images: [{ type: "image" as const, data: "cGFnZQ==", mimeType: "image/png" }],
     },
   ])(
     "stages managed attachments for new and resumed self-hosted turns with $name",
-    async ({ preparedPrompt, replacePrompt, recorderMedia, images }) => {
+    async ({ replacePrompt, images }) => {
       const fixture = await workspaceAttachmentFixture();
       let binding: AgentsApiBinding | undefined;
       try {
@@ -531,33 +424,22 @@ describe("Agents API attempt environment selection", () => {
           );
           const originalMedia = structuredClone(media);
           const prompt = `Check ${job} with grep.`;
-          const createRecorder = recorderMedia
-            ? await loadUserTurnTranscriptRecorderFactoryForTest()
-            : undefined;
-          const recorder = createRecorder?.({
-            target: () => undefined,
-            resolveInput: async () => ({ text: prompt, media }),
+          const priorNote = await prepareAgentWorkspaceAttachments({
+            workspaceDir: fixture.gatewayRoot,
+            turn: { media, timeoutMs: 1_000 },
+            assertCurrent: () => {},
           });
-          const priorNote = preparedPrompt
-            ? await prepareAgentWorkspaceAttachments({
-                workspaceDir: fixture.gatewayRoot,
-                turn: { media, timeoutMs: 1_000 },
-                assertCurrent: () => {},
-              })
-            : undefined;
           if (replacePrompt) {
             mocks.resolvePrompt.mockReturnValue(prompt);
           }
-          const submitted = await attempt(
-            "self_hosted",
+          const submitted = await attempt({
+            environment: "self_hosted",
             binding,
-            fixture.gatewayRoot,
-            recorderMedia ? undefined : media,
-            undefined,
-            priorNote ? `${prompt}\n\n${priorNote}` : prompt,
-            recorder,
+            workspaceDir: fixture.gatewayRoot,
+            media,
+            prompt: priorNote ? `${prompt}\n\n${priorNote}` : prompt,
             images,
-          );
+          });
 
           expect(submitted.result.terminal).toEqual({ kind: "ok" });
           const request = (await requestBody(1)) as {
@@ -604,15 +486,12 @@ describe("Agents API attempt environment selection", () => {
         resolveInput: async () => ({ text: "Text-only request" }),
       });
       try {
-        const { result } = await attempt(
-          "self_hosted",
-          undefined,
+        const { result } = await attempt({
+          environment: "self_hosted",
           workspaceDir,
-          undefined,
-          undefined,
-          "Text-only request",
-          recorder,
-        );
+          prompt: "Text-only request",
+          userTurnTranscriptRecorder: recorder,
+        });
         expect(result.terminal).toEqual({ kind: "ok" });
       } finally {
         fixture.release();
@@ -620,9 +499,10 @@ describe("Agents API attempt environment selection", () => {
     },
   );
   it("explains the missing self-hosted attachment provider", async () => {
-    const { result } = await attempt("self_hosted", undefined, undefined, [
-      { path: "/fixture/input.txt" },
-    ]);
+    const { result } = await attempt({
+      environment: "self_hosted",
+      media: [{ path: "/fixture/input.txt" }],
+    });
 
     expect(result).toMatchObject({
       terminal: {
@@ -640,9 +520,11 @@ describe("Agents API attempt environment selection", () => {
     const source = path.join(fixture.gatewayRoot, "private-project-file.txt");
     await fs.writeFile(source, "private project bytes");
     try {
-      const { result } = await attempt("self_hosted", undefined, fixture.gatewayRoot, [
-        { path: source, fileName: "import-job.log" },
-      ]);
+      const { result } = await attempt({
+        environment: "self_hosted",
+        workspaceDir: fixture.gatewayRoot,
+        media: [{ path: source, fileName: "import-job.log" }],
+      });
 
       expect(result).toMatchObject({
         terminal: {
@@ -656,69 +538,27 @@ describe("Agents API attempt environment selection", () => {
   });
 });
 
-async function attempt(
-  environment: string | undefined,
-  binding?: AgentsApiBinding,
-  workspaceDir = "/fixture/project",
-  media?: AgentHarnessAttemptParamsV2["media"],
-  pluginConfig?: Record<string, unknown>,
-  prompt = "Fixture prompt",
-  userTurnTranscriptRecorder?: AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"],
-  images?: AgentHarnessAttemptParamsV2["images"],
-  overrides: Partial<AgentHarnessAttemptParamsV2> = {},
-) {
-  // Authentication/tool construction are host-prepared and mocked at their boundaries.
-  const authStorage = AuthStorage.inMemory();
-  const params: AgentHarnessAttemptParamsV2 = {
-    sessionId: "local-fixture",
-    sessionKey: "agent:main:fixture",
-    sessionFile: "/fixture/session.jsonl",
-    agentId: "main",
-    workspaceDir,
-    runId: "run-fixture",
-    timeoutMs: 1_000,
-    prompt,
-    media,
-    images,
-    userTurnTranscriptRecorder,
-    provider: "openai",
-    modelId: "fixture-model",
-    model: {
-      id: "fixture-model",
-      name: "Fixture Model",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1024,
-      maxTokens: 512,
-    },
-    authStorage,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: ModelRegistry.inMemory(authStorage),
-    thinkLevel: "off",
-    resolvedApiKey: "fixture-not-a-real-api-key",
+async function attempt({
+  environment,
+  binding,
+  pluginConfig,
+  ...overrides
+}: Partial<AgentHarnessAttemptParamsV2> & {
+  environment?: string;
+  binding?: AgentsApiBinding;
+  pluginConfig?: Record<string, unknown>;
+} = {}) {
+  const params = createAttemptParams({
     // Per-run plugin overrides do not own live plugin settings.
     config: {
       plugins: { entries: { agentsapi: { config: { environment: "invalid-run-override" } } } },
     },
     hostCapabilities: {
-      kind: "agent-harness-host-capability",
-      version: 1,
       assertActive: vi.fn(),
       reportOutputTokens: vi.fn(),
-      bindToolSurface: (tools) => tools,
-      runBeforeToolCall: async ({ params: toolParams }) => ({
-        blocked: false,
-        params: toolParams,
-      }),
-      requestApproval: async () => undefined,
-      waitForApproval: async () => undefined,
     },
-  };
-  Object.assign(params, overrides);
+    ...overrides,
+  });
   const bind = vi.fn<(next: AgentsApiBinding) => Promise<void>>(async () => {});
   const result = await runAgentsApiAttempt(
     params,

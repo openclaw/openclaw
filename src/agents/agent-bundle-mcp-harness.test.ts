@@ -58,6 +58,7 @@ const mocks = vi.hoisted(() => {
       },
     ),
     acquireSessionMcpRuntime: vi.fn(),
+    retireSessionMcpRuntime: vi.fn(async () => true),
     rememberAdvertisedScopedMcpCatalog: vi.fn(
       (
         handle: { runtime: Runtime },
@@ -81,6 +82,7 @@ vi.mock("./agent-bundle-mcp-manager-api.js", async (importOriginal) => {
     ...actual,
     acquireRequesterScopedMcpRuntime: mocks.acquireRequesterScopedMcpRuntime,
     acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
+    retireSessionMcpRuntime: mocks.retireSessionMcpRuntime,
     rememberAdvertisedScopedMcpCatalog: mocks.rememberAdvertisedScopedMcpCatalog,
     getAdvertisedScopedMcpCatalog: mocks.getAdvertisedScopedMcpCatalog,
   };
@@ -105,6 +107,7 @@ beforeEach(() => {
   mocks.reset();
   mocks.acquireRequesterScopedMcpRuntime.mockClear();
   mocks.acquireSessionMcpRuntime.mockReset();
+  mocks.retireSessionMcpRuntime.mockClear();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
   readCredentialsStatus
@@ -126,6 +129,46 @@ function makeStaticRuntime(sessionId: string) {
 }
 
 describe("materializeStaticMcpToolsForHarnessRunCore", () => {
+  it.each(["none", "release", "join"] as const)(
+    "retires a failed snapshot once when cleanup failure is %s",
+    async (cleanupFailure) => {
+      const runtime = makeRuntime({ sessionId: "failed-snapshot", requesterSenderId: "unused" });
+      delete runtime.requesterScope;
+      const failure = new Error("catalog unavailable");
+      runtime.getCatalog = async () => {
+        throw failure;
+      };
+      const release = runtime.acquireLease?.();
+      const releaseLease = vi.fn(() => {
+        release?.();
+        if (cleanupFailure === "release") {
+          throw new Error("lease release failed");
+        }
+      });
+      runtime.joinCleanup = vi.fn(async () => {
+        if (cleanupFailure === "join") {
+          throw new Error("cleanup join failed");
+        }
+      });
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime, releaseLease });
+
+      await expect(
+        materializeStaticMcpToolsForHarnessRunCore({
+          sessionId: "failed-snapshot",
+          workspaceDir: "/workspace",
+          retireSessionRuntimeAfterDispose: true,
+        }),
+      ).rejects.toBe(failure);
+      expect(releaseLease).toHaveBeenCalledOnce();
+      expect(runtime.activeLeases).toBe(0);
+      expect(runtime.joinCleanup).toHaveBeenCalledOnce();
+      expect(mocks.retireSessionMcpRuntime).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "failed-snapshot",
+        reason: "scheduled-authority-snapshot-complete",
+      });
+    },
+  );
+
   it("never widens a finite scheduled cap", async () => {
     makeStaticRuntime("scheduled-denied");
 

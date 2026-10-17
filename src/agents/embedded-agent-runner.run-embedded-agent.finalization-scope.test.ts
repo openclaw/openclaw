@@ -264,19 +264,23 @@ describe("nested settled-turn finalization ownership", () => {
           return;
         }
         const result = await child;
-        const expected =
-          finalization === "answer"
-            ? "The write completed."
-            : "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
-        expect(result?.payloads).toEqual([expect.objectContaining({ text: expected })]);
         expect(toolRuns).toBe(1);
         expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);
         const transcript = await readMessages(target);
-        expect(transcript).toHaveLength(messages.length + 1);
-        expect(transcript.at(-1)?.message).toMatchObject({
-          role: "assistant",
-          content: [{ type: "text", text: expected }],
-        });
+        if (finalization === "answer") {
+          expect(result?.payloads).toEqual([
+            expect.objectContaining({ text: "The write completed." }),
+          ]);
+          expect(transcript).toHaveLength(messages.length + 1);
+          expect(transcript.at(-1)?.message).toMatchObject({
+            role: "assistant",
+            content: [{ type: "text", text: "The write completed." }],
+          });
+        } else {
+          expect(result?.payloads).toBeUndefined();
+          expect(result?.meta.error).toMatchObject({ kind: "incomplete_turn" });
+          expect(transcript).toHaveLength(messages.length);
+        }
       } finally {
         release();
         await child?.catch(() => undefined);

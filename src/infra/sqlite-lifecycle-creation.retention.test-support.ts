@@ -75,8 +75,8 @@ async function checkStaging() {
 }
 
 const readCommand = {
-  type: "deviceIdentity.read",
-  input: { identityKey: "lifecycle-retention" },
+  type: "deviceAuth.read",
+  input: { deviceId: "lifecycle-retention", role: "operator", readOnly: false },
 } as const;
 
 async function completeStateOpening() {
@@ -100,7 +100,7 @@ async function completeStateOpening() {
         },
       },
     );
-    assert.equal(result, null);
+    assert.deepEqual(result, { entry: null, expectedToken: null });
   });
   return { references, context };
 }
@@ -116,9 +116,9 @@ async function checkStateOpening() {
     assert.equal(isSqliteWorkerStoreAvailable(store), true);
     assert.equal(await owner.open(context), store);
     assert.equal(getSqliteWorkerActorIdentity(store), actor);
-    assert.equal(
+    assert.deepEqual(
       await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(readCommand)),
-      null,
+      { entry: null, expectedToken: null },
     );
   } finally {
     await closeOpenClawStateDatabaseAsync();
@@ -194,12 +194,66 @@ async function checkAgentOpening() {
   }
 }
 
+async function checkHistoryClose() {
+  const { persistSessionTranscriptTurn, replaceSessionEntrySync } =
+    await import("../config/sessions/session-accessor.js");
+  const { readSessionTranscriptHistoryEventPage } =
+    await import("../config/sessions/session-accessor.sqlite-history-events.js");
+  const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
+  const { OpenClawAgentDatabaseReadOnlyScope } =
+    await import("../state/openclaw-agent-db-readonly-scope.js");
+  const { withOpenClawAgentDatabaseReadOnly } =
+    await import("../state/openclaw-agent-db-readonly.js");
+  const scope = {
+    agentId: "main",
+    sessionId: "history-retention",
+    sessionKey: "agent:main:history-retention",
+    env: process.env,
+  };
+  const reader = new OpenClawAgentDatabaseReadOnlyScope();
+  try {
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "message", parentId: null, message: { role: "user", content: "hello" } },
+      ],
+      touchSessionEntry: false,
+    });
+    const target = { agentId: scope.agentId, path: openOpenClawAgentDatabase(scope).path };
+    await closeOpenClawAgentDatabasesAsync(root);
+    const reference = reader.run(target, () => {
+      const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
+        const page = readSessionTranscriptHistoryEventPage(scope, {
+          offset: 0,
+          maxMessages: 1,
+          readOnly: true,
+        });
+        assert.equal(page.events.length, 1);
+        return new WeakRef(db);
+      }, scope);
+      assert.ok(result.found);
+      return result.value;
+    });
+    assert.equal(reader.hasRetainedConnection, true);
+    reader.close();
+    await collectForRetentionCheck("sqlite-history-close");
+    assert.equal(reference.deref(), undefined, "Closed history database must collect");
+    assert.equal(reader.hasRetainedConnection, false);
+  } finally {
+    reader.close();
+    await closeOpenClawAgentDatabasesAsync(root);
+    await closeOpenClawStateDatabaseAsync();
+  }
+}
+
 if (scenario === "snapshot-staging") {
   await checkStaging();
 } else if (scenario === "state-opening") {
   await checkStateOpening();
 } else if (scenario === "agent-opening") {
   await checkAgentOpening();
+} else if (scenario === "history-close") {
+  await checkHistoryClose();
 } else {
   throw new Error(`Unknown SQLite lifecycle retention scenario: ${scenario}`);
 }

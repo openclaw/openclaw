@@ -24,13 +24,11 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
-import {
-  fingerprintPreparedModelCatalogGeneration,
-  fingerprintPreparedModelWorkerRequest,
-} from "./prepared-model-catalog-fingerprints.js";
 import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
@@ -41,10 +39,7 @@ import type {
   PreparedModelWorkerCommand,
   PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.types.js";
-import {
-  PreparedModelCatalogAdmissionStalledError,
-  PreparedModelCatalogGenerationMismatchError,
-} from "./prepared-model-catalog.errors.js";
+import { PreparedModelCatalogAdmissionStalledError } from "./prepared-model-catalog.errors.js";
 import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
@@ -157,6 +152,9 @@ async function getGatewayCatalogPool(
               if (gatewayCatalog.current === current) {
                 gatewayCatalog.current = undefined;
               }
+              if (signal.aborted || !borrowers.some((borrower) => borrower.isCurrent())) {
+                return;
+              }
               const { recoverPreparedModelRuntimeCatalogWorker } =
                 await import("./prepared-model-runtime.js");
               await recoverPreparedModelRuntimeCatalogWorker(borrowers);
@@ -243,7 +241,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const cache = getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot);
   const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
   const sharedAuthStoreOwnership = getPreparedSharedAuthStoreOwnership(params.agentFacts.env);
-  const value: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint"> = {
+  return {
     remoteCatalog: captureRemoteModelCatalogSnapshot(),
     input,
     sourceConfigForSecrets,
@@ -268,7 +266,6 @@ export function createPreparedModelCatalogWorkerInput(params: {
           : overlayPluginNativeAdmissions(pluginMetadataSnapshot.registryIndex, cache),
     },
   };
-  return { ...value, generationFingerprint: fingerprintPreparedModelCatalogGeneration(value) };
 }
 
 type PreparedModelCatalogWorker = Readonly<{
@@ -283,7 +280,6 @@ type PreparedModelCatalogWorker = Readonly<{
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
-      hookRows: Map<string, Set<string>>;
     }
   >;
 }>;
@@ -305,7 +301,6 @@ export function createPreparedModelCatalogWorker(
   let observingRetirement = false;
   let stoppedError: Error | undefined;
   let releaseProcessLifetime: (() => void) | undefined;
-  let expectedFingerprint: string | undefined;
   let pendingAuth:
     | { key: string; promise: ReturnType<PreparedModelCatalogWorker["loadAuth"]> }
     | undefined;
@@ -330,28 +325,12 @@ export function createPreparedModelCatalogWorker(
   const environmentFingerprint = fingerprintPreparedRuntimeFacts(workerInput.input.env);
   let pool: CatalogPool | undefined;
   let sharedOwner: GatewayCatalogPool | undefined;
-  const mismatch = (
-    message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
-  ) =>
-    new PreparedModelCatalogGenerationMismatchError(
-      workerInput.input.agentDir,
-      message.generationFingerprint,
-      message.reconstructedFingerprint,
-    );
-  const validate = (message: PreparedModelWorkerResult) => {
+  const validate: (message: PreparedModelWorkerResult) => void = () => {
     if (!gatewayOwned) {
       assertCurrent();
     }
-    if (message.status === "generation-mismatch") {
-      // Fence before any successor dispatches: rejecting here closes the pool, so a queued
-      // auth or catalog request never runs on the retired worker and rejects with this
-      // same typed outcome instead of a generic failure.
-      throw mismatch(message);
-    }
-    if (message.status === "ok" && message.generationFingerprint !== expectedFingerprint) {
-      throw new Error("prepared model catalog worker returned a stale generation");
-    }
   };
+  let receiveResult = validate;
   const stop = async (error: Error) => {
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
@@ -397,6 +376,7 @@ export function createPreparedModelCatalogWorker(
     let message: PreparedModelWorkerResult;
     let requestPool: typeof pool;
     let pending: Promise<PreparedModelWorkerResult> | undefined;
+    let credentials: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
     const controller = new AbortController();
     let progress: NativeReferenceProgress | undefined;
@@ -473,7 +453,9 @@ export function createPreparedModelCatalogWorker(
         shared.borrowers.add(borrower);
       }
       requestPool = pool =
-        shared?.pool ?? pool ?? new CatalogWorkerTaskPool(workerInput.input.env, validate);
+        shared?.pool ??
+        pool ??
+        new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
       pending = requestPool.run(
         () => {
           assertCurrent();
@@ -494,9 +476,20 @@ export function createPreparedModelCatalogWorker(
             ...value,
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
           };
-          expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);
+          const publication = beginAuthProfileCredentialBatch(
+            captureOpenClawStateWorkerContext({ env: input.env }),
+          );
+          credentials = publication;
+          receiveResult = (result) => {
+            // Even a failed or retired catalog may have committed a credential refresh.
+            publication.committed(result.authCredentials);
+            publication.finish(true);
+            credentials = undefined;
+            receiveResult = validate;
+            validate(result);
+          };
           if (shared) {
-            shared.validate = validate;
+            shared.validate = receiveResult;
           }
           return { value: workerInput, request: workerRequest };
         },
@@ -547,19 +540,11 @@ export function createPreparedModelCatalogWorker(
           process.emitWarning(`Gateway catalog recovery failed: ${String(recoveryError)}`);
         });
       }
-      if (!gatewayOwned && failure instanceof PreparedModelCatalogGenerationMismatchError) {
-        // Keep the generation open, but retire only this request's pool: a delayed rejection
-        // from it must not close a replacement already serving the same lifecycle plan.
-        if (pool === requestPool) {
-          pool = undefined;
-        }
-        await requestPool?.close(failure);
-        throw failure;
-      }
       controller.abort(error);
       await stop(failure);
       throw error;
     } finally {
+      credentials?.finish(false);
       task.onRecovery = undefined;
       if (pending) {
         tasks.delete(pending);
@@ -568,10 +553,6 @@ export function createPreparedModelCatalogWorker(
     }
     if (message.status === "failed") {
       throw new Error(message.error);
-    }
-    if (message.status === "generation-mismatch") {
-      // validateResult fences this reply before the pool can resolve it.
-      throw mismatch(message);
     }
     return message;
   };
@@ -594,7 +575,6 @@ export function createPreparedModelCatalogWorker(
         configuredRuntimeModels: message.configuredRuntimeModels,
         runtimeModels: message.runtimeModels,
         providerExpiries: message.providerExpiries,
-        hookRows: message.hookRows,
       };
     },
     loadAuth: async ({ providerIds, profileIds }) => {

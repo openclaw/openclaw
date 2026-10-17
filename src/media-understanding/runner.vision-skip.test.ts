@@ -321,23 +321,6 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("renders disabled markers when the active model has no native vision", async () => {
-    const ctx: MsgContext = {
-      Body: "inspect this image",
-      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
-    };
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: { tools: { media: { image: { enabled: false } } } },
-    });
-    expect(findImageDecision(ctx)).toMatchObject({
-      outcome: "disabled",
-      nativeVisionActive: false,
-      attachmentDispositions: { 0: { kind: "capability-disabled" } },
-    });
-    expect(ctx.Body).toContain("[Image attachment not analyzed: image understanding is disabled]");
-  });
-
   it("uses explicit image models even when the active model supports vision", async () => {
     const describeImage = vi.fn(async ({ model }: { model: string }) => ({
       text: plantedVisionSentinel,

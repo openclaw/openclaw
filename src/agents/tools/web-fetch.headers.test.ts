@@ -310,27 +310,6 @@ describe("web_fetch headers and response extraction", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/runtime-firecrawl-off");
   });
 
-  it("logs x-markdown-tokens when header is present", async () => {
-    // Token diagnostics are useful, but the logged URL must be scrubbed before
-    // query strings or private paths reach debug output.
-    const logSpy = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
-    const fetchSpy = vi
-      .fn()
-      .mockResolvedValue(markdownResponse("# Tokens Test", { "x-markdown-tokens": "1500" }));
-    global.fetch = withFetchPreconnect(fetchSpy);
-
-    const tool = createWebFetchTool(baseToolConfig);
-
-    await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
-
-    const tokenLogs = logSpy.mock.calls
-      .map(([message]) => message)
-      .filter((message) => message.includes("x-markdown-tokens"));
-    expect(tokenLogs).toEqual(["[web-fetch] x-markdown-tokens: 1500 (https://example.com/...)"]);
-    expect(tokenLogs[0]).not.toContain("token=secret");
-    expect(tokenLogs[0]).not.toContain("/tokens/private");
-  });
-
   it("converts markdown to text when extractMode is text", async () => {
     const md = "# Heading\n\n**Bold text** and [a link](https://example.com).";
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse(md));

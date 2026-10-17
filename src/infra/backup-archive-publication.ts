@@ -3,6 +3,7 @@ import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -185,6 +186,8 @@ export async function publishPreparedBackupArchive(params: {
   let publicationFailure: { error: unknown } | undefined;
   try {
     try {
+      // A cancelled operation retires prepared bytes through this same owner.
+      resolveCommandProcessSignal()?.throwIfAborted();
       const publication = await publishFileExclusive({
         sourcePath: prepared.archivePath,
         targetPath: plan.canonicalOutputPath,

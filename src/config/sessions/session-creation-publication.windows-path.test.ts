@@ -23,6 +23,44 @@ vi.mock("node:fs", async (importOriginal) => {
 afterEach(() => vi.restoreAllMocks());
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
+it("binds a native creation to its prepared physical identity", async () => {
+  const databasePath = path.join(directories.make("session-publication-native-"), "agent.sqlite");
+  const db = new DatabaseSync(databasePath);
+  const database = { agentId: "main", path: databasePath, db };
+  const target = {
+    agentId: database.agentId,
+    sessionKey: "agent:main:native-publication",
+    paths: new Set([databasePath]),
+  };
+  try {
+    registerOpenClawAgentDatabaseIdentity(db);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected a file-backed native creation fixture");
+    }
+    await withSessionEntryCreationPublication(
+      { agentId: target.agentId, sessionKey: target.sessionKey, database },
+      async (operation) => {
+        expect(() =>
+          assertSessionEntryCreationPublication(operation, {
+            ...target,
+            paths: new Set(),
+            databaseIdentity: `file:${identity}`,
+          }),
+        ).not.toThrow();
+        expect(() =>
+          assertSessionEntryCreationPublication(operation, {
+            ...target,
+            databaseIdentity: "file:0:0",
+          }),
+        ).toThrow("Session creation publication owner is no longer current");
+      },
+    );
+  } finally {
+    db.close();
+  }
+});
+
 it.each([
   { name: "drive", runtimePath: String.raw`C:\OpenClaw\agents\main\agent.sqlite` },
   { name: "UNC", runtimePath: String.raw`\\Server\Share\OpenClaw\agents\main\agent.sqlite` },

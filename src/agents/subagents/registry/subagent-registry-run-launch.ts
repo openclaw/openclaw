@@ -1,4 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -16,6 +17,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -31,14 +33,12 @@ import {
   resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
-import { prepareSubagentRegistrationRows } from "./subagent-registration-rows.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
   waitForSubagentRetirementPublication,
 } from "./subagent-registry-memory.js";
 import {
-  SubagentRegistryVersionConflictError,
   SubagentRegistryWriteError,
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -52,6 +52,7 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
+import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
 import type {
   RegisterSubagentRunOptions,
   SubagentRegistrationScope,
@@ -141,7 +142,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       childAgentId,
     );
     let authority: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
-    let preparedRows: Map<string, SubagentRunRecord> | undefined;
+    let preparedRows: (() => ReadonlyMap<string, SubagentRunRecord>) | undefined;
     let plannedEntry: SubagentRunRecord | undefined;
     let registered: SubagentRunRecord | undefined;
     let custodyTransferred = false;
@@ -179,7 +180,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     };
     const ownsCleanupSession = () =>
       preparedRows !== undefined &&
-      ![...preparedRows.values(), ...this.options.getChildSessionCandidates(childSessionKey)].some(
+      ![
+        ...preparedRows().values(),
+        ...this.options.getChildSessionCandidates(childSessionKey),
+      ].some(
         (candidate) =>
           candidate.runId !== registered?.runId &&
           isSubagentRunGenerationCandidate(candidate, childSessionKey, childAgentId),
@@ -256,6 +260,30 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       authority = registerParams.collect
         ? undefined
         : await captureOperatorToolGatewayContinuationContext();
+      const operator = authority?.operatorAuthority;
+      let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
+      if (
+        operator?.recoverySnapshot &&
+        registerParams.completionRequesterSessionId &&
+        registerParams.requesterTurnRunId
+      ) {
+        try {
+          operatorRecoverySource = decodeGatewayOperatorRecoverySource({
+            version: 1,
+            agentId: requesterAgentId,
+            sessionKey: requesterSessionKey,
+            sessionId: registerParams.completionRequesterSessionId,
+            lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
+            sourceRunId: registerParams.requesterTurnRunId,
+            snapshot: {
+              ...operator.recoverySnapshot,
+              scopes: intersectOperatorScopes(operator.recoverySnapshot.scopes, operator.scopes),
+            },
+          });
+        } catch {
+          // Oversized evidence must not block admission or become executable recovery authority.
+        }
+      }
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -279,13 +307,13 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         ],
         context,
       );
-      selected ??= preparedRows.get(runId);
+      selected ??= preparedRows().get(runId);
       assertCurrent();
       const isGenerationCandidate = (row: SubagentRunRecord) =>
         isSubagentRunGenerationCandidate(row, childSessionKey, childAgentId);
       const runIds = new Set([
         runId,
-        ...[...preparedRows.values(), ...this.options.getChildSessionCandidates(childSessionKey)]
+        ...[...preparedRows().values(), ...this.options.getChildSessionCandidates(childSessionKey)]
           .filter(isGenerationCandidate)
           .map((row) => row.runId),
       ]);
@@ -343,6 +371,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   )
                 : undefined,
           });
+          entry.operatorRecoverySource = operatorRecoverySource;
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(
@@ -367,11 +396,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           return {
             value: entry,
             postimages,
-            registrationCohort: {
-              childSessionKey,
-              childAgentId,
-              runIds: [...rows.values()].filter(isGenerationCandidate).map((row) => row.runId),
-            },
           };
         },
         {
@@ -472,9 +496,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         );
       }
     } catch (error) {
-      if (error instanceof SubagentRegistryVersionConflictError) {
-        preparedRows = undefined;
-      }
       if (!queuedScope) {
         initialOutcome =
           hasSqliteWorkerOutcomeUnknown(error) ||
@@ -565,7 +586,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             `collector gateway run id already exists: ${nextRunId}`,
           );
         }
-        const entry = structuredClone(current);
+        const entry = { ...current };
         entry.swarmRunId ??= current.runId;
         entry.schedulerSlotId ??= entry.swarmRunId;
         entry.runId = nextRunId;
@@ -659,7 +680,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           if (current.collectorCompletion) {
             return { value: true };
           }
-          entry = structuredClone(current);
+          entry = { ...current };
           prepareTerminatedCollectorLaunch(
             entry,
             endedAt,

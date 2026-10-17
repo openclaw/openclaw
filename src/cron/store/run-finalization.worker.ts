@@ -1,4 +1,3 @@
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -6,7 +5,6 @@ import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js"
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyOutcomeToAuthoritativeJob } from "../service/timer-outcomes.js";
 import { recordCronRunInDatabase } from "./run-history.kernel.js";
-import type { CronRunReceiptDatabase } from "./run-receipt-read.js";
 import { finishCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
 import { cronRunResultHistory } from "./run-result.js";
@@ -43,27 +41,41 @@ export function finalizeCronRunsInWorker(
             deps: {
               nowMs: () => policy.nowMs,
               cronConfig: policy.cronConfig,
+              failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
               log: createCronMutationLogger(outcome.logs),
             },
           };
           for (const [outcomeIndex, completed] of policy.outcomes.entries()) {
             const receipt = completed.runReceipt;
-            if (receipt) {
-              const recorded = executeSqliteQueryTakeFirstSync(
-                db,
-                getNodeSqliteKysely<CronRunReceiptDatabase>(db)
-                  .selectFrom("cron_run_receipts")
-                  .select("status")
-                  .where("receipt_id", "=", receipt.receiptId),
-              );
-              // Terminal messages are idempotent; an edited job cannot revoke a completed result.
-              if (!recorded || recorded.status !== "running") {
-                continue;
-              }
+            const storedJob = jobs.get(completed.jobId);
+            // Retention protects the marker still in storage until this mutation flushes.
+            const pendingReceiptId =
+              storedJob?.state.runningAtMs === undefined
+                ? undefined
+                : storedJob.state.runningReceiptId;
+            // Finishing may prune a removed job's old receipt and its trigger marker.
+            const triggerStateRetired =
+              receipt && isCronRunTriggerStateRetiredInDatabase({ database: db, handle: receipt });
+            // The conditional write owns terminal idempotency; history and job state
+            // commit with it, or all roll back together.
+            if (
+              receipt &&
+              !finishCronRunReceiptInDatabase({
+                database: db,
+                receiptSchema,
+                handle: receipt,
+                pendingReceiptId,
+                status:
+                  completed.status === "ok" && completed.triggerEval?.fired === false
+                    ? "skipped"
+                    : completed.status,
+                finishedAtMs: completed.endedAt,
+                error: completed.error,
+              })
+            ) {
+              continue;
             }
-            const currentJob = completed.activeJobMarker?.jobRemoved
-              ? undefined
-              : jobs.get(completed.jobId);
+            const currentJob = completed.activeJobMarker?.jobRemoved ? undefined : storedJob;
             const ownsRunningMarker =
               !receipt ||
               !currentJob?.state.runningReceiptId ||
@@ -73,9 +85,7 @@ export function finalizeCronRunsInWorker(
             const shouldDelete = applyOutcomeToAuthoritativeJob(state, job, completed, {
               request: completed.request,
               deferredNotifications: currentJob && ownsRunningMarker ? outcome.notifications : [],
-              triggerStateRetired:
-                receipt &&
-                isCronRunTriggerStateRetiredInDatabase({ database: db, handle: receipt }),
+              triggerStateRetired,
             });
             if (currentJob && ownsRunningMarker) {
               if (shouldDelete) {
@@ -103,19 +113,6 @@ export function finalizeCronRunsInWorker(
               db,
               cronRunResultHistory(input.storeKey, job, completed, policy.defaultAgentId),
             );
-            if (receipt) {
-              finishCronRunReceiptInDatabase({
-                database: db,
-                receiptSchema,
-                handle: receipt,
-                status:
-                  completed.status === "ok" && completed.triggerEval?.fired === false
-                    ? "skipped"
-                    : completed.status,
-                finishedAtMs: completed.endedAt,
-                error: completed.error,
-              });
-            }
             outcome.eventPlans.push({ outcomeIndex, job });
           }
           outcome.changed = outcome.upsertedJobs.length > 0 || outcome.removedJobs.length > 0;

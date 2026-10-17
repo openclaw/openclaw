@@ -34,6 +34,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type OwnershipScenario =
   | "owned-success"
   | "owned-success-inherited-root"
+  | "inherited-paths"
   | "stdout-error"
   | "stderr-error"
   | "sample-sigterm"
@@ -71,6 +72,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
     fs.writeFileSync(
       preloadPath,
       [
+        "import assert from 'node:assert/strict';",
         "import cp from 'node:child_process';",
         "import { EventEmitter } from 'node:events';",
         "import fs from 'node:fs';",
@@ -82,7 +84,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
         "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
         "const samples = [], signals = [], events = [];",
-        "let child, syntheticRoot, launch, attemptedSummary, closed = false, replaced = false;",
+        "let child, syntheticRoot, configHome, launch, attemptedSummary, closed = false, replaced = false;",
         "let wait, requestSettled = false, guardFired = false;",
         "const write = fs.writeFileSync, remove = fs.rmSync;",
         "const nativeKill = process.kill.bind(process);",
@@ -107,12 +109,28 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  });",
         "};",
         "fs.writeFileSync = (target, ...args) => {",
+        "  if (String(target).endsWith(path.join('.openclaw', 'openclaw.json')))",
+        "    configHome = path.dirname(path.dirname(String(target)));",
         "  if (String(target).endsWith('/summary.json')) {",
         "    events.push('summary'); attemptedSummary = JSON.parse(String(args[0]));",
         "    if (scenario === 'completed-threshold-cleanup-report-error')",
         "      throw Object.assign(new Error('summary write failed EACCES'), { code: 'EACCES' });",
         "  }",
         "  return write(target, ...args);",
+        "};",
+        "const assertIsolatedEnv = (env, boundary) => {",
+        "  if (scenario !== 'inherited-paths') return;",
+        "  assert.equal(env.HOME, configHome);",
+        "  assert.equal(env.USERPROFILE, configHome);",
+        "  assert.equal(env.OPENCLAW_HOME, configHome);",
+        "  assert.equal(env.OPENCLAW_STATE_DIR, path.join(configHome, '.openclaw'));",
+        "  assert.equal(env.OPENCLAW_CONFIG_PATH, path.join(configHome, '.openclaw', 'openclaw.json'));",
+        "  assert.equal(env.XDG_CONFIG_HOME, path.join(configHome, '.config'));",
+        "  assert.equal(env.XDG_CACHE_HOME, path.join(configHome, '.cache'));",
+        "  assert.equal(env.XDG_DATA_HOME, path.join(configHome, '.local', 'share'));",
+        "  assert.equal(env.XDG_STATE_HOME, path.join(configHome, '.local', 'state'));",
+        "  assert.equal(env.XDG_RUNTIME_DIR, path.join(configHome, '.run'));",
+        "  events.push('isolated:' + boundary);",
         "};",
         "fs.rmSync = (target, options) => {",
         "  if (target === syntheticRoot) {",
@@ -162,6 +180,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  return true;",
         "};",
         "cp.spawn = (_bin, args, options) => {",
+        "  assertIsolatedEnv(options.env, 'gateway');",
         "  if (child) throw new Error('fixture permits exactly one Gateway launch');",
         "  syntheticRoot = path.dirname(options.env.HOME);",
         "  launch = { entry: args[0], noCompileCache: options.env.NODE_DISABLE_COMPILE_CACHE,",
@@ -181,8 +200,10 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         "  return child;",
         "};",
         "const success = (stdout = '') => ({ status: 0, signal: null, stdout, stderr: '' });",
-        "cp.spawnSync = (bin, args) => {",
-        "  if (bin === process.execPath && args.includes('index')) return success();",
+        "cp.spawnSync = (bin, args, options) => {",
+        "  if (bin === process.execPath && args.includes('index')) {",
+        "    assertIsolatedEnv(options.env, 'index'); return success();",
+        "  }",
         "  if (bin !== 'lsof') throw new Error('fixture refused unexpected command ' + bin);",
         "  if (args.includes('-v')) return success();",
         "  if (args.some(arg => arg.startsWith('-iTCP:'))) {",
@@ -245,6 +266,20 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         cwd: root,
         env: {
           ...process.env,
+          ...(scenario === "inherited-paths"
+            ? {
+                HOME: path.join(root, "inherited-home"),
+                USERPROFILE: path.join(root, "inherited-userprofile"),
+                OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
+                OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
+                OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
+                XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
+                XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
+                XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
+                XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
+                XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
+              }
+            : {}),
           TMPDIR: root,
           TMP: root,
           TEMP: root,
@@ -261,7 +296,10 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
         maxBuffer: 1024 * 1024,
       },
     );
-    expect(fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims"))).toHaveLength(1);
+    expect(
+      fs.readdirSync(path.join(root, ".vitest-resource-owner", "claims")),
+      result.stderr,
+    ).toHaveLength(1);
     if (scenario === "ignored-stop") {
       expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     } else {
@@ -610,28 +648,35 @@ describe("check-memory-fd-repro", () => {
       },
     );
 
-    it.each(["owned-success", "owned-success-inherited-root", "delayed-success"] as const)(
-      "joins the launched process before publishing success (%s)",
-      (scenario) => {
-        const { result, journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(0);
-        expect(journal.launch).toEqual({
-          entry: path.join(fixtureRoot, "openclaw.mjs"),
-          noCompileCache: "1",
-          devSourceRoot:
-            scenario === "owned-success-inherited-root"
-              ? path.join(fixtureRoot, "inherited-source")
-              : fixtureRoot,
-        });
-        expect(journal.samples).toEqual(
-          Array.from({ length: 3 }, () => ({ pid: OWNED_PID, alive: true })),
+    it.each([
+      "owned-success",
+      "owned-success-inherited-root",
+      "inherited-paths",
+      "delayed-success",
+    ] as const)("joins the launched process before publishing success (%s)", (scenario) => {
+      const { result, journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario);
+      expect(result.status, result.stderr).toBe(0);
+      if (scenario === "inherited-paths") {
+        expect(journal.events).toEqual(
+          expect.arrayContaining(["isolated:index", "isolated:gateway"]),
         );
-        expect(journal.closed).toBe(true);
-        expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("summary"));
-        expect(journal.rootExists).toBe(false);
-        expect(summary?.passed).toBe(true);
-      },
-    );
+      }
+      expect(journal.launch).toEqual({
+        entry: path.join(fixtureRoot, "openclaw.mjs"),
+        noCompileCache: "1",
+        devSourceRoot:
+          scenario === "owned-success-inherited-root"
+            ? path.join(fixtureRoot, "inherited-source")
+            : fixtureRoot,
+      });
+      expect(journal.samples).toEqual(
+        Array.from({ length: 3 }, () => ({ pid: OWNED_PID, alive: true })),
+      );
+      expect(journal.closed).toBe(true);
+      expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("summary"));
+      expect(journal.rootExists).toBe(false);
+      expect(summary?.passed).toBe(true);
+    });
 
     it("fails report-only and retains inputs when the owned process cannot be joined", () => {
       const { result, journal, summary } = runGatewayOwnershipFixture("ignored-stop");

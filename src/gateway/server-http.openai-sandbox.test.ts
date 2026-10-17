@@ -3,7 +3,7 @@ import "../commands/agent-command.test-mocks.js";
 import "../commands/agent-command-attempt.test-mocks.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -54,7 +54,11 @@ let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let releaseProfileCatalog: (() => void) | undefined;
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "http-session-sandbox", scenario: "minimal" });
+  state = await createOpenClawTestState({
+    label: "http-session-sandbox",
+    scenario: "minimal",
+    prepareProfileCatalog: true,
+  });
   cfg = {
     agents: {
       entries: { main: {} },
@@ -162,7 +166,7 @@ async function post(params: {
 
 function reportRuntimeIsolation() {
   vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
-    const runtime = resolveSandboxRuntimeStatus({
+    const runtime = await resolveSandboxRuntimeStatusAsync({
       cfg: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -234,7 +238,13 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
       if (!sandbox) {
         executeHostTool();
       }
-      return { payloads: [{ text: "execution started" }], meta: { durationMs: 0 } };
+      return {
+        payloads: [{ text: "execution started" }],
+        meta: {
+          durationMs: 0,
+          terminalReply: { disposition: "visible", text: "execution started" },
+        },
+      };
     });
 
     const response = await post({ endpoint, sessionKey });

@@ -7,7 +7,8 @@ import { BUN_UI_TEST_ENV, resolveCiTestRuntimeSelections } from "./lib/ci-test-r
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
-// membership for both backend-local protected seeds.
+// membership for both backend-local protected seeds. Trial policies never expand
+// this publisher: it prepares the same qualified Node+Bun caches for every consumer.
 const hosted = process.env.CACHE_WARM_PLATFORM === "linux-hosted";
 const groups = createVitestCacheWarmGroups(hosted ? "hybrid-hosted" : "full");
 const ui = groups.find((group) => group.shard_name === "cache-warm:ui-package");
@@ -21,7 +22,6 @@ const baseEnv: NodeJS.ProcessEnv = {
   OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
   OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(collectionArgs),
   OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-  OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
   // The final Node UI collection prunes both roots after all producers join.
   OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0",
   OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0",
@@ -118,6 +118,8 @@ try {
     0,
     { runtime: "bun", cacheSlot: 0 },
   );
+  // Keep the inherited Bun selection: the launcher verifies it, and CI resolves the
+  // pinned fork from PATH, which is not an OPENCLAW_BUN_PATH file.
   bunEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   delete bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   await collect(

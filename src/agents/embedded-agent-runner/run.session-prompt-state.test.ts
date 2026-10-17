@@ -413,7 +413,7 @@ describe("embedded run session prompt state", () => {
     ).resolves.toEqual({ action: "retry" });
 
     const prompt = state.activePrompt.override ?? "";
-    expect(prompt).toContain("The previous attempt did not produce a user-visible answer.");
+    expect(prompt).toContain("Your turn ended without a final reply.");
     expect(prompt).not.toContain("recorded reasoning");
     expect(prompt.match(/Continue from the compacted transcript/gu)).toHaveLength(1);
   });

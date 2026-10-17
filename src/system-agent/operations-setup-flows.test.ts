@@ -1,11 +1,25 @@
 // Setup-flow operation tests cover parsing and deterministic one-shot guidance.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
+import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
+import { isStaticallyChannelConfigured } from "../config/channel-configured-shared.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
 } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+
+// mock-isolation: Setup guidance uses synthetic plugins without loading installed channel runtimes.
+vi.mock("../channels/plugins/setup-registry.js", () => ({ listChannelSetupPlugins: vi.fn() }));
+vi.mock("../commands/channel-setup/discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/channel-setup/discovery.js")>()),
+  resolveChannelSetupEntries: vi.fn(),
+}));
+vi.mock("../config/channel-configured-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/channel-configured-shared.js")>()),
+  isStaticallyChannelConfigured: vi.fn(),
+}));
 
 describe("system agent setup-flow operations", () => {
   it("parses channel listing and connect requests", () => {
@@ -159,11 +173,13 @@ describe("system agent setup-flow operations", () => {
 
   it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const entries = [
+    const entries: ReturnType<typeof resolveChannelSetupEntries>["entries"] = [
       {
         id: "telegram",
         meta: {
+          id: "telegram",
           label: "Telegram",
+          selectionLabel: "Telegram",
           blurb: "Telegram bot messaging.",
           docsPath: "/channels/telegram",
         },
@@ -171,27 +187,34 @@ describe("system agent setup-flow operations", () => {
       {
         id: "slack",
         meta: {
+          id: "slack",
           label: "Slack",
+          selectionLabel: "Slack",
           blurb: "Slack app messaging.",
           docsPath: "/channels/slack",
         },
       },
     ];
-    const deps = {
-      listChannelSetupPlugins: () => [{ id: "slack" }],
-      resolveChannelSetupEntries: () => ({
-        entries,
-        installedCatalogEntries: [],
-        installableCatalogEntries: [],
-        installedCatalogById: new Map(),
-        installableCatalogById: new Map(),
-      }),
-      isChannelConfigured: (_cfg: unknown, channel: string) => channel === "slack",
-    } as never;
-
-    await executeSystemAgentOperation({ kind: "channel-info", channel: "slack" }, runtime, {
-      deps,
+    vi.mocked(listChannelSetupPlugins).mockReturnValue([
+      {
+        id: "slack",
+        meta: entries[1]!.meta,
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+      },
+    ]);
+    vi.mocked(resolveChannelSetupEntries).mockReturnValue({
+      entries,
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
     });
+    vi.mocked(isStaticallyChannelConfigured).mockImplementation(
+      (_cfg, channel) => channel === "slack",
+    );
+
+    await executeSystemAgentOperation({ kind: "channel-info", channel: "slack" }, runtime);
     const knownOutput = lines.join("\n");
     expect(knownOutput).toContain("Slack (slack)");
     expect(knownOutput).toContain("Slack app messaging.");
@@ -201,9 +224,7 @@ describe("system agent setup-flow operations", () => {
     expect(knownOutput).toContain("open channel wizard for slack");
 
     lines.length = 0;
-    await executeSystemAgentOperation({ kind: "channel-info", channel: "matrix" }, runtime, {
-      deps,
-    });
+    await executeSystemAgentOperation({ kind: "channel-info", channel: "matrix" }, runtime);
     expect(lines.join("\n")).toContain("Known channels: slack, telegram");
   });
 });

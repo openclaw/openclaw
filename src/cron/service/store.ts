@@ -38,6 +38,18 @@ import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, { revision: number }>();
 
+/** Advance a complete resident store after its committed row postimages are installed. */
+export function noteLoadedCronStoreCommit(state: CronServiceState, observedRevision: number): void {
+  const storeKey = cronStoreKey(state.deps.storePath);
+  const current = getCronJobsStoreRevision(storeKey);
+  const loaded = loadedCronStoreRevisions.get(state)?.revision;
+  noteCronJobsStoreCommit(storeKey);
+  // A sibling publication during the worker await still requires a full reload.
+  if (loaded === observedRevision && current === observedRevision) {
+    loadedCronStoreRevisions.set(state, { revision: getCronJobsStoreRevision(storeKey) });
+  }
+}
+
 function warnInvalidPersistedCronJob(params: {
   state: CronServiceState;
   raw: Record<string, unknown>;
@@ -108,7 +120,7 @@ export async function ensureLoaded(
         );
       }
     }
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
+    const rawConfigJob = loaded.configJobs[index] ?? raw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
     const rawInvalidReason = getInvalidPersistedCronJobReason(raw);
@@ -150,7 +162,7 @@ export async function ensureLoaded(
       if (runtimeState && typeof runtimeState === "object" && !Array.isArray(runtimeState)) {
         // Preserve runtime state with the quarantined config so doctor can
         // repair shape without losing last/next run information.
-        quarantineEntry.state = structuredClone(runtimeState as Record<string, unknown>);
+        quarantineEntry.state = runtimeState as Record<string, unknown>;
       }
       const updatedAtMs = runtimeEntry?.updatedAtMs ?? raw.updatedAtMs;
       if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
@@ -168,6 +180,12 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
+    const loadWarning = state.deps.describeJobLoadWarning?.(hydrated);
+    const loadWarningKey = `host:${hydrated.id}`;
+    if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
+      state.warnedInvalidPersistedJobKeys.add(loadWarningKey);
+      state.deps.log.warn({ jobId: hydrated.id, name: hydrated.name }, loadWarning);
+    }
     jobs.push(hydrated);
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
   }

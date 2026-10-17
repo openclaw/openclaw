@@ -40,6 +40,11 @@ vi.mock("./src/tool.js", () => ({
   createCanvasTool: mocks.createCanvasTool,
 }));
 
+// mock-isolation: importing the real harness would defeat the cold-registration guard.
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("agent harness runtime loaded before Canvas presentation");
+});
+
 function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
   const registrations = {
     registerHttpRoute: vi.fn<OpenClawPluginApi["registerHttpRoute"]>(),

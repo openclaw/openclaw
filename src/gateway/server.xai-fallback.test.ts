@@ -126,7 +126,7 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
-    const terminalEvents = new Map<string, ReturnType<typeof createDeferred<void>>>();
+    const terminalEvents = new Map<string, (event: ChatEvent) => void>();
     const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
@@ -297,13 +297,7 @@ it(
           if (event.event === "chat") {
             const chatEvent = event.payload as ChatEvent;
             events.push(chatEvent);
-            if (
-              chatEvent.state === "final" ||
-              chatEvent.state === "error" ||
-              chatEvent.state === "aborted"
-            ) {
-              terminalEvents.get(chatEvent.sessionKey)?.resolve();
-            }
+            terminalEvents.get(chatEvent.runId)?.(chatEvent);
           }
           if (
             event.event === "session.message" &&
@@ -336,8 +330,6 @@ it(
         requests = [];
         const rejection = rejections.get(scenario);
         const sessionKey = `agent:${scenario}:xai-fallback`;
-        const terminalReceived = createDeferred();
-        terminalEvents.set(sessionKey, terminalReceived);
         await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
         const started = await gateway.client.request<{ runId: string }>("chat.send", {
           sessionKey,
@@ -345,8 +337,28 @@ it(
           deliver: false,
           idempotencyKey: `xai-${scenario}`,
         });
+        const terminalReceived = createDeferred();
+        const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
+        const receiveTerminal = (event: ChatEvent) => {
+          if (
+            event.sessionKey === sessionKey &&
+            (expectsSuccess
+              ? event.state === "final" && event.stopReason === "stop"
+              : event.state === "error")
+          ) {
+            terminalReceived.resolve();
+          }
+        };
+        terminalEvents.set(started.runId, receiveTerminal);
+        // The expected terminal may arrive before chat.send acknowledges its run ID.
+        for (const event of events) {
+          if (event.runId === started.runId) {
+            receiveTerminal(event);
+          }
+        }
         const completed = await gateway.client.request<{
           status: string;
+          error?: string;
           terminalReply?: { text?: string };
         }>(
           "agent.wait",
@@ -357,20 +369,38 @@ it(
           { timeoutMs: 65_000 },
         );
         expect(completed.status, scenario).not.toBe("timeout");
-        // Run completion can precede transcript-gated WebSocket publication.
+        // Status-notice finals do not settle the transcript-gated successful reply.
         await withinTest(terminalReceived.promise, signal);
+        terminalEvents.delete(started.runId);
         const history = await gateway.client.request<{
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });
         const assistant = history.messages.findLast((message) => message.role === "assistant");
-        expect.soft(requests[0], scenario).toBe(primaryModel);
+        const runEvents = events.filter((event) => event.runId === started.runId);
+        expect
+          .soft(
+            requests[0],
+            requests[0] === primaryModel
+              ? scenario
+              : JSON.stringify({
+                  scenario,
+                  completedError: completed.error?.slice(0, 1000),
+                  chatErrors: runEvents
+                    .filter((event) => event.state === "error")
+                    .slice(-3)
+                    .map((event) => ({
+                      errorKind: event.errorKind,
+                      errorMessage: event.errorMessage?.slice(0, 1000),
+                    })),
+                }),
+          )
+          .toBe(primaryModel);
         expect
           .soft(
             requests.filter((requested) => requested === primaryModel),
             scenario,
           )
           .toHaveLength(rejection && rejection.reason !== "rate_limit" ? 1 : 2);
-        const runEvents = events.filter((event) => event.runId === started.runId);
         const terminal = runEvents
           .filter((event) => event.state === "final")
           .filter((event) => event.stopReason === "stop");

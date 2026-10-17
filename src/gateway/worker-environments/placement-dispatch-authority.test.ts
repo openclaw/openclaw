@@ -18,6 +18,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -29,7 +30,7 @@ import {
   identifiedClient,
   sessionSharingTestContext,
 } from "../server-methods/sessions-sharing.test-support.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -40,6 +41,29 @@ import { fakeRunner, PWD_COMMAND, startTestTunnel, success } from "./tunnel.test
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cfg = {};
 afterEach(() => clearRuntimeConfigSnapshot());
+
+function revocableAuthority(message = "session recovery authority closed") {
+  let authorized = true;
+  return {
+    revoke: () => {
+      authorized = false;
+    },
+    assertCurrent: () => {
+      if (!authorized) {
+        throw new Error(message);
+      }
+    },
+  };
+}
+
+async function waitForEntry(entered: Promise<unknown>, running: Promise<unknown>) {
+  await Promise.race([
+    entered,
+    running.then((error) => {
+      throw error;
+    }),
+  ]);
+}
 
 describe("worker placement cancellation and reclaim authority", () => {
   let root: string;
@@ -60,6 +84,7 @@ describe("worker placement cancellation and reclaim authority", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -119,12 +144,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       .catch((error: unknown) => error)
       .finally(settled);
     try {
-      await Promise.race([
-        entered.promise,
-        dispatching.then((error) => {
-          throw error;
-        }),
-      ]);
+      await waitForEntry(entered.promise, dispatching);
       expect(harness.placements.current()?.state).toBe("syncing");
       expect(ownerSignal?.aborted).toBe(false);
       controller.abort(new Error("Stop during workspace sync"));
@@ -132,7 +152,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       expect(settled).not.toHaveBeenCalled();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.log).not.toContain("activation");
-      await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+      await fs.access(knownHostsPath);
     } finally {
       childClosed.resolve({
         ...success(),
@@ -230,12 +250,7 @@ describe("worker placement cancellation and reclaim authority", () => {
         controller.signal,
       )
       .catch((error: unknown) => error);
-    await Promise.race([
-      entered.promise,
-      moving.then((error) => {
-        throw error;
-      }),
-    ]);
+    await waitForEntry(entered.promise, moving);
     try {
       controller.abort(new Error("Stop Move"));
       expect(provisionSignal?.aborted).toBe(true);
@@ -249,21 +264,13 @@ describe("worker placement cancellation and reclaim authority", () => {
   });
 
   it("stops final effects when authority closes during workspace reconciliation", async () => {
-    let authorized = true;
-    const harness = await createTestHarness({
-      afterReconcile: () => {
-        authorized = false;
-      },
-    });
+    const authority = revocableAuthority();
+    const harness = await createTestHarness({ afterReconcile: authority.revoke });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim(REQUEST, () => {
-        if (!authorized) {
-          throw new Error("session recovery authority closed");
-        }
-      }),
-    ).rejects.toThrow("session recovery authority closed");
+    await expect(harness.service.reclaim(REQUEST, authority.assertCurrent)).rejects.toThrow(
+      "session recovery authority closed",
+    );
 
     expect(harness.log).toContain("workspace:reconcile");
     expect(harness.log).toContain("workspace:resume");
@@ -274,35 +281,27 @@ describe("worker placement cancellation and reclaim authority", () => {
   });
 
   it("finishes durable placement completion when authority closes during destroy", async () => {
-    let authorized = true;
-    const harness = await createTestHarness({
-      afterDestroy: () => {
-        authorized = false;
-      },
-    });
+    const authority = revocableAuthority();
+    const harness = await createTestHarness({ afterDestroy: authority.revoke });
     await harness.service.dispatch(REQUEST);
 
-    await expect(
-      harness.service.reclaim(REQUEST, () => {
-        if (!authorized) {
-          throw new Error("session recovery authority closed");
-        }
-      }),
-    ).resolves.toMatchObject({ state: "reclaimed" });
+    await expect(harness.service.reclaim(REQUEST, authority.assertCurrent)).resolves.toMatchObject({
+      state: "reclaimed",
+    });
 
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
   });
 
   it("stops failed-placement teardown when authority closes after tunnel cleanup", async () => {
-    let authorized = true;
+    const authority = revocableAuthority();
     let revokeAfterStop = false;
     const harness = await createTestHarness({
       failAt: "activation",
       destroyFailureCount: 1,
       afterStopTunnel: () => {
         if (revokeAfterStop) {
-          authorized = false;
+          authority.revoke();
         }
       },
     });
@@ -310,13 +309,9 @@ describe("worker placement cancellation and reclaim authority", () => {
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
 
     revokeAfterStop = true;
-    await expect(
-      harness.service.reclaim(REQUEST, () => {
-        if (!authorized) {
-          throw new Error("session recovery authority closed");
-        }
-      }),
-    ).rejects.toThrow("session recovery authority closed");
+    await expect(harness.service.reclaim(REQUEST, authority.assertCurrent)).rejects.toThrow(
+      "session recovery authority closed",
+    );
 
     expect(harness.environments.destroy).toHaveBeenCalledTimes(1);
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
@@ -348,6 +343,21 @@ describe("worker placement cancellation and reclaim authority", () => {
 });
 
 describe("worker placement dispatch authority", () => {
+  type Harness = Awaited<ReturnType<typeof createHarness>>;
+  async function withHarness(run: (harness: Harness, store: PlacementStore) => Promise<void>) {
+    await withOpenClawTestState(
+      { scenario: "minimal", prepareProfileCatalog: true },
+      async (state) => {
+        setRuntimeConfigSnapshot(cfg);
+        const database = openOpenClawStateDatabase({ env: state.env });
+        const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+        await run(
+          await createHarness(database, store, { workspacePath: state.workspaceDir }),
+          store,
+        );
+      },
+    );
+  }
   const effects = ["create", "attach", "tunnel:attached", "sync", "placement:starting"];
   const deviceNode: NodeWorkerSupervisorNodeProof = {
     nodeId: "device-1",
@@ -365,35 +375,28 @@ describe("worker placement dispatch authority", () => {
     },
     commands: ["system.run"],
   };
+  const deviceRequest = {
+    ...REQUEST,
+    profileId: "device:device-1",
+    deviceId: deviceNode.nodeId,
+    devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+  };
 
   it("stops after requested placement acknowledgment before node readiness", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot(cfg);
-      const database = openOpenClawStateDatabase({ env: state.env });
-      const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-      const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
+    await withHarness(async (harness, store) => {
       const readNodeReadiness = vi.fn(async () => ({ available: true, node: deviceNode }));
       bindDeviceWorkerAvailability(harness.environments, readNodeReadiness);
-      let authorized = true;
+      const authority = revocableAuthority("session creator authority closed after acknowledgment");
 
       await expect(
         harness.service.dispatch(
-          {
-            ...REQUEST,
-            profileId: "device:device-1",
-            deviceId: deviceNode.nodeId,
-            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-          },
+          deviceRequest,
           (placement) => {
             if (placement.state === "requested") {
-              authorized = false;
+              authority.revoke();
             }
           },
-          () => {
-            if (!authorized) {
-              throw new Error("session creator authority closed after acknowledgment");
-            }
-          },
+          authority.assertCurrent,
         ),
       ).rejects.toThrow("session creator authority closed after acknowledgment");
 
@@ -413,11 +416,7 @@ describe("worker placement dispatch authority", () => {
   ])(
     "stops after membership revocation during $boundary",
     async ({ boundary, completedEffects }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot(cfg);
-        const database = openOpenClawStateDatabase({ env: state.env });
-        const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
+      await withHarness(async (harness, store) => {
         const scope = { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey };
         const owner = ensureProfileForEmail("dispatch-owner@example.test");
         const member = ensureProfileForEmail("dispatch-member@example.test");
@@ -432,12 +431,13 @@ describe("worker placement dispatch authority", () => {
           addedBy: owner.id,
           expectedSessionId: REQUEST.sessionId,
         });
-        const result = resolveSessionMutationAuthorization({
+        const result = await resolveSessionMutationAuthorizationAsync({
           client: identifiedClient(member.id),
           context: sessionSharingTestContext(vi.fn(), cfg),
           method: "sessions.dispatch",
           requestParams: { key: REQUEST.sessionKey, deviceId: "device-1" },
         });
+        using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
         expect(result.error).toBeNull();
         if (!result.authorization) {
           throw new Error("dispatch fixture did not admit its session member");
@@ -501,10 +501,7 @@ describe("worker placement dispatch authority", () => {
         await expect(
           harness.service.dispatch(
             {
-              ...REQUEST,
-              profileId: deviceIdentity.profileId,
-              deviceId: deviceNode.nodeId,
-              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+              ...deviceRequest,
               inheritedProfile: {
                 providerId: deviceIdentity.providerId,
                 profileSnapshot: deviceIdentity.profileSnapshot,

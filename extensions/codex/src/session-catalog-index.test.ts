@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   measureCatalogLists,
   nativeCatalogFixture as fixture,
@@ -79,13 +78,10 @@ describe("resident Codex catalog", () => {
     const readNative = vi.fn(async (params: CodexThreadListParams) => {
       const offset = Number(params.cursor ?? 0);
       const limit = params.limit ?? 64;
-      return projectCodexCatalogPage(
-        {
-          data: nativeRows.slice(offset, offset + limit),
-          nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
-        },
-        { sanitize: sanitizeTerminalText },
-      );
+      return projectCodexCatalogPage({
+        data: nativeRows.slice(offset, offset + limit),
+        nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
+      });
     });
     const index = new CodexCatalogIndex({
       homeId: "idle-safety-reconcile",
@@ -94,32 +90,32 @@ describe("resident Codex catalog", () => {
     });
     try {
       await index.initialize();
-      expect(readNative).toHaveBeenCalledOnce();
+      expect(readNative).toHaveBeenCalledTimes(4);
 
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(readNative).toHaveBeenCalledOnce();
+      expect(readNative).toHaveBeenCalledTimes(4);
 
       // A missed native notification changes an older thread beyond an unchanged prefix.
       nativeRows = [...recent, missed];
       readNative.mockRejectedValueOnce(new Error("native unavailable"));
       const page = await index.list({ limit: 100 });
       expect(page.sessions).toHaveLength(64);
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(5));
 
       // A failed walk preserves cached rows and does not retry on a busy reader.
       await index.list({ limit: 100 });
-      expect(readNative).toHaveBeenCalledTimes(2);
+      expect(readNative).toHaveBeenCalledTimes(5);
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(readNative).toHaveBeenCalledTimes(2);
+      expect(readNative).toHaveBeenCalledTimes(5);
 
       const stale = await index.list({ limit: 100 });
       expect(stale.sessions).toHaveLength(64);
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(10));
       const refreshed = await index.list({ limit: 100 });
       expect(refreshed.sessions).toHaveLength(64);
       const tail = await index.list({ limit: 100, cursor: refreshed.nextCursor });
       expect(tail.sessions.map((session) => session.threadId)).toEqual(["missed"]);
-      expect(readNative).toHaveBeenCalledTimes(4);
+      expect(readNative).toHaveBeenCalledTimes(10);
     } finally {
       await index.close();
     }
@@ -136,7 +132,7 @@ describe("resident Codex catalog", () => {
       if (readNative.mock.calls.length > 1) {
         await blocked;
       }
-      return projectCodexCatalogPage({ data: [native] }, { sanitize: sanitizeTerminalText });
+      return projectCodexCatalogPage({ data: [native] });
     });
     const index = new CodexCatalogIndex({
       homeId: "blocked-safety-reconcile",
@@ -167,8 +163,7 @@ describe("resident Codex catalog", () => {
     const index = new CodexCatalogIndex({
       homeId: "native-order",
       assertCurrent: () => {},
-      readNative: async () =>
-        projectCodexCatalogPage({ data: native }, { sanitize: sanitizeTerminalText }),
+      readNative: async () => projectCodexCatalogPage({ data: native }),
     });
     try {
       await index.initialize();
@@ -213,13 +208,14 @@ describe("resident Codex catalog", () => {
     ).toHaveLength(removed.length);
   });
 
-  it("retains only display-sized previews from large native responses", async () => {
-    const f = fixture(80, 1024 * 1024);
+  it("requests small native pages without losing threads or retaining large previews", async () => {
+    const f = fixture(33, 128 * 1024);
     for (const row of f.rows) {
       row.name = null;
     }
     const page = await (await f.make()).listPage({ limit: 100 });
-    expect(f.fetched[0]).toHaveLength(64);
+    expect(f.fetched.every((batch) => batch.length <= 16)).toBe(true);
+    expect(f.fetched.flat()).toEqual(f.rows.map((row) => row.id));
     expect(page.sessions.every((row) => row.fallbackName?.length === 500)).toBe(true);
     expect(JSON.stringify(page).length).toBeLessThan(64 * 4_096);
   });
@@ -231,9 +227,7 @@ describe("resident Codex catalog", () => {
     const root = path.join(tempDirs.make("openclaw-resident-currency-"), "sessions");
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: [existing] }, { sanitize: sanitizeTerminalText }),
-    );
+    const readNative = vi.fn(async () => projectCodexCatalogPage({ data: [existing] }));
     const index = new CodexCatalogIndex({
       homeId: "currency",
       localSessionsRoot: root,
@@ -329,10 +323,7 @@ describe("resident Codex catalog", () => {
     const root = path.join(tempDirs.make("openclaw-catalog-outage-"), "sessions");
     const existing = idleThread({ id: "existing", source: "cli" });
     existing.path = await writeCatalogRollout(root, existing);
-    const page = await projectCodexCatalogPage(
-      { data: [existing] },
-      { sanitize: sanitizeTerminalText },
-    );
+    const page = await projectCodexCatalogPage({ data: [existing] });
     const readNative = vi.fn(async () => page);
     const index = new CodexCatalogIndex({
       homeId: "file-scan-outage",

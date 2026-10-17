@@ -17,8 +17,8 @@ import type { ApplicationUpdateOverlaySnapshot } from "./overlays-types.ts";
 import { createUpdateCampaignStatusPoller } from "./update-campaign-status-poller.ts";
 import {
   canReportUpdateFailure,
-  createUpdateFailureReportController,
-} from "./update-failure-report-controller.ts";
+  createUpdateFailureReportOwner,
+} from "./update-failure-report-owner.ts";
 import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
@@ -87,9 +87,7 @@ export function createApplicationUpdateOverlays(
   let profileId = gateway.snapshot.selfUser?.id ?? null;
   const receipts = createUpdateRunReceipts();
   let updateRequestRunning = false;
-  let updateStatusRevision = 0;
   let updateRunGeneration = 0;
-  let updateReadGeneration = 0;
   let updateHoldInFlight = false;
   let runId: string | null = null;
   let updateHistory: UpdateHistory = { kind: "unknown" };
@@ -97,7 +95,7 @@ export function createApplicationUpdateOverlays(
   let currentFailure: UpdateFailureTriage | null = null;
   let diagnosticGeneration = 0;
 
-  const updateFailureReporter = createUpdateFailureReportController({
+  const updateFailureReporter = createUpdateFailureReportOwner({
     getClient: () => gateway.snapshot.client,
     isCurrent: (attemptId, client) =>
       isCurrentClient(client) &&
@@ -270,13 +268,8 @@ export function createApplicationUpdateOverlays(
     if (!client || !id || !isCurrentClient(client)) {
       return;
     }
-    const generation = ++updateReadGeneration;
     const epoch = connectedEpoch;
-    const isCurrent = () =>
-      generation === updateReadGeneration &&
-      epoch === connectedEpoch &&
-      id === runId &&
-      isCurrentClient(client);
+    const isCurrent = () => epoch === connectedEpoch && id === runId && isCurrentClient(client);
     try {
       const response = await client.request<{ run: UpdateRunRecord | null }>("update.runs.get", {
         runId: id,
@@ -410,8 +403,6 @@ export function createApplicationUpdateOverlays(
       connectedEpoch++;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
-      updateReadGeneration++;
-      updateStatusRevision++;
       runId = null;
       updateHistory = { kind: "unknown" };
       updateAttempt = null;
@@ -451,8 +442,6 @@ export function createApplicationUpdateOverlays(
         snapshot = { ...snapshot, updateStatusBanner: resolveUnknownUpdateOutcomeBanner() };
       }
       connectedEpoch++;
-      updateReadGeneration++;
-      updateStatusRevision++;
       updateRunGeneration++;
       updateRequestRunning = false;
     }
@@ -470,7 +459,8 @@ export function createApplicationUpdateOverlays(
       } else if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
-      } else if (next.hello) {
+      } else if (next.hello && helloChanged) {
+        // Only a newly fenced hello means build skew; transport loss retains the old one.
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
       }
       publish();
@@ -523,7 +513,6 @@ export function createApplicationUpdateOverlays(
       updateFailureReporter.invalidate();
       snapshot = { ...snapshot, updateFailureReportBusy: false };
       publish();
-      updateStatusRevision++;
       if (runId && runId !== payload.runId) {
         void refreshUpdateStatus("completion");
       } else {
@@ -536,7 +525,6 @@ export function createApplicationUpdateOverlays(
         return;
       }
       const previousCampaign = snapshot.updateSchedule?.campaign;
-      updateStatusRevision++;
       snapshot = { ...snapshot, ...projectUpdateAvailableEvent(snapshot, payload) };
       publish(true);
       if (
@@ -577,8 +565,6 @@ export function createApplicationUpdateOverlays(
       }
       const generation = ++updateRunGeneration;
       const sessionKey = hooks.getActiveSessionKey?.();
-      updateStatusRevision++;
-      updateReadGeneration++;
       const attempt: UpdateAdmissionAttempt = {
         history: snapshot.updateRun
           ? { kind: "known", runId: snapshot.updateRun.runId }
@@ -668,8 +654,9 @@ export function createApplicationUpdateOverlays(
         return false;
       }
       const generation = updateRunGeneration;
-      const revision = updateStatusRevision;
       const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
+      const canPublish = () =>
+        isCurrent() && snapshot.updateSchedule?.campaign?.state !== "applying";
       updateHoldInFlight = true;
       try {
         const response = await client.request<UpdateHoldResult>("update.hold", {});
@@ -677,10 +664,9 @@ export function createApplicationUpdateOverlays(
           return false;
         }
         const updateSchedule = response.schedule && readUpdateScheduleValue(response.schedule);
-        // Campaign events can beat the hold reply; acknowledge the request
-        // without replacing the newer schedule they already published.
-        if (revision === updateStatusRevision && (updateSchedule !== undefined || response.ok)) {
-          updateStatusRevision += 1;
+        // Installation owns its interlock; other same-campaign display updates
+        // settle in completion order and converge on the next status refresh.
+        if (canPublish() && (updateSchedule !== undefined || response.ok)) {
           snapshot = {
             ...snapshot,
             ...(updateSchedule !== undefined ? { updateSchedule } : {}),
@@ -695,7 +681,7 @@ export function createApplicationUpdateOverlays(
         }
         return response.ok;
       } catch (error) {
-        if (isCurrent() && revision === updateStatusRevision) {
+        if (canPublish()) {
           publishError(error);
         }
         return false;
@@ -708,7 +694,6 @@ export function createApplicationUpdateOverlays(
       disposed = true;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
-      updateReadGeneration++;
       updateCampaignPoller.stop();
     },
   };

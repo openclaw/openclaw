@@ -7,7 +7,7 @@ import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/s
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
-import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
+import { ensureSkillsWatcher, refreshSkillsDiscovery } from "../../skills/runtime/refresh.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
@@ -71,11 +71,14 @@ export const handleSkillsStatus: GatewayRequestHandler = async ({
       changedError: errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."),
     },
     async (entry) => {
-      ensureSkillsWatcher({
+      await ensureSkillsWatcher({
         workspaceDir: resolved.workspaceDir,
         config: resolved.cfg,
         agentId: resolved.agentId,
       });
+      if (params.refresh === true) {
+        await refreshSkillsDiscovery({ config: resolved.cfg });
+      }
       const { report } = await buildRemoteAwareWorkspaceSkillStatus(
         resolved,
         entry?.skillLibrarySelections,

@@ -230,14 +230,16 @@ export async function runTelegramIngressWorkerRuntime(params: {
         if (!Array.isArray(result)) {
           throw new Error("Telegram getUpdates returned a non-array result.");
         }
-        for (const update of result) {
-          if (stopController.signal.aborted) {
-            break;
-          }
+        if (result.length > 0 && !stopController.signal.aborted) {
           const requestId = String(++nextSpoolRequestId);
           const updateId = await new Promise<number>((resolve, reject) => {
             pendingSpoolRequest = { requestId, resolve, reject };
-            port.postMessage({ type: "update", requestId, update, queued: result.length });
+            port.postMessage({
+              type: "updates",
+              requestId,
+              updates: result,
+              queued: result.length,
+            });
           });
           if (lastUpdateId === null || updateId > lastUpdateId) {
             lastUpdateId = updateId;

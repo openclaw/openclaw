@@ -25,14 +25,8 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   voiceEnabled: boolean;
-  maxDiscordCommands?: number;
-  prepareSkillCommandsForAgents?: typeof prepareSkillCommandsForAgents;
-  listNativeCommandSpecsForConfig?: typeof listNativeCommandSpecsForConfig;
 }) {
-  const listSkillCommands = params.prepareSkillCommandsForAgents ?? prepareSkillCommandsForAgents;
-  const listNativeCommandSpecs =
-    params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;
-  const maxDiscordCommands = params.maxDiscordCommands ?? 100;
+  const maxDiscordCommands = 100;
   const pluginCommandSpecs = params.nativeEnabled
     ? (await loadPluginCommandRuntime())
         .createPluginCommandRuntime()
@@ -57,7 +51,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   const listPrimaryCommandSpecs = (
     skillCommands: Awaited<ReturnType<typeof prepareSkillCommandsForAgents>>,
   ): NativeCommandSpec[] => {
-    const standardSpecs = listNativeCommandSpecs(params.cfg, {
+    const standardSpecs = listNativeCommandSpecsForConfig(params.cfg, {
       skillCommands,
       provider: "discord",
     });
@@ -77,7 +71,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   const provisionalCollisions: string[] = [];
   let skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
-      ? await listSkillCommands({ cfg: params.cfg })
+      ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
       : [];
   let commandSpecs: DiscordProviderCommandSpec[] = params.nativeEnabled
     ? mergePluginCommandSpecs(listPrimaryCommandSpecs(skillCommands), (normalizedName) =>

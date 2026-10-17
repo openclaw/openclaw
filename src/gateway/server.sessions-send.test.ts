@@ -14,7 +14,7 @@ import {
   vi,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   loadSessionEntry,
@@ -135,6 +135,8 @@ async function emitLifecycleAssistantReply(params: {
   const text = params.resolveText(commandParams.extraSystemPrompt);
   const message = {
     role: "assistant",
+    phase: "final_answer",
+    stopReason: "stop",
     content: [{ type: "text", text }],
     ...(params.includeTimestamp ? { timestamp: Date.now() } : {}),
   };
@@ -146,6 +148,9 @@ async function emitLifecycleAssistantReply(params: {
     },
     {
       cwd: "/tmp",
+      runId,
+      expectedSessionId: sessionId,
+      touchSessionEntry: false,
       updateMode: "none",
       messages: [{ message, now: Date.now() }],
     },
@@ -158,7 +163,7 @@ async function emitLifecycleAssistantReply(params: {
       phase: "end",
       startedAt,
       endedAt: Date.now(),
-      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+      terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
     },
   });
 }
@@ -200,8 +205,9 @@ beforeAll(async () => {
   } finally {
     captureKernel.mockRestore();
   }
-  // Prepare the real history handler before the RPC deadline starts.
+  // Prepare real handlers before RPC deadlines; cold module loading is fixture setup.
   await import("./server-methods/chat.js");
+  await import("./server-methods/sessions-create.js");
 });
 
 beforeEach(async () => {
@@ -271,6 +277,9 @@ describe("sessions_send gateway loopback", () => {
 
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const body = "    const first = 1;\n        const second = 2;";
+    await writeSessionStore({
+      entries: { main: { sessionId: "main", updatedAt: Date.now() } },
+    });
     const spy = agentCommandMock as unknown as Mock<
       (opts: AgentCommandGatewayIngressOpts) => Promise<void>
     >;
@@ -286,11 +295,15 @@ describe("sessions_send gateway loopback", () => {
 
     const tool = getSessionsSendTool();
 
-    const result = await tool.execute("call-loopback", {
-      sessionKey: "main",
-      message: body,
-      timeoutSeconds: 5,
-    });
+    const result = await tool
+      .execute("call-loopback", {
+        sessionKey: "main",
+        message: body,
+        timeoutSeconds: 5,
+      })
+      .catch((error: unknown) => {
+        throw new Error(`sessions_send tool execution failed: ${String(error)}`, { cause: error });
+      });
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0];
@@ -307,6 +320,8 @@ describe("sessions_send gateway loopback", () => {
       method: "chat.history",
       params: { sessionKey: "main", limit: 10 },
       timeoutMs: 5_000,
+    }).catch((error: unknown) => {
+      throw new Error(`sessions_send history read failed: ${String(error)}`, { cause: error });
     });
     // Observe both receiving and persisted body failures before ending the case.
     expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);

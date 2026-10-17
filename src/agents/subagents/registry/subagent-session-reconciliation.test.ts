@@ -4,7 +4,9 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
   replaceSessionEntrySync,
+  replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -168,7 +170,7 @@ describe("subagent session reconciliation ownership", () => {
             { agentId, sessionKey: durableKey, storePath, env: state.env },
             { ...terminalSession, sessionId: "durable-child" },
           );
-          replaceSessionEntrySync(
+          await replaceSessionEntry(
             { agentId, sessionKey: childSessionKey, storePath, env: state.env },
             { ...terminalSession, sessionId: "incognito-child", incognito: true },
           );
@@ -192,6 +194,10 @@ describe("subagent session reconciliation ownership", () => {
             fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })),
           ).toBe(false);
         } finally {
+          memorySessionActorOwners.closeDatabase({
+            agentId,
+            path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env }),
+          });
           await closeOpenClawAgentDatabasesAsync(state.root);
         }
       });

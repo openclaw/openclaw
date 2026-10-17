@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
 
@@ -80,37 +81,39 @@ describe("config appearance preferences", () => {
     { systemLocale: "de", localeOverride: "fr", label: "Deutsch (German)" },
   ] as const)(
     "renders and changes language with system locale $systemLocale",
-    ({ systemLocale, localeOverride, label }) => {
+    async ({ systemLocale, localeOverride, label }) => {
       const { container, props } = renderAppearance({
         systemLocale,
         localeOverride,
         localeOverridden: Boolean(localeOverride),
       });
+      await updatePickers(container);
       const sections = [...container.querySelectorAll<HTMLElement>(".settings-section")];
       expect(sections[0]?.id).toBe("settings-language");
       expect(sections[0]?.textContent).toContain("Language");
       expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
-      const select = container.querySelector<HTMLElement & { value: string }>(
-        "#settings-language wa-select",
+      const select = container.querySelector<SelectPicker>(
+        "#settings-language openclaw-select-picker",
       );
       expect(select).not.toBeNull();
       if (!select) {
         throw new Error("Missing language select");
       }
+      await openPicker(select);
       if (localeOverride) {
         expect(
-          select.querySelector<HTMLElement & { selected: boolean }>('wa-option[value="fr"]')
-            ?.selected,
-        ).toBe(true);
+          select.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
+        ).toBe("true");
       } else {
-        expect(select.value).toBe("system");
+        expect(
+          select.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+        ).toBe("system");
       }
-      expect(select.querySelector('wa-option[value="system"]')?.textContent).toContain(
+      expect(select.querySelector('[role="option"][data-value="system"]')?.textContent).toContain(
         `System (${label})`,
       );
       for (const value of ["fr", "system"]) {
-        Object.defineProperty(select, "value", { configurable: true, value });
-        select.dispatchEvent(new Event("change", { bubbles: true }));
+        await choosePickerValue(select, value);
       }
       expect(props.onLocaleChange).toHaveBeenCalledWith("fr");
       expect(props.onLocaleChange).toHaveBeenCalledWith(undefined);
@@ -131,14 +134,16 @@ describe("config appearance preferences", () => {
     const chat = required(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
       "openclaw-select-picker",
     )!;
+    await openPicker(ui);
     expect(ui.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · DM Sans",
     );
+    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
+    await openPicker(chat);
     expect(chat.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · Fraunces",
     );
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
     expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
     await choosePickerValue(ui, "lora");
     expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
@@ -246,6 +251,53 @@ describe("config appearance preferences", () => {
     expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
   });
 
+  it("focuses its own importer through unrelated updates and retires pending focus on disposal", () => {
+    const otherInput = document.createElement("input");
+    otherInput.setAttribute("data-custom-theme-import-input", "");
+    document.body.append(otherInput);
+    const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
+    document.body.append(container);
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    const requestFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      });
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    onTestFinished(() => {
+      cleanupSolid();
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+      otherInput.remove();
+      container.remove();
+    });
+
+    props.customThemeImportExpanded = true;
+    props.customThemeImportFocusToken = 1;
+    renderConfigInto(props, container);
+    props.textScale = 110;
+    renderConfigInto(props, container);
+    const input = required(container, ".settings-theme-import__input", HTMLInputElement);
+    const pending = [...frames.values()];
+    frames.clear();
+    for (const frame of pending) {
+      frame(0);
+    }
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("amethyst-haze".length);
+
+    props.customThemeImportFocusToken = 2;
+    renderConfigInto(props, container);
+    expect(frames.size).toBe(1);
+    cleanupSolid();
+    expect(frames.size).toBe(0);
+  });
+
   it("keeps direct Appearance default selections independent", () => {
     const { container, props } = renderAppearance({
       theme: "knot",
@@ -320,7 +372,7 @@ describe("config appearance preferences", () => {
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
   });
 
-  it("renders rejected theme and locale edits as browser-only fallbacks", () => {
+  it("renders rejected theme and locale edits as browser-only fallbacks", async () => {
     const { container, props } = renderAppearance({
       localeOverride: "fr",
       localeOverridden: true,
@@ -331,6 +383,7 @@ describe("config appearance preferences", () => {
       themeProvenance: "device-local",
       themeResetValue: "claw",
     });
+    await updatePickers(container);
     const languageRow = required(container, "#settings-language .settings-row", HTMLElement);
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const themeDescription = required(
@@ -342,13 +395,10 @@ describe("config appearance preferences", () => {
     expect(languageRow.textContent).toContain("Default: Deutsch (German)");
     expect(languageRow.textContent).toContain("Stored in this browser only");
     expect(languageRow.textContent).not.toContain("Synced across your devices");
+    await openPicker(languageRow.querySelector("openclaw-select-picker")!);
     expect(
-      (
-        languageRow.querySelector('wa-option[value="fr"]') as HTMLElement & {
-          selected: boolean;
-        }
-      ).selected,
-    ).toBe(true);
+      languageRow.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
     expect(themeDescription.textContent).toContain("Default: Claw");
     expect(themeDescription.textContent).toContain("Stored in this browser only");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
@@ -382,29 +432,6 @@ describe("config appearance preferences", () => {
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
     expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
-  });
-
-  it.each([
-    {
-      title: "Collapse task progress by default on desktop",
-      preference: "chatCollapseTaskProgress",
-      checked: false,
-    },
-    {
-      title: "Show live agent activity in sidebar",
-      preference: "sidebarLiveActivity",
-      checked: true,
-    },
-  ] as const)("changes the browser-local $title toggle", ({ title, preference, checked }) => {
-    const { container, props } = renderAppearance();
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-    const row = settingsRow(container, title);
-    expect(row.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked).toBe(checked);
-    row.click();
-    expect(props.onAppearanceChange).toHaveBeenCalledWith({ [preference]: !checked });
-    expect(row.textContent).not.toContain("Using default:");
-    expect(row.textContent).toContain("Stored in this browser only");
   });
 
   it("names the chat preference selects for assistive tech", () => {

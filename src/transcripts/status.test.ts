@@ -520,7 +520,7 @@ describe("configured transcript shutdown cleanup", () => {
           if (cleanupFails && fault === "session-write" && session.stoppedAt) {
             throw new Error("final session unavailable");
           }
-          await writeSession(session, condition);
+          return writeSession(session, condition);
         },
       );
       const writeSummary = f.store.writeSummary.bind(f.store);

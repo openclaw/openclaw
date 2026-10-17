@@ -45,6 +45,36 @@ async function expectActiveGatewayPassword(config: unknown): Promise<void> {
 }
 
 describe("secrets runtime gateway local surfaces", () => {
+  it("resolves selected system and agent App signing keys without rewriting source refs", async () => {
+    const app = {
+      appId: 101,
+      installationId: 202,
+      accountId: 303,
+      repositories: [{ id: 404, fullName: "example/project" }],
+      permissions: { contents: "write" },
+      keyVersion: "fixture-generation",
+      privateKey: { source: "env", provider: "default", id: "GITHUB_APP_KEY" },
+    };
+    const github = { profileId: "ghp_" + "a".repeat(32), kind: "app-installation", app };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({ tools: { github }, agents: { entries: { main: { tools: { github } } } } }),
+      env: { GITHUB_APP_KEY: "synthetic-app-key" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    expect(snapshot.config.tools?.github?.kind).toBe("app-installation");
+    if (snapshot.config.tools?.github?.kind !== "app-installation") {
+      throw new Error("missing App identity");
+    }
+    expect(snapshot.config.tools.github.app.privateKey).toBe("synthetic-app-key");
+    const agentIdentity = snapshot.config.agents?.entries?.main?.tools?.github;
+    if (agentIdentity?.kind !== "app-installation") {
+      throw new Error("missing agent App identity");
+    }
+    expect(agentIdentity.app.privateKey).toBe("synthetic-app-key");
+    expect(app.privateKey).toEqual({ source: "env", provider: "default", id: "GITHUB_APP_KEY" });
+  });
+
   it("resolves the Control UI GitHub preview credential independently", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

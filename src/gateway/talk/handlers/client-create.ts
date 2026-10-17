@@ -344,6 +344,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     entryId,
                     role,
                     text,
+                    providerOwned: controlSource === "delegation",
                     config: runtimeConfig,
                   },
                   writer,
@@ -498,6 +499,8 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                   ]),
                   source: sessionMutationAuthorization?.assertCurrent,
                   prepareWorkerGrant: sessionMutationAuthorization?.prepareWorkerGrant,
+                  followRegistration: (change) =>
+                    sessionMutationAuthorization?.followRegistration?.(sessionTarget, change),
                   assertCurrent: () => {
                     requester.assertPreparationCurrent();
                     gatewayControlOwner.assertOpen();
@@ -506,6 +509,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     sessionMutationAuthorization?.recordCreatedSession?.({
                       ...sessionTarget,
                       sessionId: entry.sessionId,
+                      entry,
                       lifecycleRevision: entry.lifecycleRevision,
                       readSource,
                     }),

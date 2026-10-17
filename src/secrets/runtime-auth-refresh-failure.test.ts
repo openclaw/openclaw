@@ -8,6 +8,7 @@ import {
   getAuthoredConfigSecretRef,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
   beginSecretsRuntimeIsolationForTest,
@@ -29,6 +30,36 @@ import {
 } from "./runtime.js";
 
 vi.unmock("../version.js");
+
+const fileAuthStore = (keyRef: SecretRef = OPENAI_FILE_KEY_REF) =>
+  loadAuthStoreWithProfiles({
+    "openai:default": { type: "api_key", provider: "openai", keyRef },
+  });
+async function runtimeFixture(home: string) {
+  const fixture = await createOpenAIFileRuntimeFixture(home);
+  const config = createOpenAIFileRuntimeConfig(fixture.secretFile);
+  return {
+    ...fixture,
+    config,
+    prepare: (options: Partial<Parameters<typeof prepareSecretsRuntimeSnapshot>[0]> = {}) =>
+      prepareSecretsRuntimeSnapshot({
+        config,
+        agentDirs: [fixture.agentDir],
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+        loadAuthStore: () => fileAuthStore(),
+        ...options,
+      }),
+  };
+}
+async function withRuntime(
+  run: (fixture: Awaited<ReturnType<typeof runtimeFixture>>) => Promise<void>,
+) {
+  if (os.platform() !== "win32") {
+    await withTempHome("openclaw-secrets-runtime-refresh-", async (home) =>
+      run(await runtimeFixture(home)),
+    );
+  }
+}
 
 function expectActiveSecretsRuntimeSnapshot(): NonNullable<
   ReturnType<typeof getActiveSecretsRuntimeSnapshot>
@@ -52,45 +83,24 @@ describe("secrets runtime snapshot auth refresh failure", () => {
   });
 
   it("keeps last-known-good runtime snapshot active when refresh preparation fails", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
-      const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
-
+    await withRuntime(async ({ config, agentDir, prepare }) => {
       let loadAuthStoreCalls = 0;
       const loadAuthStore = () => {
         loadAuthStoreCalls += 1;
         if (loadAuthStoreCalls > 1) {
           throw new Error("simulated secrets runtime refresh failure");
         }
-        return loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: OPENAI_FILE_KEY_REF,
-          },
-        });
+        return fileAuthStore();
       };
 
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: createOpenAIFileRuntimeConfig(secretFile),
-        agentDirs: [agentDir],
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-        loadAuthStore,
-      });
+      const prepared = await prepare({ loadAuthStore });
 
       activateSecretsRuntimeSnapshot(prepared);
       expectResolvedOpenAIRuntime(agentDir);
 
       await expect(
-        prepareSecretsRuntimeSnapshot({
-          config: {
-            ...createOpenAIFileRuntimeConfig(secretFile),
-            gateway: { auth: { mode: "token" } },
-          },
-          agentDirs: [agentDir],
-          loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+        prepare({
+          config: { ...config, gateway: { auth: { mode: "token" } } },
           loadAuthStore,
         }),
       ).rejects.toThrow(/simulated secrets runtime refresh failure/i);
@@ -104,22 +114,11 @@ describe("secrets runtime snapshot auth refresh failure", () => {
   });
 
   it("classifies a changed auth-profile ref as stale after a successful refresh", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-refresh-owner-", async (home) => {
-      const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
+    await withRuntime(async ({ secretFile, agentDir, prepare }) => {
       const firstRef = { source: "file" as const, provider: "default", id: "/accounts/first" };
       const secondRef = { source: "file" as const, provider: "default", id: "/accounts/second" };
       let activeRef = firstRef;
-      const loadAuthStore = () =>
-        loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: activeRef,
-          },
-        });
+      const loadAuthStore = () => fileAuthStore(activeRef);
       const writeSecrets = async (includeSecond: boolean) => {
         await fs.writeFile(
           secretFile,
@@ -135,59 +134,46 @@ describe("secrets runtime snapshot auth refresh failure", () => {
       };
 
       await writeSecrets(true);
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: createOpenAIFileRuntimeConfig(secretFile),
-        agentDirs: [agentDir],
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-        loadAuthStore,
-      });
+      const prepared = await prepare({ loadAuthStore });
       const discordTokenPath = "channels.discord.accounts.ops.token";
+      const discordOwner = {
+        ownerKind: "account" as const,
+        ownerId: "discord:ops",
+        refKeys: ["env:default:DISCORD_BOT_TOKEN"],
+      };
+      const discordWarning = {
+        code: "SECRETS_OWNER_UNAVAILABLE" as const,
+        path: discordTokenPath,
+        message: "Discord account ops remains unavailable.",
+      };
       setConfigResolutionFacts(
         prepared.config,
         createConfigResolutionFacts([], new Map([[discordTokenPath, "DISCORD_BOT_TOKEN"]])),
       );
-      prepared.secretOwners = [
-        ...(prepared.secretOwners ?? []),
-        {
-          ownerKind: "account",
-          ownerId: "discord:ops",
-          refKeys: ["env:default:DISCORD_BOT_TOKEN"],
-        },
-      ];
+      prepared.secretOwners = [...(prepared.secretOwners ?? []), discordOwner];
       prepared.degradedOwners = [
         {
-          ownerKind: "account",
-          ownerId: "discord:ops",
+          ...discordOwner,
           state: "unavailable",
           degradationState: "cold",
-          paths: ["channels.discord.accounts.ops.token"],
-          refKeys: ["env:default:DISCORD_BOT_TOKEN"],
+          paths: [discordTokenPath],
           reason: "secret reference could not be resolved",
         },
       ];
-      prepared.warnings = [
-        {
-          code: "SECRETS_OWNER_UNAVAILABLE",
-          path: "channels.discord.accounts.ops.token",
-          message: "Discord account ops remains unavailable.",
-        },
-      ];
+      prepared.warnings = [discordWarning];
       activateSecretsRuntimeSnapshot(prepared);
 
       activeRef = secondRef;
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
-      expect(
-        getAuthoredConfigSecretRef(expectActiveSecretsRuntimeSnapshot().config, discordTokenPath),
-      ).toEqual({ source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" });
-      expect(expectActiveSecretsRuntimeSnapshot().secretOwners).toContainEqual({
-        ownerKind: "account",
-        ownerId: "discord:ops",
-        refKeys: ["env:default:DISCORD_BOT_TOKEN"],
+      const refreshed = expectActiveSecretsRuntimeSnapshot();
+      expect(getAuthoredConfigSecretRef(refreshed.config, discordTokenPath)).toEqual({
+        source: "env",
+        provider: "default",
+        id: "DISCORD_BOT_TOKEN",
       });
+      expect(refreshed.secretOwners).toContainEqual(discordOwner);
       expect(
-        expectActiveSecretsRuntimeSnapshot().degradedOwners?.filter(
-          (owner) => owner.ownerId === "discord:ops",
-        ),
+        refreshed.degradedOwners?.filter((owner) => owner.ownerId === "discord:ops"),
       ).toHaveLength(1);
       await writeSecrets(false);
 
@@ -202,11 +188,7 @@ describe("secrets runtime snapshot auth refresh failure", () => {
       expect(
         listActiveDegradedSecretOwners().filter((owner) => owner.ownerId === "discord:ops"),
       ).toHaveLength(1);
-      expect(expectActiveSecretsRuntimeSnapshot().warnings).toContainEqual({
-        code: "SECRETS_OWNER_UNAVAILABLE",
-        path: "channels.discord.accounts.ops.token",
-        message: "Discord account ops remains unavailable.",
-      });
+      expect(expectActiveSecretsRuntimeSnapshot().warnings).toContainEqual(discordWarning);
       const profile = expectActiveSecretsRuntimeSnapshot().authStores.find(
         (entry) => entry.agentDir === agentDir,
       )?.store.profiles["openai:default"];
@@ -215,20 +197,8 @@ describe("secrets runtime snapshot auth refresh failure", () => {
   });
 
   it("makes an auth-profile credential cold when its provider endpoint changes", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-auth-route-", async (home) => {
-      const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
+    await withRuntime(async ({ secretFile, agentDir, prepare }) => {
       const profileId = "openai:default";
-      const loadAuthStore = () =>
-        loadAuthStoreWithProfiles({
-          [profileId]: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: OPENAI_FILE_KEY_REF,
-          },
-        });
       const config = (baseUrl: string) => {
         const candidate = createOpenAIFileRuntimeConfig(secretFile);
         const openai = candidate.models?.providers?.openai;
@@ -237,21 +207,15 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         }
         return candidate;
       };
-      const active = await prepareSecretsRuntimeSnapshot({
+      const active = await prepare({
         config: config("https://old.example.invalid/v1"),
-        agentDirs: [agentDir],
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-        loadAuthStore,
       });
       activateSecretsRuntimeSnapshot(active);
       await fs.unlink(secretFile);
 
-      const candidate = await prepareSecretsRuntimeSnapshot({
+      const candidate = await prepare({
         config: config("https://new.example.invalid/v1"),
-        agentDirs: [agentDir],
         allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-        loadAuthStore,
       });
 
       expect(candidate.degradedOwners).toContainEqual(

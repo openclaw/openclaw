@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
@@ -24,10 +24,10 @@ import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
+  await closeStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 

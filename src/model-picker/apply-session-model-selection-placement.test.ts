@@ -53,14 +53,12 @@ vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
 // mock-isolation: The placement runtime is a hand-built fixture so capability resolution is observed without loading the worker runtime.
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
-  ...factories.placementRuntime(),
-  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync: async (
-    params: Parameters<
-      typeof import("../gateway/worker-environments/placement-session-runtime.js").resolveWorkerPlacementSessionRuntimeCapabilitiesAsync
-    >[0],
-  ) => placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(params),
-}));
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+// mock-isolation: Worker preparation is covered by the placement runtime owner tests.
+vi.mock(
+  "../gateway/worker-environments/placement-session-runtime-preparation.js",
+  factories.placementRuntimePreparation,
+);
 
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 
@@ -215,8 +213,7 @@ describe("applySessionModelSelection — placement guard", () => {
     const initial = structuredClone(sessionEntry);
     const localPlacement = createPlacement(sessionEntry.sessionId, "local");
     const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
-    // First read (pre-write guard) sees a local placement; the synchronous commit boundary
-    // then sees an activation that overtook the directive's first read.
+    // The prepared owner sees local placement; its commit assertion observes activation.
     placementMocks.getMany
       .mockReturnValueOnce(new Map([["placement-race-1", localPlacement]]))
       .mockReturnValueOnce(new Map([["placement-race-1", activePlacement]]));
@@ -230,8 +227,7 @@ describe("applySessionModelSelection — placement guard", () => {
 
     expect(result).toMatchObject({
       status: "rejected",
-      message:
-        "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
+      message: "Session placement changed; retry model selection.",
     });
     // The durable write was fenced: the stored entry is unchanged.
     const stored = loadSessionEntryReadOnly({ sessionKey, storePath });

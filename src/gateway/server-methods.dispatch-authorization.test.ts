@@ -27,6 +27,7 @@ function requestDefaults(
     },
     isWebchatConnect: () => false,
     context: {
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
   };
@@ -185,6 +186,7 @@ describe("gateway method authorization", () => {
       } as Parameters<typeof handleGatewayRequest>[0]["client"],
       isWebchatConnect: () => false,
       context: {
+        getRuntimeConfig: () => ({}),
         logGateway: { warn: vi.fn() },
         nodeRegistry: { isConnectionCurrentPairingState },
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],

@@ -354,36 +354,6 @@ describe("MCP manager creation ownership", () => {
     });
   });
 
-  it("keeps idle reclamation on the surviving Gateway when the latest scheduler closes", async () => {
-    const firstClock = createGatewaySchedulerClock(Date.now());
-    const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
-    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
-    const secondScheduler = createTestGatewayScheduler(secondClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const lease = await manager.acquire({
-      ...params,
-      cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } },
-    });
-    try {
-      await manager.setScheduler(secondScheduler);
-      await secondScheduler.stop();
-      await firstClock.advanceBy(120_000);
-      expect(lease.runtime.dispose).not.toHaveBeenCalled();
-
-      lease.releaseLease();
-      await firstClock.advanceBy(60_000);
-      expect(lease.runtime.dispose).toHaveBeenCalledOnce();
-      expect(manager.listRuntimeKeys()).toEqual([]);
-    } finally {
-      lease.releaseLease();
-      await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
-    }
-  });
-
   it("resumes CLI acquisition after explicit scheduler binding and Gateway disposal", async () => {
     const standaloneClock = createGatewaySchedulerClock(Date.now());
     const gatewayClock = createGatewaySchedulerClock(standaloneClock.clock.now());

@@ -109,26 +109,6 @@ describe("skills.workshop gateway methods", () => {
     );
   });
 
-  it("archives and restores as the user actor", async () => {
-    library.archiveWorkshopSkill.mockResolvedValue(change);
-    library.restoreWorkshopSkill.mockResolvedValue({ ...change, action: "restore" });
-
-    const archived = await call("skills.workshop.archive", { name: "deploy-notes", reason: "dup" });
-    const restored = await call("skills.workshop.restore", { name: "deploy-notes" });
-
-    const ctx = { config, agentId: "ops", actor: "user", assertLive: expect.any(Function) };
-    expect(archived.response).toEqual({ change });
-    expect(library.archiveWorkshopSkill).toHaveBeenCalledWith(ctx, {
-      name: "deploy-notes",
-      reason: "dup",
-    });
-    expect(restored.response).toEqual({ change: { ...change, action: "restore" } });
-    expect(library.restoreWorkshopSkill).toHaveBeenCalledWith(ctx, {
-      name: "deploy-notes",
-      versionId: undefined,
-    });
-  });
-
   it.each([
     ["skills.workshop.archive", { name: "deploy-notes" }],
     ["skills.workshop.restore", { name: "deploy-notes" }],

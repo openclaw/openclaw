@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPausedRecovery } from "../lib/sessions/session-placement-recovery.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -72,11 +72,7 @@ suite.define(() => {
       await expect.poll(() => composer.isDisabled()).toBe(false);
       // Pending history permits editing before the authenticated recovery scope is ready.
       await waitForGatewayRecoveryScope(page);
-      const owner = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        const { gateway: appGateway } = app.runtime.context;
+      const owner = await evaluateControlUiContext(page, ({ gateway: appGateway }) => {
         return {
           gatewayUrl: appGateway.connection.gatewayUrl,
           recoveryScope: appGateway.snapshot.client!.recoveryScope,
@@ -259,15 +255,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await place.evaluate((element) => {
         const onAfterShow = (event: Event) => {
           if (event.target === element) {
-            element.removeEventListener("wa-after-show", onAfterShow);
+            element.removeEventListener("overlay-after-show", onAfterShow);
             element.setAttribute("data-test-picker-ready", "true");
           }
         };
-        element.addEventListener("wa-after-show", onAfterShow);
+        element.addEventListener("overlay-after-show", onAfterShow);
       });
       await page.locator("#new-session-where-trigger").click();
       await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
@@ -412,7 +408,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill(message);
@@ -535,7 +531,7 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page
-          .locator("wa-popover.new-session-page__where-popover")
+          .locator(".oc-popover.new-session-page__where-popover")
           .getByRole("button", { name: "aws", exact: true })
           .click();
         const composer = page.locator(".new-session-page__message");
@@ -709,7 +705,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {

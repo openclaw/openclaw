@@ -1,9 +1,10 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConfigForm as renderConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
+import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
@@ -151,7 +152,13 @@ describe("config form and navigation", () => {
       uiHints: { "browser.enabled": { advanced: false } },
       formValue: { browser: { enabled: true } },
       activeSection: "browser",
-      sectionPrelude: <BrowserLinkPreferencesRow enabled={false} onChange={vi.fn()} />,
+      sectionPrelude: (
+        <SettingsToggleRow
+          title={t("browserLinkPreferences.openInControlUi")}
+          checked={false}
+          onChange={vi.fn()}
+        />
+      ),
     });
 
     const groups = container.querySelectorAll("#config-section-browser .settings-group");
@@ -330,7 +337,7 @@ describe("config form and navigation", () => {
     });
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
+    expect(container.querySelector(".hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
     expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
     expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(
@@ -341,7 +348,7 @@ describe("config form and navigation", () => {
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const active = container.querySelector(".config-toolbar .hub-tab[active]");
+    const active = container.querySelector('.config-toolbar .hub-tab[aria-selected="true"]');
     expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");
@@ -631,25 +638,5 @@ describe("config form and navigation", () => {
         label.textContent?.trim(),
       ),
     ).toEqual(["Telegram"]);
-  });
-
-  it.each(["auth", null])("keeps section headings outside groups for %s", (activeSection) => {
-    const { container } = renderConfigView({
-      activeSection,
-      schema: object({
-        auth: object({ order: { type: "object" } }),
-        gateway: object({}),
-      }),
-      uiHints: { "auth.order": { advanced: false } },
-      formValue: { auth: { order: {} }, gateway: {} },
-    });
-    const headings = [
-      ...container.querySelectorAll(
-        ".settings-section > .settings-section__header .settings-section__heading",
-      ),
-    ].map((heading) => heading.textContent?.trim());
-    expect(headings).toEqual(activeSection ? ["Authentication"] : ["Authentication", "Gateway"]);
-    expect(container.querySelector("#config-section-auth .settings-group")).not.toBeNull();
-    expect(container.querySelector(".settings-group .settings-section__heading")).toBeNull();
   });
 });

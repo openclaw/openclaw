@@ -182,10 +182,12 @@ async function runSuccessfulLeaderDescendantScenario(
       await withinTest(fixtureEventBeforeSettlement(drainingFile, completion), signal);
       process.kill(childPid, "SIGUSR2");
     }
-    const status = await withinTest(completion, signal);
-    // runShard resolves only after its process group is terminal.
-    expect(isPidAlive(childPid)).toBe(false);
-    return status;
+    try {
+      return await withinTest(completion, signal);
+    } finally {
+      // Verify settlement before fixture cleanup can rescue a surviving compiler.
+      expect(isPidAlive(childPid)).toBe(false);
+    }
   } finally {
     await completion.catch(() => undefined);
     if (!childPid && existsSync(childPidPath)) {
@@ -427,9 +429,9 @@ describe("run-oxlint", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills timed-out shard process groups when the leader exits first",
-    async ({ signal }) => {
+  it.runIf(process.platform !== "win32").for(["group", "nested"] as const)(
+    "joins timed-out %s compiler ownership before returning",
+    async (ownership, { signal }) => {
       const tempDir = createTempDir("openclaw-oxlint-timeout-group-");
       const runner = join(tempDir, "timeout-runner.mjs");
       const childPidPath = join(tempDir, "child.pid");
@@ -442,12 +444,20 @@ describe("run-oxlint", () => {
         "fs.renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
         "sendReceipt(process.env.CHILD_PID_PATH, 'ready');",
       ].join("\n");
-      writeModule(runner, [
-        "import { spawn } from 'node:child_process';",
-        `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-      ]);
+      writeModule(
+        runner,
+        ownership === "nested"
+          ? [
+              `import { runManagedCommand } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts/lib/managed-child-process.mts")).href)};`,
+              `process.exitCode = await runManagedCommand({ bin: process.execPath, args: ['--input-type=module', '-e', ${JSON.stringify(childScript)}], stdio: 'ignore', requireProcessTreeExit: true, signalKillGraceMs: 250 });`,
+            ]
+          : [
+              "import { spawn } from 'node:child_process';",
+              `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+              "process.on('SIGTERM', () => process.exit(0));",
+              "setInterval(() => {}, 1000);",
+            ],
+      );
 
       // The watchdog must test teardown, not win a race against child startup.
       let completion!: Promise<number>;
@@ -479,11 +489,7 @@ describe("run-oxlint", () => {
         childPid = Number(readFileSync(childPidPath, "utf8"));
         expect(isProcessAlive(childPid)).toBe(true);
         await withinTest(releaseAndWait(), signal);
-        await waitForProcessState(
-          () => !isProcessAlive(childPid),
-          `process still alive: ${childPid}`,
-          signal,
-        );
+        expect(isProcessAlive(childPid)).toBe(false);
       } finally {
         try {
           await releaseAndWait();
@@ -514,7 +520,9 @@ describe("run-oxlint", () => {
   it.runIf(process.platform !== "win32")(
     "fails a successful shard when its process group requires SIGKILL",
     async ({ signal }) => {
-      await expect(runSuccessfulLeaderDescendantScenario("persist", signal)).resolves.toBe(1);
+      await expect(runSuccessfulLeaderDescendantScenario("persist", signal)).rejects.toMatchObject({
+        processTreeState: "terminated",
+      });
     },
   );
 

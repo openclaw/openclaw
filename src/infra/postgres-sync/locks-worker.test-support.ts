@@ -6,6 +6,7 @@ import {
   type SqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
 import {
+  runSqliteDeferredTransactionSync,
   runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../sqlite-transaction.js";
@@ -18,10 +19,11 @@ const input: {
   path: string;
   gates: SharedArrayBuffer;
   admissions: SqliteDatabaseAdmissions;
-  mode: "single" | "worker";
+  mode: "single" | "worker" | "deferred";
   id: string;
   holdStatement?: boolean;
   holdAdmission?: boolean;
+  holdRead?: boolean;
 } = workerData;
 if (!parentPort) {
   throw new Error("PostgreSQL lock fixture requires a worker");
@@ -49,10 +51,21 @@ try {
       if (input.holdStatement) {
         wait(2);
       }
+      if (input.mode === "deferred") {
+        const value = Number(connection.prepare("SELECT value FROM counter").get()!.value);
+        port.postMessage({ event: "read", value });
+        if (input.holdRead) {
+          wait(3);
+        }
+        return connection.prepare("UPDATE counter SET value = ?").run(value + 1);
+      }
       return connection.prepare("INSERT INTO events (id) VALUES (?)").run(input.id);
     };
     if (input.mode === "single") {
       runSqliteSingleStatementSync(db, statement);
+    } else if (input.mode === "deferred") {
+      port.postMessage({ event: "admission" });
+      runSqliteDeferredTransactionSync(db, statement);
     } else {
       runSqliteWorkerTransactionSync(
         {

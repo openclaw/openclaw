@@ -2,7 +2,10 @@ import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -380,8 +383,7 @@ async function waitForComfyHistory(
   promptId: string,
   pollIntervalMs: number,
 ): Promise<unknown> {
-  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
-  const headers = new Headers(requestHeaders);
+  const { baseUrl, headers, mode, ...request } = params;
   const deadline = performance.now() + params.timeoutMs;
   const read = <T>(path: string, kind: "history" | "status", timeoutMs: number) =>
     readJsonResponse<T>({
@@ -486,8 +488,7 @@ async function downloadOutputFile(
   capability: ComfyCapability,
   maxBytes: number,
 ): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
-  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
-  const headers = new Headers(requestHeaders);
+  const { baseUrl, headers, mode, ...request } = params;
   const fileName = normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
   if (!fileName) {
     throw new Error("Comfy output entry missing filename");
@@ -598,7 +599,7 @@ function resolveComfyConfigurationReadiness(
   return undefined;
 }
 
-/** Retained for released hosts that discover providers through the synchronous hook. */
+/** The released resolveCapabilityModelCandidates SDK needs this hook through 2026-12-31. */
 export function isComfyCapabilityConfigured(params: ComfyCapabilityConfiguredParams): boolean {
   return (
     resolveComfyConfigurationReadiness(params) ??
@@ -778,7 +779,10 @@ export async function runComfyWorkflow(params: {
 
   const assets: ComfyGeneratedAsset[] = [];
   const outputKind = params.capability === "music" ? "audio" : params.capability;
-  const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
+  const maxOutputBytes =
+    outputKind === "image"
+      ? resolveGeneratedImageDownloadMaxBytes(params.cfg)
+      : resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile(
       connection,

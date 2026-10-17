@@ -92,6 +92,7 @@ export function createPluginRuntimeMediaMock(
     saveMediaBuffer: vi
       .fn<PluginRuntimeMediaMock["saveMediaBuffer"]>()
       .mockResolvedValue(TEST_SAVED_MEDIA),
+    deleteMediaBuffer: vi.fn<PluginRuntimeMediaMock["deleteMediaBuffer"]>().mockResolvedValue(),
     ...overrides,
   };
 }
@@ -331,6 +332,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     },
     webSearch: {
       listProviders: vi.fn<PluginRuntime["webSearch"]["listProviders"]>(),
+      listProvidersAsync: vi.fn<PluginRuntime["webSearch"]["listProvidersAsync"]>(),
       search: vi.fn<PluginRuntime["webSearch"]["search"]>(),
     },
     channel: {
@@ -551,6 +553,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     state: createPluginStateRuntimeMock(),
     subagent: {
       complete: vi.fn(),
+      forkSession: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),

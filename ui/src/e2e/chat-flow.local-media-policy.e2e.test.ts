@@ -4,11 +4,12 @@ import { afterEach, expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import {
+  chatMessage,
+  newChatPage,
   buildLocalWebchatAudioMessage,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -47,6 +48,11 @@ suite.define(() => {
       ticket: "ticket-bootstrap-structured-audio",
       structured: true,
     },
+    ...[
+      "~/media/report-voice.mp3",
+      "/workspace/project/../media/report-voice.mp3",
+      "C:\\workspace\\project\\..\\media\\report-voice.mp3",
+    ].map((source) => ({ kind: "audio", source, ticket: "ticket-dollar-home", attachment: true })),
   ] as const)(
     "renders local assistant $kind through server metadata",
     async ({ kind, source: fixtureSource, ticket, ...options }) => {
@@ -54,8 +60,7 @@ suite.define(() => {
         "structured" in options
           ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`
           : fixtureSource;
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
+      const page = await newChatPage(suite);
       const requestedMediaUrls: URL[] = [];
       const expectedSource = "structured" in options ? new URL(source).pathname : source;
       let mediaAllowed = true;
@@ -69,23 +74,21 @@ suite.define(() => {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           if (!mediaAllowed) {
             await route.fulfill({
-              contentType: "application/json",
-              body: JSON.stringify({
+              json: {
                 available: false,
                 reason: "Outside allowed folders",
                 retryable: false,
                 canAllow: true,
-              }),
+              },
             });
             return;
           }
           await route.fulfill({
-            contentType: "application/json",
-            body: JSON.stringify({
+            json: {
               available: true,
               mediaTicket: ticket,
               mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-            }),
+            },
           });
           return;
         }
@@ -118,100 +121,89 @@ suite.define(() => {
                 id: "assistant-bootstrap-local-audio",
                 role: "assistant",
                 content:
-                  "structured" in options
-                    ? (await buildLocalWebchatAudioMessage(source)).content
-                    : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+                  "attachment" in options
+                    ? [
+                        { type: "text", text: "Your recording" },
+                        {
+                          type: "attachment",
+                          attachment: {
+                            kind: "audio",
+                            label: "report-voice.mp3",
+                            mimeType: "audio/mpeg",
+                            url: source,
+                          },
+                        },
+                      ]
+                    : "structured" in options
+                      ? (await buildLocalWebchatAudioMessage(source)).content
+                      : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
                 timestamp: Date.now(),
               },
         ],
       });
 
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const media =
-          kind === "image"
-            ? page.getByAltText("Local bootstrap image")
-            : page.locator("openclaw-chat-audio-player");
-        await media.waitFor({
-          state: "visible",
-          timeout: 10_000,
-        });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const media =
+        kind === "image"
+          ? page.getByAltText("Local bootstrap image")
+          : page.locator("openclaw-chat-audio-player");
+      await media.waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+      await expect
+        .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(2);
+      expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
+      expect(requestedMediaUrls[0]?.searchParams.get("source")).toBe(expectedSource);
+      expect(
+        requestedMediaUrls.slice(1).some((url) => url.searchParams.get("mediaTicket") === ticket),
+      ).toBe(true);
+      if (kind === "audio") {
+        const href = await media
+          .locator(".chat-assistant-attachment-card__download")
+          .getAttribute("href");
+        expect(href).toBeTruthy();
+        expect(href).toContain(`mediaTicket=${ticket}`);
+        const download = new URL(href ?? "", suite.server.baseUrl);
+        expect(download.searchParams.get("mediaTicket")).toBe(ticket);
+        expect(download.searchParams.get("source")).toBe(expectedSource);
         await expect
-          .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
-          .toBeGreaterThanOrEqual(2);
-        expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
+          .poll(() =>
+            media.locator("audio").evaluate((element) => (element as HTMLMediaElement).readyState),
+          )
+          .toBeGreaterThanOrEqual(1);
+      }
+      expect(await page.getByText("Outside allowed folders").count()).toBe(0);
+
+      if (kind === "image") {
+        await expect
+          .poll(() =>
+            media.evaluate((element) =>
+              element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+            ),
+          )
+          .toBe(180);
+      }
+
+      if ("revalidatePolicy" in options) {
+        mediaAllowed = false;
+        await gateway.emitGatewayEvent("config.changed", { hash: "workspace-protected" });
+        await page.getByRole("button", { name: "Allow image", exact: true }).waitFor();
+        expect(await media.count()).toBe(0);
+
+        mediaAllowed = true;
+        await gateway.emitGatewayEvent("config.changed", { hash: "workspace-unprotected" });
+        await media.waitFor({ state: "visible" });
+        await expect
+          .poll(() => media.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+          .toBe(180);
+        expect(await page.getByRole("button", { name: "Allow image", exact: true }).count()).toBe(
+          0,
+        );
         expect(
-          requestedMediaUrls.slice(1).some((url) => url.searchParams.get("mediaTicket") === ticket),
-        ).toBe(true);
-        if (kind === "audio") {
-          expect(
-            await media.locator(".chat-assistant-attachment-card__download").getAttribute("href"),
-          ).toContain(`mediaTicket=${ticket}`);
-          await expect
-            .poll(() =>
-              media
-                .locator("audio")
-                .evaluate((element) => (element as HTMLMediaElement).readyState),
-            )
-            .toBeGreaterThanOrEqual(1);
-        }
-        expect(await page.getByText("Outside allowed folders").count()).toBe(0);
-
-        if (kind === "image") {
-          await expect
-            .poll(() =>
-              media.evaluate((element) =>
-                element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
-              ),
-            )
-            .toBe(180);
-        }
-
-        if ("revalidatePolicy" in options) {
-          mediaAllowed = false;
-          await gateway.emitGatewayEvent("config.changed", { hash: "workspace-protected" });
-          await page.getByRole("button", { name: "Allow image", exact: true }).waitFor();
-          expect(await media.count()).toBe(0);
-
-          mediaAllowed = true;
-          await gateway.emitGatewayEvent("config.changed", { hash: "workspace-unprotected" });
-          await media.waitFor({ state: "visible" });
-          await expect
-            .poll(() => media.evaluate((element) => (element as HTMLImageElement).naturalWidth))
-            .toBe(180);
-          expect(await page.getByRole("button", { name: "Allow image", exact: true }).count()).toBe(
-            0,
-          );
-          expect(
-            requestedMediaUrls.filter((url) => url.searchParams.get("meta") === "1"),
-          ).toHaveLength(3);
-        }
-
-        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
-          });
-        }
-        if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
-          process.stdout.write(
-            `${JSON.stringify({
-              proof: "control-ui-local-media-bootstrap",
-              kind,
-              source,
-              metadataAuthenticated: true,
-              ticketScoped: true,
-              rawRequestHasBearer: false,
-              requests: requestedMediaUrls.map((url) => ({
-                source: url.searchParams.get("source"),
-                meta: url.searchParams.get("meta"),
-                mediaTicket: url.searchParams.get("mediaTicket"),
-              })),
-            })}\n`,
-          );
-        }
-      } finally {
-        await suite.closeBrowserContext(context);
+          requestedMediaUrls.filter((url) => url.searchParams.get("meta") === "1"),
+        ).toHaveLength(3);
       }
     },
   );
@@ -228,8 +220,7 @@ suite.define(() => {
       source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
     },
   ] as const)("keeps server-rejected $code media blocked", async ({ code, reason, source }) => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
+    const page = await newChatPage(suite);
     const requestedMediaUrls: URL[] = [];
 
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -239,52 +230,24 @@ suite.define(() => {
       expect(url.searchParams.get("source")).toBe(source);
       expect(url.searchParams.get("meta")).toBe("1");
       expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-      await route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ available: false, code, reason }),
-      });
+      await route.fulfill({ json: { available: false, code, reason } });
     });
 
     await installMockGateway(page, {
       historyMessages: [
-        {
+        chatMessage("assistant", `Unavailable recording\nMEDIA:${source}`, {
           id: `assistant-bootstrap-blocked-${code}`,
-          role: "assistant",
-          content: [{ type: "text", text: `Unavailable recording\nMEDIA:${source}` }],
           timestamp: Date.now(),
-        },
+        }),
       ],
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const status = page.locator(".chat-assistant-attachment-card__status-meta");
-      await status.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => status.textContent()).toContain(reason);
-      expect(requestedMediaUrls).toHaveLength(1);
-      expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
-      expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
-
-      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(suite.artifactDir, `bootstrap-blocked-${code}.png`),
-        });
-      }
-      if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
-        process.stdout.write(
-          `${JSON.stringify({
-            proof: "control-ui-local-media-bootstrap",
-            code,
-            source,
-            metadataAuthenticated: true,
-            rawMediaRequested: false,
-            visibleReason: reason,
-          })}\n`,
-        );
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const status = page.locator(".chat-assistant-attachment-card__status-meta");
+    await status.waitFor({ state: "visible", timeout: 10_000 });
+    await expect.poll(() => status.textContent()).toContain(reason);
+    expect(requestedMediaUrls).toHaveLength(1);
+    expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
+    expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
   });
 });

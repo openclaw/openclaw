@@ -24,40 +24,8 @@ extension ChatSessionSidebarModel {
     }
 
     static func sidebarKey(_ key: String) -> String {
-        // ui/src/lib/sessions/session-key.ts:93,347 preserves opaque channel identifiers.
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.lowercased() == "main" { return "agent:main:main" }
-        var parts = key.components(separatedBy: ":")
-        var index = 0
-        while parts.count - index >= 3, parts[index].lowercased() == "agent" {
-            parts[index] = "agent"
-            parts[index + 1] = parts[index + 1].lowercased()
-            index += 2
-        }
-        while index < parts.count, parts[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            index += 1
-        }
-        guard index < parts.count else { return key.lowercased() }
-        let channel = parts[index].lowercased()
-        if channel == "catalog" { return parts.joined(separator: ":") }
-        let kind = index + 1 < parts.count ? parts[index + 1].lowercased() : ""
-        let matrix = channel == "matrix" && (kind == "channel" || kind == "group")
-        guard matrix || (channel == "signal" && kind == "group") else { return key.lowercased() }
-        parts[index] = channel
-        parts[index + 1] = kind
-        if matrix {
-            if let thread = parts.indices.dropFirst(index + 2).dropLast()
-                .last(where: { parts[$0].lowercased() == "thread" })
-            {
-                parts[thread] = "thread"
-            }
-        } else if index + 2 < parts.count {
-            parts[index + 2] = parts[index + 2].trimmingCharacters(in: .whitespacesAndNewlines)
-            for tail in parts.indices.dropFirst(index + 3) {
-                parts[tail] = parts[tail].lowercased()
-            }
-        }
-        return parts.joined(separator: ":")
+        let key = OpenClawChatSessionKey.comparisonKey(key)
+        return key == "main" ? "agent:main:main" : key
     }
 
     static func isSidebarRun(_ key: String) -> Bool {
@@ -320,7 +288,7 @@ extension ChatSessionSidebar {
         let generation: Int?
         let loading: Bool
         let healthy: Bool
-        // ui/src/components/session-lineage-controller.ts:302: lifecycle facts, not live display updates, retire reads.
+        // ui/src/components/session-lineage.ts: lifecycle facts, not live display updates, retire reads.
         let selection: OpenClawChatSessionEntry
         let parents: [OpenClawChatSessionEntry]
         let inlineParents: Set<String>

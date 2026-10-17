@@ -83,10 +83,10 @@ describe("Cerebras onboarding", () => {
     expect(config.models?.mode).toBe("replace");
     expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
     expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-      CEREBRAS_DEFAULT_MODEL_REF,
+      "cerebras/gpt-oss-120b",
     );
     expect(config.agents?.defaults?.models).toEqual({
-      [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Gemma 4 31B" },
+      [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras GPT OSS 120B" },
     });
   });
 });

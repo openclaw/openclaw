@@ -18,7 +18,6 @@ import {
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
-import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
@@ -35,7 +34,8 @@ export async function withGatewayMaintenanceDrain<T>(
   },
   stop: (guard: { prepareEffect: (beforeCommit: () => void) => Promise<void> }) => Promise<T>,
 ): Promise<T> {
-  const deadline = performance.now() + (params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
+  // Leave the remaining 15 seconds of the drain lease for the stop handoff.
+  const drainBudgetMs = Math.min(params.timeoutMs ?? 30_000, 30_000);
   const explicitDrain = params.drainPolicy === "interrupt-after-drain";
   const requestId = randomUUID();
   let suspensionId: string | undefined;
@@ -102,6 +102,19 @@ export async function withGatewayMaintenanceDrain<T>(
   let lastObservation: GatewaySuspendPrepareResult | undefined;
   let observationFailure: { error: unknown } | undefined;
   let processTarget: { pid: number; processInstanceId: string } | undefined;
+  const assertSuspensionCurrent = () => {
+    if (
+      suspensionId &&
+      (!lastObservation ||
+        lastObservation.status === "busy" ||
+        lastObservation.suspensionId !== suspensionId ||
+        lastObservation.expiresAtMs <= Date.now())
+    ) {
+      throw new GatewayServiceStopUnsafeError(
+        "Gateway maintenance suspension expired or changed; the Gateway was not stopped. Retry the update after lifecycle inspection is available.",
+      );
+    }
+  };
   const assertDrainLease = () => {
     assertResidentCurrent();
     if (
@@ -124,7 +137,6 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     return lastObservation;
   };
-  const remaining = () => Math.max(1, deadline - performance.now());
   const connection = await (async () => {
     const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
     const port = await resolveUpdatedGatewayRestartPort({
@@ -278,7 +290,10 @@ export async function withGatewayMaintenanceDrain<T>(
       processTarget = { pid: identity.pid, processInstanceId: identity.processInstanceId };
       verifiedResident = true;
     }
+    let deadline = performance.now() + drainBudgetMs;
+    const remaining = () => Math.max(1, deadline - performance.now());
     while (true) {
+      assertSuspensionCurrent();
       try {
         if (!verifiedResident) {
           const identity = await call<{ pid: number }>("system.info", {});
@@ -288,15 +303,18 @@ export async function withGatewayMaintenanceDrain<T>(
           }
           verifiedResident = true;
         }
-        // Repeated prepare renews the lease and asks the same lifecycle owner to
-        // observe all admitted work, including write custody, under its fence.
-        lastObservation = await call<GatewaySuspendPrepareResult>("gateway.suspend.prepare", {
-          requestId,
-          drain: true,
-          terminalPolicy: "terminate",
-        });
-        if (lastObservation.status !== "busy") {
+        // Reobserve the original lease without acquiring another after expiry.
+        lastObservation = await call<GatewaySuspendPrepareResult>(
+          "gateway.suspend.prepare",
+          { requestId, drain: true, terminalPolicy: "terminate" },
+          assertSuspensionCurrent,
+        );
+        if (lastObservation.status !== "busy" && !suspensionId) {
           suspensionId = lastObservation.suspensionId;
+          // Preflight does not spend the drain budget; a slow prepare does.
+          deadline =
+            performance.now() +
+            Math.min(drainBudgetMs, Math.max(0, lastObservation.expiresAtMs - Date.now() - 15_000));
         }
         observationFailure = undefined;
       } catch (error) {
@@ -304,6 +322,7 @@ export async function withGatewayMaintenanceDrain<T>(
         observationFailure = { error };
       }
       assertResidentCurrent();
+      assertSuspensionCurrent();
       if (!observationFailure && lastObservation?.status === "ready") {
         return await finish();
       }
@@ -361,7 +380,11 @@ export async function withGatewayMaintenanceDrain<T>(
     if (suspensionId && !stopped) {
       // A successful stop ends the lease with the process. On refusal or a failed
       // stop, resume only the exact resident and token this invocation prepared.
-      await call("gateway.suspend.resume", { suspensionId }).catch(() => undefined);
+      await call("gateway.suspend.resume", { suspensionId }).catch((error: unknown) =>
+        params.warn(
+          `WARNING: Could not resume Gateway suspension ${suspensionId}: ${coerceErrorMessage(error)}; the Gateway reopens admission automatically when the drain lease expires.`,
+        ),
+      );
     }
   }
 }

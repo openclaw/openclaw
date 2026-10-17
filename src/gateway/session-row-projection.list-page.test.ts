@@ -7,8 +7,11 @@ import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as topology from "../config/sessions/combined-store-gateway-read.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -24,6 +27,66 @@ import * as rowInputs from "./session-utils-row.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reconciles an invalidated row while rebuilding topology for sessions.list", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = ["agent:main:dashboard:pending-row", "agent:main:dashboard:other-row"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: `pending-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const row = projection.capture({ agentId: "main", key: keys[0]! })!;
+      const prepare = topology.prepareCombinedSessionStoreForGatewayAsync;
+      vi.spyOn(topology, "prepareCombinedSessionStoreForGatewayAsync").mockImplementationOnce(
+        async (...args) => {
+          const result = await prepare(...args);
+          emitSessionIdentityMutation({
+            kind: "reset",
+            agentId: "main",
+            databaseIdentity: readDatabasePathIdentitySync(row.storeTarget.storePath).key.slice(5),
+            previous: { sessionId: "pending-0", sessionKeys: [keys[0]!] },
+            current: { sessionId: "pending-0", sessionKeys: [keys[0]!] },
+          });
+          const invalidated = projection.capture({ agentId: "main", key: keys[0]! })!;
+          expect(invalidated.storedEntry).toBeUndefined();
+          expect(invalidated.retainedDatabaseFacts).toBeUndefined();
+          expect(invalidated.pendingDatabaseFacts).toBeUndefined();
+          return result;
+        },
+      );
+      sessionChanges.emit({ all: true, scope: "stores" });
+      const respond = vi.fn();
+      await sessionReadHandlers["sessions.list"]!({
+        req: { type: "req", id: "pending-row-list", method: "sessions.list" },
+        params: {},
+        client: null,
+        context: bindSessionRowProjection(requestContext(cfg), () => projection),
+        isWebchatConnect: () => false,
+        respond,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: [
+            expect.objectContaining({ sessionId: "pending-1" }),
+            expect.objectContaining({ sessionId: "pending-0" }),
+          ],
+        }),
+      );
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("retries failed catalog renewal without blocking lists on its replacement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -184,7 +247,7 @@ it("counts matching children across cached serialized archive views", async () =
   });
 });
 
-it("yields while materializing only overlapping selected pages for concurrent list handlers", async () => {
+it("prepares the roster once and yields while enriching only overlapping selected pages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
@@ -199,6 +262,7 @@ it("yields while materializing only overlapping selected pages for concurrent li
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
       await projection.ensureMaterialized();
+      expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
@@ -252,6 +316,8 @@ it("yields while materializing only overlapping selected pages for concurrent li
         expect(Math.max(...materialized)).toBe(10);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
+        await projection.ensureMaterialized();
+        expect(projection.materializedCount).toBe(10);
       } finally {
         sql.restore();
       }

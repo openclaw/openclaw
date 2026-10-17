@@ -4,7 +4,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubOAuth from "../agents/github-oauth-client.js";
+import { createGitHubReadIdentity } from "../agents/github-read-identity.js";
 import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
@@ -14,20 +19,21 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionEntries from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as cloneRuntime from "../projects/project-clone-runtime.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import * as projectCloning from "../projects/project-clone.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import * as secretsRuntime from "../secrets/runtime-state.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import * as repositoryGitHubIdentity from "./worker-environments/repository-github-identity.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -37,7 +43,10 @@ const git = async (cwd: string, args: string[]) =>
   (await exec("git", ["-C", cwd, ...args])).stdout.trim();
 
 describe("explicit repository move to Gateway", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.restoreAllMocks();
+  });
 
   it.each([
     "system",
@@ -46,7 +55,9 @@ describe("explicit repository move to Gateway", () => {
     "host mismatch",
     "revoked",
     "reset",
+    "clone reset",
     "auth failure",
+    "unavailable identity",
   ] as const)(
     "keeps the current shared GitHub identity and move authority at clone admission: %s",
     async (scenario) => {
@@ -150,6 +161,9 @@ describe("explicit repository move to Gateway", () => {
                   lifecycleRevision: "reset-revision",
                 }));
               }
+              if (scenario === "unavailable identity") {
+                return { status: "unavailable" };
+              }
               return {
                 status: "available",
                 account: { accountId: 42, login: "shared-bot", avatarUrl: null },
@@ -162,7 +176,24 @@ describe("explicit repository move to Gateway", () => {
               : new Error("fixture clone transport reached");
           const clone = vi
             .spyOn(projectCloning, "materializeProjectClone")
-            .mockRejectedValue(cloneFailure);
+            .mockImplementation(async (_request, options) => {
+              if (scenario === "clone reset") {
+                const sql = observeHostDataSql();
+                try {
+                  expect(options?.assertCurrent).toBeTypeOf("function");
+                  options?.assertCurrent?.();
+                  expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                  await sessionEntries.patchSessionEntryCore(scope, () => ({
+                    lifecycleRevision: "reset-at-clone-effect",
+                  }));
+                  expect(options?.assertCurrent).toThrow("Repository workspace changed");
+                  expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                } finally {
+                  sql.restore();
+                }
+              }
+              throw cloneFailure;
+            });
           const operation = materializeSessionRepositoryWorkspaceOnGateway({
             ...scope,
             cfg,
@@ -176,6 +207,9 @@ describe("explicit repository move to Gateway", () => {
           if (scenario === "host mismatch") {
             await expect(operation).rejects.toThrow("configured GitHub host (ghe.example.test)");
             expect(verify).not.toHaveBeenCalled();
+            expect(clone).not.toHaveBeenCalled();
+          } else if (scenario === "unavailable identity") {
+            await expect(operation).rejects.toThrow(/reconnect.*GitHub identity/iu);
             expect(clone).not.toHaveBeenCalled();
           } else if (scenario === "revoked" || scenario === "reset") {
             await expect(operation).rejects.toThrow(
@@ -221,8 +255,18 @@ describe("explicit repository move to Gateway", () => {
     "postcommit failure",
     "publication unavailable",
     "requested topic",
-    "bound incognito",
+    "unbound incognito",
   ] as const)("retains only committed materialization: %s", async (outcome) => {
+    // Local recovery fixtures exercise retained state; identity admission is covered above.
+    vi.spyOn(repositoryGitHubIdentity, "prepareRepositoryGitHubIdentity").mockImplementation(
+      async (_agentId, assertCurrent) =>
+        createGitHubReadIdentity({
+          token: undefined,
+          selection: { source: "anonymous" },
+          assertSelected: assertCurrent,
+          readToken: async () => undefined,
+        }),
+    );
     await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
       const cfg = {
         ...(outcome === "enterprise"
@@ -277,7 +321,7 @@ describe("explicit repository move to Gateway", () => {
       const scope = {
         agentId: "main",
         sessionKey:
-          outcome === "bound incognito"
+          outcome === "unbound incognito"
             ? "agent:main:dashboard:incognito-materialization"
             : "agent:main:dashboard:materialization",
       };
@@ -309,22 +353,34 @@ describe("explicit repository move to Gateway", () => {
       });
       repository = await checkpoint.publish();
       const sessionId = "repository-materialization-session";
-      const authority = { assertCurrent() {} };
-      const actor =
-        outcome === "bound incognito"
-          ? await openIncognitoTestActor(state.env, authority)
+      const owner =
+        outcome === "unbound incognito"
+          ? memorySessionActorOwners.get({
+              agentId: "main",
+              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+            })
           : undefined;
+      const actor = await owner?.acquire(
+        { database: owner.identity, sessionKey: scope.sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      const authority = { assertCurrent() {}, authorize() {} };
       const readEntry = async () =>
-        actor
-          ? (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry
-          : loadSessionEntry(scope);
+        owner ? owner.readSession(scope.sessionKey, authority)?.entry : loadSessionEntry(scope);
       const run = async () => {
         const entry = { sessionId, repositoryWorkspaceId: repository.workspaceId };
         if (actor) {
-          await actor.sessions.create(authority, {
-            sessionKey: scope.sessionKey,
-            entry: { ...entry, updatedAt: Date.now(), incognito: true },
-          });
+          expect(
+            (
+              await actor.storage!.mutate(
+                {
+                  type: "session.entry.create",
+                  input: { entry: { ...entry, updatedAt: Date.now(), incognito: true } },
+                },
+                authority,
+              )
+            ).kind,
+          ).toBe("committed");
         } else {
           await upsertSessionEntryCore(scope, entry);
         }
@@ -424,9 +480,9 @@ describe("explicit repository move to Gateway", () => {
         expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
       };
       try {
-        await (actor ? withIncognitoSessionActor(actor, run) : run());
+        await run();
       } finally {
-        await actor?.close();
+        await actor?.release();
       }
     });
   });

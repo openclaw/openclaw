@@ -5,7 +5,6 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 const streamSimpleMock = vi.fn();
-const readFileMock = vi.fn();
 const parseSessionEntriesMock = vi.fn();
 const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
@@ -64,18 +63,6 @@ vi.mock("../llm/stream.js", async () => {
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
-  };
-});
-
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      readFile: (...args: unknown[]) => readFileMock(...args),
-    },
-    readFile: (...args: unknown[]) => readFileMock(...args),
   };
 });
 
@@ -344,16 +331,21 @@ vi.mock("../logging/diagnostic.js", () => ({
   },
 }));
 
+// mock-isolation: BTW fixtures supply transcript events without opening the transcript database.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
-  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesCoreMock(...args),
-  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
   loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
+}));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryInWorker: async (...args: unknown[]) => loadSessionEntryMock(...args),
+  readSessionEntrySummariesInWorker: async (...args: unknown[]) =>
+    listSessionEntriesCoreMock(...args),
 }));
 
 export {
   streamSimpleMock,
-  readFileMock,
   parseSessionEntriesMock,
   migrateSessionEntriesMock,
   buildSessionContextMock,

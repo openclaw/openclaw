@@ -4,6 +4,7 @@ import type { SessionEntryReplacementPublication } from "./session-accessor.sqli
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
 import type {
   SessionSourceAssertion,
   SessionSourcePredicate,
@@ -61,6 +62,7 @@ export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
   entry: SessionEntry | null;
   applied: boolean;
+  lifecycleEffects?: SessionLifecyclePatchEffects;
   publication?: SessionEntryReplacementPublication;
   /** Guard snapshot before the entry patch, carried only while the session ID is unchanged. */
   transcriptPredicate?: {
@@ -70,10 +72,12 @@ export type SessionEntryPatchCommitted = {
   refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 
+/** Internal bookkeeping borrows the committed result without mutating it. */
 export type SessionEntryPatchCommitObserver = (
   entry: SessionEntry,
   /** Historical predicate facts from the committed transaction, never current authority. */
   transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"],
+  lifecycleEffects?: SessionLifecyclePatchEffects,
 ) => void;
 
 export type SessionEntryPatchReduction = Omit<

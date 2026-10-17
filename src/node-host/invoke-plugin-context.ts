@@ -1,3 +1,4 @@
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 
 /** Retain invocation-bound workspace capabilities until command handling settles. */
@@ -55,6 +56,11 @@ export async function withNodeHostPluginInvocation<T>(
                 acquireManagedWorkspace: (
                   request: Parameters<typeof acquireManagedWorkspace>[0],
                 ) => {
+                  warnPluginSdkDeprecation({
+                    family: "node-host-sync-workspace",
+                    method: "OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace",
+                    replacement: "await context.acquireManagedWorkspaceAsync()",
+                  });
                   assertCurrent(request.sessionKey);
                   return acquireManagedWorkspace(request);
                 },

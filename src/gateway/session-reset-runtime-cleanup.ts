@@ -2,7 +2,6 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
-import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
@@ -10,7 +9,7 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import {
   clearSessionResetRuntimeState,
-  createSessionResetCleanupGuard,
+  prepareSessionResetCleanupGuard,
   SessionResetCleanupError,
   stopSessionResetSubagents,
 } from "../auto-reply/reply/session-reset-cleanup.js";
@@ -51,14 +50,25 @@ export async function ensureSessionRuntimeCleanup(params: {
   sessionLifecycleRevision?: string;
   assertCurrent?: () => void;
 }) {
-  const assertCurrent = createSessionResetCleanupGuard({
-    storePath: params.target.storePath,
-    sessionKey: params.target.canonicalKey,
-    expectedSession: params.sessionId
-      ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
-      : undefined,
-    assertCurrent: params.assertCurrent,
-  });
+  let cleanup: Awaited<ReturnType<typeof prepareSessionResetCleanupGuard>>;
+  try {
+    cleanup = await prepareSessionResetCleanupGuard({
+      agentId: params.target.agentId,
+      storePath: params.target.storePath,
+      sessionKey: params.target.canonicalKey,
+      expectedSession: params.sessionId
+        ? { sessionId: params.sessionId, lifecycleRevision: params.sessionLifecycleRevision }
+        : undefined,
+      assertCurrent: params.assertCurrent,
+    });
+  } catch (error) {
+    if (error instanceof SessionResetCleanupError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
+  const assertCurrent = cleanup.assertCurrent;
+  using _ = { [Symbol.dispose]: cleanup.release };
   const queueKeys = [
     ...params.target.storeKeys,
     params.target.canonicalKey,
@@ -105,7 +115,6 @@ export async function ensureSessionRuntimeCleanup(params: {
   });
   if (!params.sessionId) {
     assertCurrent();
-    clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
     return undefined;
   }
@@ -184,7 +193,6 @@ export async function ensureSessionRuntimeCleanup(params: {
   // after a clean stop; otherwise keep the required marker armed for late work.
   await retireMcpRuntime(!ended);
   assertCurrent();
-  clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended && !isEmbeddedAgentRunActive(sessionId)) {
     assertCurrent();
     mcpRunEndWatcherState.cancellations.get(sessionId)?.();

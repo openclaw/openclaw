@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
 import { SqliteWalCheckpointBusyError, truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
@@ -56,6 +57,7 @@ export function compactDoctorSqliteFile(options: {
     // A verified no-op needs neither a file mutation nor a second full-file scan.
     // Explicit compaction still repacks partially filled pages.
     if (!alreadyCompact) {
+      invalidateSqliteDatabaseCleanClose(options.sqlitePath);
       try {
         truncateSqliteWal(database, options.sqlitePath);
       } catch (error) {

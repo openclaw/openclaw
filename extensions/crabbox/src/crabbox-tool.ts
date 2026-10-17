@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type {
@@ -172,11 +173,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
       }
       if (action === "exec") {
         const argv = params.argv;
-        if (
-          !Array.isArray(argv) ||
-          argv.length === 0 ||
-          !argv.every((arg) => typeof arg === "string")
-        ) {
+        if (!isStringArray(argv) || argv.length === 0) {
           throw new Error("argv must be a non-empty array of strings");
         }
         const input = readStringParam(params, "input", { trim: false, allowEmpty: true });

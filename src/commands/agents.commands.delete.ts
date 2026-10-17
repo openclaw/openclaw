@@ -27,7 +27,7 @@ import {
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import {
-  resolveSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
@@ -180,7 +180,7 @@ export async function agentsDeleteCommand(
     failAgentsDelete(error.message);
     return;
   }
-  const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
+  const sharedAuthOwnership = await prepareSharedAuthStoreOwnership();
   if (
     isSharedAuthStoreOwner({
       ownership: sharedAuthOwnership,

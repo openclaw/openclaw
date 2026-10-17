@@ -8,7 +8,8 @@ import type {
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type PostedUsageTask = { input?: unknown; taskId?: number; responseId?: number };
 type NativeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: PostedUsageTask) => void>>;
+  posted: ReturnType<typeof vi.fn<(message: PostedUsageTask) => void>>;
+  postMessage: (message: PostedUsageTask) => void;
 };
 const nativeWorkers = vi.hoisted(() => [] as NativeWorker[]);
 const nativePosts = vi.hoisted(() => ({
@@ -51,9 +52,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         nativeWorkers.push(this);
       }
-      postMessage = vi.fn<(message: PostedUsageTask) => void>((message) =>
+      posted = vi.fn<(message: PostedUsageTask) => void>((message) =>
         nativePosts.observe?.(this, message),
       );
+      postMessage = this.posted;
       ref() {}
       unref() {}
       async terminate() {
@@ -69,31 +71,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>()),
   hasSqliteDatabaseSchemaAdmissionForPath: () => observed.preparedDatabase,
-}));
-
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
-  captureExistingOpenClawAgentDatabaseExecution: (options: { path: string }) => {
-    if (!observed.preparedDatabase) {
-      return undefined;
-    }
-    const claim = { identity: "transport", incarnation: "transport", assertCurrent() {} };
-    return {
-      agentId: "main",
-      path: options.path,
-      fileIdentity: undefined,
-      assertCurrent() {},
-      captureGenerationClaim: () => claim,
-      capturePreparedGenerationClaim: () => claim,
-      async prepare() {
-        throw new Error("Readonly transport must not prepare a writer");
-      },
-      async runExisting() {
-        throw new Error("Readonly transport must not open a writer");
-      },
-      async release() {},
-    };
-  },
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
@@ -186,7 +163,6 @@ vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
     return observed.unregister;
   },
 }));
-// The pure transport must not become the process-wide disk-scan singleton.
 // mock-isolation: Reader controls must never start the process-wide disk scanner.
 vi.mock("./disk-budget-runtime.js", () => ({
   measureSessionPhysicalDiskUsage: () => {

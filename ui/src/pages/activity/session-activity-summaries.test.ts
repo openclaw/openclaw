@@ -3,10 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  ACTIVITY_SUMMARY_ENSURE_METHOD,
-  SessionActivityController,
-} from "./session-activity-controller.ts";
+import { ACTIVITY_SUMMARY_ENSURE_METHOD, createSessionActivity } from "./session-activity-owner.ts";
 
 const filters = { personId: null, time: "all" as const, query: "" };
 const row = (
@@ -29,44 +26,7 @@ const listing = (sessions: GatewaySessionRow[]): SessionsListResult => ({
   sessions,
   defaults: { model: null, modelProvider: null, contextTokens: null },
 });
-const controller = () => new SessionActivityController(() => {});
-
-it("backfills eligible mixed rows and refuses retries for visible read-only sessions", async () => {
-  const sessions = [
-    row("agent:main:owned"),
-    row("agent:main:member"),
-    row("agent:main:viewer", {
-      sharingRole: "viewer",
-      visibility: "shared",
-      activitySummary: { state: "stale", text: "Cached foreign recap", canEnsure: false },
-    }),
-  ];
-  const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  const request = vi.spyOn(client, "request").mockImplementation(async (method, params) => {
-    if (method === "sessions.list") {
-      return listing(sessions);
-    }
-    const batch = (params as { sessions: Array<{ key: string }> }).sessions;
-    expect(batch.map(({ key }) => key)).toEqual(sessions.slice(0, 2).map(({ key }) => key));
-    return {
-      sessions: batch.map(({ key }) => ({
-        key,
-        agentId: "main",
-        activitySummary: { state: "updating", canEnsure: true },
-      })),
-    };
-  });
-  const state = controller();
-  void state.load(client, filters, "query", true);
-  await vi.waitFor(() =>
-    expect(state.result?.sessions[0]?.activitySummary?.state).toBe("updating"),
-  );
-  state.retrySummary(state.result!.sessions[2]!);
-  await Promise.resolve();
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(state.result?.sessions[2]?.activitySummary).toEqual(sessions[2]!.activitySummary);
-  state.dispose();
-});
+const controller = () => createSessionActivity(() => {});
 
 it("rechecks latest row permissions before queued batches and does not consume skipped attempts", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
@@ -94,6 +54,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
   const state = controller();
   void state.load(client, filters, "query", true);
   await vi.waitFor(() => expect(batches).toHaveLength(1));
+  expect(batches[0]).toHaveLength(20);
   const staleRow = sessions[20]!;
   currentRows = sessions.map((session, index) => ({
     ...session,
@@ -118,42 +79,6 @@ it("rechecks latest row permissions before queued batches and does not consume s
   await vi.waitFor(() => expect(batches).toHaveLength(3));
   expect(batches[2]).toEqual([staleRow.key]);
   expect(request).toHaveBeenCalledTimes(6);
-  state.dispose();
-});
-
-it("backfills visible missing recaps in bounded batches without repeating reads or reordering sessions", async () => {
-  const sessions = Array.from({ length: 25 }, (_, index) => row(`agent:main:notes-${index}`));
-  const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  const batches: Array<Array<{ key: string; agentId?: string }>> = [];
-  vi.spyOn(client, "request").mockImplementation(async (method, params) => {
-    if (method === "sessions.list") {
-      return listing(sessions);
-    }
-    expect(method).toBe(ACTIVITY_SUMMARY_ENSURE_METHOD);
-    const batch = (params as { sessions: Array<{ key: string; agentId?: string }> }).sessions;
-    batches.push(batch);
-    return {
-      sessions: batch.map(({ key, agentId }) => ({
-        key,
-        agentId,
-        activitySummary: { state: "updating", canEnsure: true },
-      })),
-    };
-  });
-  const state = controller();
-  void state.load(client, filters, "query", true);
-  await vi.waitFor(() =>
-    expect(
-      state.result?.sessions.every((entry) => entry.activitySummary?.state === "updating"),
-    ).toBe(true),
-  );
-  expect(batches.map((batch) => batch.length)).toEqual([20, 5]);
-  expect(state.result?.sessions.map((entry) => entry.key)).toEqual(
-    sessions.map((entry) => entry.key),
-  );
-  expect(state.result?.totalCount).toBe(25);
-  void state.load(client, filters);
-  expect(batches).toHaveLength(2);
   state.dispose();
 });
 
@@ -245,6 +170,7 @@ it("backfills newly visible sessions after the current batch settles", async () 
 it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
   "resumes recap generation after %s finishes in a hidden tab",
   async (heldMethod) => {
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const documentEvents = new EventTarget();
     const pageEvents = new EventTarget();
     let visibilityState = heldMethod === "sessions.list" ? "hidden" : "visible";
@@ -261,7 +187,6 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
           };
     const { promise: pending, resolve: finish } = createDeferred<unknown>();
     let held = false;
-    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
       if (method === heldMethod && !held) {
         held = true;
@@ -271,7 +196,6 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
     });
     const state = controller();
     try {
-      state.connect();
       void state.load(client, filters, "query", true);
       await vi.waitFor(() => expect(held).toBe(true));
       if (visibilityState !== "hidden") {

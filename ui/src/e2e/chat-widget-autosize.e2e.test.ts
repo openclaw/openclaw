@@ -392,6 +392,19 @@ suite.define(() => {
       await expect
         .poll(() => player.evaluate((element: HTMLVideoElement) => element.readyState))
         .toBeGreaterThanOrEqual(2);
+      // Media readiness does not mean the trusted bridge has received host state.
+      // This deferred style is inserted only after receipt, without exposing its nonce.
+      await expect
+        .poll(() =>
+          widget
+            .locator("head")
+            .evaluate((head) =>
+              [...head.querySelectorAll("style")].some(
+                (style) => style.textContent === ":where(body){display:flow-root}",
+              ),
+            ),
+        )
+        .toBe(true);
       await player.hover();
       await thread.evaluate((element) => {
         Reflect.set(window, "widgetScrollInputs", 0);

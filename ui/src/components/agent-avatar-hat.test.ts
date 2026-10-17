@@ -1,12 +1,13 @@
-import { nothing, render } from "lit";
 /* @vitest-environment jsdom */
+import { createComponent, flush } from "solid-js";
 import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
-import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
+import { ChatAvatar, ForwardedAvatar } from "../pages/chat/chat-avatar-view.tsx";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
-import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 
 const pageLoadRandom = vi.hoisted(() => vi.spyOn(Math, "random").mockReturnValue(0));
 
@@ -14,6 +15,7 @@ beforeAll(() => pageLoadRandom.mockRestore());
 
 afterEach(() => {
   setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
+  document.body.replaceChildren();
 });
 
 const branding: ThemeBranding = resolveThemeBranding({
@@ -30,13 +32,23 @@ describe("theme avatar hats", () => {
       const container = document.createElement("div");
       const avatar = "data:image/png;base64,YQ==";
       for (const view of [
-        renderChatAvatar("assistant", { agentId, name: "Scout", avatar }),
-        renderForwardedAvatar(agentId, {
-          agents: [{ id: agentId }],
-          senderAgentAvatars: new Map([[agentId, avatar]]),
-        }),
+        () =>
+          createComponent(ChatAvatar, {
+            role: "assistant",
+            assistant: { agentId, name: "Scout", avatar },
+          }),
+        () =>
+          createComponent(ForwardedAvatar, {
+            agentId,
+            options: {
+              agents: [{ id: agentId }],
+              senderAgentAvatars: new Map([[agentId, avatar]]),
+            },
+          }),
       ]) {
-        render(view, container);
+        const mounted = mountSolid(view, {
+          container,
+        });
         const image = container.querySelector("img")!;
         image.dispatchEvent(new Event("load"));
         const hat = image.parentElement?.querySelector(":scope > .identity-avatar__hat");
@@ -45,7 +57,7 @@ describe("theme avatar hats", () => {
           expect(hat.parentElement).toBe(image.parentElement);
           expect(hat.parentElement?.getAttribute("data-avatar-state")).toBe("loaded");
         }
-        render(nothing, container);
+        mounted.unmount();
       }
     },
   );
@@ -63,7 +75,9 @@ describe("theme avatar hats", () => {
       setCurrentThemeBranding(resolveThemeBranding({ ...branding, avatarHat, mascot }));
       const container = document.createElement("div");
       const agent = { id, pending, textAvatar: "🦀" };
-      render(renderAgentIdentityAvatar(agent), container);
+      const mounted = mountSolid(() => createComponent(AgentIdentityAvatar, { agent }), {
+        container,
+      });
       const overlay = container.querySelector(".identity-avatar--agent > .identity-avatar__hat");
       expect(Boolean(overlay)).toBe(hat);
       if (hat) {
@@ -74,9 +88,9 @@ describe("theme avatar hats", () => {
         );
       }
       setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
-      render(renderAgentIdentityAvatar(agent), container);
+      flush();
       expect(container.querySelector(".identity-avatar__hat")).toBeNull();
-      render(nothing, container);
+      mounted.unmount();
     },
   );
 });
@@ -97,16 +111,24 @@ it.each([false, true])(
       }),
     );
     const container = document.createElement("div");
-    render(renderAgentIdentityAvatar({ id: "agent-5", textAvatar: "🦀" }), container);
+    const mounted = mountSolid(
+      () => createComponent(AgentIdentityAvatar, { agent: { id: "agent-5", textAvatar: "🦀" } }),
+      { container },
+    );
     expect(container.querySelector(".identity-avatar__hat-img")).toBeNull();
     await vi.dynamicImportSettled();
     expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src") ?? null).toBe(
       missing ? null : "blob:beret",
     );
     expect(container.querySelector(".identity-avatar__hat svg")).toBeNull();
-    render(
-      renderChatAvatar("assistant", { agentId: "agent-5", name: "Scout", avatar: "blob:photo" }),
-      container,
+    mounted.unmount();
+    const chat = mountSolid(
+      () =>
+        createComponent(ChatAvatar, {
+          role: "assistant",
+          assistant: { agentId: "agent-5", name: "Scout", avatar: "blob:photo" },
+        }),
+      { container },
     );
     await vi.dynamicImportSettled();
     expect(
@@ -114,6 +136,6 @@ it.each([false, true])(
         .querySelector(".chat-avatar-slot > .identity-avatar__hat img")
         ?.getAttribute("src") ?? null,
     ).toBe(missing ? null : "blob:beret");
-    render(nothing, container);
+    chat.unmount();
   },
 );

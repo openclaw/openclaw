@@ -114,11 +114,9 @@ export function labelForMediaPath(mediaPath: string): string {
     const basename = trimmed.split("/").pop()?.trim() || trimmed;
     return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
   }
-  try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const parsed = new URL(trimmed);
-      return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
-    }
-  } catch {}
+  const parsed = /^https?:\/\//i.test(trimmed) ? URL.parse(trimmed) : null;
+  if (parsed) {
+    return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
+  }
   return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
 }

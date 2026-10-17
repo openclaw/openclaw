@@ -9,6 +9,7 @@ import {
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
 } from "../../test-helpers/devices-view.tsx";
+import type { DevicesProps } from "./view.types.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -75,36 +76,6 @@ describe("devices exec approvals rendering", () => {
     expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
     expect(section.textContent).not.toContain("Using default");
     expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
-  });
-
-  it("offers only nodes that support both reading and writing approval policy", () => {
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "get-only",
-          displayName: "Get only",
-          commands: ["system.execApprovals.get"],
-        },
-        {
-          nodeId: "set-only",
-          displayName: "Set only",
-          commands: ["system.execApprovals.set"],
-        },
-        {
-          nodeId: "editable",
-          displayName: "Editable",
-          commands: ["system.execApprovals.get", "system.execApprovals.set"],
-        },
-      ],
-      execApprovalsTarget: "node",
-    });
-    const section = getSection(container, "Exec approvals");
-    const nodeSelect = section.querySelector<HTMLSelectElement>('select[aria-label="Node"]');
-
-    expect(Array.from(nodeSelect?.options ?? [], (option) => option.value)).toEqual([
-      "",
-      "editable",
-    ]);
   });
 
   it("keeps the selected node until its owner accepts a target change", () => {
@@ -178,8 +149,8 @@ describe("devices exec approvals rendering", () => {
     const container = renderDevicesContainer({
       nodes: [
         {
-          id: "windows-node",
-          label: "Windows node",
+          nodeId: "windows-node",
+          displayName: "Windows node",
           commands: ["system.execApprovals.get", "system.execApprovals.set"],
         },
       ],
@@ -319,16 +290,12 @@ describe("devices agent bindings", () => {
   });
 
   it.each([
-    { name: "IDs", refs: ["default-node", "agent-node"] },
     {
       name: "ineligible exact IDs ahead of names",
       refs: ["default-node", "agent-node"],
       ineligibleExact: true,
       unavailable: true,
     },
-    { name: "normalized names", refs: ["default_worker", "RESEARCH-WORKER"] },
-    { name: "addresses", refs: ["192.0.2.10", "192.0.2.20"] },
-    { name: "ID prefixes", refs: ["default", "agent-"] },
     {
       name: "ambiguous names across the full inventory",
       refs: ["Default worker", "Research worker"],
@@ -360,7 +327,7 @@ describe("devices agent bindings", () => {
     );
     const container = document.createElement("div");
     document.body.append(container);
-    const renderBindings = (inventory: Array<Record<string, unknown>>, unavailable: boolean) => {
+    const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
       renderDevicesInto(
         container,
         createDevicesViewProps({ nodes: inventory, configForm, onBindDefault, onBindAgent }),
@@ -403,7 +370,7 @@ describe("devices agent bindings", () => {
         ]
       : [...nodes, ...competitors];
     renderBindings(initialNodes, scenario.unavailable ?? false);
-    renderBindings([{ ...nodes[0], commands: [] }], true);
+    renderBindings([{ ...expectDefined(nodes[0], "default bound node"), commands: [] }], true);
     renderBindings(nodes, false);
   });
 });

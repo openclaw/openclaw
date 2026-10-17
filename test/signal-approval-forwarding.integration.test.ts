@@ -40,7 +40,7 @@ describe("Signal forwarded system-agent approvals", () => {
       const writes: Array<{ namespace: string; key: string; value: unknown }> = [];
       const runtime = createPluginRuntimeMock({
         state: {
-          openKeyedStore: (options: OpenAsyncKeyedStoreOptions) => ({
+          openKeyedStoreV2: (options: OpenAsyncKeyedStoreOptions) => ({
             register: async (key: string, value: unknown) => {
               writes.push({ namespace: options.namespace, key, value });
             },
@@ -50,6 +50,13 @@ describe("Signal forwarded system-agent approvals", () => {
             delete: async () => false,
             entries: async () => [],
             clear: async () => {},
+            observe: vi.fn(),
+            compareAndApply: vi.fn(),
+            deleteIfEqual: vi.fn(),
+            lookupMany: vi.fn(),
+            entriesInKeyRange: vi.fn(),
+            moveEntriesFrom: vi.fn(),
+            count: vi.fn(),
           }),
         },
       });

@@ -1,4 +1,6 @@
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { hasOperatorReadAccess } from "./operator-access.ts";
 
 const REPORT_INTERVAL_MS = 30_000;
 const INPUT_EVENTS = ["keydown", "pointerdown", "pointermove", "wheel", "touchstart"] as const;
@@ -20,12 +22,13 @@ export function startGatewayPresenceActivity(
       pending ||
       !client ||
       phase !== "connected" ||
+      !hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) ||
       documentTarget.visibilityState !== "visible"
     ) {
       return;
     }
-    const now = Date.now();
-    if (now >= lastReportedAt && now - lastReportedAt < REPORT_INTERVAL_MS) {
+    const now = performance.now();
+    if (now - lastReportedAt < REPORT_INTERVAL_MS) {
       return;
     }
     lastReportedAt = now;
@@ -50,16 +53,13 @@ export function startGatewayPresenceActivity(
       report();
     }
   };
-  for (const event of INPUT_EVENTS) {
-    documentTarget.addEventListener(event, onInput, { capture: true, passive: true });
-  }
-  const unsubscribe = gateway.subscribe(onReady);
+  const stops = INPUT_EVENTS.map((event) =>
+    listen(documentTarget, event, onInput, { capture: true, passive: true }),
+  );
+  stops.push(gateway.subscribe(onReady));
   onReady();
   return () => {
     disposed = true;
-    unsubscribe();
-    for (const event of INPUT_EVENTS) {
-      documentTarget.removeEventListener(event, onInput, true);
-    }
+    stops.forEach((stop) => stop());
   };
 }

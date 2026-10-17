@@ -185,16 +185,29 @@ describe("CronService read ops while job is running", () => {
     const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       await cron.start();
+      await cron.status();
       sqliteTransactionLabels.length = 0;
       maintenance.mockClear();
-      const worker = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+      const worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       try {
-        await cron.status();
-        await cron.list({ includeDisabled: true });
-        await cron.listPage({ limit: 25 });
-        await cron.readJob(jobs[0]!.id);
-        expect(worker.mock.calls.length).toBe(0);
-        expect(sqliteTransactionLabels).toEqual([]);
+        for (const completed of [false, true]) {
+          if (completed) {
+            await expect(cron.run(jobs[0]!.id, "force")).resolves.toEqual({ ok: true, ran: true });
+            worker.mockClear();
+            sqliteTransactionLabels.length = 0;
+            maintenance.mockClear();
+          }
+          await cron.status();
+          await cron.list({ includeDisabled: true });
+          const page = await cron.listPage({ limit: 25 });
+          const job = await cron.readJob(jobs[0]!.id);
+          expect(worker.mock.calls.length).toBe(0);
+          expect(sqliteTransactionLabels).toEqual([]);
+          expect(job?.state.lastStatus).toBe(completed ? "ok" : undefined);
+          expect(page.jobs.find((row) => row.id === jobs[0]!.id)?.state.lastStatus).toBe(
+            completed ? "ok" : undefined,
+          );
+        }
       } finally {
         worker.mockRestore();
       }
@@ -231,6 +244,33 @@ describe("CronService read ops while job is running", () => {
     } finally {
       maintenance.mockRestore();
       cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("reloads sibling jobs added while a run is executing before serving its completed view", async () => {
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const store = await makeStorePath();
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [futureJob("first", nowMs)] });
+    const { cron: sibling } = createService(store.storePath, { nowMs: () => nowMs });
+    const { cron } = createService(store.storePath, {
+      nowMs: () => nowMs,
+      runIsolatedAgentJob: async () => {
+        await sibling.add(futureJob("sibling", nowMs));
+        return { status: "ok" };
+      },
+    });
+    try {
+      await cron.start();
+      await cron.listPage();
+      await expect(cron.run("first", "force")).resolves.toEqual({ ok: true, ran: true });
+      const page = await cron.listPage();
+      expect(page.jobs.map((job) => job.id)).toEqual(["first", "sibling"]);
+      expect(page.jobs[0]?.state.lastStatus).toBe("ok");
+      expect((await cron.status()).jobs).toBe(2);
+    } finally {
+      cron.stop();
+      sibling.stop();
       await store.cleanup();
     }
   });
@@ -341,9 +381,10 @@ describe("CronService read ops while job is running", () => {
 });
 
 describe("CronService", () => {
-  it("keeps sibling jobs when separately loaded services mutate the same partition", async () => {
+  it("keeps sibling writes visible when separately loaded services mutate and run jobs", async () => {
     const store = await makeStorePath();
-    const { cron: cronA } = createService(store.storePath);
+    const enqueueSystemEvent = vi.fn();
+    const { cron: cronA } = createService(store.storePath, { enqueueSystemEvent });
     const { cron: cronB } = createService(store.storePath);
     try {
       await cronA.status();
@@ -364,6 +405,14 @@ describe("CronService", () => {
         "first-cached-service-job",
         "second-cached-service-job",
       ]);
+      await cronB.update("first-cached-service-job", {
+        payload: { kind: "systemEvent", text: "updated by sibling" },
+      });
+      await expect(cronA.run("first-cached-service-job", "force")).resolves.toEqual({
+        ok: true,
+        ran: true,
+      });
+      expect(enqueueSystemEvent).toHaveBeenCalledWith("updated by sibling", expect.anything());
     } finally {
       cronA.stop();
       cronB.stop();

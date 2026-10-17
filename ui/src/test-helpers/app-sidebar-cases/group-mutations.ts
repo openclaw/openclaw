@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import "../../lib/toast-host.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -13,7 +14,7 @@ import {
 import { createDataTransferStub } from "../drag-data.ts";
 import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 function dispatchDragEvent(
   target: Element,
@@ -89,17 +90,11 @@ describe("AppSidebar group mutation collapsed state", () => {
   }
 
   async function selectGroupMenuAction(menu: Element, value: string) {
-    const item = menu.querySelector(`[value="${value}"]`);
+    const item = menu.querySelector<HTMLElement>(`[data-value="${value}"]`);
     if (!item) {
       throw new Error(`expected ${value} group action`);
     }
-    menu.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        cancelable: true,
-        detail: { item: { value } },
-      }),
-    );
+    item.click();
     await vi.dynamicImportSettled();
   }
 
@@ -428,29 +423,16 @@ describe("AppSidebar group mutation collapsed state", () => {
     });
     await sidebar.updateComplete;
     const menu = await openGroupMenu(sidebar);
-    const dropdown = menu.closest("wa-dropdown");
-    const rename = menu.querySelector<HTMLElement>('[value="rename-group"]');
-    const create = menu.querySelector<HTMLElement>('[value="new-group"]');
-    const remove = menu.querySelector<HTMLElement>('[value="delete-group"]');
+    const rename = menu.querySelector<HTMLElement>('[data-value="rename-group"]');
+    const create = menu.querySelector<HTMLElement>('[data-value="new-group"]');
+    const remove = menu.querySelector<HTMLElement>('[data-value="delete-group"]');
 
     expect(rename?.hasAttribute("disabled")).toBe(true);
     expect(create?.hasAttribute("disabled")).toBe(false);
     expect(remove?.hasAttribute("disabled")).toBe(true);
 
-    dropdown?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        cancelable: true,
-        detail: { item: { value: "rename-group" } },
-      }),
-    );
-    dropdown?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        cancelable: true,
-        detail: { item: { value: "delete-group" } },
-      }),
-    );
+    rename?.click();
+    remove?.click();
 
     expect(harness.groupsRename).not.toHaveBeenCalled();
     expect(harness.groupsDelete).not.toHaveBeenCalled();

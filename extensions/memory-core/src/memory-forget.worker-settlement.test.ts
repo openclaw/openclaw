@@ -3,6 +3,7 @@ import path from "node:path";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { requireNativeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
@@ -26,7 +27,9 @@ describe("memory forget worker settlement", () => {
 
   async function seedSelectedMemory(withOrigins: boolean) {
     await seedMemoryForgetSession("target");
-    const { db } = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(
+      sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db,
+    );
     if (withOrigins) {
       await recordMemoryEntryOrigins({
         agentId: "main",
@@ -91,6 +94,7 @@ describe("memory forget worker settlement", () => {
     async (failResult) => {
       const state = await seedSelectedMemory(true);
       const before = state.derived();
+      const beforeRevision = Number(state.revision()?.revision);
       const origins = await listMemoryEntryOrigins({ agentId: "main" });
       const reportPath = path.join(fixture.stateDir, "forget-native-report.jsonl");
       const restore = observeMemoryForgetWorker(state.db, { failResult, reportPath });
@@ -124,12 +128,16 @@ describe("memory forget worker settlement", () => {
         expect(state.derived()).toEqual(
           failResult === "forget.mark" ? before : { chunks: [], sources: [], cache: [] },
         );
+        expect(Number(state.revision()?.revision)).toBe(
+          beforeRevision + (failResult === "forget.mark" ? 1 : 2),
+        );
         expect(await fs.readFile(state.memoryPath, "utf8")).toBe(state.content);
         expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
 
         restore();
         await forgetMemoryEntries(state.params);
         expect(state.derived()).toEqual({ chunks: [], sources: [], cache: [] });
+        expect(Number(state.revision()?.revision)).toBe(beforeRevision + 3);
         expect(await fs.readFile(state.memoryPath, "utf8")).toBe(state.retained);
         expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
         expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);

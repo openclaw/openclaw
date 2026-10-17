@@ -2,27 +2,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { normalizeSchemaSql, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 
-type SqliteTempGenerationSchema = {
-  kind: "generation";
-  functionName: string;
-  triggers: readonly {
-    name: string;
-    table: string;
-    operation: "INSERT" | "UPDATE" | "DELETE";
-    enabled: boolean;
-  }[];
-};
-
-type SqliteTempTranscriptIndexSchema = {
+export type SqliteTempTrackingSchema = {
   kind: "transcript-index";
   statusTable: string;
   pendingTable: string;
   pendingIndex: string;
   observedTables: readonly string[];
 };
-
-/** Fixed connection-local mutation callbacks or transcript queues. */
-export type SqliteTempTrackingSchema = SqliteTempGenerationSchema | SqliteTempTranscriptIndexSchema;
 
 type SqliteTempObject = {
   name: string;
@@ -35,10 +21,7 @@ export function prepareSqliteTempTrackingSchema(
   database: DatabaseSync,
   schema: SqliteTempTrackingSchema,
 ): { sql: string; unexpected: boolean } {
-  const { sql, objects } =
-    schema.kind === "generation"
-      ? prepareGenerationSchema(schema)
-      : prepareTranscriptIndexSchema(schema);
+  const { createSql, objects } = prepareTranscriptIndexSchema(schema);
   const definitions = new Map(objects.map((object) => [object.name.toLowerCase(), object]));
   const names = objects.map((object) => object.name);
   const tableNames = objects
@@ -65,39 +48,16 @@ export function prepareSqliteTempTrackingSchema(
       normalizeSchemaSql(row.sql) !== normalizeSchemaSql(declared.sql)
     );
   });
-  return { sql, unexpected };
+  const existingTriggers = new Set(
+    existing.flatMap((row) =>
+      row.type === "trigger" && typeof row.name === "string" ? [row.name.toLowerCase()] : [],
+    ),
+  );
+  return { sql: createSql(existingTriggers), unexpected };
 }
 
-function prepareGenerationSchema(schema: SqliteTempGenerationSchema): {
-  sql: string;
-  objects: SqliteTempObject[];
-} {
-  const increment = `SELECT ${quoteSqliteIdentifier(schema.functionName)}();`;
-  const triggers = schema.triggers.map((trigger) => ({
-    ...trigger,
-    definition: `TRIGGER ${quoteSqliteIdentifier(trigger.name)} AFTER ${trigger.operation} ON main.${quoteSqliteIdentifier(trigger.table)} BEGIN ${increment} END`,
-  }));
-  const sql = `
-    ${triggers
-      .map(({ name, definition, enabled }) => {
-        const trigger = quoteSqliteIdentifier(name);
-        return `DROP TRIGGER IF EXISTS temp.${trigger};${enabled ? `CREATE TEMP ${definition};` : ""}`;
-      })
-      .join("\n")}
-  `;
-  return {
-    sql,
-    objects: triggers.map((trigger): SqliteTempObject => ({
-      name: trigger.name,
-      type: "trigger",
-      table: trigger.table,
-      sql: `CREATE ${trigger.definition}`,
-    })),
-  };
-}
-
-function prepareTranscriptIndexSchema(schema: SqliteTempTranscriptIndexSchema): {
-  sql: string;
+function prepareTranscriptIndexSchema(schema: SqliteTempTrackingSchema): {
+  createSql: (existingTriggers: ReadonlySet<string>) => string;
   objects: SqliteTempObject[];
 } {
   const status = quoteSqliteIdentifier(schema.statusTable);
@@ -142,21 +102,23 @@ function prepareTranscriptIndexSchema(schema: SqliteTempTranscriptIndexSchema): 
     }),
   );
   // Update before the conflict-free insert preserves an outer INSERT OR REPLACE policy.
-  const sql = `
+  const createSql = (existingTriggers: ReadonlySet<string>) => `
     CREATE TEMP TABLE IF NOT EXISTS ${statusTable};
     INSERT OR IGNORE INTO temp.${status} VALUES (1, -1, -1, 0, NULL, 0);
     UPDATE temp.${status} SET sibling_write_revision = -1;
     CREATE TEMP TABLE IF NOT EXISTS ${pendingTable};
     CREATE INDEX IF NOT EXISTS temp.${pendingIndex};
     ${triggers
-      .map(
-        ({ name, definition }) =>
-          `DROP TRIGGER IF EXISTS temp.${quoteSqliteIdentifier(name)};CREATE TEMP ${definition};`,
-      )
+      .map(({ name, definition }) => {
+        const drop = existingTriggers.has(name.toLowerCase())
+          ? `DROP TRIGGER IF EXISTS temp.${quoteSqliteIdentifier(name)};`
+          : "";
+        return `${drop}CREATE TEMP ${definition};`;
+      })
       .join("\n")}
   `;
   return {
-    sql,
+    createSql,
     objects: [
       {
         name: schema.statusTable,

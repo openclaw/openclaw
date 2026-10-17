@@ -9,7 +9,7 @@ import {
   formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import type {
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,

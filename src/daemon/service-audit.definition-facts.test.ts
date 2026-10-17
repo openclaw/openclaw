@@ -21,12 +21,13 @@ import {
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
-import { auditGatewayServiceConfig } from "./service-audit.js";
+import { auditGatewayServiceConfig as inspectGatewayServiceConfig } from "./service-audit.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   execSystemctlUserMock,
   resetServiceAuditMocks,
 } from "./test-helpers/service-audit-fixtures.js";
+import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const native = vi.hoisted(() => ({ task: vi.fn() }));
 vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
@@ -37,10 +38,23 @@ vi.mock("../process/exec.js", async (original) => ({
   ),
 }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+let runtimePinStateDir: string;
 beforeEach(() => {
   resetServiceAuditMocks();
   native.task.mockReset();
+  runtimePinStateDir = dirs.make("definition-facts-runtime-pin-");
 });
+
+async function auditGatewayServiceConfig(
+  options: Parameters<typeof inspectGatewayServiceConfig>[0],
+) {
+  const env = {
+    ...options.env,
+    OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR ?? runtimePinStateDir,
+  };
+  await seedCompletedRuntimePinMigration(env);
+  return inspectGatewayServiceConfig({ ...options, env });
+}
 
 const staleServiceEnvironment = {
   OPENCLAW_SERVICE_MARKER: "openclaw",

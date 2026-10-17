@@ -83,6 +83,29 @@ export type PluginUpdateOutcome =
       code?: string;
     });
 
+export function createOperatorManagedPluginUpdateOutcome(
+  update: OperatorManagedPluginUpdate,
+  coreVersion?: string,
+): PluginUpdateOutcome {
+  const [pluginId] = update.pluginIds;
+  const { source, rootDir, shadowedInstallOwner, shadowedInstallRecord } = update;
+  const shadowed = shadowedInstallRecord
+    ? ` It shadows the ${shadowedInstallRecord.source} install ${shadowedInstallRecord.spec ?? pluginId}${shadowedInstallRecord.installPath ? ` at ${shadowedInstallRecord.installPath}` : ""}.`
+    : "";
+  const guidance = `This copy was not updated; verify it against ${coreVersion ?? "the updated OpenClaw version"} or remove it from plugins.load.paths.`;
+  return {
+    pluginId,
+    status: "skipped",
+    code: "plugin-operator-managed",
+    source,
+    rootDir,
+    shadowedInstallOwner,
+    shadowedInstallRecord,
+    message: `Plugin "${pluginId}" is operator-managed by plugins.load.paths. ${guidance} Source: ${rootDir}.${shadowed}`,
+    guidance: [guidance],
+  };
+}
+
 export type PluginUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;

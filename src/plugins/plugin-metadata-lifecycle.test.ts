@@ -25,7 +25,11 @@ import {
   retainGatewayPluginMetadata,
 } from "./plugin-metadata-lifecycle.js";
 import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
-import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "./plugin-metadata-snapshot-required.js";
+import {
+  getCurrentPluginMetadataSnapshotRequiredRuntime,
+  listKnownProviderAuthEnvVarNamesRuntime,
+  listOpenClawPluginManifestMetadataRuntime,
+} from "./plugin-metadata-snapshot-required.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const clearMemo = vi.fn();
@@ -33,12 +37,27 @@ registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
 it("retains running metadata readers through Gateway close after package replacement", async () => {
   const readers = { ...snapshotReaderSlot };
+  const manifests = [{ pluginDir: "/fixture", manifest: { id: "fixture" }, origin: "bundled" }];
+  const envNames = ["FIXTURE_API_KEY"];
+  Object.assign(snapshotReaderSlot, {
+    listOpenClawPluginManifestMetadata: () => manifests,
+    listKnownProviderAuthEnvVarNamesCore: () => envNames,
+  });
   const cache = getPluginCache();
   const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
   const snapshot = owner.runBootstrap(() => createPluginMetadataSnapshotFixture());
   const scoped = owner.runBootstrap(() => createPluginMetadataSnapshotFixture());
   const replacementReader = () => {
     throw new TypeError("replacement installation cannot read the running scope state");
+  };
+  const replacementReaders = {
+    getCurrentPluginMetadataSnapshot: replacementReader,
+    listOpenClawPluginManifestMetadata: replacementReader,
+    listKnownProviderAuthEnvVarNamesCore: replacementReader,
+  };
+  const expectRetainedPolicyReaders = () => {
+    expect(listOpenClawPluginManifestMetadataRuntime()).toBe(manifests);
+    expect(listKnownProviderAuthEnvVarNamesRuntime()).toBe(envNames);
   };
   const closing = createDeferredCore();
   const releaseClose = createDeferredCore();
@@ -57,9 +76,10 @@ it("retains running metadata readers through Gateway close after package replace
     clearMemo.mockClear();
     clearPluginMetadataLifecycleCaches();
     // Released modules register by assigning the shared slot directly.
-    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    Object.assign(snapshotReaderSlot, replacementReaders);
     await drainGlobalSingletonLifecycleState("close");
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
+    expectRetainedPolicyReaders();
     expect(
       withPluginMetadataSnapshotScope(scoped, () =>
         getCurrentPluginMetadataSnapshotRequiredRuntime({}),
@@ -73,8 +93,9 @@ it("retains running metadata readers through Gateway close after package replace
       await releaseClose.promise;
     });
     await closing.promise;
-    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    Object.assign(snapshotReaderSlot, replacementReaders);
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
+    expectRetainedPolicyReaders();
     releaseClose.resolve();
     await finalClose;
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
@@ -82,8 +103,14 @@ it("retains running metadata readers through Gateway close after package replace
     expect(getPluginCache()).not.toBe(cache);
     await owner.close();
     expect(clearMemo).toHaveBeenCalledOnce();
-    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    Object.assign(snapshotReaderSlot, replacementReaders);
     expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
+      "replacement installation cannot read the running scope state",
+    );
+    expect(listOpenClawPluginManifestMetadataRuntime).toThrow(
+      "replacement installation cannot read the running scope state",
+    );
+    expect(listKnownProviderAuthEnvVarNamesRuntime).toThrow(
       "replacement installation cannot read the running scope state",
     );
     for (const event of ["plugin-registry", "restart"] as const) {
@@ -95,11 +122,21 @@ it("retains running metadata readers through Gateway close after package replace
     await drainGlobalSingletonLifecycleState("close");
     expect(snapshotReaderSlot.getCurrentPluginMetadataSnapshot).toBeUndefined();
     expect(snapshotReaderSlot.loadPluginMetadataSnapshot).toBeUndefined();
+    expect(snapshotReaderSlot.listOpenClawPluginManifestMetadata).toBeUndefined();
+    expect(snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore).toBeUndefined();
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBeUndefined();
   } finally {
     releaseClose.resolve();
     await (finalClose ?? owner.close());
     Object.assign(snapshotReaderSlot, readers);
+    for (const key of [
+      "listOpenClawPluginManifestMetadata",
+      "listKnownProviderAuthEnvVarNamesCore",
+    ] as const) {
+      if (!Object.hasOwn(readers, key)) {
+        delete snapshotReaderSlot[key];
+      }
+    }
   }
 });
 

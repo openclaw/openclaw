@@ -87,6 +87,38 @@ describePosix("attributed test failure in a cancelled job", () => {
     expect(f.record().priorCiAdmin.cancelledJobIds).toEqual([604]);
   });
 
+  it("rechecks the live cancelled root after a main advance", () => {
+    const f = cancelledRootCandidate();
+    const state = f.state();
+    state.graphqlMergeProjection = { mergeStateStatus: "UNKNOWN" };
+    state.restObservations = [
+      {},
+      {},
+      {},
+      { advanceMain: true },
+      {
+        priorCi: {
+          deadline: {
+            ...state.priorCi.deadline,
+            check: { ...state.priorCi.deadline.check, conclusion: "success" },
+          },
+        },
+      },
+    ];
+    f.save(state);
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("Requalifying admin admission");
+    expect(result.output).toContain("matching live GitHub Actions check-run");
+    expect(f.state().mainAdvances).toHaveLength(1);
+    expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
+    expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
+    expect(f.captures()).toEqual([]);
+    expect(() => f.record()).toThrow();
+  });
+
   it.each([
     ...Object.keys(workflowVariants),
     "missing binding",

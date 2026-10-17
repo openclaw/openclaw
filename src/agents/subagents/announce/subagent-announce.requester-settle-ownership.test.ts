@@ -38,7 +38,11 @@ const { registryRuntimeMock, deliverSpy } = vi.hoisted(() => ({
 
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
-vi.mock("../spawn/subagent-depth.js", () => ({ getSubagentDepthFromSessionStore: () => 0 }));
+// mock-isolation: This fixture controls requester depth without a session database.
+vi.mock("../spawn/subagent-depth.js", () => ({
+  getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionStoreInWorker: async () => 0,
+}));
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (params: Record<string, unknown>) => deliverSpy(params),
   loadRequesterSessionEntry: () => ({
@@ -114,9 +118,10 @@ function wakeParams() {
 }
 
 beforeEach(() => {
-  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockReturnValue(() => ({
-    sessionId: "sess-main",
-  }));
+  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockResolvedValue({
+    readCurrent: () => ({ sessionId: "sess-main" }),
+    release() {},
+  });
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       registryRuntimeMock.listSubagentRunsForRequester().find((entry) => entry.runId === runId),

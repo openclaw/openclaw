@@ -19,6 +19,7 @@ import {
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme } from "./custom-theme.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveProfileAppearanceProfileId } from "./server-prefs-profile.ts";
 import {
   loadBackgroundPreference,
@@ -141,6 +142,7 @@ function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
   }
+  // Vite injects this development script outside the application's rendered DOM.
   return Boolean(document.querySelector('script[src*="/@vite/client"]'));
 }
 
@@ -152,7 +154,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (!isViteDevPage()) {
+  if (isRemoteControlUiIngress() || !isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping
@@ -599,8 +601,7 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
-    talkCameraAutoEnable:
-      typeof next.talkCameraAutoEnable === "boolean" ? next.talkCameraAutoEnable : undefined,
+    talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.
     chatWorkspaceDock: next.chatWorkspaceDock === "bottom" ? "bottom" : undefined,

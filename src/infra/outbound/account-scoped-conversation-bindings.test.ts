@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createAccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManagerV2,
   resetAccountScopedConversationBindingsForTests,
   type AccountScopedConversationBindingManager,
 } from "./account-scoped-conversation-bindings.js";
@@ -69,7 +69,7 @@ describe("account-scoped conversation binding expiry", () => {
   afterEach(async () => {
     resetAccountScopedConversationBindingsForTests({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -77,6 +77,32 @@ describe("account-scoped conversation binding expiry", () => {
     }
     await fs.rm(testStateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it("warns once for legacy construction and leaves V2 construction silent", () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    withPluginRuntimePluginScope({ pluginId: "account-binding-factory-warning" }, () => {
+      const manager = createAccountScopedConversationBindingManagerV2<TestBindingKind>({
+        channel: "imessage",
+        cfg: baseCfg,
+        accountId: "ttl-owner",
+        stateKey,
+        toStoredTargetKind: (kind) => (kind === "subagent" ? "subagent" : "acp"),
+        toSessionBindingTargetKind: (kind) => (kind === "subagent" ? "subagent" : "session"),
+      });
+      expect(manager.accountId).toBe("ttl-owner");
+      expect(warning).not.toHaveBeenCalled();
+      createManager();
+      createManager();
+    });
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "createAccountScopedConversationBindingManager is deprecated; use createAccountScopedConversationBindingManagerV2",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+    expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
   });
 
   it.each(["agent", "plugin"] as const)(
@@ -134,7 +160,7 @@ describe("account-scoped conversation binding expiry", () => {
       }
 
       manager.stop();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       createManager({ cfg });
 
       expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
@@ -210,7 +236,7 @@ describe("account-scoped conversation binding expiry", () => {
         metadata: { label: "updated" },
       });
       manager.stop();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       createManager();
 
       expect(service.resolveByConversation(conversation)).toMatchObject({

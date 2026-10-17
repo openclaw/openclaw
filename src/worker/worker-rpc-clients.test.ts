@@ -210,6 +210,19 @@ function doneOutcome(): Extract<WorkerInferenceTerminalOutcome, { type: "done" }
 }
 
 describe("worker transcript commit client", () => {
+  it("rejects a message beyond the frame byte ceiling before submitting it", async () => {
+    const harness = connectionHarness();
+    const client = new WorkerTranscriptCommitClient(harness.connection, {
+      runEpoch: 3,
+      baseLeafId: null,
+    });
+
+    await expect(client.commit([userMessage("a".repeat(80_000))])).rejects.toThrow(
+      "worker transcript message exceeds the protocol payload limit",
+    );
+    expect(harness.requestTranscriptCommit).not.toHaveBeenCalled();
+  });
+
   it("splits semantic batches at the gateway frame byte ceiling", async () => {
     const harness = connectionHarness();
     harness.requestTranscriptCommit
@@ -471,12 +484,7 @@ describe("worker inference proxy client", () => {
     const onStreamGap = vi.fn();
     const terminal = doneOutcome();
 
-    const request = {
-      ...structuredClone(INFERENCE_REQUEST),
-      modelRef: { ...INFERENCE_REQUEST.modelRef },
-    };
-    const outcome = client.start(request, { onEvent, onStreamGap });
-    request.modelRef.model = "caller-mutation";
+    const outcome = client.start(INFERENCE_REQUEST, { onEvent, onStreamGap });
     await vi.waitFor(() => expect(harness.requestInferenceStart).toHaveBeenCalledOnce());
     expect(harness.requestInferenceStart.mock.calls[0]?.[1]).toEqual(INFERENCE_REQUEST);
     harness.emitInferenceEvent({

@@ -21,14 +21,14 @@ scheduled result, while the registry owns the nested orchestrator's continuation
 
 ## Ownership through the handoff
 
-| Phase                | Owner                                         | Required handoff                                                                                                                           |
-| -------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Executing requester  | Admitted agent turn                           | Children identify the spawning turn with `requesterTurnRunId`. Progress callbacks use this turn's live authority.                          |
-| Explicit yield       | Registry requester-yield settlement           | Persist yield intent, freeze the child run IDs, advance the batch generation, and clear the old requester-turn binding.                    |
-| Waiting for children | Registry lifecycle and `requesterSettleWake`  | Retain captured completion results and schedule the owed batch. Individual announcements must not start a competing continuation.          |
-| Settlement dispatch  | Requester-settle wake delivery                | Validate the current batch and Gateway owner, dispatch an idempotent internal continuation for a nested requester, and record its outcome. |
-| Successor admission  | Gateway task tracking and paused-run adoption | Continue the paused task under the newly admitted run ID, preserving requester lineage and its outstanding settlement obligation.          |
-| Successor completion | Registry completion delivery                  | Deliver the orchestrator's result to its original requester. Cron's existing continuation and delivery policy own the scheduled output.    |
+| Phase                | Owner                                         | Required handoff                                                                                                                               |
+| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executing requester  | Admitted agent turn                           | Children identify the spawning turn with `requesterTurnRunId`. Progress callbacks use this turn's live authority.                              |
+| Explicit yield       | Registry requester-yield settlement           | Persist yield intent, freeze the child run IDs, advance the batch generation, and clear the old requester-turn binding.                        |
+| Waiting for children | Registry lifecycle and `requesterSettleWake`  | Retain captured completion results and schedule the owed batch. Individual announcements must not start a competing continuation.              |
+| Settlement dispatch  | Requester-settle wake delivery                | Validate the current batch and Gateway owner, dispatch an internal continuation safe to repeat for a nested requester, and record its outcome. |
+| Successor admission  | Gateway task tracking and paused-run adoption | Continue the paused task under the newly admitted run ID, preserving requester lineage and its outstanding settlement obligation.              |
+| Successor completion | Registry completion delivery                  | Deliver the orchestrator's result to its original requester. Cron's existing continuation and delivery policy own the scheduled output.        |
 
 The implementation owners are `subagent-registry-requester-yield.ts`,
 `subagent-announce.requester-settle-wake.ts`, and
@@ -48,6 +48,18 @@ An explicit `waitFor: "message"` counts as continuation evidence after the
 registry accepts the wait. The attempt carries that fact into terminal reply
 presentation, so a registered message wait does not produce a missing-continuation
 warning. Refused or unregistered waits do not provide that evidence.
+
+`resolveYieldedRunContinuation` owns whether a paused run can still be continued.
+A collector without a recorded result never can, because an explicit wait reads a
+collector and no continuation resumes it. The registry sweeper settles that run
+through the existing completion owner and keeps the end time the yield recorded.
+An outcome the yield already recorded stays: a collector an earlier version left at
+`ok` settles as done with the reply its yielded turn ended on, the same result a
+collector that yields now gets. Only a run with no recorded outcome settles as an
+`error` that says why. Every other paused run stays continuable however long it has been
+paused: a declared message wait, a leaf that an earlier version left paused, and an
+orchestrator waiting on descendants are not bounded by this settlement. A kill
+claim on a paused run is never settled over; cancellation stays with the kill path.
 
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
@@ -75,6 +87,14 @@ the latter already owns its run replacement after dispatch and must not trigger
 paused-run adoption at admission. Provenance classifies the handoff; live
 Gateway admission and registry ownership still authorize it.
 
+The completion owner also selects whether the successor owes another reply.
+Gateway admission carries that choice into execution without deriving it again
+from the internal channel or private-delivery mode. Optional result processing
+can finish silently when there is no more work or new answer; an outstanding
+required final still cannot. A peer’s returned `sessions_send` result likewise
+need not generate an acknowledgment. These internal choices are not public RPC
+options, and an unrelated earlier answer never discharges a new request.
+
 An explicit yield batch must be eligible at any requester depth. The ordinary
 nested-wave exclusion remains: nested runs without a yielded batch use the
 existing descendant-settle path. The top-level cron exclusion also remains;
@@ -94,7 +114,7 @@ advance those observations only from their own acknowledged publications.
 The SQLite worker compares row-version digests before writing. A foreign change
 refreshes the affected rows through the read worker and reruns the plan, up to
 three attempts. Only acknowledged commits publish resident rows and notify readers.
-An unknown write outcome fences those rows until canonical restoration. Terminal
+An unknown write outcome fences those rows until restoration from the store. Terminal
 rows and their eligible session-state events commit together; equivalent duplicate
 terminal callbacks preserve in-flight cleanup authority. This changes no schema or
 update format.
@@ -139,6 +159,13 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
+  Visible settlement cohorts use the host-only binding when every captured
+  requester session and lifecycle revision matches the current parent. Private
+  cohorts retain their strict requester identity checks. This lets a guest's own yielded session
+  resume under its existing session-write scope without granting `operator.write`.
+  Stale, mixed-incarnation, or unbound visible history does not gain this scope
+  alternative; its existing authorized recovery path stays unchanged. Copied
+  request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary
@@ -151,13 +178,17 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   A default-delivery follow-up admitted before the pause publishes receives
   the paused row's requester, completion custody, and settlement obligation
   when the pause publishes; requester-bound follow-ups keep their own delivery.
-- **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
+- **Fixed batch ordering.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
   IDs, and yield generation.
-- **Bounded delivery.** Existing limits remain: three attempts, three ambiguous
-  transport replays, and ten stale deferrals. Active descendants do not consume
-  the stale-deferral budget. Delivery bookkeeping for executions that ended
+- **Bounded delivery.** Delivery retains three attempts and three ambiguous
+  transport replays. Active descendants resume settlement through completion
+  events, without periodic wake retries or retry-state writes. Terminal descendants
+  with unresolved delivery get one fallback timer, five minutes after the latest
+  recorded completion in the batch's descendant tree. Settlement events can release
+  the wait earlier; restart does not recharge it. The fallback delivers the finished
+  batch with an explicit notice that a descendant result remains undelivered. Delivery bookkeeping for executions that ended
   before the current batch's earliest child was created cannot block its
   continuation. Active descendants and delivery settlement overlapping that
   batch still hold the wake; historical failure records remain available.

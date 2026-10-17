@@ -15,6 +15,7 @@ import { createWorkerInferenceCancellationService } from "../worker-environments
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   captureAbortedPartial,
+  prepareChatAbortSessionSnapshot,
   persistAbortedPartials,
 } from "./chat-transcript-persistence.runtime.js";
 import {
@@ -46,27 +47,30 @@ const sessionEntryState = vi.hoisted(() => ({
   loadCalls: [] as Array<{ sessionKey: string; opts?: { agentId?: string } }>,
 }));
 
+function loadAbortSessionFixture(sessionKey: string, opts?: { agentId?: string }) {
+  sessionEntryState.loadCalls.push({ sessionKey, opts });
+  return {
+    cfg: sessionEntryState.cfg,
+    agentId: opts?.agentId ?? "main",
+    storePath: sessionEntryState.storePath,
+    entry: sessionEntryState.hasEntry
+      ? {
+          sessionId: sessionEntryState.sessionId,
+          lifecycleRevision: sessionEntryState.lifecycleRevision,
+          sessionFile: sessionEntryState.transcriptPath,
+        }
+      : undefined,
+    canonicalKey: sessionEntryState.canonicalKey,
+  };
+}
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
-    loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) => {
-      sessionEntryState.loadCalls.push({ sessionKey, opts });
-      return {
-        cfg: sessionEntryState.cfg,
-        agentId: opts?.agentId ?? "main",
-        storePath: sessionEntryState.storePath,
-        entry: sessionEntryState.hasEntry
-          ? {
-              sessionId: sessionEntryState.sessionId,
-              lifecycleRevision: sessionEntryState.lifecycleRevision,
-              sessionFile: sessionEntryState.transcriptPath,
-            }
-          : undefined,
-        canonicalKey: sessionEntryState.canonicalKey,
-      };
-    },
+    loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+      loadAbortSessionFixture(params.key, { agentId: params.agentId }),
   };
 });
 
@@ -330,9 +334,13 @@ describe("chat abort transcript persistence", () => {
       context: { logGateway: { warn } },
       snapshots: [
         captureAbortedPartial({
+          session: await prepareChatAbortSessionSnapshot({
+            cfg: sessionEntryState.cfg,
+            key: "main",
+            agentId: "main",
+          }),
           sessionKey: "main",
           sessionId,
-          agentId: "main",
           runId: "failed-abort-run",
           text: "partial that cannot be persisted",
           abortOrigin: origin,
@@ -356,9 +364,13 @@ describe("chat abort transcript persistence", () => {
         context: { logGateway: { warn: vi.fn() } },
         snapshots: [
           captureAbortedPartial({
+            session: await prepareChatAbortSessionSnapshot({
+              cfg: sessionEntryState.cfg,
+              key: "main",
+              agentId: "main",
+            }),
             sessionKey: "main",
             sessionId: `${sessionId}-stale`,
-            agentId: "main",
             runId: "stale-placement-run",
             text: "partial from the former session",
             abortOrigin: "placement-abandon",
@@ -382,9 +394,13 @@ describe("chat abort transcript persistence", () => {
       );
       sessionEntryState.lifecycleRevision = lifecycleRevision;
       const snapshot = captureAbortedPartial({
+        session: await prepareChatAbortSessionSnapshot({
+          cfg: sessionEntryState.cfg,
+          key: "main",
+          agentId: "main",
+        }),
         sessionKey: "main",
         sessionId,
-        agentId: "main",
         runId: "placement-revision",
         text: "obsolete placement partial",
         abortOrigin: "placement-abandon",
@@ -457,10 +473,14 @@ describe("chat abort transcript persistence", () => {
       context: { logGateway: { warn: vi.fn() } },
       snapshots: [
         captureAbortedPartial({
+          session: await prepareChatAbortSessionSnapshot({
+            cfg: sessionEntryState.cfg,
+            key: "main",
+            agentId: "main",
+          }),
           sessionKey: "main",
           runId: "aborted-later-run",
           sessionId,
-          agentId: "main",
           text: "Completed reply",
           abortOrigin: "rpc",
         }),
@@ -487,10 +507,14 @@ describe("chat abort transcript persistence", () => {
       context: { logGateway: { warn: vi.fn() } },
       snapshots: [
         captureAbortedPartial({
+          session: await prepareChatAbortSessionSnapshot({
+            cfg: sessionEntryState.cfg,
+            key: "main",
+            agentId: "main",
+          }),
           sessionKey: "main",
           runId: "stalled-placement-run",
           sessionId,
-          agentId: "main",
           text: "Completed reply",
           abortOrigin: "placement-abandon",
         }),

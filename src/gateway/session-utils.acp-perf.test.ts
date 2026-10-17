@@ -20,6 +20,7 @@ import type {
   OpenClawStateReadRequest,
 } from "../state/openclaw-state-read.types.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -112,8 +113,10 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
 
     const database = openOpenClawStateDatabase();
     let projection: SessionRowProjection | undefined;
-    const acpSelects = trackSqliteStatementExecutions(database.db, ["metadata"], (sql) =>
-      /^select\b.*\bacp_sessions\b/is.test(sql) ? "metadata" : null,
+    const acpSelects = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["metadata"],
+      (sql) => (/^select\b.*\bacp_sessions\b/is.test(sql) ? "metadata" : null),
     );
     try {
       const unboundKey = "agent:default:webchat:dm:unbound";
@@ -232,6 +235,8 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       });
       projection = await createSessionRowProjection({ cfg });
       await projection.ensureMaterialized();
+      await listProjectedSessions({ projection, opts: { agentId: "default", limit: 3 } });
+      await listProjectedSessions({ projection, opts: { agentId: "runtime", limit: 1 } });
       acpSelects.counts.metadata = 0;
       const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
       const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntryAsync");

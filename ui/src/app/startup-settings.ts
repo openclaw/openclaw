@@ -14,7 +14,12 @@ import {
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import { createNativeGatewayConnectAuth } from "./native-gateway-auth.ts";
-import { resolveGatewayCredentialsForUrlEdit, type UiSettings } from "./settings.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import {
+  resolveGatewayCredentialsForUrlEdit,
+  resolvePageGatewaySettings,
+  type UiSettings,
+} from "./settings.ts";
 
 type NativeControlAuth = {
   gatewayUrl?: string | null;
@@ -73,8 +78,11 @@ export function resolveApplicationStartupSettings(
   initialSettings: UiSettings,
   location: RouteLocation,
 ) {
-  let settings = initialSettings;
-  let changed = false;
+  const remoteIngress = isRemoteControlUiIngress();
+  let settings = remoteIngress
+    ? { ...resolvePageGatewaySettings(initialSettings), token: "" }
+    : initialSettings;
+  let changed = remoteIngress;
   let password: string | null = null;
   let pendingGatewayUrl: string | null = null;
   let pendingGatewayToken: string | null = null;
@@ -94,13 +102,14 @@ export function resolveApplicationStartupSettings(
   };
 
   const injectedNativeAuth =
-    typeof window === "undefined" ? undefined : window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+    remoteIngress || typeof window === "undefined"
+      ? undefined
+      : window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
   // Older Android WebViews cannot inject at document start. This public marker
   // selects native-only auth immediately; authority arrives over a main-frame port.
   // Keep the marker in the URL so a reload cannot start a browser pairing flow.
-  const nativePortGateway = new URLSearchParams(location.hash.replace(/^#/, "")).get(
-    "nativeControlAuth",
-  );
+  const nativePortGateway =
+    !remoteIngress && new URLSearchParams(location.hash.replace(/^#/, "")).get("nativeControlAuth");
   const nativeAuth =
     injectedNativeAuth ??
     (nativePortGateway ? { gatewayUrl: nativePortGateway, nativeConnectAuth: true } : undefined);
@@ -181,14 +190,16 @@ export function resolveApplicationStartupSettings(
   );
   const params = new URLSearchParams(url.search);
   const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-  const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
+  const gatewayUrlRaw = remoteIngress
+    ? null
+    : (params.get("gatewayUrl") ?? hashParams.get("gatewayUrl"));
   const nextGatewayUrl = normalizeOptionalString(gatewayUrlRaw) ?? "";
   const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== settings.gatewayUrl);
   const queryToken = params.get("token");
   const hashToken = hashParams.get("token");
   const hasTokenParam = hashToken != null || queryToken != null;
-  const token = normalizeOptionalString(hashToken ?? queryToken);
-  const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
+  const token = remoteIngress ? undefined : normalizeOptionalString(hashToken ?? queryToken);
+  const hasBootstrapTokenParam = !remoteIngress && hashParams.has("bootstrapToken");
   const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
   const bootstrapProfile = normalizeOptionalString(
     hashParams.get(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM),

@@ -81,6 +81,81 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.state`              | [State and system](/plugins/sdk-runtime/state-and-system#api-runtime-state)     |
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
 
+### Read-only session forks
+
+Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
+for background inference against an existing session. It returns
+`{ text, usage? }`; usage uses the completion fields `inputTokens`, `outputTokens`,
+`cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, and `costUsd`.
+The timeout defaults to 30 seconds.
+
+The fork uses the session's model and harness, with no model override. Codex
+inherits the conversation and tool definitions in an ephemeral thread, but denies
+local tool calls at dispatch and disables provider-hosted web search. On managed
+inference routes, it replays the parent's last prepared instructions, tool schemas,
+and input prefix, including after parent completion, with tool choice set to `none`.
+Snapshots share a 32 MiB in-memory LRU budget; evicted or oversized snapshots
+and WebSocket continuation requests fall back to native thread reconstruction
+without guaranteed cache reuse. Native reconstructed history also takes precedence when
+its prefix no longer matches the recorded request. Completed parent responses and
+subsequent fork tool-denial outcomes remain before the side question or continuation.
+While the prepared request remains in the snapshot budget,
+instructions and tool schemas stay parent-identical even on that native reconstruction path.
+Denied forks always set tool choice to `none` on managed inference requests,
+while native hosted search remains disabled. The fork has its own thread,
+session, and current model authority.
+Start a normal parent turn
+in the current runtime before requesting a fork. The native hook relay must be
+enabled and available; otherwise the request fails closed.
+The built-in `openclaw` runtime replays the parent's recorded provider request,
+followed by its completed messages and the side question, preserving its system prompt, tools, reasoning
+settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
+payload data without re-running the parent's one-shot continuation hooks.
+Completed asynchronous tool calls, their outcomes, and the final answer remain in
+conversation order.
+If a published tool call is still running when the fork starts, the built-in
+runtime includes a non-error placeholder saying its result is not available yet.
+This does not cancel the parent call or persist a result in the parent session.
+The replay uses the current prepared model's proxy and TLS policy. Session read
+authority is checked immediately before every network send, including retries.
+Native ChatGPT forks use independent connections without consuming or replacing
+the parent's continuation. Supported APIs are OpenAI Responses (including native
+ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
+fail before dispatch because their transports cannot enforce the fork's live
+request authority.
+Tool choice is set to `none` before dispatch to prevent hosted tool execution;
+local tool calls are also denied, with at most two additional inference attempts.
+On Anthropic, changing tool choice invalidates the messages cache, but preserves
+the tool and system caches. Other APIs without a supported hosted-tool prohibition
+are rejected when the recorded request contains tools.
+The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
+request-data budget and at most 1,000 sessions, until expiry or session cleanup.
+Keeping a snapshot does not retain the completed parent session or its transcript manager.
+The built-in runtime retains the prepared provider prefix instead of a second copy
+of conversation history. Forks convert only later publications and the side question;
+HTTP continuations retain the full prefix even when the parent sends only a suffix.
+Read-only forks do not acquire workspace placement authority, so a parent's
+pending placement publication does not block them. Normal parent settlement and
+usage updates preserve the fork's read authority. Session reset or deletion
+revokes even an in-flight fork before its answer can be returned.
+After a restart or without a prepared parent turn, the request fails closed:
+"Cache-parity session fork requires a parent turn prepared by this OpenClaw
+runtime. Send a normal message first." CLI runtimes are unsupported for
+`forkSession`, even when their backend can disable native tools. Ordinary `/btw`
+keeps its lightweight, tool-free context; CLI backends with native tools must
+explicitly support disabling them for side questions, while backends with no
+native tools need no additional declaration.
+
+Conversation access is required through
+`plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
+bundled plugins). The caller must also have the target session's `sessions.get`
+read access. That authority, the Gateway binding, and conversation access remain
+live through inference and return. Requests share the subagent command lane and
+the `agents.defaults.subagents.maxConcurrent` cap with `subagent.complete`, and
+are cancelled when their runtime is retired. A fork does not write a transcript,
+deliver an answer, fire agent-turn lifecycle hooks, or consume queued injections
+or steering. Missing session context and unsupported harnesses produce errors.
+
 ## Storing runtime references
 
 Synchronous storage compatibility calls retain their synchronous return contract.
@@ -98,7 +173,7 @@ releasing request resources. Released opaque-requester and synchronous lifecycle
 methods remain deprecated compatibility routes; actual use shares one warning
 budget per plugin and publication family. See
 [GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
-for the method mapping, callback ordering, and next-major removal contract.
+for the method mapping, callback ordering, and ordinary stable removal contract.
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
@@ -172,6 +247,22 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+Tool factories and provider schema normalizers keep the same tool-object API.
+The host separates their definition data from executable callbacks: schemas and
+metadata retain their identities, while execution and preparation callbacks keep
+the original receiver and the exact plugin invocation scope. Reusable descriptor
+snapshots contain no run authority or cancellation signal. A retired plugin or
+closed invocation still rejects retained callbacks, including callbacks reached
+after rebuilding a tool's hooks. Definition accessors remain lazy and scoped, so
+an unreadable schema can be quarantined without invoking the tool.
+Callable tools and Proxy-backed objects retain their admitted callable and live
+property contracts, including execution methods supplied by `get` traps.
+
+`before_tool_call` inputs and approval parameters retain detached snapshots so
+plugin mutations cannot alter caller arguments or an approved request. These
+snapshots reject shared memory in the cloned graph; properties omitted by
+structured cloning do not cross this boundary.
+
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
@@ -234,6 +325,14 @@ fields are optional in the SDK type because an API host without a managed
 instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
+
+Diagnostic subscriptions made while a managed plugin is loading, registering,
+or running belong to that instance. OpenClaw automatically unsubscribes them
+when the instance is disposed, including after a failed load or replacement.
+The unsubscribe handle still releases a subscription early and removes its
+cleanup registration. This covers `onDiagnosticEvent` and
+`onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
+as host-owned diagnostic subscriptions created on the plugin's behalf.
 
 ### Instance-bound background context
 
@@ -326,11 +425,41 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+Doctor migrations can use `withSqliteReadOnlyInspection(path, inspect)` from
+`openclaw/plugin-sdk/sqlite-runtime`. The synchronous callback borrows a read-only
+connection in one transaction snapshot. For a shared-state path already admitted
+by Doctor after backup, the maintenance scope owns the reader. Other sources use
+an artifact-preserving private copy with the existing unstable-source refusal.
+The helper owns cleanup; callbacks must not retain or close the connection.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
+
+Connection-bound backends use `bindSqliteWorkerDatabase(db, backend)` from the
+same entrypoint for scope closure and synchronous transaction settlement checks.
+The backend supplies its command implementation and optional preparation or
+scope cleanup; it never closes the borrowed database. Transaction and commit
+admission remain with the executor and the store's write operation.
+
+Worker kernels that write derived data without changing any session facts wrap
+their synchronous DML in `withSqliteDatabaseWriteScope(db, [], write)` from the
+same subpath. This preserves resident session caches while the database-wide
+write receipt still advances. Only certify the kernel's own writes; keep user
+callbacks and authority admission outside the scope. Schema changes continue to
+invalidate all scopes.
+
+Built-in engine-aware stores consume their boot-selected family through
+`getDatabaseEngineInput(family)` from
+`openclaw/plugin-sdk/database-engine-runtime`. The host resolves the shared
+PostgreSQL secret once; plugin openers and reopens use this immutable choice.
+The experimental mixed-mode configuration is described in
+[Database engines](/reference/database-engines).
+
+External stores continue using `resolveDatabaseEngineInput(config)`, which follows
+`database.engine` independently of the built-in family overrides.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
@@ -350,15 +479,37 @@ deny an ordinary read or grant effect authority. A changed token invalidates eve
 derived cache that depends on that database, including caches in sibling plugin
 instances. The helper does not observe writes by other processes.
 
+For independent data owners in one database,
+`readSqliteDatabaseScopedWriteTokenForPath(path, scope)` retains facts across
+unrelated scoped writes. The worker exports `readSqliteDatabaseScopedWriteToken`
+and `readSqliteDatabasePendingScopedWriteToken` from `sqlite-worker-runtime`;
+use the latter to attach the committed scope receipt to a transaction result.
+Each participating writer names its affected scopes with
+`withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
+all scope receipts. These tokens describe committed data, never effect authority.
+
+`readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
+write revision without SQL. PostgreSQL owners retaining a snapshot across their own
+commit capture this revision under the writer lock and accept only that commit's
+advance afterward. Another advance invalidates the snapshot, including during
+post-commit reads. Read the scope token before the final revision check.
+
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read
 the same database or do blocking work. Put same-database predicates in the paired
 worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
-missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+missing storage absent. `terminalSignal` aborts with the terminal failure reason
+after accepted publications settle. Retained consumers must stop reusing that
+store and acquire through their normal admission owner. Idle retirement and
+explicit `close()` do not abort the signal; an aborted signal never authorizes
+replaying an acknowledged or unknown-outcome write.
+The deprecated `withOpenClawAgentDatabaseRuntime` and
 `withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
-ordering, including the latter's post-integrity, pre-repair checkpoint, until
-the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.
+ordering, including the latter's post-integrity, pre-repair checkpoint, through
+2026-12-31. Removal ships in the first January 2027 stable release; see the
+[SQLite migration guide](/plugins/sdk-migration/sqlite-async#debug-proxy-capture-and-raw-sqlite).
+Awaiting those callbacks does not move SQL off-thread.
 
 Transcript assertion composition preserves prepared source checks independently
 of opaque SDK callbacks. Cold restoration can recheck those prepared components
@@ -416,6 +567,17 @@ metadata, including page globals and audio/manual-action prefixes.
 guest names, preserved identity, virtual audio input, microphone control, and
 manual actions. Existing string-based callers keep their generated source.
 
+## Browser meeting configuration
+
+Use `resolveMeetingChromeConfig` and `resolveMeetingRealtimeConfig` from
+the production-private `openclaw/plugin-sdk/meeting-config` subpath when sharing browser-meeting settings.
+This lightweight entry point parses common Chrome, audio, realtime, and provider-map
+fields without loading meeting engines or transports. Pass object records for
+each section; the adapter retains its format aliases, in-call timeout default,
+realtime instructions, and transcription-provider default. The same subpath exposes
+`buildMeetingConfigAudioCommands` for default audio command pairs; command construction
+uses the shared audio backend owner without starting it.
+
 ## Browser meeting status ownership
 
 `MeetingPlatformAdapter.createStatusCallSource` accepts an optional
@@ -431,7 +593,7 @@ retryable. Omitting the option leaves the generated status source unchanged.
 The existing `openclaw/plugin-sdk/meeting-runtime` entry point exposes optional
 participation methods on `MeetingSessionRuntime`. Supply its `participation`
 options with an SQLite plugin keyed store, current capabilities, action
-validation, and a provider executor. Providers observe canonical source identity,
+validation, and a provider executor. Providers observe resolved source identity,
 epoch, revision, and finality through `observeParticipationSource`; never accept
 these fields from model arguments. `inspectParticipationSource` returns a
 snapshot and a live guard for work that crosses asynchronous boundaries.
@@ -481,6 +643,8 @@ the adapter's final page-session and URL checks remain required.
 
 ## Worker provider allocation authority
 
+Worker runtime and enrollment grants may include `nodeBootstrap.linuxToolchainSetup`, a core-owned POSIX script that prepares a supported Node before invoking bootstrap JavaScript. Providers execute it only for Linux targets, using the same operation authority and command budget as bootstrap. It carries no credentials. macOS and Windows providers retain their image-provided Node contract.
+
 The Gateway supplies `assertCurrent()` in the options passed to worker providers'
 `provision` and `prepareProvision` methods. This required runtime callback binds
 the operation to the live environment owner and any requesting run. Invoke it
@@ -495,11 +659,33 @@ preparation record. After the attempt closes, the callback rejects retained work
 Teardown keeps its existing cleanup authority and must still settle an owned
 lease when the requesting run has ended.
 
+Project preparation can return optional `recipePreparation` diagnostics with the
+recipe source, ignored-property note, phase durations, and a failure reason plus
+an output tail of at most 16 KiB. The optional transport callback
+`recordRecipePreparation` records diagnostics before a declared recipe rejects.
+These records contain neither command definitions nor environment values.
+An optional `captureSkipped` reason means detected setup failed best effort:
+continue enrollment, but suppress checkpoint capture for that allocation,
+including later teardown. Keep these recorded facts under the same live
+provisioning authority; they do not grant new allocation or execution authority.
+
 The legacy optional parameter shape remains source-compatible until the next
 declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
+
+## Harness execution identity
+
+The harness host's closure-bound `preparedEnvironment()` returns non-secret
+execution facts. When `hostExecutionRequired` is true, use the host's
+`createToolSurfaceAsync()` execution tools rather than a native runtime shell
+environment overlay. The host captures credential selection before plugin
+handoff and binds it privately at child launch. Tool construction overrides
+cannot replace that selection. The tools retain the host's existing approvals,
+source authority, process lifecycle, and failure handling; this fact grants no
+credential export or remote delegation authority. Hosts without a managed
+selection omit the optional fact and retain native execution defaults.
 
 ## Other top-level `api` fields
 
@@ -580,6 +766,56 @@ Choice, ordered Score, and Boolean-probability batches. Retained handles reject
 after consumer retirement. See [decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for provider selection, lifecycle, failure handling, limits, and diagnostics.
 
+## Setup secret egress
+
+Worker providers can optionally implement `runSetupCommand` to run repository
+binding lifecycle commands over their owned lease transport. The host supplies
+the prepared workspace and HOME, a script factory accepting only the bounded
+remote environment, and a live attached-environment/repository authority guard.
+The provider rechecks that guard after awaits and immediately before launch.
+Returning `undefined` retains the normal node tunnel; a protected transport error
+must reject instead of falling back. Project preparation's script factory accepts
+the same bounded prepared environment. Secrets and host proxy credentials remain
+owned by the setup-egress capability below.
+
+The private official-plugin entrypoint `openclaw/plugin-sdk/secret-egress-runtime`
+exports `withSetupSecretEgress(options, run)` alongside `withConfiguredModelEgress`.
+Both use the same worker-owned, revocable job grant lifecycle. Setup options
+require a job-owned `AbortSignal` and an explicit map of environment names to
+shared-store SecretRefs:
+
+```ts
+const { withSetupSecretEgress } = await import("openclaw/plugin-sdk/secret-egress-runtime");
+await withSetupSecretEgress(
+  {
+    signal: job.signal,
+    secrets: {
+      REGISTRY_TOKEN: { source: "store", provider: "default", id: "REGISTRY_TOKEN" },
+    },
+  },
+  async ({ remoteEnv, caBundle, hostEnv, revoke }) => {
+    await bridge.run({ remoteEnv, caBundle, hostEnv, revoke });
+  },
+);
+```
+
+The host bridge must keep `hostEnv` on the credential-owning host. It contains
+authenticated upstream proxy URLs and local CA paths. Only `remoteEnv` (sealed
+sentinels) and `caBundle` (public trust contents) may cross to the remote job;
+the bridge installs remote proxy and CA settings itself. Store values and their
+allowed hosts are selected together through the shared-state read worker, and
+only selected protected secrets are registered. Missing and agent-readable
+entries fail before the callback runs.
+
+Register process termination listeners inside the callback, after the grant's
+revocation listener is installed. Abort the job signal before termination, or
+call `revoke()` synchronously first. Retained credentials stop authorizing egress
+after cancellation, explicit revocation, callback settlement, or worker failure.
+The callback must join its process and bridge cleanup before returning. The
+helper then stops the worker and removes temporary CA files; it does not manage
+remote processes itself. This capability adds no profile keys or stored-data
+migration.
+
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.
@@ -593,3 +829,17 @@ Revalidate each caller before delivering any result.
 `allowStale: false` waits for freshness; `refresh: true` replaces an older load.
 `clear()` retires pending cache publications. Cache keys must include the owning
 identity or revision; the cache never provides authorization.
+
+`createStaleWhileRevalidateCache` from `openclaw/plugin-sdk/collection-runtime`
+passes the previous successful value (or `undefined`) to its load callback,
+including explicit refreshes. Keep HTTP validators with that value so eviction,
+clear, and failed refreshes retire the representation and its validators together.
+The loader must treat the previous value as immutable.
+
+### Worker provisioning status
+
+Worker providers can call `options.reportStartStatus` during provisioning to publish
+attempt-scoped snapshot or cold-start facts. Environment status and session
+placement expose these facts as `startStatus`; the host closes the callback when
+the attempt finishes or loses authority. Report capture progress only when capture
+is claimed. These display facts do not change allocation or enrollment ownership.

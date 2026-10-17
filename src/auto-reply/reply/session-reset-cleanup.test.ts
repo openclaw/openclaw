@@ -11,6 +11,7 @@ import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -19,9 +20,14 @@ import {
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
-import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import {
+  clearSessionResetRuntimeState,
+  prepareSessionResetCleanupGuard,
+} from "./session-reset-cleanup.js";
 
 afterEach(() => {
   clearEmbeddedSessionPromptStates(["old-session"]);
@@ -29,6 +35,19 @@ afterEach(() => {
   resetDiagnosticRunActivityForTest();
   resetSystemEventsForTest();
 });
+
+const replySessionKey = "agent:main:slack:room:1";
+function clearArchived(keys = [replySessionKey, "old-session"]) {
+  clearSessionResetRuntimeState(keys, {
+    agentId: "main",
+    sessionKey: replySessionKey,
+    activeReplySessionId: "old-session",
+    assertCurrent: () => {},
+  });
+}
+function createOperation(sessionId = "old-session") {
+  return createReplyOperation({ sessionKey: replySessionKey, sessionId, resetTriggered: false });
+}
 
 describe("clearSessionResetRuntimeState", () => {
   it("refreshes prepared settings only for the archived session", async () => {
@@ -41,23 +60,19 @@ describe("clearSessionResetRuntimeState", () => {
       pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
     };
     const settingsPath = path.join(cwd, "settings.json");
+    const writeSettings = (keepRecentTokens: number) =>
+      fs.writeFile(settingsPath, JSON.stringify({ compaction: { keepRecentTokens } }));
+    const readSettings = (sessionId: string) =>
+      createPreparedEmbeddedAgentSettingsManager({
+        ...params,
+        sessionId,
+      }).getCompactionKeepRecentTokens();
     try {
-      await fs.writeFile(
-        settingsPath,
-        JSON.stringify({ compaction: { keepRecentTokens: 25_000 } }),
-      );
+      await writeSettings(25_000);
       for (const sessionId of [archivedSessionId, retainedSessionId]) {
-        expect(
-          createPreparedEmbeddedAgentSettingsManager({
-            ...params,
-            sessionId,
-          }).getCompactionKeepRecentTokens(),
-        ).toBe(25_000);
+        expect(readSettings(sessionId)).toBe(25_000);
       }
-      await fs.writeFile(
-        settingsPath,
-        JSON.stringify({ compaction: { keepRecentTokens: 35_000 } }),
-      );
+      await writeSettings(35_000);
 
       clearSessionResetRuntimeState([archivedSessionId], {
         agentId: "main",
@@ -66,18 +81,8 @@ describe("clearSessionResetRuntimeState", () => {
         assertCurrent: () => {},
       });
 
-      expect(
-        createPreparedEmbeddedAgentSettingsManager({
-          ...params,
-          sessionId: archivedSessionId,
-        }).getCompactionKeepRecentTokens(),
-      ).toBe(35_000);
-      expect(
-        createPreparedEmbeddedAgentSettingsManager({
-          ...params,
-          sessionId: retainedSessionId,
-        }).getCompactionKeepRecentTokens(),
-      ).toBe(25_000);
+      expect(readSettings(archivedSessionId)).toBe(35_000);
+      expect(readSettings(retainedSessionId)).toBe(25_000);
     } finally {
       clearPreparedEmbeddedAgentSettings([archivedSessionId, retainedSessionId]);
       await fs.rm(cwd, { recursive: true, force: true });
@@ -89,12 +94,7 @@ describe("clearSessionResetRuntimeState", () => {
     const state = original.state;
     state.toolResults.frozen.add("sent-tool-result");
 
-    clearSessionResetRuntimeState(["old-session"], {
-      agentId: "main",
-      sessionKey: "agent:main:slack:room:1",
-      activeReplySessionId: "old-session",
-      assertCurrent: () => {},
-    });
+    clearArchived(["old-session"]);
 
     using replacement = retainEmbeddedSessionPromptState("old-session");
     expect(replacement.state).not.toBe(state);
@@ -134,11 +134,7 @@ describe("clearSessionResetRuntimeState", () => {
 
   it("releases active reply work owned by the archived reset session id", () => {
     const cancel = vi.fn();
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:slack:room:1",
-      sessionId: "old-session",
-      resetTriggered: false,
-    });
+    const operation = createOperation();
     operation.attachBackend({
       kind: "embedded",
       cancel,
@@ -146,89 +142,82 @@ describe("clearSessionResetRuntimeState", () => {
     });
     operation.setPhase("running");
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      agentId: "main",
-      activeReplySessionId: "old-session",
-      sessionKey: "agent:main:slack:room:1",
-      assertCurrent: () => {},
-    });
+    clearArchived();
 
     expect(cancel).toHaveBeenCalledWith("restart");
-    expect(replyRunRegistry.isActive("agent:main:slack:room:1")).toBe(false);
-    const nextOperation = createReplyOperation({
-      sessionKey: "agent:main:slack:room:1",
-      sessionId: "new-session",
-      resetTriggered: false,
-    });
+    expect(replyRunRegistry.isActive(replySessionKey)).toBe(false);
+    const nextOperation = createOperation("new-session");
     expect(nextOperation.sessionId).toBe("new-session");
   });
 
   it("does not clear a fresh active reply under the same key when only the archived id is reset", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:slack:room:1",
-      sessionId: "new-session",
-      resetTriggered: false,
-    });
+    const operation = createOperation("new-session");
     operation.setPhase("running");
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      agentId: "main",
-      activeReplySessionId: "old-session",
-      sessionKey: "agent:main:slack:room:1",
-      assertCurrent: () => {},
-    });
+    clearArchived();
 
-    expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
+    expect(replyRunRegistry.get(replySessionKey)).toBe(operation);
   });
 
   it("does not clear a replacement admitted while the archived run is cancelling", () => {
     let replacement: ReturnType<typeof createReplyOperation> | undefined;
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:slack:room:1",
-      sessionId: "old-session",
-      resetTriggered: false,
-    });
+    const operation = createOperation();
     operation.attachBackend({
       kind: "embedded",
       cancel() {
         operation.complete();
-        replacement = createReplyOperation({
-          sessionKey: "agent:main:slack:room:1",
-          sessionId: "old-session",
-          resetTriggered: false,
-        });
+        replacement = createOperation();
         replacement.setPhase("running");
       },
       isStreaming: () => false,
     });
     operation.setPhase("running");
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      agentId: "main",
-      activeReplySessionId: "old-session",
-      sessionKey: "agent:main:slack:room:1",
-      assertCurrent: () => {},
-    });
+    clearArchived();
 
     expect(replacement).toBeDefined();
-    expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(replacement);
+    expect(replyRunRegistry.get(replySessionKey)).toBe(replacement);
   });
 
   it("leaves queued reservations for the archived id so session init can rebind them", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:slack:room:1",
-      sessionId: "old-session",
-      resetTriggered: false,
-    });
+    const operation = createOperation();
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      agentId: "main",
-      activeReplySessionId: "old-session",
-      sessionKey: "agent:main:slack:room:1",
-      assertCurrent: () => {},
-    });
+    clearArchived();
 
     expect(operation.phase).toBe("queued");
-    expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
+    expect(replyRunRegistry.get(replySessionKey)).toBe(operation);
+  });
+});
+
+it("keeps reset cleanup current through metadata writes and refuses a replacement session", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const agentId = "main";
+    const sessionKey = "agent:main:reset-cleanup";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId });
+    const scope = { agentId, sessionKey, storePath };
+    const entry = { sessionId: "before-reset", lifecycleRevision: "original", updatedAt: 1 };
+    await replaceSessionEntry(scope, entry);
+    const cleanup = await prepareSessionResetCleanupGuard({ ...scope, expectedSession: entry });
+    try {
+      await replaceSessionEntry(scope, { ...entry, updatedAt: 2, label: "Renamed" });
+      expect(() => cleanup.assertCurrent()).not.toThrow();
+      await replaceSessionEntry(scope, {
+        sessionId: "replacement",
+        lifecycleRevision: "replacement",
+        updatedAt: 3,
+      });
+      enqueueSystemEvent("replacement work", withSystemEventOwner({ sessionKey }, agentId));
+      expect(() =>
+        clearSessionResetRuntimeState([sessionKey, entry.sessionId], {
+          agentId,
+          sessionKey,
+          activeReplySessionId: entry.sessionId,
+          assertCurrent: cleanup.assertCurrent,
+        }),
+      ).toThrow("session changed before cleanup");
+      expect(peekSystemEvents(sessionKey)).toEqual(["replacement work"]);
+    } finally {
+      cleanup.release();
+    }
   });
 });

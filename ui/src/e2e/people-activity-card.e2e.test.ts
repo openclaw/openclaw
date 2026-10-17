@@ -111,7 +111,7 @@ async function expectMultilineTitle(title: Locator) {
 }
 
 async function selectOnlineView(page: Page, touch = false) {
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Online", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
   if (touch) {
     await online.tap();
   } else {
@@ -134,12 +134,12 @@ suite.define(() => {
   it("reports native browser interaction but not automatic reconnection", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
+      await page.clock.install();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
       await gateway.waitForRequest("presence.activity");
       const initial = await gateway.getRequests("presence.activity");
       expect(initial).toHaveLength(1);
       expect(initial[0]?.params).toEqual({});
-      await page.clock.install();
       await page.clock.fastForward(31_000);
       await page.keyboard.press("Shift");
       await expect

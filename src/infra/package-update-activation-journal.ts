@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { sql } from "kysely";
 import { z } from "zod";
+import { formatCliCommand } from "../cli/command-format.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
@@ -131,6 +132,23 @@ function openJournal(anchor: string, settlementOnly: boolean) {
     descriptor.parentIdentity === parentIdentity &&
     descriptor.journalParentIdentity === journalParentIdentity &&
     descriptor.journalIdentity === journalIdentity;
+  const installationMismatchMessage = (descriptor: PackageActivationDescriptor) => {
+    const bindings: [string, string, string][] = [
+      ["parent", descriptor.parentIdentity, parentIdentity],
+      ["control dir", descriptor.journalParentIdentity, journalParentIdentity],
+      ["journal", descriptor.journalIdentity, journalIdentity],
+    ];
+    const changes = bindings.flatMap(([name, recorded, current]) => {
+      if (recorded === current) {
+        return [];
+      }
+      const deviceOnly = recorded.split(":")[1] === current.split(":")[1];
+      return [
+        `${name} (recorded ${recorded}; current ${current}${deviceOnly ? "; device number changed only" : ""})`,
+      ];
+    });
+    return `Package publication journal does not match its installation${changes.length ? `: ${changes.join("; ")}` : ""}. Run ${formatCliCommand("openclaw update repair")}.`;
+  };
   const inspectRemount = (descriptor: PackageActivationDescriptor) => {
     const historicalDevices = new Map<string, string>();
     const currentDevices = new Map<string, string>();
@@ -200,7 +218,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         descriptor.authority.installKey !== completedInstallKey) ||
       new Set(descriptor.launchers.map((entry) => entry.name)).size !== descriptor.launchers.length
     ) {
-      throw new Error("Package publication journal does not match its installation");
+      throw new Error(installationMismatchMessage(descriptor));
     }
     const expectedTransfers = new Map<string, string>([
       ["anchor", descriptor.anchorIdentity],
@@ -249,7 +267,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         !allowSettlementInspection ||
         !["prepared", "publishing", "publication-complete", "superseded"].includes(record.phase)
       ) {
-        throw new Error("Package publication journal does not match its installation");
+        throw new Error(installationMismatchMessage(descriptor));
       }
       inspectRemount(descriptor);
     }

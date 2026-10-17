@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { resolveRawAssistantAnswerText } from "../shared/assistant-answer-text.js";
+import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import {
@@ -17,7 +19,7 @@ registerAgentSessionLoopTestLifecycle();
 describe("completed assistant delivery snapshot", () => {
   it.each([
     {
-      name: "speech facts alongside a silent text reply",
+      name: "speech facts alongside a literal silence token",
       source: "[[tts:text]]Do not speak.[[/tts:text]]NO_REPLY",
       text: "NO_REPLY",
       facts: { tts: { tagged: true, text: "Do not speak." } },
@@ -83,15 +85,19 @@ describe("completed assistant delivery snapshot", () => {
       expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
       expect.soft(rawCompletion?.content).toEqual(contentFor(sourceParts));
       expect.soft(rawCompletion?.openclawDelivery).toBeUndefined();
-      expect.soft(captured.content).toEqual(content);
+      expect.soft(captured.content).toEqual(contentFor(sourceParts));
       expect.soft(captured.openclawDelivery).toEqual(scenario.facts);
+      expect(
+        prepareAgentRunTerminalReply({ rawText: resolveRawAssistantAnswerText(captured) })
+          .terminalReply.disposition,
+      ).toBe("visible");
       expect.soft(persisted).toMatchObject({
         type: "message",
         message: { content, ...(scenario.facts ? { openclawDelivery: scenario.facts } : {}) },
       });
       expect.soft(payloads).toHaveLength(1);
       expect.soft(payloads[0]).toMatchObject({
-        text: scenario.text === "NO_REPLY" ? undefined : scenario.text || undefined,
+        text: scenario.text || undefined,
         ...scenario.payload,
       });
       expect

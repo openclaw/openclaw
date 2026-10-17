@@ -12,7 +12,7 @@ import {
   TUI_KEYBINDINGS,
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { getAgentDir } from "../config.js";
 
@@ -156,7 +156,7 @@ function parseKeybindingsConfig(
     throw createInvalidConfigError(
       configPath,
       `Retired keybinding names: ${retired.join("; ")}. ` +
-        "Preserve the original file and replace the retired names, keeping existing canonical bindings when both names occur. " +
+        "Preserve the original file and replace the retired names, keeping bindings that already use the current names when both names occur. " +
         "OpenClaw 2026.9.7 retains the former keybinding reader for a staged upgrade. " +
         "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
       { recovery: "manual" },
@@ -166,7 +166,7 @@ function parseKeybindingsConfig(
   for (const [key, binding] of Object.entries(rawConfig)) {
     if (typeof binding === "string") {
       config.set(key, binding as KeyId);
-    } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
+    } else if (isStringArray(binding)) {
       config.set(key, binding as KeyId[]);
     }
   }

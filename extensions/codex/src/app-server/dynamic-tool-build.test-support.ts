@@ -16,6 +16,8 @@ import type { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexTestModel } from "./test-support.js";
 
+export { createCodexRuntimePlanFixture } from "./test-support.js";
+
 const hoisted = vi.hoisted(() => ({
   normalizeAgentRuntimeTools: vi.fn(),
   resolveWebSearchToolPolicy: vi.fn(),
@@ -82,27 +84,6 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
   } as EmbeddedRunAttemptParams;
 }
 
-export function createCodexRuntimePlanFixture(): NonNullable<
-  EmbeddedRunAttemptParams["runtimePlan"]
-> {
-  return {
-    auth: {},
-    observability: {
-      resolvedRef: "codex/gpt-5.4-codex",
-      provider: "codex",
-      modelId: "gpt-5.4-codex",
-      harnessId: "codex",
-    },
-    prompt: {
-      resolveSystemPromptContribution: () => undefined,
-    },
-    tools: {
-      normalize: (tools: unknown[]) => tools,
-      logDiagnostics: () => undefined,
-    },
-  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
-}
-
 export async function buildDynamicToolsForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
@@ -112,6 +93,8 @@ export async function buildDynamicToolsForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
+  const config = params.config ?? {};
+  setRuntimeConfigSnapshot(config, config);
   return buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,

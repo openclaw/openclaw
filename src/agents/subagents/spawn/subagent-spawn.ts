@@ -75,7 +75,6 @@ export async function spawnSubagentDirect(
     assertDelegationCurrent?.();
   });
   const promptedAt = Date.now();
-  const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
@@ -97,7 +96,6 @@ export async function spawnSubagentDirect(
     contextMode,
     requesterInternalKey,
     ownership,
-    requesterEntry,
     requesterAgentId,
     targetAgentId,
     swarmConfig,
@@ -147,13 +145,13 @@ export async function spawnSubagentDirect(
       preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
     const childPlan = await resolveSubagentChildPlan({
-      request: params,
+      request: { ...params, context: contextMode },
       ctx: { ...ctx, assertActive },
       cfg,
       requesterInternalKey,
       requesterAgentId,
       targetAgentId,
-      requesterEntry,
+      requesterEntry: requestResolution.resolved.requesterEntry,
       sandboxMode,
       swarmEnabled: swarmConfig.enabled,
       requesterSandboxed: ctx.sandboxed,
@@ -176,7 +174,6 @@ export async function spawnSubagentDirect(
       resolvedModelMetadata,
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
-    const { resolvedModel, thinkingOverride } = plan;
     const sessionError = (error: string): SpawnSubagentResult => ({
       status: "error",
       error,
@@ -192,6 +189,7 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         incognito,
         requesterInternalKey,
+        parentTarget: requestResolution.resolved.requesterTarget,
         senderIsOwner: ctx.senderIsOwner,
         expectedParentSessionId: ctx.expectedParentSessionId,
         creationPolicy,
@@ -209,6 +207,7 @@ export async function spawnSubagentDirect(
         swarmGroupId,
         collect: params.collect === true,
         outputSchema: params.outputSchema,
+        firstAdmission: childPlan.resolved.firstAdmission,
       }),
     );
     if (initialSession.status === "error") {
@@ -309,7 +308,7 @@ export async function spawnSubagentDirect(
       completionTarget: params.completionTarget,
       soleCollectorChild: soleImplicitMember,
       spawnMode,
-      task,
+      task: params.task,
       requesterSessionKey: ctx.agentSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
@@ -365,7 +364,6 @@ export async function spawnSubagentDirect(
         childIdem,
         outputSchema: params.outputSchema,
         childSystemPrompt,
-        thinkingOverride,
         runTimeoutSeconds,
         lightContext: params.lightContext === true,
         requesterOrigin,
@@ -422,6 +420,7 @@ export async function spawnSubagentDirect(
                 sessionId: childEntry.sessionId,
                 lifecycleRevision: childEntry.lifecycleRevision,
                 runId: childIdem,
+                freshChild: initialSession.freshChild,
               }
             : undefined,
         ),
@@ -466,9 +465,9 @@ export async function spawnSubagentDirect(
         canRetireReservation = scope.canRetireReservation;
       },
       async initialize() {
-        const result =
+        const preparation =
           params.lightContext && preparedSpawnContext.mode === "isolated"
-            ? ({ status: "ok", preparation: undefined } as const)
+            ? undefined
             : await runWithAgentToolSourceExecutionScope(assertActive, () =>
                 prepareContextEngineSubagentSpawn({
                   assertActive,
@@ -479,11 +478,8 @@ export async function spawnSubagentDirect(
                   runTimeoutSeconds,
                 }),
               );
-        if (result.status === "error") {
-          throw new Error(result.error);
-        }
-        contextEnginePreparation = result.preparation;
-        preparationHold.prepared(result.preparation, isCleanupCurrent);
+        contextEnginePreparation = preparation;
+        preparationHold.prepared(preparation, isCleanupCurrent);
         return { contextEnginePreparation };
       },
       async dispatchTurn() {
@@ -513,7 +509,6 @@ export async function spawnSubagentDirect(
             isCleanupCurrent,
             isAbortCurrent,
             cleanupOwner,
-            retainAdmission: params.collect ? undefined : admissionReservation?.retain,
           });
         }
         if (!isCleanupCurrent()) {
@@ -561,12 +556,12 @@ export async function spawnSubagentDirect(
           requesterOrigin,
           progressOrigin,
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
-          task,
+          task: params.task,
           taskName,
           requesterAgentId,
           cleanup,
           label: label || undefined,
-          model: resolvedModel,
+          model: plan.resolvedModel,
           agentDir: targetAgentDir,
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,

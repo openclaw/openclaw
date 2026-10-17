@@ -1,5 +1,6 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   resolveCommandAuthorization,
   resolveCommandAuthorizationAsync,
@@ -92,9 +93,19 @@ describe("plugin-sdk/command-auth-native", () => {
       cfg: { commands: { ownerAllowFrom: ["owner"] } },
       commandAuthorized: true,
     };
-    const actual = resolveCommandAuthorization(params);
+    using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const actual = withPluginRuntimePluginScope({ pluginId: "command-auth-compat-proof" }, () => {
+      resolveCommandAuthorization(params);
+      return resolveCommandAuthorization(params);
+    });
     expect(await resolveCommandAuthorizationAsync(params)).toStrictEqual(expected);
     expect(actual).toStrictEqual(expected);
     expect(new Set(Reflect.ownKeys(actual))).toEqual(new Set(Reflect.ownKeys(expected)));
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "resolveCommandAuthorization is deprecated; use resolveCommandAuthorizationAsync",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
   });
 });
