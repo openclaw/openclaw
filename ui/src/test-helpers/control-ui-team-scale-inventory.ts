@@ -182,26 +182,32 @@ export function createTeamScaleCronInventory({
     );
     const offset = typeof params.offset === "number" ? params.offset : 0;
     const limit = typeof params.limit === "number" ? params.limit : 50;
-    const jobs = rows.slice(offset, offset + limit).map((job): CronJob | CronCompactJob =>
-      params.compact === true
-        ? {
-            id: job.id,
-            name: job.name,
-            agentId: job.agentId,
-            enabled: job.enabled,
-            updatedAtMs: job.updatedAtMs,
-            scheduleKind: job.schedule.kind,
-            ...(job.schedule.kind === "every" ? { schedule: job.schedule } : {}),
-            nextRunAt: new Date(job.state.nextRunAtMs!).toISOString(),
-            nextRunAtMs: job.state.nextRunAtMs!,
-            lastRunAt: new Date(job.state.lastRunAtMs!).toISOString(),
-            lastRunAtMs: job.state.lastRunAtMs!,
-            lastRunStatus: job.state.lastRunStatus!,
-            lastRunError: job.state.lastError ?? null,
-            ...(job.state.runningAtMs !== undefined ? { runningAtMs: job.state.runningAtMs } : {}),
-          }
-        : job,
-    );
+    const jobs = rows.slice(offset, offset + limit).map((job): CronJob | CronCompactJob => {
+      if (params.compact !== true) {
+        return job;
+      }
+      const compact: CronCompactJob = {
+        id: job.id,
+        name: job.name,
+        agentId: job.agentId,
+        enabled: job.enabled,
+        updatedAtMs: job.updatedAtMs,
+        scheduleKind: job.schedule.kind,
+        nextRunAt: new Date(job.state.nextRunAtMs!).toISOString(),
+        nextRunAtMs: job.state.nextRunAtMs!,
+        lastRunAt: new Date(job.state.lastRunAtMs!).toISOString(),
+        lastRunAtMs: job.state.lastRunAtMs!,
+        lastRunStatus: job.state.lastRunStatus!,
+        lastRunError: job.state.lastError ?? null,
+      };
+      if (job.schedule.kind === "every") {
+        compact.schedule = job.schedule;
+      }
+      if (job.state.runningAtMs !== undefined) {
+        compact.runningAtMs = job.state.runningAtMs;
+      }
+      return compact;
+    });
     const hasMore = offset + jobs.length < rows.length;
     return {
       jobs,
