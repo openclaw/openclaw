@@ -50,9 +50,12 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
-import type { SentMessageCache } from "./echo-cache.js";
+import {
+  hasIMessageEchoMatch,
+  hasReflectedReplyEcho,
+  type IMessageEchoCache,
+} from "./echo-scope.js";
 import { resolveIMessageInboundMentionPolicy } from "./mention-policy.js";
-import { hasReflectedReplyEcho } from "./echo-scope.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -69,10 +72,6 @@ type IMessageReplyContext = {
   id?: string;
   body: string;
   sender?: string;
-};
-
-type IMessageEchoCache = {
-  has: (...args: Parameters<SentMessageCache["has"]>) => boolean | Promise<boolean>;
 };
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
@@ -215,49 +214,6 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
   } else if (isAmbiguousSelfThread) {
     params.selfChatCache?.remember(lookup);
   }
-}
-
-async function hasIMessageEchoMatch(params: {
-  echoCache: IMessageEchoCache;
-  scope: readonly string[];
-  text?: string;
-  media?: MediaPlaceholderTextFact;
-  messageIds: string[];
-  skipIdShortCircuit?: boolean;
-  includePendingText?: boolean;
-}): Promise<boolean> {
-  // Outbound sends persist echo scopes keyed by whichever target shape was
-  // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
-  // messages from chat.db typically carry chat_id + chat_guid + chat_identifier
-  // for groups and just sender for DMs, so the same conversation can be
-  // echo-cached under one shape and re-encountered under another. Probe every
-  // candidate scope so a chat_guid-keyed send isn't surfaced back to the agent
-  // as a fresh inbound when chat.db only annotates it with chat_id (or
-  // vice-versa).
-  for (const scope of params.scope) {
-    for (const messageId of params.messageIds) {
-      if (await params.echoCache.has(scope, { messageId })) {
-        return true;
-      }
-    }
-    const fallbackMessageId = params.messageIds[0];
-    if (!params.text && !params.media && !fallbackMessageId) {
-      continue;
-    }
-    if (
-      await params.echoCache.has(
-        scope,
-        { text: params.text, media: params.media, messageId: fallbackMessageId },
-        {
-          skipIdShortCircuit: params.skipIdShortCircuit,
-          includePendingText: params.includePendingText,
-        },
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 type IMessageInboundDispatchDecision = {
