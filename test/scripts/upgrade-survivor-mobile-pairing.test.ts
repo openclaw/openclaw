@@ -28,6 +28,14 @@ import {
 
 const CLIENT_PATH = "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
 const RUNNER_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
+const cleanPairing = {
+  pendingDevicePairingCount: 0,
+  pendingNodePairingCount: 0,
+  pairedDevicePresent: true,
+  pairedNodePresent: true,
+  nodeSurfaceReapprovalRequired: false,
+  nodeSurfaceCommandAdditions: [],
+};
 
 afterEach(() => {
   vi.useRealTimers();
@@ -35,6 +43,21 @@ afterEach(() => {
 
 function tokenHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+const operatorScopes = [
+  "operator.approvals",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+];
+function credentialsFor(nodeToken: string, operatorToken: string, url = "ws://127.0.0.1:18789") {
+  return extractBootstrapCredentials({
+    url,
+    client: MOBILE_PAIRING_CLIENT,
+    identity: createMobilePairingIdentity(),
+    hello: bootstrapHello(nodeToken, operatorToken),
+  });
 }
 
 function bootstrapHello(nodeToken: string, operatorToken: string) {
@@ -47,12 +70,7 @@ function bootstrapHello(nodeToken: string, operatorToken: string) {
       deviceTokens: [
         {
           role: "operator",
-          scopes: [
-            "operator.approvals",
-            "operator.read",
-            "operator.talk.secrets",
-            "operator.write",
-          ],
+          scopes: operatorScopes,
           deviceToken: operatorToken,
           issuedAtMs: 1,
         },
@@ -149,44 +167,25 @@ describe("upgrade survivor mobile pairing client", () => {
   it("uses shipped protocol ranges, challenge time, instance id, and auth.token", () => {
     const identity = createMobilePairingIdentity();
     const challengePayload = { nonce: " nonce-1 ", ts: 1_700_000_000_001 };
+    const common = { challengePayload, client: MOBILE_PAIRING_CLIENT, identity };
     const nodeRequest = buildConnectRequest({
+      ...common,
       id: "connect-1",
-      challengePayload,
-      client: MOBILE_PAIRING_CLIENT,
       mode: "node",
       role: "node",
       scopes: [],
       auth: { token: "node-token" },
-      identity,
     });
     const operatorRequest = buildConnectRequest({
+      ...common,
       id: "connect-2",
-      challengePayload,
-      client: MOBILE_PAIRING_CLIENT,
       mode: "ui",
       role: "operator",
       scopes: ["operator.read"],
       auth: { token: "operator-token" },
-      identity,
     });
-    const nodeParams = nodeRequest.params as {
-      minProtocol: number;
-      maxProtocol: number;
-      client: Record<string, string>;
-      caps: string[];
-      commands: string[];
-      permissions: Record<string, boolean>;
-      locale: string;
-      userAgent: string;
-      auth: Record<string, string>;
-      device: { nonce: string; signature: string; signedAt: number };
-    };
-    const operatorParams = operatorRequest.params as {
-      minProtocol: number;
-      maxProtocol: number;
-      caps: string[];
-      auth: Record<string, string>;
-    };
+    const nodeParams = nodeRequest.params as { device: { signature: string } };
+    const operatorParams = operatorRequest.params;
     const payload = buildDeviceAuthCompatibilityPayloadV2({
       deviceId: identity.deviceId,
       clientId: MOBILE_PAIRING_CLIENT.id,
@@ -222,8 +221,8 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(MOBILE_PAIRING_OPERATOR_CAPS).toEqual(["inline-widgets"]);
     expect(operatorParams).not.toHaveProperty("commands");
     expect(operatorParams).not.toHaveProperty("permissions");
-    expect(nodeParams.auth).not.toHaveProperty("deviceToken");
-    expect(operatorParams.auth).not.toHaveProperty("deviceToken");
+    expect(nodeParams).not.toHaveProperty("auth.deviceToken");
+    expect(operatorParams).not.toHaveProperty("auth.deviceToken");
     expect(
       verify(
         null,
@@ -260,14 +259,8 @@ describe("upgrade survivor mobile pairing client", () => {
         bootstrapToken: "bootstrap-token-secret",
       }),
     ).toString("base64url");
-    const identity = createMobilePairingIdentity();
     const bootstrap = parseQrBootstrapJson({ setupCode });
-    const credentials = extractBootstrapCredentials({
-      url: bootstrap.url,
-      client: MOBILE_PAIRING_CLIENT,
-      identity,
-      hello: bootstrapHello(nodeToken, operatorToken),
-    });
+    const credentials = credentialsFor(nodeToken, operatorToken, bootstrap.url);
 
     expect(bootstrap).toEqual({
       url: "ws://127.0.0.1:18789",
@@ -294,87 +287,38 @@ describe("upgrade survivor mobile pairing client", () => {
       ...pairedNode,
       commands: ["watch.status", "camera.snap", "watch.notify"],
     };
-    expect(
+    const audit = (pending: unknown[], expectKnownNodeSurfaceUpgrade = true) =>
       validatePairingAudit({
         devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-        nodePairing: { pending: [], paired: [pairedNode] },
+        nodePairing: { pending, paired: [pairedNode] },
         deviceId: "device-1",
-      }),
-    ).toEqual({
-      pendingDevicePairingCount: 0,
-      pendingNodePairingCount: 0,
-      pairedDevicePresent: true,
-      pairedNodePresent: true,
-      nodeSurfaceReapprovalRequired: false,
-      nodeSurfaceCommandAdditions: [],
-    });
-    expect(
-      validatePairingAudit({
-        devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-        nodePairing: { pending: [pendingNode], paired: [pairedNode] },
-        deviceId: "device-1",
-        expectKnownNodeSurfaceUpgrade: true,
-      }),
-    ).toEqual({
-      pendingDevicePairingCount: 0,
+        expectKnownNodeSurfaceUpgrade,
+      });
+    expect(audit([], false)).toEqual(cleanPairing);
+    expect(audit([pendingNode])).toEqual({
+      ...cleanPairing,
       pendingNodePairingCount: 1,
-      pairedDevicePresent: true,
-      pairedNodePresent: true,
       nodeSurfaceReapprovalRequired: true,
       nodeSurfaceCommandAdditions: ["watch.notify", "watch.status"],
     });
-    expect(() =>
-      validatePairingAudit({
-        devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-        nodePairing: { pending: [pendingNode], paired: [pairedNode] },
-        deviceId: "device-1",
-      }),
-    ).toThrow(/unexpected pending request/);
+    expect(() => audit([pendingNode], false)).toThrow(/unexpected pending request/);
     for (const invalidPending of [
       { ...pendingNode, nodeId: "device-2" },
       { ...pendingNode, commands: ["camera.snap", "watch.status"] },
       { ...pendingNode, caps: ["camera", "microphone"] },
       { ...pendingNode, permissions: { camera: true, screenRecording: true } },
     ]) {
-      expect(() =>
-        validatePairingAudit({
-          devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-          nodePairing: { pending: [invalidPending], paired: [pairedNode] },
-          deviceId: "device-1",
-          expectKnownNodeSurfaceUpgrade: true,
-        }),
-      ).toThrow();
+      expect(() => audit([invalidPending])).toThrow();
     }
     for (const narrowedPending of [
       { ...pendingNode, commands: ["watch.notify", "watch.status"] },
       { ...pendingNode, caps: [] },
       { ...pendingNode, permissions: { camera: false } },
     ]) {
-      expect(() =>
-        validatePairingAudit({
-          devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-          nodePairing: { pending: [narrowedPending], paired: [pairedNode] },
-          deviceId: "device-1",
-          expectKnownNodeSurfaceUpgrade: true,
-        }),
-      ).not.toThrow();
+      expect(() => audit([narrowedPending])).not.toThrow();
     }
-    expect(() =>
-      validatePairingAudit({
-        devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-        nodePairing: { pending: [pendingNode, pendingNode], paired: [pairedNode] },
-        deviceId: "device-1",
-        expectKnownNodeSurfaceUpgrade: true,
-      }),
-    ).toThrow(/unexpected pending request/);
-    expect(() =>
-      validatePairingAudit({
-        devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-        nodePairing: { pending: [], paired: [pairedNode] },
-        deviceId: "device-1",
-        expectKnownNodeSurfaceUpgrade: true,
-      }),
-    ).toThrow(/omitted the expected command-surface reapproval/);
+    expect(() => audit([pendingNode, pendingNode])).toThrow(/unexpected pending request/);
+    expect(() => audit([])).toThrow(/omitted the expected command-surface reapproval/);
   });
 
   it("completes legacy baseline node pairing only for the bootstrapped identity", async () => {
@@ -394,40 +338,22 @@ describe("upgrade survivor mobile pairing client", () => {
     });
     expect(approvalRequest.params).not.toHaveProperty("device");
 
-    expect(
-      inspectBaselineNodePairing(
-        {
-          pending: [{ requestId: "request-1", nodeId: "device-1" }],
-          paired: [],
-        },
-        "device-1",
-      ),
-    ).toEqual({ pendingRequestId: "request-1", paired: false });
-    expect(
-      inspectBaselineNodePairing(
-        {
-          pending: [],
-          paired: [{ nodeId: "device-1" }],
-        },
-        "device-1",
-      ),
-    ).toEqual({ pendingRequestId: null, paired: true });
-    expect(() =>
-      inspectBaselineNodePairing(
-        {
-          pending: [{ requestId: "request-other", nodeId: "device-2" }],
-          paired: [],
-        },
-        "device-1",
-      ),
-    ).toThrow(/unexpected pending request/);
-
-    const observed: string[] = [];
     const states = [
       { pending: [], paired: [] },
       { pending: [{ requestId: "request-1", nodeId: "device-1" }], paired: [] },
       { pending: [], paired: [{ nodeId: "device-1" }] },
     ];
+    const inspect = (state: Parameters<typeof inspectBaselineNodePairing>[0]) =>
+      inspectBaselineNodePairing(state, "device-1");
+    expect(inspect(states[1])).toEqual({ pendingRequestId: "request-1", paired: false });
+    expect(inspect(states[2])).toEqual({ pendingRequestId: null, paired: true });
+    expect(() =>
+      inspect({
+        pending: [{ requestId: "request-other", nodeId: "device-2" }],
+        paired: [],
+      }),
+    ).toThrow(/unexpected pending request/);
+    const observed: string[] = [];
     await approveBaselineNodePairing({
       deviceId: "device-1",
       listPairings: async () => {
@@ -447,12 +373,7 @@ describe("upgrade survivor mobile pairing client", () => {
   it("emits only redacted reconnect evidence", () => {
     const nodeToken = "node-token-must-not-leak";
     const operatorToken = "operator-token-must-not-leak";
-    const credentials = extractBootstrapCredentials({
-      url: "ws://127.0.0.1:18789",
-      client: MOBILE_PAIRING_CLIENT,
-      identity: createMobilePairingIdentity(),
-      hello: bootstrapHello(nodeToken, operatorToken),
-    });
+    const credentials = credentialsFor(nodeToken, operatorToken);
     const node = persistHelloCredential({
       credentials,
       role: "node",
@@ -479,14 +400,7 @@ describe("upgrade survivor mobile pairing client", () => {
         credentials,
         node,
         operator,
-        pairing: {
-          pendingDevicePairingCount: 0,
-          pendingNodePairingCount: 0,
-          pairedDevicePresent: true,
-          pairedNodePresent: true,
-          nodeSurfaceReapprovalRequired: false,
-          nodeSurfaceCommandAdditions: [],
-        },
+        pairing: cleanPairing,
         expectKnownNodeSurfaceUpgrade: false,
       }),
     );
@@ -497,16 +411,11 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(serialized).not.toContain(credentials.identity.privateKeyPem);
     expect(serialized).not.toContain(credentials.client.instanceId);
     expect(JSON.parse(serialized)).toMatchObject({
+      ...cleanPairing,
       phase: "candidate-restart",
       ok: true,
       connectedDevicePresent: true,
       pendingPairingCount: 0,
-      pendingDevicePairingCount: 0,
-      pendingNodePairingCount: 0,
-      pairedDevicePresent: true,
-      pairedNodePresent: true,
-      nodeSurfaceReapprovalRequired: false,
-      nodeSurfaceCommandAdditions: [],
       nodeSurfaceReapprovalExpected: false,
       missingPasswordReason: true,
       missingPasswordClose1008: true,

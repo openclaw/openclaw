@@ -10,6 +10,9 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const policyScript = "scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs";
+const run = (command: string, args: string[], env: NodeJS.ProcessEnv = {}) =>
+  spawnSync(command, args, { encoding: "utf8", env: { ...process.env, ...env } });
 
 const hooks = { enabled: true, path: "/survivor-hooks", token: "synthetic-survivor-hook-token" };
 const specimen = { hooks, plugins: { slots: { memory: "memory-core" } } };
@@ -86,26 +89,13 @@ if (args[0] === "config" && args[1] === "set") {
       { mode: 0o755 },
     );
     symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", join(prefix, "bin/openclaw"));
-    const result = spawnSync(
-      process.execPath,
-      [
-        "scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs",
-        "seed",
-        source,
-        "2026.9.2",
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${join(prefix, "bin")}${delimiter}${process.env.PATH ?? ""}`,
-          npm_config_prefix: prefix,
-          OPENCLAW_STATE_DIR: root,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
-        },
-      },
-    );
+    const result = run(process.execPath, [policyScript, "seed", source, "2026.9.2"], {
+      PATH: `${join(prefix, "bin")}${delimiter}${process.env.PATH ?? ""}`,
+      npm_config_prefix: prefix,
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+    });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const authored = JSON.parse(readFileSync(configPath, "utf8"));
     expect(authored.models.providers.survivor).toEqual(provider);
@@ -120,7 +110,7 @@ if (args[0] === "config" && args[1] === "set") {
     mkdirSync(artifacts);
     mkdirSync(prefix);
     writeFileSync(join(artifacts, "legacy-operator-webhooks.json"), '{"seeded":true}');
-    const result = spawnSync(
+    const result = run(
       "bash",
       [
         "-euo",
@@ -163,13 +153,9 @@ printf 'main-preserved\\n'
         prefix,
       ],
       {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          DISCORD_BOT_TOKEN: "synthetic-discord-token",
-          GATEWAY_AUTH_TOKEN_REF: "synthetic-gateway-hook-token",
-          TELEGRAM_BOT_TOKEN: "synthetic-telegram-token",
-        },
+        DISCORD_BOT_TOKEN: "synthetic-discord-token",
+        GATEWAY_AUTH_TOKEN_REF: "synthetic-gateway-hook-token",
+        TELEGRAM_BOT_TOKEN: "synthetic-telegram-token",
       },
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -181,16 +167,12 @@ printf 'main-preserved\\n'
   it.each(["2026.9.3", "2026.9.4"])(
     "leaves the %s historical migration cell with its existing owner",
     (baselineVersion) => {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          'set -euo pipefail; source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh; ARTIFACT_ROOT=unused; RUNTIME_ROOT=unused; npm_config_prefix=unused; baseline_version="$1"; node() { return 97; }; legacy_operator_plugin_policy verify',
-          "policy-cell",
-          baselineVersion,
-        ],
-        { encoding: "utf8" },
-      );
+      const result = run("bash", [
+        "-c",
+        'set -euo pipefail; source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh; ARTIFACT_ROOT=unused; RUNTIME_ROOT=unused; npm_config_prefix=unused; baseline_version="$1"; node() { return 97; }; legacy_operator_plugin_policy verify',
+        "policy-cell",
+        baselineVersion,
+      ]);
       expect(result.status, result.stdout + result.stderr).toBe(0);
     },
   );
@@ -226,6 +208,8 @@ printf 'main-preserved\\n'
   });
 
   it("reads the actual 9.2 eligibility shape and checks candidate runtime separately", () => {
+    const rejects = (inventory: unknown, error: string, state = baseline) =>
+      expect(() => assertPreservedPluginActivation(inventory, state)).toThrow(error);
     expect(readEnabledPolicyPlugins(baselineInventory())).toEqual(baseline.enabledPlugins);
     expect(assertPreservedPluginActivation(candidateInventory(), baseline)).toEqual([
       "memory-core",
@@ -233,23 +217,20 @@ printf 'main-preserved\\n'
     expect(() => readEnabledPolicyPlugins({ plugins: [] })).toThrow(
       "omitted or duplicated installed plugin",
     );
-    expect(() =>
-      assertPreservedPluginActivation(candidateInventory(), { ...baseline, enabledPlugins: [] }),
-    ).toThrow("widened or lost plugin activation");
+    rejects(candidateInventory(), "widened or lost plugin activation", {
+      ...baseline,
+      enabledPlugins: [],
+    });
     for (const id of ["memory-core", "telegram", "device-pair"]) {
       const changed = candidateInventory();
       const plugin = changed.plugins.find((entry) => entry.id === id)!;
       plugin.enabled = !plugin.enabled;
-      expect(() => assertPreservedPluginActivation(changed, baseline)).toThrow(
-        "wrong activation policy",
-      );
+      rejects(changed, "wrong activation policy");
     }
-    expect(() =>
-      assertPreservedPluginActivation(candidateInventory(), {
-        ...baseline,
-        enabledPlugins: [...baseline.enabledPlugins, "missing-survivor"],
-      }),
-    ).toThrow("widened or lost plugin activation");
+    rejects(candidateInventory(), "widened or lost plugin activation", {
+      ...baseline,
+      enabledPlugins: [...baseline.enabledPlugins, "missing-survivor"],
+    });
     const widened = candidateInventory();
     widened.plugins.push({
       id: "unrelated",
@@ -258,23 +239,17 @@ printf 'main-preserved\\n'
       state: "enabled",
       runtime: { state: "unloaded" },
     });
-    expect(() => assertPreservedPluginActivation(widened, baseline)).toThrow(
-      "widened or lost plugin activation",
-    );
+    rejects(widened, "widened or lost plugin activation");
     widened.plugins.at(-1)!.enabled = false;
     widened.plugins.at(-1)!.runtime.state = "active";
-    expect(() => assertPreservedPluginActivation(widened, baseline)).toThrow(
-      "activated forbidden plugin unrelated",
-    );
+    rejects(widened, "activated forbidden plugin unrelated");
     for (const state of ["service-failed", undefined]) {
       const broken = {
         plugins: candidateInventory().plugins.map((plugin, index) =>
           index === 0 ? Object.assign({}, plugin, { runtime: { state } }) : plugin,
         ),
       };
-      expect(() => assertPreservedPluginActivation(broken, baseline)).toThrow(
-        "failed or is unknown",
-      );
+      rejects(broken, "failed or is unknown");
     }
   });
 });

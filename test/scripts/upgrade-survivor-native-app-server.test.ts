@@ -59,6 +59,22 @@ function request(method: string, params: object = {}): Promise<Result> {
   });
 }
 
+const runningId = "native-upgrade-running";
+const completeId = "native-upgrade-complete";
+async function readThread(threadId: string, includeTurns = true) {
+  return await request("thread/read", { threadId, ...(includeTurns ? { includeTurns } : {}) });
+}
+async function startTurn(threadId: string, text: string) {
+  return (await request("turn/start", { threadId, input: [{ type: "text", text }] })).turn!;
+}
+function readMessages() {
+  return fs
+    .readFileSync(logFile, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 async function notificationWhere(matches: (entry: Notification) => boolean): Promise<Notification> {
   const observed = notifications.find(matches);
   if (observed) {
@@ -77,11 +93,21 @@ async function notificationWhere(matches: (entry: Notification) => boolean): Pro
 }
 
 async function completed(threadId: string, turnId: string) {
-  return await notificationWhere(
-    (entry) =>
-      entry.method === "turn/completed" &&
-      entry.params.threadId === threadId &&
-      entry.params.turn?.id === turnId,
+  return await notificationWhere((entry) => isCompleted(entry, threadId, turnId));
+}
+
+function isCompleted(entry: Notification, threadId: string, turnId: string) {
+  return (
+    entry.method === "turn/completed" &&
+    entry.params.threadId === threadId &&
+    entry.params.turn?.id === turnId
+  );
+}
+function isCloseItem(entry: Notification, threadId: string, turnId: string) {
+  return (
+    entry.params.threadId === threadId &&
+    entry.params.turnId === turnId &&
+    entry.params.item?.tool === "closeAgent"
   );
 }
 
@@ -153,26 +179,15 @@ beforeAll(async () => {
 it("isolates native seeding, interruption, and closure from incidental parent turns", async () => {
   const parent = (await request("thread/start", { cwd: process.cwd() })).thread!;
   expect(parent.id).toBe("native-upgrade-parent");
-  const seeded = (
-    await request("turn/start", {
-      threadId: parent.id,
-      input: [{ type: "text", text: "NATIVE_UPGRADE_SEED_ASSIGNMENTS" }],
-    })
-  ).turn!;
-  await completed("native-upgrade-complete", "native-complete-turn");
-  const before = await request("thread/read", { threadId: parent.id, includeTurns: true });
-  const running = await request("thread/read", {
-    threadId: "native-upgrade-running",
-    includeTurns: true,
+  const seeded = await startTurn(parent.id, "NATIVE_UPGRADE_SEED_ASSIGNMENTS");
+  await completed(completeId, "native-complete-turn");
+  const before = await readThread(parent.id);
+  const running = await readThread(runningId);
+  const finished = await readThread(completeId);
+  expect(running.thread).toMatchObject({
+    status: { type: "active" },
+    turns: [{ id: "native-running-turn", status: "inProgress" }],
   });
-  const finished = await request("thread/read", {
-    threadId: "native-upgrade-complete",
-    includeTurns: true,
-  });
-  expect(running.thread?.status.type).toBe("active");
-  expect(running.thread?.turns).toMatchObject([
-    { id: "native-running-turn", status: "inProgress" },
-  ]);
   expect(finished.thread?.turns).toMatchObject([
     {
       id: "native-complete-turn",
@@ -186,34 +201,23 @@ it("isolates native seeding, interruption, and closure from incidental parent tu
   expect(incidental.parentThreadId).toBeUndefined();
   expect(incidental.source).toBe("unknown");
   expect(incidental.turns).toEqual([]);
-  const incidentalTurn = (
-    await request("turn/start", {
-      threadId: incidental.id,
-      input: [{ type: "text", text: "An unrelated turn while seeding is still active." }],
-    })
-  ).turn!;
+  const incidentalTurn = await startTurn(
+    incidental.id,
+    "An unrelated turn while seeding is still active.",
+  );
   await completed(incidental.id, incidentalTurn.id);
-  expect(await request("thread/read", { threadId: parent.id, includeTurns: true })).toEqual(before);
+  expect(await readThread(parent.id)).toEqual(before);
 
   fs.writeFileSync(phaseFile, JSON.stringify({ phase: "handoff" }));
   await request("turn/interrupt", { threadId: parent.id, turnId: seeded.id });
   await completed(parent.id, seeded.id);
-  const interrupted = (await request("thread/read", { threadId: parent.id, includeTurns: true }))
-    .thread!;
+  const interrupted = (await readThread(parent.id)).thread!;
   expect(interrupted.status.type).toBe("idle");
   expect(interrupted.turns.find((turn) => turn.id === seeded.id)?.status).toBe("interrupted");
   expect(interrupted.turns.some((turn) => turn.status === "inProgress")).toBe(false);
-  expect(
-    await request("thread/read", { threadId: "native-upgrade-running", includeTurns: true }),
-  ).toEqual(running);
-  expect(
-    await request("thread/read", { threadId: "native-upgrade-complete", includeTurns: true }),
-  ).toEqual(finished);
-  const messages = fs
-    .readFileSync(logFile, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  expect(await readThread(runningId)).toEqual(running);
+  expect(await readThread(completeId)).toEqual(finished);
+  const messages = readMessages();
   expect(messages.filter((entry) => entry.direction === "fixture-error")).toEqual([]);
   const interruptRequest = messages.find(
     (entry) => entry.direction === "request" && entry.method === "turn/interrupt",
@@ -222,10 +226,7 @@ it("isolates native seeding, interruption, and closure from incidental parent tu
     (entry) => entry.direction === "response" && entry.id === interruptRequest.id,
   );
   const interruptNotification = messages.findIndex(
-    (entry) =>
-      entry.method === "turn/completed" &&
-      entry.params?.threadId === parent.id &&
-      entry.params?.turn?.id === seeded.id,
+    (entry) => entry.params && isCompleted(entry, parent.id, seeded.id),
   );
   expect(interruptResponse).toBeGreaterThanOrEqual(0);
   expect(interruptNotification).toBeGreaterThan(interruptResponse);
@@ -233,87 +234,56 @@ it("isolates native seeding, interruption, and closure from incidental parent tu
   for (const phase of ["close-loaded", "close-gone"]) {
     fs.writeFileSync(phaseFile, JSON.stringify({ phase }));
     const prompt = `Continue the synthetic native upgrade fixture: ${phase}.`;
-    const closing = (
-      await request("turn/start", {
-        threadId: parent.id,
-        input: [{ type: "text", text: prompt }],
-      })
-    ).turn!;
+    const closing = await startTurn(parent.id, prompt);
     await notificationWhere(
       (entry) =>
         entry.method === "item/completed" &&
-        entry.params.threadId === parent.id &&
-        entry.params.turnId === closing.id &&
-        entry.params.item?.tool === "closeAgent" &&
-        entry.params.item.status === "completed",
+        isCloseItem(entry, parent.id, closing.id) &&
+        entry.params.item?.status === "completed",
     );
 
-    const incidentalClosePhase = (
-      await request("turn/start", {
-        threadId: incidental.id,
-        input: [{ type: "text", text: "An unrelated turn with no close request." }],
-      })
-    ).turn!;
+    const incidentalClosePhase = await startTurn(
+      incidental.id,
+      "An unrelated turn with no close request.",
+    );
     const incidentalOutcome = await notificationWhere(
       (entry) =>
-        entry.params.threadId === incidental.id &&
-        ((entry.method === "turn/completed" && entry.params.turn?.id === incidentalClosePhase.id) ||
-          (entry.method === "item/completed" &&
-            entry.params.turnId === incidentalClosePhase.id &&
-            entry.params.item?.tool === "closeAgent")),
+        isCompleted(entry, incidental.id, incidentalClosePhase.id) ||
+        (entry.method === "item/completed" &&
+          isCloseItem(entry, incidental.id, incidentalClosePhase.id)),
     );
     expect(incidentalOutcome.method, `${phase}: an incidental turn must not request closure`).toBe(
       "turn/completed",
     );
     expect(incidentalOutcome.params.turn?.status).toBe("completed");
 
-    const refused = (
-      await request("turn/start", {
-        threadId: incidental.id,
-        input: [{ type: "text", text: prompt }],
-      })
-    ).turn!;
+    const refused = await startTurn(incidental.id, prompt);
     expect((await completed(incidental.id, refused.id)).params.turn?.status).toBe("failed");
-    expect(
-      notifications.some(
-        (entry) =>
-          entry.params.threadId === incidental.id &&
-          entry.params.turnId === refused.id &&
-          entry.params.item?.tool === "closeAgent",
-      ),
-    ).toBe(false);
+    expect(notifications.some((entry) => isCloseItem(entry, incidental.id, refused.id))).toBe(
+      false,
+    );
 
-    const waitingParent = (
-      await request("thread/read", { threadId: parent.id, includeTurns: true })
-    ).thread!;
+    const waitingParent = (await readThread(parent.id)).thread!;
     expect(waitingParent.turns.find((turn) => turn.id === closing.id)?.status).toBe("inProgress");
-    expect(
-      (await request("thread/read", { threadId: "native-upgrade-running" })).thread?.status.type,
-    ).toBe("active");
+    expect((await readThread(runningId, false)).thread?.status.type).toBe("active");
 
     const loaded = await request("thread/loaded/list");
     expect(loaded.nextCursor).toBeNull();
     expect(loaded.data?.filter((id) => id === parent.id)).toHaveLength(1);
-    expect(loaded.data?.filter((id) => id === "native-upgrade-running")).toHaveLength(
+    expect(loaded.data?.filter((id) => id === runningId)).toHaveLength(
       phase === "close-loaded" ? 1 : 0,
     );
-    expect(loaded.data).not.toContain("native-upgrade-complete");
+    expect(loaded.data).not.toContain(completeId);
     expect((await completed(parent.id, closing.id)).params.turn?.status).toBe("completed");
-    const confirmed = (await request("thread/read", { threadId: parent.id, includeTurns: true }))
-      .thread!;
+    const confirmed = (await readThread(parent.id)).thread!;
     expect(confirmed.turns.find((turn) => turn.id === closing.id)?.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "agentMessage", text: "NATIVE_UPGRADE_CLOSE_OBSERVED" }),
       ]),
     );
   }
-  const finalMessages = fs
-    .readFileSync(logFile, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
   expect(
-    finalMessages
+    readMessages()
       .filter((entry) => entry.direction === "fixture-error")
       .map((entry) => entry.message),
   ).toEqual([

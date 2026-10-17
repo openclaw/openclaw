@@ -123,46 +123,41 @@ function doctorOwnerFixture(files: Record<string, string>) {
 }
 
 describe("published project-worktree Doctor ownership evidence", () => {
-  it.each<{
-    name: string;
-    files: Record<string, string>;
-    changed?: boolean;
-    error?: RegExp;
-  }>([
-    {
-      name: "forwarded owner",
-      files: {
+  it.each<[string, Record<string, string>, RegExp?, boolean?]>([
+    [
+      "forwarded owner",
+      {
         "doctor-owner-entry.mjs": schemaForwarder,
         "doctor-owner-real.mjs": schemaDefinition,
       },
-    },
-    {
-      name: "two defining owners",
-      files: {
+    ],
+    [
+      "two defining owners",
+      {
         "doctor-owner-real.mjs": schemaDefinition,
         "doctor-owner-other.mjs": schemaDefinition,
       },
-      error: /one installed defining/,
-    },
-    {
-      name: "forwarder without a definition",
-      files: { "doctor-owner-entry.mjs": schemaForwarder },
-      error: /one installed defining/,
-    },
-    {
-      name: "malformed definition",
-      files: { "doctor-owner-real.mjs": `function ${schemaSymbol}( {` },
-      error: /Cannot parse package owner/,
-    },
-    {
-      name: "changed candidate bytes",
-      files: { "doctor-owner-real.mjs": schemaDefinition },
-      changed: true,
-      error: /Package owner changed/,
-    },
+      /one installed defining/,
+    ],
+    [
+      "forwarder without a definition",
+      { "doctor-owner-entry.mjs": schemaForwarder },
+      /one installed defining/,
+    ],
+    [
+      "malformed definition",
+      { "doctor-owner-real.mjs": `function ${schemaSymbol}( {` },
+      /Cannot parse package owner/,
+    ],
+    [
+      "changed candidate bytes",
+      { "doctor-owner-real.mjs": schemaDefinition },
+      /Package owner changed/,
+      true,
+    ],
   ])(
-    "resolves only an unchanged defining Doctor chunk: $name",
-    async ({ files, changed, error }) => {
+    "resolves only an unchanged defining Doctor chunk: %s",
+    async (_name, files, error, changed) => {
       const { root, identity } = doctorOwnerFixture(files);
       if (changed) {
         writeFileSync(
@@ -352,24 +347,12 @@ ${scenario}
       }
     }
     const corruptions: Array<(value: typeof original) => void> = [
-      (value) => {
-        value.agent.sessions[0]!.updated_at++;
-      },
-      (value) => {
-        value.agent.sessions[0]!.current_session_id = "replacement";
-      },
-      (value) => {
-        value.agent.transcript[0]!.event_json = "rewritten";
-      },
-      (value) => {
-        value.shared.project[0]!.id = "other";
-      },
-      (value) => {
-        value.agent.sessions[1]!.entry_json = '{"changed":true}';
-      },
-      (value) => {
-        value.agent.sessions.pop();
-      },
+      (value) => value.agent.sessions[0]!.updated_at++,
+      (value) => (value.agent.sessions[0]!.current_session_id = "replacement"),
+      (value) => (value.agent.transcript[0]!.event_json = "rewritten"),
+      (value) => (value.shared.project[0]!.id = "other"),
+      (value) => (value.agent.sessions[1]!.entry_json = '{"changed":true}'),
+      (value) => value.agent.sessions.pop(),
       (value) => {
         const row = value.agent.sessions[0]!;
         const entry = JSON.parse(row.entry_json);

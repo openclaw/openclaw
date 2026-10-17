@@ -10,6 +10,21 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const recoveryScript = "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs";
+const faultScript = path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs");
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+const runNode = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+  spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: { ...process.env, ...env },
+  });
+function writePackage(root: string, version: string, build: { buildId: string }) {
+  fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+  writeJson(path.join(root, "package.json"), { version });
+  writeJson(path.join(root, "dist/build-info.json"), build);
+}
 
 it.each([
   "package-publication-recovery",
@@ -32,9 +47,7 @@ describe("release package interruption fixture", () => {
       [installed, "2026.9.8", "released"],
       [packed, "2026.9.10", "candidate"],
     ] as const) {
-      fs.mkdirSync(path.join(root, "dist"), { recursive: true });
-      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
-      fs.writeFileSync(path.join(root, "dist/build-info.json"), JSON.stringify({ buildId }));
+      writePackage(root, version, { buildId });
     }
     const tarball = path.join(artifacts, "candidate.tgz");
     const pack = spawnSync("tar", ["-czf", tarball, "-C", artifacts, "package"], {
@@ -42,31 +55,16 @@ describe("release package interruption fixture", () => {
     });
     expect(pack.status, pack.stderr).toBe(0);
     const config = path.join(artifacts, "config.json");
-    fs.writeFileSync(config, JSON.stringify({ gateway: {}, plugins: { enabled: false } }));
+    writeJson(config, { gateway: {}, plugins: { enabled: false } });
     const evidence = path.join(artifacts, "package-activation-cut.json");
     for (const cut of ["publication-complete", "verification"]) {
       fs.writeFileSync(evidence, '{"pid":"previous-run"}');
       fs.writeFileSync(`${evidence}.doctor`, '{"exitCode":1}');
-      const setup = spawnSync(
-        process.execPath,
-        [
-          "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs",
-          "setup",
-          artifacts,
-          installed,
-          tarball,
-          cut,
-          config,
-        ],
-        { encoding: "utf8", timeout: 10_000 },
-      );
+      const setup = runNode([recoveryScript, "setup", artifacts, installed, tarball, cut, config]);
       expect(setup.status, setup.stderr).toBe(0);
       expect(fs.existsSync(evidence)).toBe(false);
       expect(fs.existsSync(`${evidence}.doctor`)).toBe(false);
-      expect(
-        JSON.parse(fs.readFileSync(path.join(artifacts, "package-activation-fault.json"), "utf8"))
-          .cut,
-      ).toBe(cut);
+      expect(readJson(path.join(artifacts, "package-activation-fault.json")).cut).toBe(cut);
     }
   });
   it.each(["run", "all"])(
@@ -75,13 +73,10 @@ describe("release package interruption fixture", () => {
       const root = fs.realpathSync(dirs.make("package-activation-fault-"));
       const journal = path.join(root, "operation.sqlite");
       const evidence = path.join(root, "cut.json");
-      const hook = pathToFileURL(
-        path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs"),
-      ).href;
+      const hook = pathToFileURL(faultScript).href;
       const spec = path.join(root, "fault.json");
-      fs.writeFileSync(spec, JSON.stringify({ journal, evidence, cut: "publication-complete" }));
-      const result = spawnSync(
-        process.execPath,
+      writeJson(spec, { journal, evidence, cut: "publication-complete" });
+      const result = runNode(
         [
           "--import=tsx",
           "--import",
@@ -108,15 +103,11 @@ describe("release package interruption fixture", () => {
       throw new Error('fault did not terminate the updater');
     `,
         ],
-        {
-          encoding: "utf8",
-          env: { ...process.env, OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
-          timeout: 10_000,
-        },
+        { OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
       );
       expect(result.error).toBeUndefined();
       expect(result.signal, result.stderr).toBe("SIGKILL");
-      const cut = JSON.parse(fs.readFileSync(evidence, "utf8"));
+      const cut = readJson(evidence);
       expect(cut.row).toEqual({ slot: 1, phase: "publication-complete", intent_json: "null" });
       const db = new DatabaseSync(journal, { readOnly: true });
       try {
@@ -135,27 +126,22 @@ describe("release package interruption fixture", () => {
     fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
     fs.writeFileSync(evidence, "{}");
     const spec = path.join(root, "fault.json");
-    fs.writeFileSync(spec, JSON.stringify({ cut: "verification", evidence, previousRoot }));
-    const result = spawnSync(
-      process.execPath,
+    writeJson(spec, { cut: "verification", evidence, previousRoot });
+    const result = runNode(
       [
         "--import",
-        path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs"),
+        faultScript,
         "--input-type=module",
         "-e",
         "throw new Error('Doctor body must not run')",
         "doctor",
       ],
-      {
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
-        timeout: 10_000,
-      },
+      { OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(1);
     expect(fs.readFileSync(manifest, "utf8")).toBe('{"version":"2026.9.8"}\n');
-    expect(JSON.parse(fs.readFileSync(`${evidence}.doctor`, "utf8"))).toMatchObject({
+    expect(readJson(`${evidence}.doctor`)).toMatchObject({
       exitCode: 1,
     });
   });
@@ -175,14 +161,11 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
     reload: { mode: "off" },
     auth: { mode: "token" },
   };
-  fs.writeFileSync(configPath, JSON.stringify({ gateway, plugins: { enabled: false } }));
+  const writeSettings = (enabled: boolean) =>
+    writeJson(configPath, { gateway, plugins: { enabled } });
+  writeSettings(false);
   for (const tree of [root, previous]) {
-    fs.mkdirSync(path.join(tree, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tree, "package.json"),
-      JSON.stringify({ version: candidate.version }),
-    );
-    fs.writeFileSync(path.join(tree, "dist/build-info.json"), JSON.stringify(candidate.build));
+    writePackage(tree, candidate.version, candidate.build);
     fs.writeFileSync(path.join(tree, "dist/runtime.mjs"), "retained runtime bytes");
   }
   fs.mkdirSync(`${anchor}.control`);
@@ -202,33 +185,22 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
   );
   db.close();
   const evidence = path.join(artifacts, "cut.json");
-  fs.writeFileSync(evidence, JSON.stringify({ cut: "publication-complete" }));
-  fs.writeFileSync(
-    path.join(artifacts, "package-activation-fault.json"),
-    JSON.stringify({ cut: "publication-complete", evidence, journal }),
-  );
-  fs.writeFileSync(
-    path.join(artifacts, "package-activation-recovery.json"),
-    JSON.stringify({
-      baseline: { version: "2026.9.8" },
-      candidate,
-      root,
-      anchor,
-      configPath,
-      authoredSettings: { gateway, pluginsEnabled: false },
-    }),
-  );
+  writeJson(evidence, { cut: "publication-complete" });
+  writeJson(path.join(artifacts, "package-activation-fault.json"), {
+    cut: "publication-complete",
+    evidence,
+    journal,
+  });
+  writeJson(path.join(artifacts, "package-activation-recovery.json"), {
+    baseline: { version: "2026.9.8" },
+    candidate,
+    root,
+    anchor,
+    configPath,
+    authoredSettings: { gateway, pluginsEnabled: false },
+  });
   const run = (command: string, exit: string) =>
-    spawnSync(
-      process.execPath,
-      [
-        "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs",
-        command,
-        artifacts,
-        exit,
-      ],
-      { encoding: "utf8", timeout: 10_000 },
-    );
+    runNode([recoveryScript, command, artifacts, exit]);
   const interrupted = run("interrupted", "137");
   expect(interrupted.status, interrupted.stderr).toBe(0);
   const retained = `${anchor}.superseded-fixture-operation`;
@@ -236,11 +208,11 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
   fs.renameSync(`${anchor}.control`, path.join(retained, "control"));
   const repaired = run("repaired", "0");
   expect(repaired.status, repaired.stderr).toBe(0);
-  fs.writeFileSync(configPath, JSON.stringify({ gateway, plugins: { enabled: true } }));
+  writeSettings(true);
   const changedSettings = run("repaired", "0");
   expect(changedSettings.status).not.toBe(0);
   expect(changedSettings.stderr).toContain("authored settings changed");
-  fs.writeFileSync(configPath, JSON.stringify({ gateway, plugins: { enabled: false } }));
+  writeSettings(false);
   for (const tree of [root, path.join(retained, "previous")]) {
     const runtime = path.join(tree, "dist/runtime.mjs");
     fs.writeFileSync(runtime, "damaged runtime bytes");

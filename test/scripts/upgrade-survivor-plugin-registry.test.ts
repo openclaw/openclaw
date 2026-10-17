@@ -17,6 +17,7 @@ const SCRIPT = resolve("scripts/e2e/upgrade-survivor-docker.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1";
+const read = (root: string, name: string) => readFileSync(join(root, name), "utf8");
 
 function expectFinalFailure(stderr: string, exitCode: number) {
   const summary = `[upgrade-survivor] FAILED (exit ${exitCode})`;
@@ -236,12 +237,12 @@ on_exit 0
       shell,
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(join(captureDir, "node-env"), "utf8")).toBe(
+    expect(read(captureDir, "node-env")).toBe(
       direct
         ? "update-restart-auth||base\n"
         : "published-upgrade-survivor|openclaw@2026.7.1-2|configured-plugin-installs\n",
     );
-    const args = readFileSync(join(captureDir, "docker-run-args"), "utf8").split("\0").slice(0, -1);
+    const args = read(captureDir, "docker-run-args").split("\0").slice(0, -1);
     if (direct) {
       expect(result.stderr).not.toContain("unbound variable");
       expect(result.stderr).not.toContain("FAILED (exit");
@@ -257,10 +258,10 @@ on_exit 0
       expect(args).not.toContain("");
       expect(args.at(-2)).toBe("-lc");
     } else {
-      expect(readFileSync(join(captureDir, "node-args"), "utf8")).toContain(
+      expect(read(captureDir, "node-args")).toContain(
         "scripts/test-docker-all.mjs --prepare-plugin-registry",
       );
-      expect(readFileSync(join(captureDir, "docker-args"), "utf8")).toContain(
+      expect(read(captureDir, "docker-args")).toContain(
         ":/tmp/openclaw-prepublish-plugin-registry:ro",
       );
       expect(args).not.toContain("--user");
@@ -310,7 +311,7 @@ on_exit 0
         if (error) {
           expect(result.stderr).toContain(error);
         } else {
-          expect(existsSync(readFileSync(join(captureDir, "preparation-dir"), "utf8"))).toBe(false);
+          expect(existsSync(read(captureDir, "preparation-dir"))).toBe(false);
         }
       });
     },
@@ -339,7 +340,7 @@ on_exit 0
 
       expect(result.status, result.stderr).toBe(0);
       expect(existsSync(join(captureDir, "node-args"))).toBe(false);
-      expect(readFileSync(join(captureDir, "docker-args"), "utf8")).toContain(
+      expect(read(captureDir, "docker-args")).toContain(
         `${registryDir}:/tmp/openclaw-prepublish-plugin-registry:ro`,
       );
     },
@@ -354,7 +355,7 @@ on_exit 0
 
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(join(captureDir, "node-args"))).toBe(false);
-    expect(readFileSync(join(captureDir, "docker-args"), "utf8")).not.toContain(
+    expect(read(captureDir, "docker-args")).not.toContain(
       "/tmp/openclaw-prepublish-plugin-registry",
     );
     expect(existsSync(packageTarball)).toBe(true);
@@ -401,9 +402,7 @@ on_exit 0
             "--",
             "/tmp/openclaw-worker-cleanup/runtime",
           ]);
-          expect(readFileSync(join(captureDir, "docker-run-args"), "utf8")).toContain(
-            "worker-cleanup-fixture\0",
-          );
+          expect(read(captureDir, "docker-run-args")).toContain("worker-cleanup-fixture\0");
         }
         if (exitCode !== "0") {
           expect(result.stderr).toContain("Preserved failed synthetic worker-cell state:");
@@ -428,7 +427,7 @@ on_exit 0
     expect(result.status, result.stderr).toBe(1);
     expectFinalFailure(result.stderr, 1);
     expect(result.stderr).toContain("Worker-cell runtime cleanup failed:");
-    const args = readFileSync(join(captureDir, "docker-cleanup-args"), "utf8").split("\0");
+    const args = read(captureDir, "docker-cleanup-args").split("\0");
     const mount = args[args.indexOf("-v") + 1];
     if (!mount) {
       throw new Error("Cleanup did not mount the synthetic runtime");
@@ -497,7 +496,7 @@ run_live_models
       .map((line) => JSON.parse(line));
     expect(turns.map(({ model }) => model)).toEqual(models);
     expect(new Set(turns.map(({ session }) => session)).size).toBe(3);
-    const summary = JSON.parse(readFileSync(join(root, "live-models.json"), "utf8"));
+    const summary = JSON.parse(read(root, "live-models.json"));
     expect(
       summary.models.map(({ model, ok }: { model: string; ok: boolean }) => ({ model, ok })),
     ).toEqual(models.map((model) => ({ model, ok: true })));
@@ -567,7 +566,7 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      const receipt = JSON.parse(readFileSync(join(root, "live-models.json"), "utf8"));
+      const receipt = JSON.parse(read(root, "live-models.json"));
       expect(receipt.models.map((entry: { model: string }) => entry.model)).toEqual(expectedModels);
     },
   );
@@ -621,7 +620,7 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
         return;
       }
       expect(result.status, result.stderr).toBe(0);
-      const args = readFileSync(join(captureDir, "docker-run-args"), "utf8").split("\0");
+      const args = read(captureDir, "docker-run-args").split("\0");
       const runnerRoot = frozen ? join(root, "selected") : process.cwd();
       expect(args).toContain(
         `${runnerRoot}/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro`,
@@ -630,7 +629,7 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
         expect(args).toContain(`${liveVariable}=${liveValue}`);
         expect(args).toContain("OPENAI_API_KEY");
         if (legacyLive) {
-          const command = readFileSync(join(captureDir, "docker-args"), "utf8");
+          const command = read(captureDir, "docker-args");
           expect(command).toContain("-e OPENAI_API_KEY");
           expect(command).toContain(
             "-e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL=openai/test-model",
@@ -742,12 +741,10 @@ printf '%s\\n' "$baseline_version" >"$CAPTURE_DIR/core-version"
         expect(existsSync(join(root, "packed-spec"))).toBe(false);
         expect(existsSync(join(root, "install-args"))).toBe(false);
         expect(existsSync(join(root, "assert-args"))).toBe(false);
-        expect(readFileSync(join(root, "registry-args"), "utf8")).toContain("openclaw\n2026.9.4\n");
+        expect(read(root, "registry-args")).toContain("openclaw\n2026.9.4\n");
         return;
       }
-      expect(readFileSync(join(root, "packed-spec"), "utf8")).toBe(
-        `@openclaw/discord@${pluginVersion}\n`,
-      );
+      expect(read(root, "packed-spec")).toBe(`@openclaw/discord@${pluginVersion}\n`);
       for (const { file, expectedVersion } of [
         { file: "baseline-dist-tags", expectedVersion: pluginVersion },
         { file: "dist-tags", expectedVersion: "2026.9.4" },
@@ -760,16 +757,16 @@ printf '%s\\n' "$baseline_version" >"$CAPTURE_DIR/core-version"
         );
         expect(tags[tag]).toBe(expectedVersion);
       }
-      expect(readFileSync(join(root, "baseline-registry-args"), "utf8")).toContain(
+      expect(read(root, "baseline-registry-args")).toContain(
         `@openclaw/discord\n${pluginVersion}\n`,
       );
-      expect(readFileSync(join(root, "assert-args"), "utf8")).toBe(
+      expect(read(root, "assert-args")).toBe(
         `scripts/e2e/lib/upgrade-survivor/assertions.mjs\nassert-baseline-plugin\n${pluginVersion}\ndiscord\n${tag}\n`,
       );
-      expect(readFileSync(join(root, "install-args"), "utf8")).toBe(
+      expect(read(root, "install-args")).toBe(
         `openclaw\n--\nplugins\ninstall\n@openclaw/discord@${tag}\n--force\n`,
       );
-      expect(readFileSync(join(root, "core-version"), "utf8")).toBe(`${baseline}\n`);
+      expect(read(root, "core-version")).toBe(`${baseline}\n`);
     },
   );
 });

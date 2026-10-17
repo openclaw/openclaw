@@ -100,6 +100,8 @@ describe("native upgrade witness", () => {
   });
 
   it("requires package-bound proof before publishing a successful retirement cell", () => {
+    const versions = { baselineVersion: "2026.9.4", candidateVersion: "2026.9.6" };
+    const digest = "a".repeat(64);
     const snapshot = {
       status: "passed",
       scenario: "legacy-operator-state",
@@ -111,16 +113,15 @@ describe("native upgrade witness", () => {
       phases: [],
       backupRollback: {
         status: "passed",
-        baselineVersion: "2026.9.4",
-        candidateVersion: "2026.9.6",
+        ...versions,
         runtime: {
           version: "2026.9.4",
           schemaVersions: { state: 16, agent: 19 },
-          manifestSha256: "a".repeat(64),
-          entrySha256: "a".repeat(64),
+          manifestSha256: digest,
+          entrySha256: digest,
         },
         candidateSchemaVersions: { state: 17, agent: 21 },
-        archive: { sha256: "a".repeat(64) },
+        archive: { sha256: digest },
         before: {
           databases: [
             {
@@ -130,7 +131,7 @@ describe("native upgrade witness", () => {
               userVersion: 19,
               contentVersion: 19,
               sessions: [{ key: "synthetic", sessionId: "synthetic" }],
-              tables: [{ table: "transcript_events", rows: 1, sha256: "a".repeat(64) }],
+              tables: [{ table: "transcript_events", rows: 1, sha256: digest }],
             },
           ],
           files: [],
@@ -142,15 +143,14 @@ describe("native upgrade witness", () => {
       nativeAssignmentEligibility: {
         status: "required",
         candidateVersion: "2026.9.6",
-        candidateSha256: "a".repeat(64),
+        candidateSha256: digest,
         companionSha256: "b".repeat(64),
         sourceSha: "c".repeat(40),
       },
       nativeAssignments: {
         status: "passed",
-        baselineVersion: "2026.9.4",
-        candidateVersion: "2026.9.6",
-        candidateSha256: "a".repeat(64),
+        ...versions,
+        candidateSha256: digest,
         source: "published-gateway-agent-native-events",
         backend: "synthetic-codex-websocket",
         baselineCore: "OpenClaw 2026.9.4 (3a9d69d)",
@@ -177,9 +177,9 @@ describe("native upgrade witness", () => {
       sourceSha: "c".repeat(40),
     });
     expect(JSON.stringify(report)).not.toContain("incidentalPath");
-    expect(() => publish({ ...snapshot, nativeAssignmentEligibility: undefined })).toThrow(
-      "Missing native assignment eligibility",
-    );
+    const rejects = (patch: Partial<typeof snapshot>, error: string) =>
+      expect(() => publish({ ...snapshot, ...patch })).toThrow(error);
+    rejects({ nativeAssignmentEligibility: undefined }, "Missing native assignment eligibility");
     const skipped = publish({
       ...snapshot,
       nativeAssignmentEligibility: {
@@ -189,20 +189,15 @@ describe("native upgrade witness", () => {
       nativeAssignments: undefined,
     });
     expect(skipped.logs).not.toHaveProperty("native-assignment-server.log");
-    expect(() => publish({ ...snapshot, nativeAssignments: undefined })).toThrow(
-      "omitted native assignment proof",
-    );
-    expect(() =>
-      publish({
-        ...snapshot,
-        nativeAssignments: { ...snapshot.nativeAssignments, candidateSha256: "d".repeat(64) },
-      }),
-    ).toThrow("Invalid native assignment preservation");
-    expect(() =>
-      publish({
-        ...snapshot,
-        nativeAssignments: { ...snapshot.nativeAssignments, unconfirmedClosePreserved: false },
-      }),
-    ).toThrow("Invalid native assignment preservation");
+    rejects({ nativeAssignments: undefined }, "omitted native assignment proof");
+    for (const patch of [
+      { candidateSha256: "d".repeat(64) },
+      { unconfirmedClosePreserved: false },
+    ]) {
+      rejects(
+        { nativeAssignments: { ...snapshot.nativeAssignments, ...patch } },
+        "Invalid native assignment preservation",
+      );
+    }
   });
 });

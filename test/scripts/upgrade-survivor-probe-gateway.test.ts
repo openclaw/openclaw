@@ -1,4 +1,3 @@
-// Upgrade Survivor Probe Gateway tests cover upgrade survivor probe gateway script behavior.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";
@@ -17,6 +16,45 @@ function writeProbeImport(source: string): string[] {
   const fixturePath = path.join(tempDirs.make("openclaw-upgrade-probe-"), "probe-import.mjs");
   fs.writeFileSync(fixturePath, source);
   return ["--import", pathToFileURL(fixturePath).href];
+}
+
+function probeArgs(
+  baseUrl: string,
+  out: string,
+  kind: "ready" | "started" | "live" = "ready",
+  timeout = 1000,
+  extra: string[] = [],
+) {
+  const route = { ready: "/readyz", started: "/startupz", live: "/healthz" }[kind];
+  return [
+    "--base-url",
+    baseUrl,
+    "--path",
+    route,
+    "--expect",
+    kind,
+    "--out",
+    out,
+    "--timeout-ms",
+    String(timeout),
+    ...extra,
+  ];
+}
+
+// Advance only retry sleeps; transport deadlines still use real timers.
+function virtualFetch(body: string, status: string, delay: number) {
+  return writeProbeImport(
+    [
+      "const realSetTimeout = globalThis.setTimeout;",
+      "let now = 0, calls = 0;",
+      "Date.now = () => now;",
+      `globalThis.fetch = async () => new Response(JSON.stringify(${body}), { status: ${status}, headers: { "content-type": "application/json" } });`,
+      "globalThis.setTimeout = (callback, delay = 0, ...args) => {",
+      `  if (delay === ${delay}) { now += delay; return realSetTimeout(callback, 0, ...args); }`,
+      "  return realSetTimeout(callback, delay, ...args);",
+      "};",
+    ].join("\n"),
+  );
 }
 
 interface ProbeResult {
@@ -121,18 +159,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     const baseUrl = await listen(server);
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready.json");
     try {
-      const result = await runProbe([
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/readyz",
-        "--expect",
-        "ready",
-        "--out",
-        out,
-        "--timeout-ms",
-        "1000",
-      ]);
+      const result = await runProbe(probeArgs(baseUrl, out));
 
       expect(result.status).toBe(0);
       expect(JSON.parse(fs.readFileSync(out, "utf8"))).toMatchObject({
@@ -148,31 +175,13 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
 
   it("waits for startup completion even when required-agent readiness is already true", async () => {
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "startup.json");
-    const nodeArgs = writeProbeImport(
-      [
-        "const realSetTimeout = globalThis.setTimeout;",
-        "let now = 0, calls = 0;",
-        "Date.now = () => now;",
-        'globalThis.fetch = async () => new Response(JSON.stringify(++calls === 1 ? { ready: true, ok: false, status: "starting", pendingReason: "agent-database-inspection" } : { ok: true, status: "started" }), { status: calls === 1 ? 503 : 200 });',
-        "globalThis.setTimeout = (callback, delay = 0, ...args) => {",
-        "  if (delay === 100) { now += delay; return realSetTimeout(callback, 0, ...args); }",
-        "  return realSetTimeout(callback, delay, ...args);",
-        "};",
-      ].join("\n"),
+    const nodeArgs = virtualFetch(
+      '++calls === 1 ? { ready: true, ok: false, status: "starting", pendingReason: "agent-database-inspection" } : { ok: true, status: "started" }',
+      "calls === 1 ? 503 : 200",
+      100,
     );
     const result = await runProbe(
-      [
-        "--base-url",
-        "http://probe.test",
-        "--path",
-        "/startupz",
-        "--expect",
-        "started",
-        "--out",
-        out,
-        "--timeout-ms",
-        "1000",
-      ],
+      probeArgs("http://probe.test", out, "started"),
       LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
       {},
       nodeArgs,
@@ -189,39 +198,14 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
   it("rejects degraded ready responses by default even when failing components are allowlisted", async () => {
     const baseUrl = "http://probe.test";
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-degraded.json");
-    const nodeArgs = writeProbeImport(
-      [
-        "const realSetTimeout = globalThis.setTimeout;",
-        "let now = 0;",
-        "Date.now = () => now;",
-        'globalThis.fetch = async () => new Response(JSON.stringify({ ready: false, failing: ["telegram"] }), { status: 503, headers: { "content-type": "application/json" } });',
-        "globalThis.setTimeout = (callback, delay = 0, ...args) => {",
-        "  if (delay === 50) {",
-        "    now += delay;",
-        "    return realSetTimeout(callback, 0, ...args);",
-        "  }",
-        "  return realSetTimeout(callback, delay, ...args);",
-        "};",
-      ].join("\n"),
-    );
-    // Test strict readiness policy without racing transport scheduling against the deadline.
+    const nodeArgs = virtualFetch('{ ready: false, failing: ["telegram"] }', "503", 50);
     const result = await runProbe(
-      [
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/readyz",
-        "--expect",
-        "ready",
+      probeArgs(baseUrl, out, "ready", 50, [
         "--allow-failing",
         "telegram",
-        "--out",
-        out,
-        "--timeout-ms",
-        "50",
         "--attempt-timeout-ms",
         "25",
-      ],
+      ]),
       LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
       { OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED: "0" },
       nodeArgs,
@@ -232,42 +216,14 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     expect(fs.existsSync(out)).toBe(false);
   });
 
-  it.each(["ready", "started"])(
+  it.each(["ready", "started"] as const)(
     "keeps failed %s probe retries inside the total timeout",
     async (expectKind) => {
       const baseUrl = "http://probe.test";
       const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-timeout.json");
-      const nodeArgs = writeProbeImport(
-        [
-          "const realSetTimeout = globalThis.setTimeout;",
-          "let now = 0;",
-          "Date.now = () => now;",
-          'globalThis.fetch = async () => new Response(JSON.stringify({ ready: false, failing: ["gateway"] }), { status: 503, headers: { "content-type": "application/json" } });',
-          "globalThis.setTimeout = (callback, delay = 0, ...args) => {",
-          "  if (delay === 50) {",
-          "    now += delay;",
-          "    return realSetTimeout(callback, 0, ...args);",
-          "  }",
-          "  return realSetTimeout(callback, delay, ...args);",
-          "};",
-        ].join("\n"),
-      );
-      // Virtualize fetch and only the retry sleep; CPU scheduling cannot consume the test budget.
+      const nodeArgs = virtualFetch('{ ready: false, failing: ["gateway"] }', "503", 50);
       const result = await runProbe(
-        [
-          "--base-url",
-          baseUrl,
-          "--path",
-          expectKind === "started" ? "/startupz" : "/readyz",
-          "--expect",
-          expectKind,
-          "--out",
-          out,
-          "--timeout-ms",
-          "50",
-          "--attempt-timeout-ms",
-          "25",
-        ],
+        probeArgs(baseUrl, out, expectKind, 50, ["--attempt-timeout-ms", "25"]),
         LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
         {},
         nodeArgs,
@@ -286,21 +242,11 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       'globalThis.fetch = async () => new Response(JSON.stringify({ ready: true }), { status: 500, headers: { "content-type": "application/json" } });',
     );
     const result = await runProbe(
-      [
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/readyz",
-        "--expect",
-        "ready",
+      probeArgs(baseUrl, out, "ready", 300, [
         "--allow-failing",
         "telegram",
         "--allow-degraded-ready",
-        "--out",
-        out,
-        "--timeout-ms",
-        "300",
-      ],
+      ]),
       LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
       {},
       nodeArgs,
@@ -322,20 +268,9 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "stall.json");
     const startedAt = Date.now();
     try {
-      const result = await runProbe([
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/healthz",
-        "--expect",
-        "live",
-        "--out",
-        out,
-        "--timeout-ms",
-        "300",
-        "--attempt-timeout-ms",
-        "100",
-      ]);
+      const result = await runProbe(
+        probeArgs(baseUrl, out, "live", 300, ["--attempt-timeout-ms", "100"]),
+      );
       const elapsedMs = Date.now() - startedAt;
 
       expect(result.error).toBeUndefined();
@@ -365,20 +300,9 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "body-stall.json");
     const startedAt = Date.now();
     try {
-      const result = await runProbe([
-        "--base-url",
-        baseUrl,
-        "--path",
-        "/healthz",
-        "--expect",
-        "live",
-        "--out",
-        out,
-        "--timeout-ms",
-        "300",
-        "--attempt-timeout-ms",
-        "100",
-      ]);
+      const result = await runProbe(
+        probeArgs(baseUrl, out, "live", 300, ["--attempt-timeout-ms", "100"]),
+      );
       const elapsedMs = Date.now() - startedAt;
 
       expect(result.error).toBeUndefined();
