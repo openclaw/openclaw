@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
@@ -12,6 +11,8 @@ import {
   expectCapturedFiles,
   observeMerged,
   expectGraphqlSquash,
+  readLocal,
+  writeLocal,
 } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
@@ -28,11 +29,20 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     return f;
   }
 
-  const evidenceCase = (
-    name: string,
-    state: Parameters<typeof configureMerge>[1],
-    admitted = false,
-  ) => ({ name, state, admitted });
+  const evidenceCase = (state: Parameters<typeof configureMerge>[1], admitted = false) => ({
+    state,
+    admitted,
+  });
+
+  function expectAdmission(f: ReturnType<typeof fixture>, admitted = true) {
+    expectExit(f.run(), admitted ? 0 : 1);
+    expect(f.state().mutations).toBe(admitted ? 1 : 0);
+    if (admitted) {
+      expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
+    } else {
+      expect(() => f.record()).toThrow();
+    }
+  }
 
   it.each([false, true])(
     "reconciles async UUID without replay (commit omitted=%s)",
@@ -52,11 +62,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         },
       });
       expect(f.state().asyncPolls).toBe(1);
-      const asyncCalls = f
-        .state()
-        .calls.filter((call) =>
-          call.some((arg) => arg.startsWith("repos/fixture/repo/pulls/123/merge-async")),
-        );
+      const { calls } = f.state();
+      const asyncCalls = calls.filter((call) =>
+        call.some((arg) => arg.startsWith("repos/fixture/repo/pulls/123/merge-async")),
+      );
       expect(asyncCalls).toHaveLength(2);
       for (const call of asyncCalls) {
         expect(call.slice(1, 4)).toEqual(["api", "-H", "X-Octopool-Require: merge-async-v1"]);
@@ -296,41 +305,30 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     });
     expect(f.state().restMergePayload).not.toHaveProperty("commit_title");
     expect(f.state().nodeArgs).toEqual(resolveVitestNodeArgs());
-    expect(f.state().calls.filter((call) => call.includes("PUT"))).toHaveLength(1);
+    const { calls } = f.state();
+    expect(calls.filter((call) => call.includes("PUT"))).toHaveLength(1);
     expect(
-      f
-        .state()
-        .calls.some((call) => call.includes("graphql") || (call[1] === "pr" && call[2] !== "view")),
+      calls.some((call) => call.includes("graphql") || (call[1] === "pr" && call[2] !== "view")),
     ).toBe(false);
   });
 
-  it("switches exhausted REST reads to one pinned GraphQL merge", () => {
-    const f = restFixture({
-      restReadFailure: "core",
-      restReadFailuresRemaining: 1,
-    });
-
-    expectExit(f.run(), 0);
-    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
-    expect(f.record()).not.toHaveProperty("transport");
-    expect(f.state()).toMatchObject({ mutations: 1, restMergePayload: null });
-    expectGraphqlSquash(f, f.state().mergeBody);
-    expect(f.state().calls.some((call) => call[1] === "pr" && call[2] === "merge")).toBe(false);
-  });
-
-  it.each([unknownProjection, { mergeable: "UNKNOWN" }, { mergeStateStatus: "UNKNOWN" }])(
-    "settles UNKNOWN REST %j via GraphQL before pinned merge",
-    (projection) => {
-      const f = restFixture({
-        pr: { ...projection },
-        observations: [{ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } }],
-      });
+  it.each([
+    { restReadFailure: "core", restReadFailuresRemaining: 1 },
+    ...[unknownProjection, { mergeable: "UNKNOWN" }, { mergeStateStatus: "UNKNOWN" }].map((pr) => ({
+      pr,
+      observations: [{ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } }],
+    })),
+  ])(
+    "settles REST read failure or UNKNOWN projection %j via one pinned GraphQL merge",
+    (changes) => {
+      const f = restFixture(changes);
 
       expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
       expect(f.record()).not.toHaveProperty("transport");
       expect(f.state()).toMatchObject({ restMergePayload: null, mutations: 1 });
       expectGraphqlSquash(f, f.state().mergeBody);
+      expect(f.state().calls.some((call) => call[1] === "pr" && call[2] === "merge")).toBe(false);
     },
   );
 
@@ -392,9 +390,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       expect(run.status, run.output).not.toBe(0);
       expect(f.state().mutations).toBe(0);
       expect(() => f.record()).toThrow();
-      const fallbackChecks = f
-        .state()
-        .calls.filter((call) => call[1] === "pr" && call[2] === "checks");
+      const { calls } = f.state();
+      const fallbackChecks = calls.filter((call) => call[1] === "pr" && call[2] === "checks");
       expect(fallbackChecks).toHaveLength(failure === "core" ? 1 : 0);
       if (failure === "core") {
         expect(run.output).toContain("Neither GitHub transport");
@@ -526,10 +523,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       ...(quotaAt === "observe" ? { restObservation: { gates: "pass" } } : {}),
     });
     if (route === "admin") {
-      const gates = join(f.worktree, ".local/gates.env");
-      writeFileSync(
-        gates,
-        readFileSync(gates, "utf8").replace("GATES_MODE=full", "GATES_MODE=remote_crabbox_aws"),
+      writeLocal(
+        f,
+        "gates.env",
+        readLocal(f, "gates.env").replace("GATES_MODE=full", "GATES_MODE=remote_crabbox_aws"),
       );
     }
 
@@ -581,11 +578,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         restFailedContext: failedContext,
       });
 
-      expectExit(f.run(), admitted ? 0 : 1);
-      expect(f.state().mutations).toBe(admitted ? 1 : 0);
-      const requests = f
-        .state()
-        .calls.flatMap((call) =>
+      expectAdmission(f, admitted);
+      const { calls } = f.state();
+      const requests = calls
+        .flatMap((call) =>
           call.filter(
             (arg) => arg.startsWith("repos/fixture/repo/commits/") && arg.includes("/check-runs?"),
           ),
@@ -598,20 +594,11 @@ describePosix("native merge with exhausted GraphQL quota", () => {
             request.searchParams.get("check_name") === (contexts.length === 1 ? contexts[0] : null),
         ),
       ).toBe(true);
-      if (admitted) {
-        expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
-      } else {
-        expect(() => f.record()).toThrow();
-      }
     },
   );
 
   it.each([
-    evidenceCase(
-      "app-bound check with same-name legacy status",
-      { restChecks: "bound-status" },
-      true,
-    ),
+    evidenceCase({ restChecks: "bound-status" }, true),
     ...[
       "missing",
       "status-only",
@@ -621,7 +608,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       "failed-status",
       "inconsistent-status",
     ].map((fault) =>
-      evidenceCase(`required check ${fault}`, {
+      evidenceCase({
         restChecks: fault,
         restCheckApp: fault.startsWith("wrong-app") ? 999 : 15368,
         gates: fault === "failed" ? "fail" : "pass",
@@ -635,21 +622,14 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       "ambiguous-mapping",
       "same-time",
       "missing-time",
-    ].map((restDuplicate) =>
-      evidenceCase(
-        `rerun identity ${restDuplicate}`,
-        { restDuplicate },
-        restDuplicate === "same-workflow",
-      ),
-    ),
+    ].map((restDuplicate) => evidenceCase({ restDuplicate }, restDuplicate === "same-workflow")),
     ...[999, 1_000].map((restUnseenSuiteCount) =>
       evidenceCase(
-        `suite inventory limit with ${restUnseenSuiteCount} empty suites`,
         { restUnseenSuite: "queued-empty-custom", restUnseenSuiteCount },
         restUnseenSuiteCount === 999,
       ),
     ),
-    evidenceCase("successful check with rerunning suite", { restSuite: "rerunning" }),
+    evidenceCase({ restSuite: "rerunning" }),
     ...[
       { restUnseenSuite: "pending", admitted: false },
       { restUnseenSuite: "failed", admitted: false },
@@ -668,20 +648,13 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       { restUnseenSuite: "queued-empty-drift", admitted: false },
     ].map(({ restUnseenSuite, restRequiredApp = 15368, admitted }) =>
       evidenceCase(
-        `fresh suite ${restUnseenSuite}`,
         { restUnseenSuite, restRequiredApp, restCheckApp: restRequiredApp ?? 15368 },
         admitted,
       ),
     ),
-  ])("admits REST merge only with complete check evidence: $name", ({ state, admitted }) => {
+  ])("admits REST merge only with complete check evidence: $state", ({ state, admitted }) => {
     const f = restFixture({ quotaAt: "checks", ...state });
-    expectExit(f.run(), admitted ? 0 : 1);
-    expect(f.state().mutations).toBe(admitted ? 1 : 0);
-    if (admitted) {
-      expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
-    } else {
-      expect(() => f.record()).toThrow();
-    }
+    expectAdmission(f, admitted);
   });
 
   it.each(["queued-empty-custom", "labeler"])(
@@ -692,15 +665,14 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         restUnseenSuite,
         restUnseenSuiteCount: 173,
       });
-      expectExit(f.run(), 0);
-      expect(f.state().mutations).toBe(1);
-      const checkCalls = f
-        .state()
-        .calls.filter((call) => call.some((arg) => /\/check-(runs|suites)[/?]/.test(arg)));
+      expectAdmission(f);
+      const { calls } = f.state();
+      const checkCalls = calls.filter((call) =>
+        call.some((arg) => /\/check-(runs|suites)[/?]/.test(arg)),
+      );
       // A full native attempt may reread evidence, but request count must not
       // grow as two subprocesses per suite (346 calls per observation).
       expect(checkCalls.length).toBeLessThan(40);
-      expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
     },
   );
 

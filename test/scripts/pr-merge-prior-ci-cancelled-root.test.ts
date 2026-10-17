@@ -1,6 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { expectExit, completedStep } from "./pr-merge-assertions.test-support.js";
+import {
+  expectExit,
+  expectPriorCiRefusal,
+  completedStep,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -152,11 +156,9 @@ describePosix("attributed test failure in a cancelled job", () => {
     mutate(f);
     writeFileSync(f.path, JSON.stringify(f.evidence));
     f.save(f.live);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(
+    expectPriorCiRefusal(
+      f,
       workflowVariants[fault] ? "canonical Node shard workflow owner" : "Prior-CI admin admission:",
     );
-    expect(f.state().mutations).toBe(0);
   });
 });

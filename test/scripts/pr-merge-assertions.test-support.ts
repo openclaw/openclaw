@@ -2,10 +2,21 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
 import type { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
+import type { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
 type Fixture = ReturnType<ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"]>;
 type State = ReturnType<Fixture["state"]>;
 type Changes = Partial<Omit<State, "pr">> & { pr?: Partial<State["pr"]> };
+type PriorCandidate = ReturnType<
+  ReturnType<typeof createPriorCiCandidateFactory>["preExistingCandidate"]
+>;
+
+export function expectPriorCiRefusal(f: PriorCandidate, message: string | RegExp) {
+  const result = f.verifyPriorCi(f.path);
+  expect(result.status, result.output).not.toBe(0);
+  expect(result.output).toMatch(message);
+  expect(f.state().mutations).toBe(0);
+}
 
 export function readLocal(f: Pick<Fixture, "worktree">, name: string) {
   return readFileSync(join(f.worktree, ".local", name), "utf8");

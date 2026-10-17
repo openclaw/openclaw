@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
-import { expectExit, completedStep } from "./pr-merge-assertions.test-support.js";
+import {
+  expectExit,
+  expectPriorCiRefusal,
+  completedStep,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -156,10 +160,7 @@ describePosix("pre-existing job deadline admission", () => {
       mutate(f);
       f.save(f.live);
       writeFileSync(f.path, JSON.stringify(f.evidence));
-      const result = f.verifyPriorCi(f.path);
-      expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toMatch(/Prior-CI admin admission:/u);
-      expect(f.state().mutations).toBe(0);
+      expectPriorCiRefusal(f, /Prior-CI admin admission:/u);
     },
   );
 
@@ -182,9 +183,6 @@ describePosix("pre-existing job deadline admission", () => {
     mutate(f);
     f.save(f.live);
     writeFileSync(f.path, JSON.stringify(f.evidence));
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("deadline");
-    expect(f.state().mutations).toBe(0);
+    expectPriorCiRefusal(f, "deadline");
   });
 });
