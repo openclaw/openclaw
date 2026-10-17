@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { activeSessions } from "../../transcripts/capture-startup.js";
 import { startTranscripts } from "../../transcripts/capture.js";
 import type { TranscriptStartRequest } from "../../transcripts/provider-types.js";
@@ -9,6 +8,7 @@ import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import {
   captureFixture,
+  captureGate,
   type CaptureStart,
 } from "./transcripts-tool.capture-fixture.test-support.js";
 import {
@@ -22,22 +22,16 @@ function pause<Args extends unknown[], Result>(
   operation: (...args: Args) => Promise<Result>,
   after = false,
 ) {
-  const entered = createDeferred();
-  const release = createDeferred();
-  const wait = async () => {
-    entered.resolve();
-    await release.promise;
-  };
+  const gate = captureGate();
   return {
-    entered: entered.promise,
-    release: release.resolve,
+    ...gate,
     run: async (...args: Args) => {
       if (after) {
         const result = await operation(...args);
-        await wait();
+        await gate.wait();
         return result;
       }
-      await wait();
+      await gate.wait();
       return operation(...args);
     },
   };
@@ -85,11 +79,11 @@ function harness() {
     });
   const reopen = (
     existingSession: Awaited<ReturnType<typeof session>>,
-    ctx: Pick<Parameters<typeof startTranscripts>[0]["ctx"], "agentId" | "config"> = {},
+    agentId?: string,
     title?: string,
   ) =>
     startTranscripts({
-      ctx: { stateDir: f.ctx.stateDir, logger: f.logger, ...ctx },
+      ctx: { stateDir: f.ctx.stateDir, logger: f.logger, agentId },
       store,
       rawParams: { providerId: provider.id, title },
       configuredLifecycle: true,
@@ -212,8 +206,7 @@ it("does not grant retry authority when failed startup cannot restore its sessio
 
 it("releases the provider when shutdown interrupts title adoption", async () => {
   const h = harness();
-  const entered = createDeferred();
-  const release = createDeferred();
+  const gate = captureGate();
   const controller = new AbortController();
   h.provider.start = async (request) => ({
     ok: true,
@@ -225,8 +218,7 @@ it("releases the provider when shutdown interrupts title adoption", async () => 
     async (session, condition) => {
       if (session.title === "Room" && !blocked) {
         blocked = true;
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
       }
       return originalWrite(session, condition);
     },
@@ -237,10 +229,10 @@ it("releases the provider when shutdown interrupts title adoption", async () => 
   );
   const rejected = expect(start).rejects.toThrow("aborted");
   try {
-    await entered.promise;
+    await gate.entered;
     controller.abort();
   } finally {
-    release.resolve();
+    gate.release();
   }
   await rejected;
   expect(h.provider.stop).toHaveBeenCalledOnce();
@@ -280,7 +272,7 @@ it.each([false, true])(
     };
     const sessionId = existingSession?.sessionId ?? "notes";
     if (existingSession) {
-      await h.reopen(existingSession, { agentId: "research" }, "Future title");
+      await h.reopen(existingSession, "research", "Future title");
     } else {
       await h.execute({ action: "start", providerId: "capture", sessionId });
     }
@@ -417,8 +409,7 @@ it.each([
     vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
     const h = harness();
     const caller = h.caller();
-    const entered = createDeferred();
-    const authorization = createDeferred();
+    const authorization = captureGate();
     let delayAuthorization = true;
     h.provider.accessControl = {
       channelId: "capture-channel",
@@ -426,8 +417,7 @@ it.each([
       authorize: async (request) => {
         if (request.action === action && delayAuthorization) {
           delayAuthorization = false;
-          entered.resolve();
-          await authorization.promise;
+          await authorization.wait();
         }
         return { ok: true, value: undefined };
       },
@@ -445,7 +435,7 @@ it.each([
           }
         : {}),
     });
-    await Promise.race([entered.promise, delayed]);
+    await Promise.race([authorization.entered, delayed]);
     caller.close();
     await h.requests[0]!.onStatus?.({ active: false });
     vi.setSystemTime(new Date("2026-07-02T10:00:00.000Z"));
@@ -455,7 +445,7 @@ it.each([
     const read = vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot");
     const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
     const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
-    authorization.resolve();
+    authorization.release();
     await expect.soft(delayed).resolves.toMatchObject({
       details: action === "status" ? { active: [] } : { skipped: true },
     });

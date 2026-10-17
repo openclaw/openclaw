@@ -1,6 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -10,7 +9,6 @@ import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.
 import { activeSessions } from "../../transcripts/capture-startup.js";
 import { createTranscriptSessionId } from "../../transcripts/capture.js";
 import * as transcriptCapture from "../../transcripts/capture.js";
-import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import * as configuredStartStatus from "../../transcripts/configured-start-status.js";
 import type {
   TranscriptOccupancyWatchRequest,
@@ -21,24 +19,17 @@ import {
   type AutoStarts,
   type CaptureStart,
 } from "./transcripts-tool.capture-fixture.test-support.js";
+import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
 
-const tempDirs = createTempDirTracker();
+const testState = useTranscriptTestState();
 const startTranscripts = transcriptCapture.startTranscripts;
 const beginConfiguredTranscriptStarts = configuredStartStatus.beginConfiguredTranscriptStarts;
 type Service = ReturnType<typeof createTranscriptsAutoStartService>;
-afterEach(async () => {
-  await clearTranscriptCapturesForTest();
-  vi.useRealTimers();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  tempDirs.cleanup();
-  vi.restoreAllMocks();
-});
 
 function harness() {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-08-01T12:00:00Z"));
-  const stateDir = tempDirs.make("transcript-occupancy-");
+  const state = testState();
   const watches: TranscriptOccupancyWatchRequest[] = [];
   const unwatch = vi.fn();
   const starts: ReturnType<typeof createDeferred<void>>[] = [];
@@ -67,11 +58,8 @@ function harness() {
     return result;
   });
   const f = captureFixture(
-    { stateDir },
+    state,
     {
-      id: "room-capture",
-      name: "Room capture",
-      sourceKinds: ["live-audio"],
       accessControl: {
         channelId: "room",
         resolveAccountId: ({ source }) => ({ ok: true, value: source.accountId ?? "default" }),

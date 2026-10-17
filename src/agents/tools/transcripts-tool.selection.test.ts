@@ -21,17 +21,12 @@ function harness() {
       ? { ok: false, error: "private provider reason" }
       : { ok: true, value: undefined },
   );
-  const f = captureFixture(
-    testState(),
-    {
-      accessControl: {
-        channelId: "capture",
-        resolveAccountId: ({ source }) => ({ ok: true, value: source.accountId }),
-        authorize,
-      },
-    },
-    { agentId: "research" },
-  );
+  const accessControl: TranscriptSourceProvider["accessControl"] = {
+    channelId: "capture",
+    resolveAccountId: ({ source }) => ({ ok: true, value: source.accountId }),
+    authorize,
+  };
+  const f = captureFixture(testState(), { accessControl }, { agentId: "research" });
   const stop = vi.mocked(f.provider.stop!);
   f.provider.start = async (request) => {
     f.requests.push(request);
@@ -65,6 +60,7 @@ const [legacy, dated] = collision;
 describe("transcript tool selection", () => {
   it("rejects legacy collisions before and after retirement", async () => {
     const h = harness();
+    const { store } = h;
     for (const target of collision) {
       await h.start(target.sessionId, target.date);
     }
@@ -77,14 +73,11 @@ describe("transcript tool selection", () => {
     };
     await rejectLegacy();
     expect(h.stop).not.toHaveBeenCalled();
-    for (const request of h.requests) {
-      expect(await h.store.readSummary(request.session)).toEqual({});
-      expect(
-        (await h.store.readSession(transcriptSessionSelector(request.session)))?.stoppedAt,
-      ).toBeUndefined();
-      await expect(fs.stat(h.store.sessionDir(request.session))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+    for (const { session } of h.requests) {
+      expect(await store.readSummary(session)).toEqual({});
+      const selector = transcriptSessionSelector(session);
+      expect((await store.readSession(selector))?.stoppedAt).toBeUndefined();
+      await expect(fs.stat(store.sessionDir(session))).rejects.toMatchObject({ code: "ENOENT" });
     }
     const status = await h.execute("status");
     expect(status.details).toMatchObject({
@@ -98,16 +91,14 @@ describe("transcript tool selection", () => {
     const shownSelectors = [...statusText.matchAll(/^active: (.+)$/gm)].map((match) => match[1]);
     expect(shownSelectors).toEqual(collision.map(({ selector }) => selector).toSorted());
     for (const target of collision) {
+      const { sessionId } = target;
       const selector = shownSelectors.find((value) => value === target.selector);
       for (const action of ["summarize", "stop", "stop"]) {
         const result = await h.execute(action, { selector });
         expect(result.details).toMatchObject({
-          sessionId: target.sessionId,
+          sessionId,
           selector: target.selector,
-          summary: {
-            sessionId: target.sessionId,
-            transcript: [`Notes for ${target.sessionId}`],
-          },
+          summary: { sessionId, transcript: [`Notes for ${sessionId}`] },
         });
         expect(result.content).toContainEqual({
           type: "text",
@@ -115,7 +106,7 @@ describe("transcript tool selection", () => {
         });
       }
       expect(h.stop.mock.calls.map(([request]) => request.sessionId)).toEqual(
-        collision.slice(0, collision.indexOf(target) + 1).map(({ sessionId }) => sessionId),
+        collision.slice(0, collision.indexOf(target) + 1).map(({ sessionId: id }) => id),
       );
       await rejectLegacy();
     }
@@ -140,10 +131,7 @@ describe("transcript tool selection", () => {
       await expect(h.execute(action, { sessionId })).rejects.toThrow(ambiguous);
       expect(
         (await h.execute(action, { selector: `2026-07-01/${sessionId}` })).details,
-      ).toMatchObject({
-        sessionId,
-        summary: { transcript: ["Speaker: Historical 2026-07-01"] },
-      });
+      ).toMatchObject({ sessionId, summary: { transcript: ["Speaker: Historical 2026-07-01"] } });
     }
     expect(h.stop).toHaveBeenCalledOnce();
   });
@@ -205,14 +193,12 @@ describe("transcript tool selection", () => {
     async (denial) => {
       const h = harness();
       await h.start(legacy.sessionId, legacy.date);
+      const accountId = denial === "account" ? "private-account" : "public-account";
       const privateSession = {
         sessionId: "raw-id",
         startedAt: "2026-07-03T10:00:00.000Z",
         title: "private title",
-        source: {
-          providerId: "capture",
-          accountId: denial === "account" ? "private-account" : "public-account",
-        },
+        source: { providerId: "capture", accountId },
         metadata: { agentId: denial === "agent" ? "private-owner" : "research" },
       };
       await h.store.writeSession(privateSession);

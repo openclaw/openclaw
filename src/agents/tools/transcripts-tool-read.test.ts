@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -12,8 +10,11 @@ import {
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture-startup.js";
-import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
-import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceProvider,
+} from "../../transcripts/provider-types.js";
+import { type TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import {
   createToolSearchCatalogRef,
@@ -22,13 +23,14 @@ import {
 import { resolveToolSearchConfig } from "../tool-search-config.js";
 import { ToolSearchRuntime } from "../tool-search-runtime.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
+import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
 
 const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
 vi.mock("../../transcripts/provider-registry.js", () => ({
   getTranscriptSourceProvider: getProvider,
   listTranscriptSourceProviders: () => [],
 }));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testState = useTranscriptTestState();
 let stateDir: string;
 let store: TranscriptsStore;
 const session = {
@@ -39,19 +41,20 @@ const session = {
   metadata: { agentId: "capture-agent" },
 };
 const selector = transcriptSessionSelector(session);
+const foreignSource = { providerId: "voice", guildId: "other" };
 type Authorize = NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"];
 function provider(authorize: Authorize) {
-  getProvider.mockReturnValue({
-    id: "voice",
-    name: "Voice",
-    accessControl: { channelId: "discord", authorize },
-  });
+  const accessControl = { channelId: "discord", authorize };
+  getProvider.mockReturnValue({ id: "voice", name: "Voice", accessControl });
 }
 function writeNotes(text: string, descriptor = session) {
   return store.writeSummary(
     summarizeTranscripts({ session: descriptor, utterances: [{ text }] }),
     descriptor,
   );
+}
+function saveSession(overrides: Partial<TranscriptSessionDescriptor>) {
+  return store.writeSession({ ...session, ...overrides });
 }
 function show(channel = false) {
   return run({ action: "show", selector }, channel);
@@ -97,17 +100,9 @@ function expectNotes(result: Awaited<ReturnType<typeof run>>, text: string) {
 }
 
 beforeEach(async () => {
-  stateDir = tempDirs.make("transcripts-read-");
-  store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  ({ stateDir, store } = testState());
   getProvider.mockReset();
   await store.writeSession(session);
-});
-afterEach(async () => {
-  activeSessions.clear();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
 });
 
 describe("transcripts read actions", () => {
@@ -131,9 +126,8 @@ describe("transcripts read actions", () => {
       const pending = store.listReadEntries({ limit: 2 });
       releaseSkill();
       releaseSkill = () => {};
-      expect((await pending).entries.map(({ session: { sessionId } }) => ({ sessionId }))).toEqual(
-        expected,
-      );
+      const ordered = (await pending).entries.map(({ session: { sessionId } }) => ({ sessionId }));
+      expect(ordered).toEqual(expected);
       await expectList(expected);
     } finally {
       releaseSkill();
@@ -163,7 +157,7 @@ describe("transcripts read actions", () => {
     try {
       await Promise.race([entered.promise, reading]);
       expect(authorize).toHaveBeenCalledOnce();
-      const rewritten = { ...session, source: { providerId: "voice", guildId: "other" } };
+      const rewritten = { ...session, source: foreignSource };
       await store.writeSession(rewritten);
       await writeNotes("Other guild notes", rewritten);
       release.resolve();
@@ -214,13 +208,9 @@ describe("transcripts read actions", () => {
         : { ok: false, error: "denied" },
     );
     provider(authorize);
+    const metadata = { providerPrivate: "x".repeat(600_000) };
     for (const sessionId of ["hidden", "hidden-too"]) {
-      await store.writeSession({
-        ...session,
-        sessionId,
-        source: { providerId: "voice", guildId: "other" },
-        metadata: { providerPrivate: "x".repeat(600_000) },
-      });
+      await saveSession({ sessionId, source: foreignSource, metadata });
     }
     await expectList([{ sessionId: "meeting" }], true, 1);
     await show(true);
@@ -236,12 +226,9 @@ describe("transcripts read actions", () => {
     );
     provider(authorize);
     registerActiveCapture();
-    await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
+    await saveSession({ source: foreignSource });
     await writeNotes("Other guild notes");
-    const authorizedSource = expect.objectContaining({
-      action: "show",
-      source: { providerId: "voice", guildId: "other" },
-    });
+    const authorizedSource = expect.objectContaining({ action: "show", source: foreignSource });
     await expect(show(true)).rejects.toThrow("not found");
     expect(authorize).toHaveBeenLastCalledWith(authorizedSource);
     authorize.mockResolvedValue({ ok: true, value: undefined });
@@ -250,19 +237,17 @@ describe("transcripts read actions", () => {
   });
 
   it("closes its read page before awaited source authorization writes and checkpoints state", async () => {
+    const text = "Written during authorization";
     provider(async () => {
-      await store.appendUtteranceForSession(session, { text: "Written during authorization" });
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      await store.appendUtteranceForSession(session, { text });
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const { db } = openOpenClawStateDatabase({ env });
       // A pending SELECT would prevent the provider's committed write from checkpointing.
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       return { ok: true, value: undefined };
     });
     await expectList([{ sessionId: session.sessionId, utteranceCount: 0 }], true, 1);
-    expect(await store.readUtterancesForSession(session)).toMatchObject([
-      { text: "Written during authorization" },
-    ]);
+    expect(await store.readUtterancesForSession(session)).toMatchObject([{ text }]);
   });
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
@@ -284,11 +269,7 @@ describe("transcripts read actions", () => {
     );
     await expect(readThroughCatalog()).resolves.toMatchObject({ text: text.text });
     for (let index = 0; index < 50; index++) {
-      await store.writeSession({
-        ...session,
-        sessionId: `meeting-${index}`,
-        title: "Long title ".repeat(40),
-      });
+      await saveSession({ sessionId: `meeting-${index}`, title: "Long title ".repeat(40) });
     }
     const listed = await run({ action: "list", limit: 50 });
     expect(listed.details).toHaveProperty("sessions.length", 50);
