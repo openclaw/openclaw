@@ -1,9 +1,14 @@
 // Qa Lab Matrix tests cover request behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockMatrixQaHttp } from "./http.test-support.js";
 import { requestMatrixJson } from "./request.js";
 
 describe("requestMatrixJson", () => {
+  let http: ReturnType<typeof mockMatrixQaHttp>;
+  beforeEach(() => {
+    http = mockMatrixQaHttp();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -24,7 +29,11 @@ describe("requestMatrixJson", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetchImpl).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({ signal }));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://matrix.example.test/_matrix/client/v3/account/whoami",
+      expect.objectContaining({ signal }),
+    );
+    expect(http.release).toHaveBeenCalledOnce();
   });
 
   it.each([200, 500])("cancels an over-cap response before handling HTTP %s", async (status) => {
@@ -65,6 +74,7 @@ describe("requestMatrixJson", () => {
 
     expect(canceled).toBe(true);
     expect(reads).toBeLessThan(chunkCount);
+    expect(http.release).toHaveBeenCalledOnce();
   });
 
   it("still falls back to an empty body for malformed in-bounds JSON", async () => {

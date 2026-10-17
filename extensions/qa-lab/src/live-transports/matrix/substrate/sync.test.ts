@@ -1,6 +1,7 @@
 // Qa Lab Matrix tests cover sync behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixQaObservedEvent, MatrixQaRoomEvent } from "./events.js";
+import { mockMatrixQaHttp } from "./http.test-support.js";
 import { createMatrixQaRoomObserver, primeMatrixQaRoom } from "./sync.js";
 
 function message(
@@ -28,7 +29,11 @@ function syncResponse(
 }
 
 describe("matrix sync helpers", () => {
+  beforeEach(() => {
+    mockMatrixQaHttp();
+  });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 

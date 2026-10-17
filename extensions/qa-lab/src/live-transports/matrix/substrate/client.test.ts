@@ -1,10 +1,11 @@
 // Qa Lab Matrix tests cover client behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixQaMessageContent,
   resolveNextRegistrationAuth,
 } from "./client-message-content.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
+import { mockMatrixQaHttp } from "./http.test-support.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   if (typeof input === "string") {
@@ -24,7 +25,11 @@ function parseJsonRequestBody(init?: RequestInit) {
 }
 
 describe("matrix driver client", () => {
+  beforeEach(() => {
+    mockMatrixQaHttp();
+  });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 

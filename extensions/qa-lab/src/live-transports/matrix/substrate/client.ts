@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixQaMediaMessageContent,
@@ -98,28 +99,37 @@ async function uploadMatrixQaContent(params: {
     params.buffer.buffer instanceof ArrayBuffer
       ? new Uint8Array(params.buffer.buffer, params.buffer.byteOffset, params.buffer.byteLength)
       : Uint8Array.from(params.buffer);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": params.contentType ?? "application/octet-stream",
-      ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.href,
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-matrix-media-upload",
+    init: {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": params.contentType ?? "application/octet-stream",
+        ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+      },
+      body: uploadBody,
+      signal: AbortSignal.timeout(20_000),
     },
-    body: uploadBody,
-    signal: AbortSignal.timeout(20_000),
   });
-  const body = (await readMatrixQaJsonResponse(response)) as {
-    content_uri?: string;
-    error?: string;
-  };
-  if (response.status !== 200) {
-    throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
+  try {
+    const body = (await readMatrixQaJsonResponse(response)) as {
+      content_uri?: string;
+      error?: string;
+    };
+    if (response.status !== 200) {
+      throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
+    }
+    const contentUri = body.content_uri?.trim();
+    if (!contentUri) {
+      throw new Error("Matrix media upload did not return content_uri.");
+    }
+    return contentUri;
+  } finally {
+    await release();
   }
-  const contentUri = body.content_uri?.trim();
-  if (!contentUri) {
-    throw new Error("Matrix media upload did not return content_uri.");
-  }
-  return contentUri;
 }
 
 function buildRegisteredAccount(params: {
