@@ -38,6 +38,7 @@ const remoteResult = (stdout = "", code = 0) => ({
   ...spawnResult(stdout, code),
   workspaceDir: REMOTE_WORKSPACE,
 });
+const isManifestCapture = (argv: string[]) => argv[0] === "node" && !argv.includes("--");
 const originStdout = async ({
   argv,
   seed,
@@ -48,7 +49,7 @@ const originStdout = async ({
   if (argv.includes("rev-parse")) {
     return remoteResult(COMMIT);
   }
-  return remoteResult(argv[0] === "node" && !argv.includes("--") ? MANIFEST_REF : "");
+  return remoteResult(isManifestCapture(argv) ? MANIFEST_REF : "");
 };
 function fixture(exec = vi.fn<WorkspaceExec>(originStdout)) {
   const request = { localPath: cleanWorkspace(), sessionId: "session-1", generation: 1 };
@@ -104,15 +105,12 @@ describe("node worker workspace origin fallback", () => {
         return originStdout({ argv, seed });
       });
       const { sync } = fixture(exec);
-      await expect(
-        sync({
-          authorize: () => {
-            if (!current) {
-              throw closed;
-            }
-          },
-        }),
-      ).rejects.toBe(closed);
+      const authorize = () => {
+        if (!current) {
+          throw closed;
+        }
+      };
+      await expect(sync({ authorize })).rejects.toBe(closed);
       expect(exec.mock.calls.at(-1)?.[0].seed?.action).toBe(boundary);
       if (boundary === "apply") {
         expect(exec).toHaveBeenCalledOnce();
@@ -177,12 +175,7 @@ describe("node worker workspace origin fallback", () => {
         if (argv.includes("get-url")) {
           return remoteResult(failure === "remote-mismatch" ? "https://other.invalid" : ORIGIN);
         }
-        if (
-          !cloned &&
-          failure === "manifest-mismatch" &&
-          argv[0] === "node" &&
-          !argv.includes("--")
-        ) {
+        if (!cloned && failure === "manifest-mismatch" && isManifestCapture(argv)) {
           return remoteResult(`sha256:${"d".repeat(64)}`);
         }
         const result = await originStdout({ argv, seed });
@@ -261,11 +254,8 @@ describe("node worker workspace origin fallback", () => {
     async (gitAuthor, name, email, lookups) => {
       const { exec, finalize } = fixture();
       await expect(finalize(gitAuthor)).resolves.toEqual(syncResult);
-      expect(
-        commandArgs(exec)
-          .filter((argv) => argv.includes("config"))
-          .map((argv) => argv.slice(-2)),
-      ).toEqual([
+      const config = commandArgs(exec).filter((argv) => argv.includes("config"));
+      expect(config.map((argv) => argv.slice(-2))).toEqual([
         ["user.name", name],
         ["user.email", email],
         ["remote.origin.url", ORIGIN],

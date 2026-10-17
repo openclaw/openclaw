@@ -2,7 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -67,6 +67,7 @@ async function transferFixture(name: string, filename: string, payload: string |
     sessionId,
     localPath,
     isAuthorized: () => true,
+    signal: new AbortController().signal,
   };
   return { service, record, input };
 }
@@ -114,15 +115,11 @@ describe("node workspace credential revocation", () => {
       try {
         const prepared = await service.prepareSync(input);
         const entry = prepared.snapshot.manifest.entries.find((row) => row.path === "proof.txt");
-        if (entry?.type !== "file") {
-          throw new Error("Missing verified blob fixture");
-        }
+        assert(entry?.type === "file", "Missing verified blob fixture");
         server.listen(0, "127.0.0.1");
         await once(server, "listening");
         const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("HTTP blob fixture did not bind");
-        }
+        assert(address && typeof address !== "string", "HTTP blob fixture did not bind");
         request = fetch(
           `http://127.0.0.1:${address.port}/__openclaw__/worker-transfer/v1/environments/${record.environmentId}/blobs/${entry.sha256}`,
           {
@@ -171,10 +168,8 @@ describe("node workspace credential revocation", () => {
         );
         resumeVerification.resolve();
         const response = await handled.promise;
-        if (mutationKind === "revokeEnvironmentCredential") {
-          expect(response.headersSent).toBe(false);
-        } else {
-          expect(response.headersSent).toBe(true);
+        expect(response.headersSent).toBe(mutationKind !== "revokeEnvironmentCredential");
+        if (mutationKind !== "revokeEnvironmentCredential") {
           expect(await request).toEqual({ status: 200, body: payload });
         }
         expect(verification).toHaveBeenCalledOnce();
@@ -201,16 +196,12 @@ describe("node workspace credential revocation", () => {
     const fixture = await transferFixture("transfer", "input.txt", "gateway input");
     const { service, record, input: preparation } = fixture;
     const { environmentId, ownerEpoch } = record;
-    const ownerSignal = new AbortController();
     const server = await startNodeWorkspaceTransferTestServer(service);
     const release = createDeferred();
     let uploadFailure: Promise<void> | undefined;
     let restoreOpen: (() => void) | undefined;
     try {
-      const { snapshot, token: downloadToken } = await service.prepareSync({
-        ...preparation,
-        signal: ownerSignal.signal,
-      });
+      const { snapshot, token: downloadToken } = await service.prepareSync(preparation);
       const route = {
         kind: "manifest",
         direction: "download",
@@ -218,9 +209,7 @@ describe("node workspace credential revocation", () => {
         manifestRef: snapshot.manifestRef,
       } as const;
       const authorization = service.authorize({ route, token: downloadToken });
-      if (!authorization) {
-        throw new Error("expected admitted download");
-      }
+      assert(authorization, "expected admitted download");
       let stagingRoot: string | undefined;
       const runtime = new NodeWorkerWorkspaceRuntime({
         root: path.join(support.testState.root, "node-workspaces"),
@@ -277,7 +266,7 @@ describe("node workspace credential revocation", () => {
         destroyRequestedAtMs: null,
       });
       expect({
-        aborted: ownerSignal.signal.aborted,
+        aborted: preparation.signal.aborted,
         current: service.isAuthorizationCurrent(authorization),
         snapshot: service.snapshot(authorization),
       }).toEqual({ aborted: false, current: false, snapshot: undefined });
@@ -289,20 +278,13 @@ describe("node workspace credential revocation", () => {
       );
       expect(response.status).toBe(404);
       await expect(response.json()).resolves.toEqual({ error: "not_found" });
-      expect(() => service.prepareUpload(environmentId, snapshot.manifestRef)).toThrow(
-        "context is unavailable",
-      );
-      expect(() => service.publishSnapshot(environmentId, snapshot)).toThrow(
-        "context is unavailable",
-      );
-      await expect(
-        service.prepareAttachments({
-          environmentId,
-          localPath: preparation.localPath,
-          isAuthorized: () => true,
-          signal: ownerSignal.signal,
-        }),
-      ).rejects.toThrow("authority closed");
+      for (const operation of [
+        () => service.prepareUpload(environmentId, snapshot.manifestRef),
+        () => service.publishSnapshot(environmentId, snapshot),
+      ]) {
+        expect(operation).toThrow("context is unavailable");
+      }
+      await expect(service.prepareAttachments(preparation)).rejects.toThrow("authority closed");
       release.resolve();
       await uploadFailure;
       expect(stagingRoot).toBeDefined();

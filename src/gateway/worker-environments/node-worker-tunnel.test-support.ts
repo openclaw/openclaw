@@ -265,20 +265,12 @@ export function seedNodeWorkspaceRepositories(
     }).trim();
   git(["init", "--quiet", localPath]);
   git(["-C", localPath, "add", "."]);
-  git([
-    "-C",
-    localPath,
-    "-c",
+  const commitOptions = [
     "user.name=Memo Test",
-    "-c",
     "user.email=memo@example.invalid",
-    "-c",
     "commit.gpgSign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "base",
-  ]);
+  ].flatMap((option) => ["-c", option]);
+  git(["-C", localPath, ...commitOptions, "commit", "--quiet", "-m", "base"]);
   const baseCommit = git(["-C", localPath, "rev-parse", "HEAD"]);
   git(["clone", "--quiet", localPath, remoteWorkspaceDir]);
   return baseCommit;

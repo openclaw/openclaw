@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { environment, workspaceCommandResult } from "./node-worker-tunnel.test-support.js";
@@ -11,29 +11,23 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const identity = { environmentId: "environment-1", ownerEpoch: 2, sessionId: "session-1" };
 
 async function workspaceFixture(beforeDownload?: () => Promise<void>) {
-  const root = tempDirs.make("node-workspace-authority-");
-  const localPath = path.join(root, "workspace");
-  await fs.mkdir(localPath);
+  const localPath = tempDirs.make("node-workspace-authority-");
   await fs.writeFile(path.join(localPath, "input.txt"), "workspace input\n");
-  const record = environment();
   const transfer = createNodeWorkspaceTransferService({
-    getOwner: () => ({
-      environment: record,
-      credential: { ownerEpoch: record.ownerEpoch, sessionId: "session-1" },
-    }),
-    temporaryRoot: path.join(root, "transfer"),
+    getOwner: () => ({ environment: environment(), credential: identity }),
+    temporaryRoot: tempDirs.make("node-workspace-transfer-"),
   });
   const owner = new AbortController();
   const turn = new AbortController();
-  const route = {
-    kind: "manifest" as const,
-    direction: "download" as const,
-    environmentId: identity.environmentId,
-  };
   const downloadAuthority = (token: string, manifestRef: string) =>
     transfer.authorize({
       token,
-      route: { ...route, manifestRef },
+      route: {
+        kind: "manifest",
+        direction: "download",
+        environmentId: identity.environmentId,
+        manifestRef,
+      },
     });
   const actions = createNodeWorkerWorkspaceActions({
     ...identity,
@@ -62,12 +56,13 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
     downloadAuthority,
     closeTurn: () => turn.abort(new Error("Initiating dispatch turn closed")),
     transferRequest: { ...identity, localPath, isAuthorized: () => true },
-    request: {
-      source: { kind: "local" as const, path: localPath, projectKey: "a".repeat(64) },
-      sessionId: "session-1",
-      generation: 1,
-      authorize: () => turn.signal.throwIfAborted(),
-    },
+    sync: (authorize = () => turn.signal.throwIfAborted()) =>
+      actions.syncWorkspace({
+        source: { kind: "local" as const, path: localPath, projectKey: "a".repeat(64) },
+        sessionId: "session-1",
+        generation: 1,
+        authorize,
+      }),
     [Symbol.asyncDispose]: async () => {
       owner.abort();
       await transfer.closeAll();
@@ -75,113 +70,102 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
   };
 }
 
-describe("node workspace operation authority", () => {
-  it.each(
-    (["local", "repository"] as const).flatMap((source) =>
-      (["turn", "owner", "signal"] as const).map((boundary) => ({ source, boundary })),
-    ),
-  )(
-    "rejects a queued $source sync with closed $boundary authority without replacing its predecessor",
-    async ({ source, boundary }) => {
-      await using fixture = await workspaceFixture();
-      const preparing = createDeferred();
-      const releasePreparation = createDeferred();
-      const originalRealpath = fs.realpath.bind(fs);
-      let blocked = false;
-      const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
-        if (!blocked && args[0] === fixture.localPath) {
-          blocked = true;
-          preparing.resolve();
-          await releasePreparation.promise;
-        }
-        return await originalRealpath(...args);
-      });
-      let authorized = true;
-      const signal = new AbortController();
-      const request = fixture.transferRequest;
-      try {
-        const first = fixture.transfer.prepareSync(request);
-        await preparing.promise;
-        const pending = {
-          ...request,
-          signal: signal.signal,
-          isAuthorized: () => boundary !== "owner" || authorized,
-          authorize: boundary === "turn" ? fixture.request.authorize : undefined,
-        };
-        const second =
-          source === "local"
-            ? fixture.transfer.prepareSync(pending)
-            : fixture.transfer.prepareRepository({
-                ...pending,
-                baseCommit: "a".repeat(40),
-                baseManifestRef: `sha256:${"b".repeat(64)}`,
-              });
-        const rejected = expect(second).rejects.toThrow();
-        authorized = false;
-        fixture.closeTurn();
-        if (boundary === "signal") {
-          signal.abort();
-        }
-        releasePreparation.resolve();
-        const prepared = await first;
-        await rejected;
-        expect(
-          fixture.downloadAuthority(prepared.token, prepared.snapshot.manifestRef),
-        ).toBeDefined();
-      } finally {
-        releasePreparation.resolve();
-        realpath.mockRestore();
+it.each(
+  (["local", "repository"] as const).flatMap((source) =>
+    (["turn", "owner", "signal"] as const).map((boundary) => ({ source, boundary })),
+  ),
+)(
+  "rejects a queued $source sync with closed $boundary authority without replacing its predecessor",
+  async ({ source, boundary }) => {
+    await using fixture = await workspaceFixture();
+    const preparing = createDeferred();
+    const releasePreparation = createDeferred();
+    const originalRealpath = fs.realpath.bind(fs);
+    let blocked = false;
+    const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      if (!blocked && args[0] === fixture.localPath) {
+        blocked = true;
+        preparing.resolve();
+        await releasePreparation.promise;
       }
-    },
-  );
-
-  it.each(["reconciliation", "attachments"] as const)(
-    "preserves independent %s after the initiating dispatch turn closes",
-    async (operation) => {
-      await using fixture = await workspaceFixture();
-      const synced = await fixture.actions.syncWorkspace(fixture.request);
-      fixture.closeTurn();
-      if (operation === "reconciliation") {
-        const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
-        expect(token).toBeTruthy();
-        await fixture.transfer.revoke("environment-1", token);
-      } else {
-        assert.isDefined(fixture.actions.stageAttachments);
-        await expect(
-          fixture.actions.stageAttachments({
-            localPath: fixture.localPath,
-            isAuthorized: () => true,
-            signal: new AbortController().signal,
-          }),
-        ).resolves.toBeUndefined();
-      }
-    },
-  );
-
-  it("rejects a download after its initiating turn closes but permits a fresh sync", async () => {
-    const downloading = createDeferred();
-    const releaseDownload = createDeferred();
-    await using fixture = await workspaceFixture(async () => {
-      downloading.resolve();
-      await releaseDownload.promise;
+      return await originalRealpath(...args);
     });
+    const signal = new AbortController();
     try {
-      const syncing = fixture.actions.syncWorkspace(fixture.request);
-      const rejected = expect(syncing).rejects.toThrow(/authority closed|dispatch turn closed/u);
-      await downloading.promise;
-      fixture.closeTurn();
-      releaseDownload.resolve();
+      const first = fixture.transfer.prepareSync(fixture.transferRequest);
+      await preparing.promise;
+      const pending = {
+        ...fixture.transferRequest,
+        signal: boundary === "signal" ? signal.signal : undefined,
+        isAuthorized: () => boundary !== "owner" || !signal.signal.aborted,
+        authorize: boundary === "turn" ? () => signal.signal.throwIfAborted() : undefined,
+      };
+      const second =
+        source === "local"
+          ? fixture.transfer.prepareSync(pending)
+          : fixture.transfer.prepareRepository({
+              ...pending,
+              baseCommit: "a".repeat(40),
+              baseManifestRef: `sha256:${"b".repeat(64)}`,
+            });
+      const rejected = expect(second).rejects.toThrow();
+      signal.abort(new Error("Initiating dispatch turn closed"));
+      releasePreparation.resolve();
+      const prepared = await first;
       await rejected;
+      expect(
+        fixture.downloadAuthority(prepared.token, prepared.snapshot.manifestRef),
+      ).toBeDefined();
+    } finally {
+      releasePreparation.resolve();
+      realpath.mockRestore();
+    }
+  },
+);
 
-      const synced = await fixture.actions.syncWorkspace({
-        ...fixture.request,
-        authorize: () => {},
-      });
+it.each(["reconciliation", "attachments"] as const)(
+  "preserves independent %s after the initiating dispatch turn closes",
+  async (operation) => {
+    await using fixture = await workspaceFixture();
+    const synced = await fixture.sync();
+    fixture.closeTurn();
+    if (operation === "reconciliation") {
       const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
       expect(token).toBeTruthy();
       await fixture.transfer.revoke("environment-1", token);
-    } finally {
-      releaseDownload.resolve();
+    } else {
+      assert.isDefined(fixture.actions.stageAttachments);
+      await expect(
+        fixture.actions.stageAttachments({
+          localPath: fixture.localPath,
+          isAuthorized: () => true,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBeUndefined();
     }
+  },
+);
+
+it("rejects a download after its initiating turn closes but permits a fresh sync", async () => {
+  const downloading = createDeferred();
+  const releaseDownload = createDeferred();
+  await using fixture = await workspaceFixture(async () => {
+    downloading.resolve();
+    await releaseDownload.promise;
   });
+  try {
+    const syncing = fixture.sync();
+    const rejected = expect(syncing).rejects.toThrow(/authority closed|dispatch turn closed/u);
+    await downloading.promise;
+    fixture.closeTurn();
+    releaseDownload.resolve();
+    await rejected;
+
+    const synced = await fixture.sync(() => {});
+    const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
+    expect(token).toBeTruthy();
+    await fixture.transfer.revoke("environment-1", token);
+  } finally {
+    releaseDownload.resolve();
+  }
 });

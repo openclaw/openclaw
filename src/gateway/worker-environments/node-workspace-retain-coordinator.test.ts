@@ -1,28 +1,25 @@
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND as RETAIN_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
-  NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
-  type NodeWorkerWorkspaceRetainResult,
+  NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES as MAX_HASHES,
+  NODE_WORKER_RETAIN_REQUEST_MAX_BYTES as MAX_BYTES,
+  type NodeWorkerWorkspaceRetainResult as RetainResult,
 } from "../../worker/node-workspace-retain-protocol.js";
 import type {
-  NodeWorkerSupervisorNodeProof,
-  NodeWorkerSupervisorTransport,
+  NodeWorkerSupervisorNodeProof as NodeProof,
+  NodeWorkerSupervisorTransport as Transport,
 } from "../node-registry-private.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import type { WorkerEnvironmentService } from "./service.js";
+import type { WorkerSessionPlacementStore as PlacementStore } from "./placement-store.js";
 
-type NodeWorkerBundleStatusObservation = NonNullable<
-  ReturnType<NonNullable<NodeWorkerSupervisorTransport["getBundleStatus"]>>
->;
+type BundleStatus = NonNullable<ReturnType<NonNullable<Transport["getBundleStatus"]>>>;
 
 const node = {
   nodeId: "node-1",
@@ -47,6 +44,10 @@ function receipt(bundleHash: string, openclawVersion = "2026.8.9") {
 
 const previousHash = "b".repeat(64);
 const currentHash = "c".repeat(64);
+const installedStatus = (bundleHash: string, version = "2026.8.9") => ({
+  bundleHash,
+  status: { status: "installed" as const, version },
+});
 const baseManifest = `sha256:${"1".repeat(64)}`;
 const manifestRead = (read: () => string[] | null) =>
   Object.assign(read, { [Symbol.dispose]: () => {} });
@@ -65,7 +66,6 @@ const turnClaim = {
 function environment(overrides: Record<string, unknown> = {}) {
   return {
     environmentId: "environment-1",
-    profileSnapshot: { install: "bundle", settings: { device: "node-1" } },
     nodeDeviceId: "node-1",
     bootstrapReceipt: null,
     ownerEpoch: 7,
@@ -76,9 +76,7 @@ function environment(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const retainResult = (
-  overrides: Partial<NodeWorkerWorkspaceRetainResult> = {},
-): NodeWorkerWorkspaceRetainResult => ({
+const retainResult = (overrides: Partial<RetainResult> = {}): RetainResult => ({
   applied: true,
   deleted: 0,
   hasMore: false,
@@ -117,17 +115,24 @@ function placement(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function boundedInventory(attachedCount: number, statusOnlyOverflow = false) {
+function boundedInventory(
+  attachedCount: number,
+  statusOnlyOverflow = false,
+  hashCount = MAX_HASHES,
+) {
   const padding = (index: number, full: number) =>
-    !statusOnlyOverflow || index < attachedCount - 1 ? full : index === attachedCount - 1 ? 31 : 0;
-  const environments = Array.from({ length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES }, (_, index) => {
+    !attachedCount || (statusOnlyOverflow && index >= attachedCount)
+      ? 0
+      : statusOnlyOverflow && index === attachedCount - 1
+        ? 31
+        : full;
+  const environments = Array.from({ length: hashCount }, (_, index) => {
     const suffix = index.toString(16).padStart(8, "0");
     return environment({
       environmentId: `environment-${"e".repeat(padding(index, 220))}-${suffix}`,
       attachedSessionIds:
         index < attachedCount ? [`session-${"s".repeat(padding(index, 224))}-${suffix}`] : [],
-      createdAtMs:
-        statusOnlyOverflow && index === NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1 ? 10 : 1,
+      createdAtMs: statusOnlyOverflow && index === MAX_HASHES - 1 ? 10 : 1,
       bootstrapReceipt: receipt(
         index.toString(16).padStart(64, "0"),
         statusOnlyOverflow ? "2026.8.9" : "2026.8.1",
@@ -148,13 +153,11 @@ function createHarness(
   params: {
     environments?: unknown[];
     placements?: unknown[];
-    pendingResults?: Awaited<
-      ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>
-    >;
+    pendingResults?: Awaited<ReturnType<PlacementStore["listPendingWorkspaceResultsAsync"]>>;
     prepareResultAuthority?: () => () => void;
-    results?: NodeWorkerWorkspaceRetainResult[];
-    node?: NodeWorkerSupervisorNodeProof;
-    currentBundleStatus?: NodeWorkerBundleStatusObservation;
+    results?: RetainResult[];
+    node?: NodeProof;
+    currentBundleStatus?: BundleStatus;
     bundleRetention?: Parameters<typeof createNodeWorkspaceRetainCoordinator>[0]["bundleRetention"];
     additionalManifestRefs?: Parameters<
       typeof createNodeWorkspaceRetainCoordinator
@@ -166,7 +169,7 @@ function createHarness(
 ) {
   const results = [...(params.results ?? [retainResult()])];
   let invokeIndex = 0;
-  const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {
+  const invoke = vi.fn<Transport["invoke"]>(async () => {
     params.onInvoke?.(invokeIndex++);
     if (params.invokeError) {
       return { ok: false, error: { code: "UNAVAILABLE", message: params.invokeError } };
@@ -177,16 +180,13 @@ function createHarness(
     };
   });
   let currentBundleStatus = params.currentBundleStatus;
-  const acceptBundleStatus = vi.fn(
-    (
-      _node: NodeWorkerSupervisorNodeProof,
-      observation: NodeWorkerBundleStatusObservation | undefined,
-    ) => {
+  const acceptBundleStatus = vi.fn<NonNullable<Transport["acceptBundleStatus"]>>(
+    (_node, observation) => {
       currentBundleStatus = observation;
       return true;
     },
   );
-  const transport: NodeWorkerSupervisorTransport = {
+  const transport: Transport = {
     async getCurrentNode(nodeId) {
       return (await this.listCurrentNodes()).find((entry) => entry.nodeId === nodeId);
     },
@@ -207,46 +207,39 @@ function createHarness(
     },
   };
   const warn = vi.fn();
-  const rows = () =>
-    (params.placements ?? [placement()]) as ReturnType<WorkerSessionPlacementStore["list"]>;
-  const placements: Pick<
-    WorkerSessionPlacementStore,
-    "prepareMaintenancePlacements" | "prepareRuntimeRefresh"
-  > = {
-    prepareMaintenancePlacements: async () => ({
-      placements: structuredClone(rows()),
-      assertCurrent: () => {},
-      release: () => {},
-    }),
-    prepareRuntimeRefresh: async (sessionId) => {
-      const captured = structuredClone(rows().find((row) => row.sessionId === sessionId));
-      const assertPreparedResultCurrent = params.prepareResultAuthority?.();
-      return {
-        placement: captured,
-        pendingResult: structuredClone(
-          params.pendingResults?.find((row) => row.sessionId === sessionId),
-        ),
-        move: undefined,
-        assertCurrent: () => {
-          assertPreparedResultCurrent?.();
-          if (
-            !isDeepStrictEqual(
-              captured,
-              rows().find((row) => row.sessionId === sessionId),
-            )
-          ) {
-            throw new WorkerPlacementInventoryChangedError(new Set([sessionId]));
-          }
-        },
+  const rows = () => (params.placements ?? [placement()]) as ReturnType<PlacementStore["list"]>;
+  const findPlacement = (sessionId: string) => rows().find((row) => row.sessionId === sessionId);
+  const placements: Pick<PlacementStore, "prepareMaintenancePlacements" | "prepareRuntimeRefresh"> =
+    {
+      prepareMaintenancePlacements: async () => ({
+        placements: structuredClone(rows()),
+        assertCurrent: () => {},
         release: () => {},
-      };
-    },
-  };
+      }),
+      prepareRuntimeRefresh: async (sessionId) => {
+        const captured = structuredClone(findPlacement(sessionId));
+        const assertPreparedResultCurrent = params.prepareResultAuthority?.();
+        return {
+          placement: captured,
+          pendingResult: structuredClone(
+            params.pendingResults?.find((row) => row.sessionId === sessionId),
+          ),
+          move: undefined,
+          assertCurrent: () => {
+            assertPreparedResultCurrent?.();
+            if (!isDeepStrictEqual(captured, findPlacement(sessionId))) {
+              throw new WorkerPlacementInventoryChangedError(new Set([sessionId]));
+            }
+          },
+          release: () => {},
+        };
+      },
+    };
   const coordinator = createNodeWorkspaceRetainCoordinator({
     gatewayNamespace: "gateway-test",
     environments: {
       list: () => (params.environments ?? [environment()]) as never,
-    } as Pick<WorkerEnvironmentService, "list">,
+    },
     placements,
     bundleRetention: params.bundleRetention,
     additionalManifestRefs: params.additionalManifestRefs,
@@ -309,10 +302,9 @@ describe("node workspace retain coordinator", () => {
         }),
       ).toBe(true);
       await publishing;
-      expect(nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")).toEqual({
-        bundleHash,
-        status: { status: "installed", version: "2026.8.10" },
-      });
+      expect(nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")).toEqual(
+        installedStatus(bundleHash, "2026.8.10"),
+      );
     } finally {
       await coordinator.stop();
       nodeRegistry.unregister("connection-1");
@@ -327,7 +319,6 @@ describe("node workspace retain coordinator", () => {
         environment({
           environmentId: "environment-other",
           nodeDeviceId: "node-other",
-          profileSnapshot: { settings: { device: "node-other" } },
         }),
         environment({ environmentId: "environment-terminal", state: "orphaned" }),
       ],
@@ -336,7 +327,7 @@ describe("node workspace retain coordinator", () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]?.[0]).toMatchObject({
       node,
-      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      command: RETAIN_COMMAND,
       params: {
         version: 1,
         gatewayNamespace: "gateway-test",
@@ -374,10 +365,7 @@ describe("node workspace retain coordinator", () => {
     });
 
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
-    expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
-      bundleHash,
-      status: { status: "installed", version: "2026.8.9" },
-    });
+    expect(acceptBundleStatus).toHaveBeenCalledWith(node, installedStatus(bundleHash));
     await coordinator.schedule(node.nodeId);
     expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ bundleHashes: [bundleHash] });
     expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundleStatusHash");
@@ -408,10 +396,7 @@ describe("node workspace retain coordinator", () => {
     });
     await coordinator.schedule(node.nodeId);
     expect(invoke.mock.calls[2]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
-    expect(acceptBundleStatus).toHaveBeenLastCalledWith(node, {
-      bundleHash,
-      status: { status: "installed", version: "2026.8.9" },
-    });
+    expect(acceptBundleStatus).toHaveBeenLastCalledWith(node, installedStatus(bundleHash));
   });
 
   it.each(["inspection failure", "different echoed hash"])(
@@ -419,9 +404,7 @@ describe("node workspace retain coordinator", () => {
     async (failure) => {
       const inspection = failure === "inspection failure";
       const { acceptBundleStatus, warn } = await startHarness({
-        currentBundleStatus: inspection
-          ? { bundleHash: previousHash, status: { status: "installed", version: "2026.8.8" } }
-          : undefined,
+        currentBundleStatus: inspection ? installedStatus(previousHash, "2026.8.8") : undefined,
         environments: [
           environment({ bootstrapReceipt: receipt(inspection ? currentHash : previousHash) }),
         ],
@@ -486,18 +469,7 @@ describe("node workspace retain coordinator", () => {
       const inventory =
         limit === "combined bytes"
           ? boundedInventory(1_500)
-          : {
-              environments: Array.from(
-                { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES + 1 },
-                (_, index) =>
-                  environment({
-                    environmentId: `environment-${index}`,
-                    attachedSessionIds: [],
-                    bootstrapReceipt: receipt(index.toString(16).padStart(64, "0"), "2026.8.1"),
-                  }),
-              ),
-              placements: [],
-            };
+          : boundedInventory(0, false, MAX_HASHES + 1);
       const { invoke, warn } = await startHarness(inventory);
       expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleHashes");
       expect(warn).toHaveBeenCalledWith(
@@ -510,16 +482,12 @@ describe("node workspace retain coordinator", () => {
     const { invoke, warn } = await startHarness(boundedInventory(1_241, true));
 
     const input = invoke.mock.calls[0]?.[0].params as Record<string, unknown>;
-    expect(input.bundleHashes).toHaveLength(NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES);
+    expect(input.bundleHashes).toHaveLength(MAX_HASHES);
     expect(input).not.toHaveProperty("bundleStatusHash");
     const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
-    const bundleStatusHash = (NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1)
-      .toString(16)
-      .padStart(64, "0");
-    expect(bytes(input)).toBeLessThanOrEqual(NODE_WORKER_RETAIN_REQUEST_MAX_BYTES);
-    expect(bytes({ ...input, bundleStatusHash })).toBeGreaterThan(
-      NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
-    );
+    const bundleStatusHash = (MAX_HASHES - 1).toString(16).padStart(64, "0");
+    expect(bytes(input)).toBeLessThanOrEqual(MAX_BYTES);
+    expect(bytes({ ...input, bundleStatusHash })).toBeGreaterThan(MAX_BYTES);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -702,7 +670,6 @@ describe("node workspace retain coordinator", () => {
     } finally {
       release.resolve();
       await startup;
-      await coordinator.stop();
     }
   });
 
@@ -735,9 +702,9 @@ describe("node workspace retain coordinator", () => {
       retain: [],
     });
     expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
-      NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
-      NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
-      NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      RETAIN_COMMAND,
+      RETAIN_COMMAND,
+      RETAIN_COMMAND,
     ]);
   });
 
@@ -768,8 +735,8 @@ describe("node workspace retain coordinator", () => {
   it("maintains a newly connected node while another node's retention is held", async () => {
     const held = createDeferredCore();
     const second = { ...node, nodeId: "node-2", connId: "connection-2" };
-    let nodes: NodeWorkerSupervisorNodeProof[] = [node];
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+    let nodes: NodeProof[] = [node];
+    const invoke = vi.fn<Transport["invoke"]>(async (request) => {
       if (request.node.nodeId === node.nodeId) {
         await held.promise;
       }
@@ -778,7 +745,7 @@ describe("node workspace retain coordinator", () => {
         payloadJSON: JSON.stringify(retainResult()),
       };
     });
-    const transport: NodeWorkerSupervisorTransport = {
+    const transport: Transport = {
       getCurrentNode: async (nodeId) => nodes.find((entry) => entry.nodeId === nodeId),
       listCurrentNodes: async () => nodes,
       hasCurrentRunner: () => true,
@@ -796,7 +763,6 @@ describe("node workspace retain coordinator", () => {
     } finally {
       held.resolve();
       await first;
-      await coordinator.stop();
     }
   });
 

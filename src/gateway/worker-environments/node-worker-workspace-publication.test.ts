@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
@@ -11,7 +12,10 @@ import { createSessionRepositoryWorkspaceStore } from "../../state/session-repos
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
@@ -72,9 +76,7 @@ it.each([
       localPath: workspaceDir,
       temporaryRoot: root,
     });
-    if (!base.manifest.baseCommit) {
-      throw new Error("Repository fixture has no base commit");
-    }
+    assert(base.manifest.baseCommit, "Repository fixture has no base commit");
     const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
     const store = createSessionRepositoryWorkspaceStore({ path: database.path });
     const created = await store.create({
@@ -105,15 +107,7 @@ it.each([
     await fs.writeFile(path.join(workspaceDir, "result.txt"), "checkpoint edit\n");
     const service = createNodeWorkspaceTransferService({
       temporaryRoot,
-      getOwner: () => ({
-        credential: { ownerEpoch: 1, sessionId: "session" },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session"),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
     const receiving = createDeferred();
@@ -266,9 +260,7 @@ it.each([
         };
         void first.then(onSettled, onSettled);
         await withTestTimeout(discardStarted.promise, 5_000, "publication disposal did not start");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await setImmediate();
         expect.soft(settled, "reconciliation must join abandoned staging work").toBe(false);
         release.resolve();
       }
