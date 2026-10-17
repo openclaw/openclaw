@@ -21,17 +21,58 @@ import { prepareOutboxPayload } from "./outbox-payloads.ts";
 
 useChatSendBrowserFixture();
 
+function admissionFixture(
+  chatMessage: string,
+  overrides: NonNullable<Parameters<typeof makeChatHost>[0]> = {},
+) {
+  const batch = createDeliveryAttachmentBatch();
+  const host = makeChatHost({
+    connected: false,
+    chatMessage,
+    chatAttachments: batch.attachments,
+    ...overrides,
+    requestHandlers: overrides.requestHandlers ?? {},
+  });
+  return { ...batch, host };
+}
+
+async function enteredBeforeSettling(entered: Promise<unknown>, sending: Promise<unknown>) {
+  await Promise.race([
+    entered,
+    sending.then(() => {
+      throw new Error("Submission ended before payload write");
+    }),
+  ]);
+}
+
+function holdPayloadWrite(fail = false) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const writePayload = outboxPayloadStore.writeOutboxPayload;
+  vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementationOnce(async (...args) => {
+    started.resolve();
+    await release.promise;
+    return fail ? { status: "failed", reason: "unavailable" } : writePayload(...args);
+  });
+  return { started, release };
+}
+
+async function expectPayload(
+  host: ReturnType<typeof makeChatHost>,
+  item: Parameters<typeof prepareOutboxPayload>[1] | undefined,
+  dataUrls: string[],
+) {
+  const hydrated = await prepareOutboxPayload(host, expectDefined(item, "stored input"));
+  expect(
+    hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
+  ).toEqual(dataUrls);
+}
+
 describe("chat attachment admission", () => {
   it.each(["same owner", "connection", "recovery owner", "selected agent"])(
     "settles overlapping attachment admissions with %s",
     async (changedOwner) => {
-      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-      const host = makeChatHost({
-        requestHandlers: {},
-        connected: false,
-        chatMessage: "Stale submission",
-        chatAttachments: attachments,
-      });
+      const { host, dataUrls } = admissionFixture("Stale submission");
       if (changedOwner === "selected agent") {
         host.sessionKey = "global";
         host.assistantAgentId = "main";
@@ -50,12 +91,7 @@ describe("chat attachment admission", () => {
       const stale = handleSendChat(host);
       let current: ReturnType<typeof handleSendChat> | undefined;
       try {
-        await Promise.race([
-          entered[0]!.promise,
-          stale.then(() => {
-            throw new Error("Stale submission ended before payload write");
-          }),
-        ]);
+        await enteredBeforeSettling(entered[0]!.promise, stale);
         if (changedOwner === "connection") {
           host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
         } else if (changedOwner === "selected agent") {
@@ -67,12 +103,7 @@ describe("chat attachment admission", () => {
         }
         host.chatMessage = "Current submission";
         current = handleSendChat(host);
-        await Promise.race([
-          entered[1]!.promise,
-          current.then(() => {
-            throw new Error("Current submission ended before payload write");
-          }),
-        ]);
+        await enteredBeforeSettling(entered[1]!.promise, current);
         if (changedOwner !== "same owner") {
           host.chatMessage = "Newer draft";
           releases[1]!.resolve();
@@ -92,15 +123,7 @@ describe("chat attachment admission", () => {
       );
       expect(host.chatMessage).toBe(changedOwner === "same owner" ? "" : "Newer draft");
       expect(host.chatAttachments).toEqual([]);
-      const hydrated = await prepareOutboxPayload(
-        host,
-        expectDefined(queued.at(-1), "current input"),
-      );
-      expect(
-        hydrated.status === "ready"
-          ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
-          : [],
-      ).toEqual(dataUrls);
+      await expectPayload(host, queued.at(-1), dataUrls);
       expect(host.request).not.toHaveBeenCalled();
     },
   );
@@ -108,24 +131,20 @@ describe("chat attachment admission", () => {
   it.each(["committed", "payload failure", "metadata failure", "unrelated send"])(
     "preserves a newer draft while settling submitted attachment ownership (%s)",
     async (outcome) => {
-      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-      const added = createStagedAttachment("newer-draft-file");
-      const replacement = { ...attachments[1]!, fileName: "replacement.pdf" };
-      const newerReply = { messageId: "newer-quote", text: "Newer quote" };
-      const newerMentions = [{ profileId: "alex", start: 0, end: 5 }];
       const olderStarted = createDeferred();
       const olderAck = createDeferred<{ runId: string; status: string }>();
-      const host = makeChatHost({
+      const { host, attachments, dataUrls } = admissionFixture("First prompt", {
         requestHandlers: {
           "chat.send": () => {
             olderStarted.resolve();
             return olderAck.promise;
           },
         },
-        connected: false,
-        chatMessage: "First prompt",
-        chatAttachments: attachments,
       });
+      const added = createStagedAttachment("newer-draft-file");
+      const replacement = { ...attachments[1]!, fileName: "replacement.pdf" };
+      const newerReply = { messageId: "newer-quote", text: "Newer quote" };
+      const newerMentions = [{ profileId: "alex", start: 0, end: 5 }];
       if (outcome === "unrelated send") {
         host.connected = true;
         host.chatMessage = "Older text-only send";
@@ -135,33 +154,14 @@ describe("chat attachment admission", () => {
           olderAck.resolve({ runId: "older-run", status: "started" });
           await older;
         });
-        await Promise.race([
-          olderStarted.promise,
-          older.then(() => {
-            throw new Error("Older send ended before transport");
-          }),
-        ]);
+        await enteredBeforeSettling(olderStarted.promise, older);
         host.chatMessage = "First prompt";
         host.chatAttachments = attachments;
       }
-      const started = createDeferred();
-      const release = createDeferred();
-      const writePayload = outboxPayloadStore.writeOutboxPayload;
-      vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementationOnce(async (...args) => {
-        started.resolve();
-        await release.promise;
-        return outcome === "payload failure"
-          ? { status: "failed", reason: "unavailable" }
-          : writePayload(...args);
-      });
+      const { started, release } = holdPayloadWrite(outcome === "payload failure");
       const sending = handleSendChat(host);
       try {
-        await Promise.race([
-          started.promise,
-          sending.then(() => {
-            throw new Error("Submission ended before payload write");
-          }),
-        ]);
+        await enteredBeforeSettling(started.promise, sending);
         host.chatMessage = "@Alex newer input";
         host.chatMentions = newerMentions;
         host.chatReplyTarget = newerReply;
@@ -201,12 +201,7 @@ describe("chat attachment admission", () => {
         listStoredChatOutboxes(host)[0]?.queue.find((item) => item.text === "First prompt"),
         "first submission",
       );
-      const hydrated = await prepareOutboxPayload(host, first);
-      expect(
-        hydrated.status === "ready"
-          ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
-          : [],
-      ).toEqual(dataUrls);
+      await expectPayload(host, first, dataUrls);
       await handleSendChat(host);
       const queue =
         listStoredChatOutboxes(host)[0]?.queue.filter(
@@ -225,38 +220,21 @@ describe("chat attachment admission", () => {
   it.each(["defaults", "route", "recovery owner", "reply"])(
     "keeps the creation-time destination and input while payload admission awaits changed %s",
     async (change) => {
-      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
       const replyTarget = {
         messageId: "original-quote",
         sourceMessageId: "original-entry",
         text: "Original quote",
       };
       const newerReply = { messageId: "newer-quote", text: "Newer quote" };
-      const host = makeChatHost({
-        requestHandlers: {},
-        connected: false,
+      const { host, attachments, dataUrls } = admissionFixture("original destination", {
         sessionKey: "main",
         agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-        chatMessage: "original destination",
-        chatAttachments: attachments,
         chatReplyTarget: replyTarget,
       });
-      const started = createDeferred();
-      const release = createDeferred();
-      const writePayload = outboxPayloadStore.writeOutboxPayload;
-      vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementationOnce(async (...args) => {
-        started.resolve();
-        await release.promise;
-        return writePayload(...args);
-      });
+      const { started, release } = holdPayloadWrite();
       const sending = handleSendChat(host);
       try {
-        await Promise.race([
-          started.promise,
-          sending.then(() => {
-            throw new Error("Submission ended before payload write");
-          }),
-        ]);
+        await enteredBeforeSettling(started.promise, sending);
         if (change === "defaults") {
           host.agentsList = { defaultId: "main", mainKey: "current", scope: "per-sender" };
         } else if (change === "route") {
@@ -293,15 +271,7 @@ describe("chat attachment admission", () => {
         sendAttempts: 0,
         replyToId: "original-entry",
       });
-      const hydrated = await prepareOutboxPayload(
-        host,
-        expectDefined(stored.queue[0], "stored input"),
-      );
-      expect(
-        hydrated.status === "ready"
-          ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
-          : [],
-      ).toEqual(dataUrls);
+      await expectPayload(host, stored.queue[0], dataUrls);
       expect(host.chatMessage).toBe(expectedDraft);
       expect(host.chatAttachments).toEqual(change === "defaults" ? attachments : []);
       expect(host.request).not.toHaveBeenCalled();
@@ -309,13 +279,7 @@ describe("chat attachment admission", () => {
   );
 
   it("keeps a verified Blob admission when its notification changes recovery owner", async () => {
-    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-    const host = makeChatHost({
-      requestHandlers: {},
-      connected: false,
-      chatMessage: "committed input",
-      chatAttachments: attachments,
-    });
+    const { host, dataUrls } = admissionFixture("committed input");
     const client = expectDefined(host.client, "recovery client");
     const target = storageTargetForComposer(host);
     const recovery = vi.spyOn(client, "recoveryScope", "get");
@@ -339,10 +303,7 @@ describe("chat attachment admission", () => {
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(cleanup).not.toHaveBeenCalled();
     recovery.mockReturnValue(originalRecovery);
-    const hydrated = await prepareOutboxPayload(host, queued);
-    expect(
-      hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
-    ).toEqual(dataUrls);
+    await expectPayload(host, queued, dataUrls);
     expect(host.chatMessage).toBe("newer input");
     expect(host.request).not.toHaveBeenCalled();
   });

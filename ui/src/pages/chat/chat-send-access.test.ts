@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 // @vitest-environment node
+import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   captureChatOutboxAdmission,
   readStoredOutboxStore,
@@ -23,6 +24,17 @@ import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+const accessError = "Your operator role requires a sandboxed session.";
+const sendStarted = { "chat.send": { status: "started" } };
+const sessions = (...rows: GatewaySessionRow[]) => ({
+  ...createSessionsListResult(),
+  sessions: rows,
+});
+const sessionRow = (sendDisabledReason: string | null = null): GatewaySessionRow => ({
+  key: "agent:main",
+  kind: "direct",
+  sendDisabledReason,
+});
 
 useChatSendBrowserFixture();
 
@@ -49,18 +61,8 @@ it.each([
       chatReplyTarget: replyTarget,
       lastError: earlierError ?? null,
       chatError: earlierError,
-      requestHandlers: { "chat.send": { status: "started" } },
-      sessionsResult: {
-        ...createSessionsListResult(),
-        sessions: [
-          {
-            key: "agent:main",
-            kind: "direct",
-            sendDisabledReason:
-              hold === "access" ? "Your operator role requires a sandboxed session." : null,
-          },
-        ],
-      },
+      requestHandlers: sendStarted,
+      sessionsResult: sessions(sessionRow(hold === "access" ? accessError : null)),
     });
     const readiness =
       hold === "recovery"
@@ -106,7 +108,7 @@ it.each([true, false])(
           messages: [],
           sessionInfo: { key: "agent:main", status: "done", hasActiveRun: false },
         },
-        "chat.send": { status: "started" },
+        ...sendStarted,
       },
       hasPendingInitialTurn: () => pending,
       chatFollowUpMode: connected ? "steer" : "interrupt",
@@ -140,23 +142,18 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     let pending = false;
     const admitted = createDeferred();
     const row = {
-      key: "agent:main",
-      kind: "direct" as const,
+      ...sessionRow(),
       sessionId: "pending-settings-test",
       updatedAt: 1,
-      sendDisabledReason: null,
     };
-    const sendDisabledReason = "Your operator role requires a sandboxed session.";
     const attachment = createStagedAttachment("waiting-att");
     const host = makeChatHost({
       chatMessage: "later turn",
       chatAttachments: [attachment],
-      requestHandlers: { "chat.send": { status: "started" } },
+      requestHandlers: sendStarted,
       pendingSettingsPatches: { "agent:main": settingsPatch.promise },
       hasPendingInitialTurn: () => pending,
-      ...(hold === "send-access"
-        ? { sessionsResult: { ...createSessionsListResult(), sessions: [row] } }
-        : {}),
+      ...(hold === "send-access" ? { sessionsResult: sessions(row) } : {}),
     });
     const send = handleSendChat(host, undefined, { onOutboxAdmitted: () => admitted.resolve() });
     await admitted.promise;
@@ -167,8 +164,8 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     } else if (hold === "recovery-scope") {
       readiness.mockReturnValue(false);
     } else {
-      host.sessions.captureReconcile()({ ...row, updatedAt: 2, sendDisabledReason });
-      expect(host.sessions.projectRows([row])[0]?.sendDisabledReason).toBe(sendDisabledReason);
+      host.sessions.captureReconcile()({ ...row, updatedAt: 2, sendDisabledReason: accessError });
+      expect(host.sessions.projectRows([row])[0]?.sendDisabledReason).toBe(accessError);
     }
     host.chatMessage = "newer draft";
     settingsPatch.resolve(true);
@@ -228,18 +225,15 @@ it.each([true, false])(
       sessionKey: "global",
       assistantAgentId: "main",
       sessionsResultAgentId: "main",
-      sessionsResult: {
-        ...createSessionsListResult(),
-        sessions: [
-          {
-            key: "global",
-            agentId: "main",
-            kind: "global",
-            sendDisabledReason: blocked ? null : "Main global session is read-only.",
-          },
-          writer,
-        ],
-      },
+      sessionsResult: sessions(
+        {
+          key: "global",
+          agentId: "main",
+          kind: "global",
+          sendDisabledReason: blocked ? null : "Main global session is read-only.",
+        },
+        writer,
+      ),
       requestHandlers: {
         "chat.history": { messages: [], sessionInfo: writer },
         "chat.send": { status: "started", runId: "writer-run" },
@@ -300,7 +294,7 @@ it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "c
           },
         },
       },
-      requestHandlers: { "chat.send": { status: "started" } },
+      requestHandlers: sendStarted,
       confirmConversationReset: () => {
         confirming.resolve();
         return confirmation.promise;

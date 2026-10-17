@@ -64,6 +64,55 @@ function thinking(state: TestState, text: string, seq = 1, owner = runId, itemId
   });
 }
 
+function final(
+  state: TestState,
+  text = "The answer is 42.",
+  seq = 3,
+  sessionKey = state.sessionKey,
+) {
+  handleChatGatewayEvent(state, {
+    state: "final",
+    sessionKey,
+    runId,
+    seq,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+}
+
+function receipt(
+  state: TestState,
+  messageId: string,
+  itemId = "thinking-1",
+  seq = 2,
+  messageRunId = runId,
+  messageSeq?: number,
+) {
+  handleAgentEvent(state, {
+    runId,
+    seq,
+    stream: "thinking",
+    ts: 4,
+    sessionKey: "main",
+    data: {
+      phase: "persisted",
+      itemId,
+      messageId,
+      messageRunId,
+      ...(messageSeq === undefined ? {} : { messageSeq }),
+    },
+  });
+}
+
+function expectAnswer(container: HTMLElement) {
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  expect(
+    container.querySelector(".chat-thread-inner")?.textContent?.match(/The answer is 42\./g),
+  ).toHaveLength(1);
+  expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+    "The answer is 42.",
+  );
+}
+
 function show(
   container: HTMLElement,
   state: TestState,
@@ -91,20 +140,7 @@ function persistReasoning(
   active: boolean,
   positions = { appended: 2, displayed: 2 },
 ) {
-  handleAgentEvent(state, {
-    runId,
-    seq: 2,
-    stream: "thinking",
-    ts: 4,
-    sessionKey: "main",
-    data: {
-      phase: "persisted",
-      itemId: "thinking-1",
-      messageId: "answer",
-      messageSeq: positions.appended,
-      messageRunId: runId,
-    },
-  });
+  receipt(state, "answer", "thinking-1", 2, runId, positions.appended);
   const message = {
     role: "assistant",
     content: [
@@ -156,21 +192,9 @@ it.each([
       expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
       expect(state.chatReasoning?.items.at(-1)?.receipt?.persisted).toBe(true);
     }
-    handleChatGatewayEvent(state, {
-      state: "final",
-      sessionKey: "main",
-      runId,
-      seq: 3,
-      message: { role: "assistant", content: [{ type: "text", text: "The answer is 42." }] },
-    });
+    final(state);
     show(container, state);
-    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
-    expect(
-      container.querySelector(".chat-thread-inner")?.textContent?.match(/The answer is 42\./g),
-    ).toHaveLength(1);
-    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
-      "The answer is 42.",
-    );
+    expectAnswer(container);
     expect(state.chatReasoning).toBeNull();
     if (order === "after") {
       // An intervening older snapshot must retain the reducer-owned live final.
@@ -178,13 +202,7 @@ it.each([
       expect(state.chatMessages.map(extractThinkingCached)).toContain(text);
       persistReasoning(state, text, false, { appended, displayed });
       show(container, state);
-      expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
-      expect(
-        container.querySelector(".chat-thread-inner")?.textContent?.match(/The answer is 42\./g),
-      ).toHaveLength(1);
-      expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
-        "The answer is 42.",
-      );
+      expectAnswer(container);
     }
     expect(state.chatMessages).toHaveLength(2);
   },
@@ -210,13 +228,7 @@ it("applies View and session visibility independently to live and saved reasonin
     expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
     expect(container.querySelector(".chat-thinking")?.textContent).toContain("Private synthetic");
   }
-  handleChatGatewayEvent(state, {
-    state: "final",
-    sessionKey: "main",
-    runId,
-    seq: 2,
-    message: { role: "assistant", content: [{ type: "text", text: "The answer is 42." }] },
-  });
+  final(state, "The answer is 42.", 2);
   show(container, state, "stream");
   expect(container.querySelector(".chat-thinking")).toBeNull();
   show(container, state, "on");
@@ -308,13 +320,7 @@ it("does not attach foreground thinking to another session's final with the same
       sessionId: "other-session-id",
     },
   );
-  handleChatGatewayEvent(state, {
-    state: "final",
-    sessionKey: "other-session",
-    runId,
-    seq: 2,
-    message: { role: "assistant", content: [{ type: "text", text: "Other session answer." }] },
-  });
+  final(state, "Other session answer.", 2, "other-session");
   expect(state.chatReasoning?.items.at(-1)?.text).toBe("Foreground private reasoning.");
   const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, {
     sessionKey: "other-session",
@@ -353,14 +359,7 @@ it("does not let an earlier receipt consume equal reasoning from the next assist
   thinking(state, text, 2, runId, "later");
   show(container, state);
   expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
-  handleAgentEvent(state, {
-    runId,
-    seq: 3,
-    stream: "thinking",
-    ts: 4,
-    sessionKey: "main",
-    data: { phase: "persisted", itemId: "earlier", messageId: "earlier", messageRunId: runId },
-  });
+  receipt(state, "earlier", "earlier", 3);
   applySessionMessagePayload(
     state,
     {
@@ -526,13 +525,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
   worked()[0]!.click();
   show(container, state);
 
-  handleChatGatewayEvent(state, {
-    state: "final",
-    sessionKey,
-    runId,
-    seq: ++seq,
-    message: { role: "assistant", content: [{ type: "text", text: "The answer is 42." }] },
-  });
+  final(state, "The answer is 42.", ++seq);
   show(container, state);
   expect(worked()).toHaveLength(2);
   expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
@@ -548,26 +541,8 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
 it("does not attach known-committed pre-tool reasoning to a later final answer", () => {
   const state = stateWithRun();
   thinking(state, "Reasoning belonging to the tool call.");
-  handleAgentEvent(state, {
-    runId,
-    seq: 2,
-    stream: "thinking",
-    ts: 4,
-    sessionKey: "main",
-    data: {
-      phase: "persisted",
-      itemId: "thinking-1",
-      messageId: "tool-answer",
-      messageRunId: runId,
-    },
-  });
-  handleChatGatewayEvent(state, {
-    state: "final",
-    sessionKey: "main",
-    runId,
-    seq: 3,
-    message: { role: "assistant", content: [{ type: "text", text: "Separate final answer." }] },
-  });
+  receipt(state, "tool-answer");
+  final(state, "Separate final answer.");
   expect(state.chatMessages.map(extractThinkingCached).filter(Boolean)).toEqual([]);
 });
 
@@ -580,13 +555,7 @@ it("removes a worker's explicitly cleared reasoning before the final answer", ()
   thinking(state, "", 2);
   show(container, state);
   expect(container.querySelector(".chat-thinking")).toBeNull();
-  handleChatGatewayEvent(state, {
-    state: "final",
-    sessionKey: "main",
-    runId,
-    seq: 3,
-    message: { role: "assistant", content: [{ type: "text", text: "The final answer." }] },
-  });
+  final(state, "The final answer.");
   expect(state.chatMessages.map(extractThinkingCached).filter(Boolean)).toEqual([]);
 });
 
@@ -601,32 +570,14 @@ it("clears only the worker's current occurrence without adopting an earlier tool
   expect(container.querySelector(".chat-thinking")?.textContent).toContain(
     "Keep the earlier tool reasoning.",
   );
-  handleChatGatewayEvent(state, {
-    state: "final",
-    sessionKey: "main",
-    runId,
-    seq: 4,
-    message: { role: "assistant", content: [{ type: "text", text: "The final answer." }] },
-  });
+  final(state, "The final answer.", 4);
   expect(state.chatMessages.map(extractThinkingCached).filter(Boolean)).toEqual([]);
 });
 
 it("uses the producer run in the receipt when Gateway remaps the live client run", () => {
   const state = stateWithRun();
   thinking(state, "A remapped source occurrence.");
-  handleAgentEvent(state, {
-    runId,
-    seq: 2,
-    stream: "thinking",
-    ts: 4,
-    sessionKey: "main",
-    data: {
-      phase: "persisted",
-      itemId: "thinking-1",
-      messageId: "source-answer",
-      messageRunId: "source-run",
-    },
-  });
+  receipt(state, "source-answer", "thinking-1", 2, "source-run");
   applySessionMessagePayload(
     state,
     {
