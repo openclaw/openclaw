@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
@@ -18,6 +19,41 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+function history(prefix: string, baseTs = Date.now() - 100_000) {
+  return Array.from({ length: 50 }, (_, index) => ({
+    content: [
+      { text: prefix + " " + index + "\n" + "extra transcript line\n".repeat(4), type: "text" },
+    ],
+    role: index % 2 === 0 ? "assistant" : "user",
+    timestamp: baseTs + index,
+  }));
+}
+
+function proofDir(name: string) {
+  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  return parent ? createControlUiE2eArtifactDir(name, parent) : undefined;
+}
+
+async function capture(
+  page: Page,
+  dir: string | undefined,
+  name: string,
+  composer?: Parameters<typeof takeControlUiViewportScreenshot>[2][number],
+) {
+  if (!dir) {
+    return;
+  }
+  const target = path.join(dir, name + ".png");
+  if (composer) {
+    await writeFile(
+      target,
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+    );
+  } else {
+    await page.screenshot({ fullPage: true, path: target });
+  }
+}
 
 suite.define(() => {
   it("scrolls the transcript over the pinned composer while preserving nested scrolling", async () => {
@@ -162,23 +198,11 @@ suite.define(() => {
   });
 
   it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
-    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
-      : undefined;
+    const artifactDir = proofDir("chat-flow.streaming");
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `Composer resize history ${index}\n${"extra transcript line\n".repeat(4)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
+    const historyMessages = history("Composer resize history", baseTs);
     await installMockGateway(page, { historyMessages });
 
     try {
@@ -190,6 +214,7 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
 
       const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const thread = page.locator(".chat-thread");
       for (let line = 1; line <= 8; line += 1) {
         await composer.fill(
           Array.from({ length: line }, (_, index) => `Growing composer line ${index + 1}`).join(
@@ -202,45 +227,31 @@ suite.define(() => {
           `composer line count ${line}`,
         ).toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       }
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "composer-resize-pinned.png"),
-        });
-      }
+      await capture(page, artifactDir, "composer-resize-pinned");
 
       await composer.fill("Growing composer line 1");
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);
-      const readingScrollTop = await page
-        .locator(".chat-thread")
-        .evaluate((element) => element.scrollTop);
+      const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
       await composer.fill(
         Array.from({ length: 8 }, (_, index) => `Reading composer line ${index + 1}`).join("\n"),
       );
       await waitForChatScrollIdle(page);
       expect(
-        await page
-          .locator(".chat-thread")
-          .evaluate((element, initial) => Math.abs(element.scrollTop - initial), readingScrollTop),
+        await thread.evaluate(
+          (element, initial) => Math.abs(element.scrollTop - initial),
+          readingScrollTop,
+        ),
       ).toBeLessThanOrEqual(1);
 
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "composer-resize-manual-scroll.png"),
-        });
-      }
+      await capture(page, artifactDir, "composer-resize-manual-scroll");
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("scrolls a delayed pending send while Details progress expands before the ACK resolves", async () => {
-    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-send-scroll", artifactDirParent)
-      : undefined;
+    const artifactDir = proofDir("chat-send-scroll");
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -251,16 +262,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `History message ${index}\n${"extra transcript line\n".repeat(4)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
+    const historyMessages = history("History message", baseTs);
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
       historyMessages,
@@ -310,12 +312,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill(prompt);
       const draftHeight = await composer.evaluate((element) => element.clientHeight);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "before-send.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
-        );
-      }
+      await capture(page, artifactDir, "before-send", composer);
       // Opening Details must not interfere with submission or the pending-send
       // scroll, even before the delayed ACK resolves.
       await openChatDetails(page);
@@ -335,12 +332,7 @@ suite.define(() => {
         timeout: 10_000,
       });
       await waitForChatScrollIdle(page);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "after-send.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
-        );
-      }
+      await capture(page, artifactDir, "after-send", composer);
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(4);
@@ -355,16 +347,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `Scrollable history ${index}\n${"extra transcript line\n".repeat(4)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
+    const historyMessages = history("Scrollable history", baseTs);
     await installMockGateway(page, { historyMessages });
 
     try {
