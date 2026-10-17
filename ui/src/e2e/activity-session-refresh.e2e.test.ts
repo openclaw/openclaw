@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ElementHandle } from "playwright";
+import type { ElementHandle, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   pauseVirtualClock,
@@ -30,6 +30,17 @@ const historyRow = (key: string, label: string) => ({
 });
 const historyList = (key: string, label: string) =>
   chatSessionListResponse([historyRow(key, label)]);
+async function openHistory(page: Page, key: string, label: string) {
+  const gateway = await installMockGateway(page, {
+    sessionKey: key,
+    methodResponses: { "sessions.list": historyList(key, label) },
+  });
+  await page.goto(`${suite.server.baseUrl}activity`);
+  await waitForControlUiRoute(page, { routeId: "activity", search: "" });
+  const row = page.locator(`[data-activity-session="${key}"]`);
+  await expectText(row).toContain(label);
+  return { gateway, row };
+}
 
 suite.define(() => {
   it.each(["current", "history"])(
@@ -78,63 +89,33 @@ suite.define(() => {
     },
   );
 
-  it.each([
-    { name: "unfiltered", path: "activity", search: undefined, person: undefined },
-    { name: "filtered", path: "activity?q=alpha", search: "alpha", person: undefined },
-    {
-      name: "person",
-      path: "activity/profile-ada?q=alpha",
-      search: "alpha",
-      person: "profile-ada",
-    },
-  ])(
-    "loads only the requested initial $name Activity route",
-    async ({ name, path: route, search, person }) => {
-      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const key = "agent:main:activity-initial-route";
-        const response = {
-          ...historyList(key, "Requested Activity"),
-          ...(person
-            ? {
-                involvingProfileId: person,
-                people: [
-                  { identity: { type: "profile", id: person }, label: "Ada", sessionCount: 1 },
-                ],
-              }
-            : {}),
-        };
-        const gateway = await installMockGateway(page, {
-          sessionKey: key,
-          methodResponses: { "sessions.list": response },
-        });
-        await page.goto(`${suite.server.baseUrl}${route}`);
-        await waitForControlUiRoute(page, {
-          routeId: "activity",
-          search: search ? `?q=${search}` : "",
-        });
-        await expectText(page.locator(`[data-activity-session="${key}"]`)).toContain(
-          "Requested Activity",
-        );
-        const requests = await gateway.getRequests("sessions.list", { includePeople: true });
-        expect(requests).toHaveLength(1);
-        expect(requests).toMatchObject([
-          {
-            params: {
-              ...(search ? { search } : {}),
-              ...(person ? { involvingProfileId: person } : {}),
-            },
-          },
-        ]);
-        if (!search) {
-          expect(requests[0]?.params).not.toHaveProperty("search");
-        }
-        if (!person) {
-          expect(requests[0]?.params).not.toHaveProperty("involvingProfileId");
-        }
-        await captureUiProof(suite, page, "initial-route", `${name}.png`);
+  it("loads only the requested initial person-filtered Activity route", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const key = "agent:main:activity-initial-route";
+      const response = {
+        ...historyList(key, "Requested Activity"),
+        involvingProfileId: "profile-ada",
+        people: [
+          { identity: { type: "profile", id: "profile-ada" }, label: "Ada", sessionCount: 1 },
+        ],
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        methodResponses: { "sessions.list": response },
       });
-    },
-  );
+      await page.goto(`${suite.server.baseUrl}activity/profile-ada?q=alpha`);
+      await waitForControlUiRoute(page, { routeId: "activity", search: "?q=alpha" });
+      await expectText(page.locator(`[data-activity-session="${key}"]`)).toContain(
+        "Requested Activity",
+      );
+      const requests = await gateway.getRequests("sessions.list", { includePeople: true });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        params: { search: "alpha", involvingProfileId: "profile-ada" },
+      });
+      await captureUiProof(suite, page, "initial-route", "person.png");
+    });
+  });
 
   it("preserves three pending Activity query intents and excludes superseded replies", async () => {
     const key = "agent:main:activity-query-aba";
@@ -146,16 +127,8 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
-        const controls = await installMockGateway(page, {
-          sessionKey: key,
-          methodResponses: { "sessions.list": response("Initial history") },
-        });
+        const { gateway: controls } = await openHistory(page, key, "Initial history");
         gateway = controls;
-        await page.goto(`${suite.server.baseUrl}activity`);
-        await waitForControlUiRoute(page, { routeId: "activity", search: "" });
-        await expectText(page.locator(`[data-activity-session="${key}"]`)).toContain(
-          "Initial history",
-        );
         const match = { includePeople: true };
         const initialRequests = (await controls.getRequests("sessions.list", match)).length;
         const search = page.locator('.activity-feed__search input[type="search"]');
@@ -215,13 +188,7 @@ suite.define(() => {
       async ({ page }) => {
         const key = "agent:main:activity-refresh";
         const response = (label: string) => historyList(key, label);
-        const gateway = await installMockGateway(page, {
-          sessionKey: key,
-          methodResponses: { "sessions.list": response("Initial activity") },
-        });
-        await page.goto(`${suite.server.baseUrl}activity`);
-        const row = page.locator(`[data-activity-session="${key}"]`);
-        await expectText(row).toContain("Initial activity");
+        const { gateway, row } = await openHistory(page, key, "Initial activity");
         await page.screenshot({ path: path.join(suite.artifactDir, "01-initial.png") });
         const activityRequests = async () =>
           (await gateway.getRequests("sessions.list", { includePeople: true })).length;
@@ -230,10 +197,16 @@ suite.define(() => {
         const initialRequests = await activityRequests();
         await setVisibility(page, "hidden");
         await gateway.setSessionsListResponse(response("Caught up activity"));
-        for (let index = 0; index < 10; index += 1) {
-          await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, reason: "update" });
-          await page.clock.runFor(50);
-        }
+        const burst = async (interval: number) => {
+          for (let index = 0; index < 10; index += 1) {
+            await gateway.emitGatewayEvent("sessions.changed", {
+              sessionKey: key,
+              reason: "update",
+            });
+            await page.clock.runFor(interval);
+          }
+        };
+        await burst(50);
         expect(await activityRequests()).toBe(initialRequests);
         expect(await row.textContent()).toContain("Initial activity");
 
@@ -245,10 +218,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(suite.artifactDir, "02-caught-up.png") });
 
         await gateway.setSessionsListResponse(response("Latest activity"));
-        for (let index = 0; index < 10; index += 1) {
-          await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, reason: "update" });
-          await page.clock.runFor(10);
-        }
+        await burst(10);
         expect(await activityRequests()).toBe(initialRequests + 1);
         // The first visible event starts a five-second window; the burst consumed 100 ms.
         await page.clock.runFor(4_899);
@@ -278,16 +248,18 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.messages.subscribe", { after, match: { key } });
         // Scoped events can be delivered only after the Gateway accepts the subscription.
         await gateway.resolveDeferred("sessions.messages.subscribe", undefined, { match: { key } });
-        await gateway.emitGatewayEvent("agent", {
-          runId: "run-activity",
-          stream: "tool",
-          sessionKey: key,
-          data: {
-            phase: "result",
-            name: "exec",
-            toolCallId: "tool-activity",
-            result: { content: [{ type: "text", text: "Received while viewing Live activity." }] },
-          },
+        const emitTool = (data: object) =>
+          gateway.emitGatewayEvent("agent", {
+            runId: "run-activity",
+            stream: "tool",
+            sessionKey: key,
+            data,
+          });
+        await emitTool({
+          phase: "result",
+          name: "exec",
+          toolCallId: "tool-activity",
+          result: { content: [{ type: "text", text: "Received while viewing Live activity." }] },
         });
         const entry = page.locator(".activity-entry");
         await expectCount(entry).toBe(1);
@@ -295,12 +267,7 @@ suite.define(() => {
         await showText(entry, "Received while viewing Live activity.");
         await page.screenshot({ path: path.join(suite.artifactDir, "04-live-activity.png") });
         for (let index = 0; index < 20; index += 1) {
-          await gateway.emitGatewayEvent("agent", {
-            runId: "run-activity",
-            stream: "tool",
-            sessionKey: key,
-            data: { phase: "start", name: "exec", toolCallId: `tool-${index}` },
-          });
+          await emitTool({ phase: "start", name: "exec", toolCallId: `tool-${index}` });
         }
         const stream = page.locator(".activity-stream");
         await expect

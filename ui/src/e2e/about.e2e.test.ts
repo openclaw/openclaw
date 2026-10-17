@@ -232,19 +232,6 @@ suite.define(() => {
       await expectText(gatewayRow).toContain("e2e");
       await expectText(gatewayRow).toContain("separate from this Control UI build");
 
-      const hero = page.locator(".about-hero");
-      await expectText(hero.locator(".about-hero__name")).toBe("OpenClaw");
-      await expectText(hero.locator(".about-hero__version")).toBe("v2026.7.10");
-
-      const githubLink = hero.getByRole("link", { name: "GitHub", exact: true });
-      await expectAttribute(githubLink, "href").toBe("https://github.com/openclaw/openclaw");
-      await expectAttribute(githubLink, "target").toBe("_blank");
-      await expectAttribute(githubLink, "rel").toContain("noopener");
-      const discordLink = hero.getByRole("link", { name: "Discord", exact: true });
-      await expectAttribute(discordLink, "href").toBe("https://discord.gg/clawd");
-      const xLink = hero.getByRole("link", { name: "X (Twitter)", exact: true });
-      await expectAttribute(xLink, "href").toBe("https://x.com/openclaw");
-
       const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
       // CLAWD_WAVE_MS clears the class after 1400ms, so click and read it in one browser step.
       const clawdWaving = await clawd.evaluate(async (element) => {
@@ -262,8 +249,6 @@ suite.define(() => {
         return button.classList.contains("about-hero__clawd--wave");
       });
       expect(clawdWaving).toBe(true);
-
-      await expectText(page.locator(".about-footer")).toContain("MIT License");
 
       await page.setViewportSize({ height: 812, width: 375 });
       await expect

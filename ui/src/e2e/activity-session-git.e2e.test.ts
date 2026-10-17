@@ -57,15 +57,6 @@ const reviewRequest = {
 const preview: ControlUiLinkReaderPreview = {
   url: reviewRequest.url,
   title: reviewRequest.title,
-  subtitle: "example/gateway #17",
-  author: "casey-example",
-  badge: { label: "Draft", tone: "neutral" },
-  metadata: [
-    { label: "", value: "+63" },
-    { label: "", value: "−8" },
-  ],
-  createdAt: "2026-09-10T12:00:00Z",
-  updatedAt: "2026-09-11T12:00:00Z",
 };
 
 const ready = { rateLimited: false, status: "ready" as const };

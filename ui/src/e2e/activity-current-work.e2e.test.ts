@@ -42,6 +42,14 @@ const listing = (sessions: object[]) => ({
   sessions,
   defaults: { model: null, modelProvider: null, contextTokens: null },
 });
+const finished = ({ key, agentId, sessionId }: typeof running) => ({
+  key,
+  agentId,
+  sessionId,
+  updatedAt: at + 1000,
+  status: "done",
+  hasActiveRun: false,
+});
 async function openCurrentWork(page: Page, options: Parameters<typeof installMockGateway>[1]) {
   const gateway = await installMockGateway(page, options);
   await page.goto(`${suite.server.baseUrl}activity?view=live`);
@@ -83,12 +91,7 @@ suite.define(() => {
 
       await gateway.setMethodResponse("sessions.list", listing([queued]));
       await gateway.emitGatewayEvent("sessions.changed", {
-        key: running.key,
-        agentId: running.agentId,
-        sessionId: running.sessionId,
-        updatedAt: at + 1000,
-        status: "done",
-        hasActiveRun: false,
+        ...finished(running),
         activeRunIds: [],
       });
       await expectCount(rows).toBe(1);
@@ -117,27 +120,21 @@ suite.define(() => {
 
   it("reconciles completion during the first snapshot and keeps global navigation owner-specific", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const scopedRow = (agentId: string, kind = "global") => ({
+      const sessionRow = (agentId: string, kind = "global", literal = false) => ({
         ...running,
-        key: kind,
+        key: literal ? `agent:${agentId}:${kind}` : kind,
         agentId,
-        kind,
-        label: `${agentId} ${kind} work`,
-        sessionId: `${kind}-${agentId}`,
-        activeRunIds: kind === "global" ? [`run-${agentId}`] : running.activeRunIds,
+        kind: literal ? running.kind : kind,
+        label: literal ? `Literal ${kind} session` : `${agentId} ${kind} work`,
+        sessionId: literal ? `literal-${kind}` : `${kind}-${agentId}`,
+        activeRunIds: !literal && kind === "global" ? [`run-${agentId}`] : running.activeRunIds,
       });
-      const mainGlobal = scopedRow("main");
-      const workGlobal = scopedRow("work");
-      const literalRow = (kind: string) => ({
-        ...running,
-        key: `agent:work:${kind}`,
-        agentId: "work",
-        sessionId: `literal-${kind}`,
-        label: `Literal ${kind} session`,
-      });
-      const literal = literalRow("global");
-      const unknown = ["main", "work"].map((agentId) => scopedRow(agentId, "unknown"));
-      const activeRows = [mainGlobal, workGlobal, literal, ...unknown, literalRow("unknown")];
+      const mainGlobal = sessionRow("main");
+      const workGlobal = sessionRow("work");
+      const literal = sessionRow("work", "global", true);
+      const unknown = ["main", "work"].map((agentId) => sessionRow(agentId, "unknown"));
+      const literalUnknown = sessionRow("work", "unknown", true);
+      const activeRows = [mainGlobal, workGlobal, literal, ...unknown, literalUnknown];
       const remainingRows = activeRows.filter((row) => row !== mainGlobal);
       const { gateway, current, rows } = await openCurrentWork(page, {
         sessionScope: "global",
@@ -167,14 +164,7 @@ suite.define(() => {
       await showText(current, "Loading active sessions…");
       const currentRequests = (await gateway.getRequests("sessions.list", { activeOnly: true }))
         .length;
-      await gateway.emitGatewayEvent("sessions.changed", {
-        key: "global",
-        agentId: "main",
-        sessionId: "global-main",
-        updatedAt: at + 1000,
-        status: "done",
-        hasActiveRun: false,
-      });
+      await gateway.emitGatewayEvent("sessions.changed", finished(mainGlobal));
       await gateway.resolveDeferred("sessions.list", listing(activeRows));
       await expectCount(rows).toBe(5);
       // The completion fully reconciles this bounded snapshot; no catch-up RPC is needed.

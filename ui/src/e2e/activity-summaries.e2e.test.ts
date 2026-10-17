@@ -24,17 +24,7 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:research:work";
       const gateway = await installMockGateway(page, {
-        sessions: [
-          {
-            key: sessionKey,
-            agentId: "research",
-            kind: "direct",
-            displayName: "Research",
-            hasActiveRun: true,
-            status: "running",
-            updatedAt: Date.now(),
-          },
-        ],
+        sessions: [{ key: sessionKey, kind: "direct", hasActiveRun: true, status: "running" }],
       });
       const emitTool = (id: string) =>
         gateway.emitGatewayEvent("session.tool", {

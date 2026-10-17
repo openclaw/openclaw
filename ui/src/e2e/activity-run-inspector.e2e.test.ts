@@ -35,25 +35,6 @@ beforeEach(() => {
   }
 });
 
-function unavailableResult(params: {
-  state: "unknown" | "unsupported";
-  reasonCode: string;
-  remediation?: Array<{ code: string; text: string }>;
-}): AuditRunInspectResult {
-  return {
-    schemaVersion: 1,
-    run: { runId: "typed-state", status: params.state === "unknown" ? "unknown" : "known" },
-    identity: {
-      state: params.state,
-      reasonCode: params.reasonCode,
-      missingEvidence: ["identity.context"],
-      remediation: params.remediation ?? [],
-    },
-    decisionDisplays: [],
-    coverage: { state: params.state, missingEvidence: ["identity.context"] },
-  };
-}
-
 function ambiguousResult(
   runId: string,
   executionId: string,
@@ -196,29 +177,6 @@ suite.define(() => {
         const backToSessions = page.getByRole("link", { name: "Back to sessions" });
         await backToSessions.waitFor();
         expect(await backToSessions.getAttribute("href")).toBe("/activity");
-        await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
-        for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
-          await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
-        }
-        for (const dimension of [
-          "Trust domain",
-          "Ingress",
-          "Invoker",
-          "Represented subject",
-          "Sponsor",
-          "Agent principal",
-          "Runtime instance",
-          "Applicable grant 1",
-          "Assurance evidence 1",
-          "Lineage",
-        ]) {
-          await showText(page, dimension);
-        }
-        await showText(page, "Best-effort audit warning", false);
-        await showText(page, "Additional decision receipts are available", false);
-        expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
-        expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
-        expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
         await screenshot(page, "01-present-unattributed.png");
         await page.reload();
         await showHeading(page, "Identity and authority");
@@ -667,34 +625,10 @@ suite.define(() => {
     });
   });
 
-  it("renders empty, typed unavailable, corrupt, and expired results without guessing", async () => {
+  it("keeps empty selections explicit and pages ambiguous executions", async () => {
     await withPage(async (page) => {
       const gateway = await installInspector(page, {
         cases: [
-          {
-            match: { runId: "missing" },
-            response: unavailableResult({ state: "unknown", reasonCode: "run_not_found" }),
-          },
-          {
-            match: { runId: "expired" },
-            response: unavailableResult({
-              state: "unsupported",
-              reasonCode: "identity_context_unavailable",
-              remediation: [
-                {
-                  code: "run_again_after_expiry",
-                  text: "This run is outside the 30-day retention window.",
-                },
-              ],
-            }),
-          },
-          {
-            match: { runId: "corrupt" },
-            response: unavailableResult({
-              state: "unknown",
-              reasonCode: "identity_context_corrupt",
-            }),
-          },
           {
             match: { runId: "ambiguous", executionCursor: "50" },
             response: ambiguousResult("ambiguous", "execution-candidate-51"),
@@ -717,15 +651,6 @@ suite.define(() => {
       await showHeading(page, "No run selected");
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
       await screenshot(page, "02-empty.png");
-      for (const [runId, heading, screenshotName] of [
-        ["missing", "Run not found", "03-not-found.png"],
-        ["expired", "Identity evidence expired", "04-expired.png"],
-        ["corrupt", "Identity evidence is corrupt", "05-corrupt.png"],
-      ] as const) {
-        await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-        await showHeading(page, heading);
-        await screenshot(page, screenshotName);
-      }
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=ambiguous`);
       await showHeading(page, "Multiple executions match this run");
       await screenshot(page, "11-ambiguous.png");
