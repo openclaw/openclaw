@@ -24,7 +24,7 @@ export type DatabasePortProvider = {
     config: OpenClawConfig;
     stateDir: string;
     env: NodeJS.ProcessEnv;
-    plugins: ReturnType<typeof resolvePluginMetadataSnapshot>;
+    plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins">;
   }): readonly string[] | Promise<readonly string[]>;
   matchesSqlite(tables: ReadonlySet<string>): boolean;
   /** Includes the expected catalog from the same generated source as the bundled DDL. */

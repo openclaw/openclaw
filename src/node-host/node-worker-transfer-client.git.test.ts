@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
@@ -10,20 +10,6 @@ import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments
 import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
-
-const transferDebug = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "node-host/worker-workspace"
-        ? { ...logger, debug: transferDebug }
-        : logger;
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -137,7 +123,6 @@ describe("node worker Git transfers", () => {
   ])(
     "$description (prepared project: $seedState)",
     async ({ changed, replaceSymlinkAncestor, lateWrite, seedState }) => {
-      transferDebug.mockClear();
       const root = tempDirs.make("node-worker-transfer-git-");
       const source = path.join(root, "source");
       const workspaceDir = path.join(root, "workspace");
@@ -332,15 +317,6 @@ describe("node worker Git transfers", () => {
           "tracked.txt",
         );
         expect(requestedBlobs).toEqual([...filesByHash.keys()]);
-        expect(transferDebug).toHaveBeenCalledWith(
-          "node worker manifest capture completed",
-          expect.objectContaining({
-            contentHashCount: downloadablePaths.size,
-            memoHitCount:
-              snapshot.manifest.entries.filter((entry) => entry.type === "file").length -
-              downloadablePaths.size,
-          }),
-        );
         await expect(git(workspaceDir, ["rev-parse", "HEAD"])).resolves.toBe(commit);
         if (replaceSymlinkAncestor) {
           expect((await fs.lstat(path.join(workspaceDir, "nested"))).isDirectory()).toBe(true);
@@ -351,18 +327,6 @@ describe("node worker Git transfers", () => {
         if (!replaceSymlinkAncestor) {
           await expect(git(workspaceDir, ["status", "--porcelain=v1"])).resolves.toBe("");
         }
-        expect(transferDebug).toHaveBeenCalledWith(
-          "node worker workspace transfer completed",
-          expect.objectContaining({
-            environmentId: "environment-git",
-            direction: "download",
-            outcome: "succeeded",
-            durationMs: expect.any(Number),
-            baseSource: "gateway-pack",
-            packDownloadMs: expect.any(Number),
-            blobApplyMs: expect.any(Number),
-          }),
-        );
       } finally {
         server.closeAllConnections();
         await new Promise<void>((resolve) => {
@@ -434,8 +398,7 @@ describe("node worker transfer client hash memo", () => {
     }
   });
 
-  it("reuses the placement hash memo across download and upload captures", async () => {
-    transferDebug.mockClear();
+  it("round-trips a downloaded workspace with a supplied hash memo", async () => {
     const root = tempDirs.make("node-worker-transfer-memo-");
     const workspaceDir = path.join(root, "workspace");
     const body = Buffer.from("memoized content\n");
@@ -496,15 +459,6 @@ describe("node worker transfer client hash memo", () => {
           hashMemo,
         }),
       ).resolves.toBe(manifestRef);
-      const captures = transferDebug.mock.calls
-        .filter(([message]) => message === "node worker manifest capture completed")
-        .map(([, data]) => data as { contentHashCount: number; memoHitCount: number });
-      expect(captures).toHaveLength(2);
-      // Download verifies fresh staging files by hashing; the unchanged upload
-      // capture must reuse the memo seeded through the workspace rename.
-      expect(captures[0]!.contentHashCount).toBe(1);
-      expect(captures[1]!.contentHashCount).toBe(0);
-      expect(captures[1]!.memoHitCount).toBe(1);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

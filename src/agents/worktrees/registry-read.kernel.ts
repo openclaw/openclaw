@@ -3,7 +3,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import type {
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
@@ -267,3 +269,56 @@ export function getRegistryWorktreeProvisionedChunkInDatabase(
     .where("chunk_index", "=", params.chunkIndex);
   return executeSqliteQuerySync(db, query).rows[0]?.data;
 }
+
+export const worktreeReadOperations = {
+  "worktrees.findLiveByOwner": (
+    { ownerKind, ownerId }: { ownerKind: ManagedWorktreeOwnerKind; ownerId: string },
+    db,
+  ) => ({
+    type: "worktrees.findLiveByOwner" as const,
+    value: findLiveRegistryWorktreeByOwnerInDatabase(db, ownerKind, ownerId),
+  }),
+  "worktrees.get": ({ id }: { id: string }, db) => ({
+    type: "worktrees.get" as const,
+    value: getRegistryWorktreeInDatabase(db, id),
+  }),
+  "worktrees.sessionBinding": (
+    { boundId, ownerId }: { boundId?: string; ownerId: string },
+    db,
+  ) => ({
+    type: "worktrees.sessionBinding" as const,
+    value: runSqliteDeferredTransactionSync(db, () => {
+      const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
+      return bound && bound.removedAt === undefined
+        ? bound
+        : findLiveRegistryWorktreeByOwnerInDatabase(db, "session", ownerId);
+    }),
+  }),
+  "worktrees.findLiveByPath": ({ path }: { path: string }, db) => ({
+    type: "worktrees.findLiveByPath" as const,
+    value: findLiveRegistryWorktreeByPathInDatabase(db, path),
+  }),
+  "worktrees.list": (input: WorktreeRegistryListOptions, db) => ({
+    type: "worktrees.list" as const,
+    value: listRegistryWorktreesInDatabase(db, input),
+  }),
+  "worktrees.liveIds": (_input: undefined, db) => ({
+    type: "worktrees.liveIds" as const,
+    value: listLiveRegistryWorktreeIdsInDatabase(db),
+  }),
+  "worktrees.provisionedPaths": ({ id }: { id: string }, db) => ({
+    type: "worktrees.provisionedPaths" as const,
+    value: getRegistryWorktreeProvisionedPathsInDatabase(db, id),
+  }),
+  "worktrees.provisionedState": ({ id }: { id: string }, db) => ({
+    type: "worktrees.provisionedState" as const,
+    value: getRegistryWorktreeProvisionedStateInDatabase(db, id),
+  }),
+  "worktrees.provisionedChunk": (
+    input: Parameters<typeof getRegistryWorktreeProvisionedChunkInDatabase>[1],
+    db,
+  ) => ({
+    type: "worktrees.provisionedChunk" as const,
+    value: getRegistryWorktreeProvisionedChunkInDatabase(db, input),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;

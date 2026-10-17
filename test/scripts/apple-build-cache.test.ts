@@ -207,6 +207,31 @@ echo built >> "$FIXTURE_BUILDS"
       step.uses?.startsWith("actions/cache/save@"),
     );
     expect(saves).toHaveLength(4);
+    const watchRestore = job.steps.find(
+      (step: { name?: string }) => step.name === "Restore Watch RTC build inputs",
+    );
+    for (const [file, jobName, buildName] of [
+      ["ios-periphery.yml", "scan", "Run Periphery"],
+      ["shared-openclawkit-periphery.yml", "scan-ios", "Build iOS consumer index"],
+    ] as const) {
+      const steps = parse(readFileSync(`.github/workflows/${file}`, "utf8")).jobs[jobName].steps;
+      const identify = steps.findIndex(
+        (step: { name?: string }) => step.name === "Identify Watch RTC cache inputs",
+      );
+      const restore = steps.findIndex(
+        (step: { name?: string }) => step.name === "Restore Watch RTC build inputs",
+      );
+      const build = steps.findIndex((step: { name?: string }) => step.name === buildName);
+      expect(identify, file).toBeGreaterThan(-1);
+      expect(restore, file).toBeGreaterThan(identify);
+      expect(build, file).toBeGreaterThan(restore);
+      expect(steps[restore].uses, file).toBe(watchRestore.uses);
+      expect(steps[restore].with, file).toEqual(watchRestore.with);
+      expect(
+        steps.some((step: { uses?: string }) => step.uses?.startsWith("actions/cache/save@")),
+        file,
+      ).toBe(false);
+    }
     for (const event of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
       for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
         for (const allowed of ["true", "false"]) {

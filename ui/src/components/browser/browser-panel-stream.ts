@@ -26,6 +26,7 @@ type StreamState = {
 interface BrowserPanelStreamHost extends StreamState {
   readonly host: BrowserPanelHost;
   readonly mode: "interact" | "annotate" | "inspect";
+  readonly input: { elements: { stage?: HTMLElement; viewport?: HTMLElement } };
   readonly operations: Pick<
     BrowserPanelOperations,
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
@@ -87,8 +88,7 @@ export class BrowserPanelStream {
   }
 
   private dimensions() {
-    const stage = this.host.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-    const viewport = this.host.host.renderRoot.querySelector<HTMLElement>(".bp-viewport");
+    const { stage, viewport } = this.host.input.elements;
     const width =
       stage?.clientWidth || viewport?.clientWidth || this.host.observedViewportSize?.width || 1280;
     const height = viewport?.clientHeight || this.host.observedViewportSize?.height || width;

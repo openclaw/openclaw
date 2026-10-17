@@ -270,6 +270,18 @@ export class WorkerProviderError extends Error {
   }
 }
 
+type WorkerRecipePreparation = {
+  source: "devcontainer" | "script" | "detected" | "none";
+  ignoredPropertiesNote?: string;
+  note?: string;
+  phaseDurationsMs?: {
+    onCreate?: number;
+    updateContent?: number;
+    detectedInstall?: number;
+  };
+  failure?: { reason: string; outputTail?: string };
+};
+
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
@@ -385,17 +397,7 @@ export type WorkerProvider = {
           ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
           /** Persist diagnostics before a declared recipe rejects preparation. */
-          recordRecipePreparation?: (value: {
-            source: "devcontainer" | "script" | "detected" | "none";
-            ignoredPropertiesNote?: string;
-            note?: string;
-            phaseDurationsMs?: {
-              onCreate?: number;
-              updateContent?: number;
-              detectedInstall?: number;
-            };
-            failure?: { reason: string; outputTail?: string };
-          }) => Promise<void>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<{
           seedKey: string;
           cacheHit: boolean;
@@ -403,17 +405,7 @@ export type WorkerProvider = {
           captureRequired?: true;
           /** Detected setup is best effort; this allocation must remain cold on failure. */
           captureSkipped?: string;
-          recipePreparation?: {
-            source: "devcontainer" | "script" | "detected" | "none";
-            ignoredPropertiesNote?: string;
-            note?: string;
-            phaseDurationsMs?: {
-              onCreate?: number;
-              updateContent?: number;
-              detectedInstall?: number;
-            };
-            failure?: { reason: string; outputTail?: string };
-          };
+          recipePreparation?: WorkerRecipePreparation;
           preparedWorkspace?: {
             preparationKey: string;
             cacheKey: string;

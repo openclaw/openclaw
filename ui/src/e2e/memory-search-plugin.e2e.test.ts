@@ -1,8 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect } from "playwright/test";
 import { it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -119,29 +116,6 @@ suite.define(() => {
           true,
         );
         await expect(page.locator("html")).toHaveAttribute("data-theme-mode", "light");
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          memories,
-          [input, submit, memories.locator("[data-memory-match]")],
-          { elements: [memories], animations: "disabled" },
-        );
-        await fs.writeFile(
-          path.join(suite.artifactDir, "memory-search-after-crop.png"),
-          frame.elements[0]!.png,
-        );
-        await fs.writeFile(
-          path.join(suite.artifactDir, "memory-search-proof.json"),
-          JSON.stringify(
-            {
-              assets,
-              browser: suite.browser.version(),
-              viewport: page.viewportSize(),
-              bounds: await memories.boundingBox(),
-            },
-            null,
-            2,
-          ),
-        );
 
         const searchCount = await gateway.deferNext("memory.search");
         await input.fill("Retired query");

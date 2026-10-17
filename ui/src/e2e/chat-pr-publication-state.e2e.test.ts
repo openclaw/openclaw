@@ -491,7 +491,16 @@ suite.define(() => {
         );
       }
       await rows
-        .getByRole("button", { name: "Dismiss pull request synthetic/publication-demo#44" })
+        .getByRole("button", {
+          name: "Actions for pull request synthetic/publication-demo#44",
+          exact: true,
+        })
+        .click();
+      await page
+        .getByRole("menuitem", {
+          name: "Dismiss pull request synthetic/publication-demo#44",
+          exact: true,
+        })
         .click();
       await expect.poll(() => rows.count()).toBe(0);
       await showBranch();

@@ -487,16 +487,88 @@ returning empty search results. Reopen the store after installing the extension.
 
 ## Monitoring and troubleshooting
 
-Use `openclaw doctor` for configured family selections and physical shared-state
-root checks. A line such as `physical=postgres, namespace=...` identifies the
-anchor's physical selection; a configured line alone does not prove connectivity.
-An engine mismatch or `Database roots could not all be inspected.` needs
-investigation before restart or migration.
+### Read the Doctor and status store report
 
-`openclaw status` summarizes Gateway reachability, services, sessions, and memory
-readiness. Its Memory row describes the active memory system's vector/FTS/cache
-status; it is not an installation-wide PostgreSQL health check. Use
-`openclaw health` and actual enabled feature operations alongside Doctor.
+`openclaw doctor` enumerates physical stores through the same family and plugin
+resource descriptors used by database port. The report includes shared-state roots, every discovered agent database, Workboard, Logbook,
+Team Reports, and retained Matrix account/token roots. Quarantine, managed-update,
+package-activation, and local credentials are labeled **local by design**.
+
+Read `default`, `override`, and `effective` as configuration; `observed` comes
+from the physical SQLite file or PostgreSQL anchor. A mismatch means changing
+configuration did not migrate existing data. Keep the Gateway stopped and use
+`openclaw database port --family <family> --to <engine>`, or restore the matching
+configuration. Never delete an anchor to clear a mismatch.
+
+`schema`, `expected`, and `pending` compare observed metadata with the installed
+store owner's descriptor. A version match alone does not prove complete schema
+integrity. Readable state and agent schema versions remain visible when port
+validation refuses an older or newer schema. Unreadable files and directories
+remain in the inventory with unknown contents and a permission-repair step;
+they are not reported as absent. Missing resolved store files remain listed with
+initialization guidance. Unversioned local journals are identified separately. Installed server
+extensions and recorded admitted search extensions are separate facts;
+`degraded` identifies recorded keyword-only operation and missing vector support.
+Install a named missing extension as a database administrator, grant `USAGE` on
+its schema to the runtime role, and reopen the store through its owner.
+
+A PostgreSQL anchor can remain readable while the server is down. In that case
+`observed=postgres` and the namespace remain visible, but connectivity is
+unreachable and server schema, extensions, and lease information stay unknown.
+Check the PostgreSQL service and port, network/TLS settings, and
+`database.postgres.connection` or its SecretRef. Raw connection strings and
+connection errors are omitted from the report.
+
+`custody` and `lease` distinguish a verified live owner, no owner, and unverifiable
+ownership. These are observations, not permission to take over a store.
+`backup=unknown` means no matching recorded outcome was observed; it does not
+assert that no backup exists. The installation backup ledger records backup
+destinations, which do not establish coverage of an individual physical store. `legacy=pending` names imports that must complete
+with `openclaw doctor --fix` before porting. If a detector or store is unavailable,
+`unknown` includes a next step instead of claiming success.
+
+Doctor's JSON includes every inspected store in `databaseStores`, even when its finding is below `--severity-min`. Visible store findings also include the same fields in `details`.
+Status JSON includes `databaseEngines.stores`, alongside the configured
+`families`. Its `source=admitted` rows consume the owners' existing admission
+facts, without opening stores or probing PostgreSQL. They can show a recorded
+engine and schema version while connectivity, backup, or lease state remains
+unknown. An unopened or unadmitted store remains unknown. Configured agent paths
+stay listed before admission, without filesystem probes. Status uses the selected
+Gateway's projection, including remote Gateways; if that projection is unavailable,
+it directs you to run Doctor on the Gateway host. Doctor's bounded, read-only
+inspection supplies fresh physical evidence without adding Gateway hot-path probes.
+
+For example, this excerpt from a read-only inspection catches an unported
+SQLite state store after PostgreSQL was selected (paths shortened; other fields
+omitted):
+
+```text
+state (~/.openclaw/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=sqlite (mismatch); schema=26, expected=26, pending=0; connectivity=local
+```
+
+The same observation is machine-readable in the store finding's `details`:
+
+```json
+{
+  "family": "state",
+  "observed": "sqlite",
+  "mismatch": true,
+  "schema": {
+    "versioning": "versioned",
+    "version": 26,
+    "expectedVersion": 26,
+    "pending": 0
+  },
+  "connectivity": "local",
+  "backup": null
+}
+```
+
+The next step is `openclaw database port --family state --to postgres` with the
+Gateway stopped, or restoring the matching engine configuration. A current
+SQLite schema does not make the engine mismatch safe to ignore.
+
+Use `openclaw health` and actual enabled feature operations alongside this report.
 Monitor PostgreSQL availability, connections, locks, storage, and backup success
 through your database operator's normal monitoring.
 

@@ -26,7 +26,7 @@ import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
 } from "../../../lib/session-pull-request-presentation.ts";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";

@@ -83,7 +83,7 @@ export function personalGitHubPublicationSelection(
 }
 
 /** Owns one session's explicit publication; connection/access changes retire every response. */
-export class GitHubPublicationController {
+export class GitHubPublicationOwner {
   private readonly presentations = new Set<Presentation>();
   private version = 0;
   private activity: GitHubPublicationActivity | null = null;
@@ -152,9 +152,7 @@ export class GitHubPublicationController {
   }
 
   private changed(): void {
-    for (const presentation of this.presentations) {
-      presentation.changed?.();
-    }
+    this.presentations.forEach((presentation) => presentation.changed?.());
   }
 
   private presented(presentation: Presentation): boolean {
@@ -167,13 +165,10 @@ export class GitHubPublicationController {
   }
 
   private retireIdleOptions(): void {
-    if (
-      !this.busy &&
-      !this.locked &&
-      !this.result &&
-      !this.error &&
-      ![...this.presentations].some((presentation) => this.presented(presentation))
-    ) {
+    if (this.busy || this.locked || this.result || this.error) {
+      return;
+    }
+    if (![...this.presentations].some((presentation) => this.presented(presentation))) {
       this.resetPresentation();
     }
   }
