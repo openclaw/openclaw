@@ -145,7 +145,9 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       await vi.waitFor(() =>
         expect(notifications.slice(cursor).map(([seen]) => seen)).toContainEqual(notification),
       );
-      await Promise.all(notifications.slice(cursor).map(([, completion]) => completion));
+      await Promise.all(
+        notifications.slice(cursor).map(([, completion]) => Promise.resolve(completion)),
+      );
       let joined = 0;
       while (joined < transitionObservation.mock.results.length) {
         const pending = transitionObservation.mock.results.slice(joined);

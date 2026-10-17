@@ -167,7 +167,7 @@ function manifestWriterFixture(plan: unknown, drain: unknown = { children: {} })
   return {
     writer,
     directory,
-    run(env: NodeJS.ProcessEnv) {
+    run(this: void, env: NodeJS.ProcessEnv) {
       const result = spawnSync("bash", ["-c", writer.run], {
         encoding: "utf8",
         env: {
@@ -1232,7 +1232,7 @@ it.each([
   ],
 ] satisfies Array<[string, unknown, string, string?]>)(
   "refuses %s without a partial artifact or raw values in logs",
-  (_name, event, error, rawEvent) => {
+  (_name, event, error, rawEvent = undefined) => {
     const { result, bytes } = runDispatchWitness(event, rawEvent);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(error);

@@ -81,7 +81,7 @@ const accounting = {
   cliSessionIds: { synthetic: "old" },
   cliSessionBindings: { synthetic: { sessionId: "old" } },
   claudeCliSessionId: "old",
-};
+} satisfies Partial<InternalSessionEntry>;
 const ids = (events: readonly unknown[]) =>
   events.flatMap((event) => (isRecord(event) ? [event.id] : []));
 

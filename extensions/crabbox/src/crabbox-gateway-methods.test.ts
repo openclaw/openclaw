@@ -46,7 +46,7 @@ const profileCases = [
   ["mac", { ...SETTINGS, target: "macos" }, "standard", "macos", "off", "Linux"],
 ] as const;
 let api: ReturnType<typeof createApi>;
-let respond: ReturnType<typeof vi.fn>;
+let respond: ReturnType<typeof vi.fn<Parameters<typeof recoverCrabboxImage>[1]["respond"]>>;
 let actions: ReturnType<typeof createActions>;
 
 beforeEach(async () => {
@@ -54,7 +54,7 @@ beforeEach(async () => {
   resetPluginStateStoreForTests();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-gateway-"));
   api = createApi();
-  respond = vi.fn();
+  respond = vi.fn<Parameters<typeof recoverCrabboxImage>[1]["respond"]>();
   actions = createActions();
 });
 
@@ -142,10 +142,7 @@ async function list(params: unknown = {}) {
   return respond.mock.calls[0]![1];
 }
 
-async function mutate(
-  action: "pin" | "delete" | "rollback",
-  params: unknown = { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: true } : {}) },
-) {
+async function mutate(action: "pin" | "delete" | "rollback", params: unknown) {
   respond.mockClear();
   await mutateCrabboxImage(api, actions, action, { params, respond });
 }
@@ -184,7 +181,7 @@ describe("Crabbox snapshot mutations", () => {
         other: { provider: "other", settings: {} },
       },
     };
-    await mutate("delete");
+    await mutate("delete", { checkpointId: "chk_fixture" });
     expect(actions.delete).toHaveBeenCalledWith("chk_fixture", [SETTINGS]);
     expect(respond).toHaveBeenCalledWith(true, { status: "retiring" });
   });
@@ -197,7 +194,7 @@ describe("Crabbox snapshot mutations", () => {
       actions.rollback.mockImplementation(() => {
         throw error;
       });
-      await mutate("rollback");
+      await mutate("rollback", { checkpointId: "chk_fixture" });
       expect(respond).toHaveBeenCalledWith(
         false,
         { error: error.message },
@@ -298,7 +295,10 @@ describe("Crabbox snapshots Gateway methods", () => {
     actions.pin.mockResolvedValue(image);
     actions.rollback.mockResolvedValue(image);
     for (const action of ["pin", "rollback"] as const) {
-      await mutate(action);
+      await mutate(action, {
+        checkpointId: "chk_fixture",
+        ...(action === "pin" ? { pinned: true } : {}),
+      });
       expect(respond).toHaveBeenCalledWith(true, summary);
     }
     expect(Object.keys(image.allocations)).toHaveLength(21);

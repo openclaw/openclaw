@@ -162,14 +162,15 @@ describe("matrixSetupAdapter", () => {
   });
 
   it("stores canonical dangerous private-network opt-in from setup input", () => {
+    const input: MatrixSetupInput = {
+      homeserver: "http://matrix.internal:8008",
+      accessToken: "ops-token",
+      dangerouslyAllowPrivateNetwork: true,
+    };
     const next = matrixSetupAdapter.applyAccountConfig({
       cfg: {},
       accountId: "ops",
-      input: {
-        homeserver: "http://matrix.internal:8008",
-        accessToken: "ops-token",
-        dangerouslyAllowPrivateNetwork: true,
-      },
+      input,
     }) as CoreConfig;
 
     expectFields(next.channels?.matrix?.accounts?.ops, {

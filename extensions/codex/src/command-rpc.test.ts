@@ -184,8 +184,8 @@ describe("Codex command RPC helpers", () => {
       preparedAuth: { kind: "api-key", apiKey: "control-platform-key" },
       authRequirement: "api-key",
       agentDir,
-      authProfileId: undefined,
     });
+    expect(acquired().authProfileId).toBeUndefined();
     expect(onResponse).toHaveBeenCalledWith(
       expect.objectContaining({ thread: expect.objectContaining({ id: "thread-1" }) }),
       harness.client,
@@ -229,7 +229,6 @@ describe("Codex command RPC helpers", () => {
 
       expect(acquired()).toMatchObject({
         authRequirement: "subscription",
-        authProfileId: undefined,
         authBindingFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
         preparedAuth: {
           kind: "profile",
@@ -237,6 +236,7 @@ describe("Codex command RPC helpers", () => {
           snapshot: { loginParams: { type: "chatgptAuthTokens", accessToken: token } },
         },
       });
+      expect(acquired().authProfileId).toBeUndefined();
       expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
         authProfileId: "openai:ready",
         ...expectedAuthority,
@@ -287,7 +287,8 @@ describe("Codex command RPC helpers", () => {
 
     await resume({ authProfileId: null });
 
-    expect(acquired()).toMatchObject({ preparedAuth: undefined, authRequirement: undefined });
+    expect(acquired().preparedAuth).toBeUndefined();
+    expect(acquired().authRequirement).toBeUndefined();
   });
 
   it("keeps omitted Unix scope on the explicit user-scoped supervision connection", async () => {

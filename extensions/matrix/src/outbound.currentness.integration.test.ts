@@ -118,7 +118,12 @@ type MatrixFixture = {
   context: Pick<ChannelOutboundContext, "cfg" | "to" | "deps" | "mediaLocalRoots">;
   pendingText: (
     text: string,
-    options?: Partial<ChannelOutboundContext>,
+    options?: Partial<
+      Pick<
+        ChannelOutboundContext,
+        "to" | "signal" | "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+      >
+    > & { onDeliveryResult?: () => void },
   ) => Promise<SendOutcome<unknown>>;
   handlers: FixtureHandlers;
   uploads: string[];

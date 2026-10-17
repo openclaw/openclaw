@@ -500,9 +500,11 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
         .toEqual({ visible: true, animated, outline: "none" });
       await expect.poll(() => flashPaint(index)).toBe(false);
     } finally {
-      await observation
-        .evaluate((entry) => entry.disconnect())
-        .finally(() => observation.dispose());
+      try {
+        await observation.evaluate((entry) => entry.disconnect());
+      } finally {
+        await observation.dispose();
+      }
     }
   };
   for (const index of [120, 121]) {

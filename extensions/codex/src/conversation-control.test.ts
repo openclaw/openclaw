@@ -97,7 +97,9 @@ function trackTurn(
   });
 }
 
-async function boundTarget(binding: Parameters<typeof writeCodexAppServerBinding>[1]) {
+async function boundTarget(
+  binding: Omit<Parameters<typeof writeCodexAppServerBinding>[1], "cwd"> & { cwd?: string },
+) {
   const sessionFile = path.join(tempDir, "session.jsonl");
   await writeCodexAppServerBinding(sessionFile, { cwd: tempDir, ...binding });
   return { ...controlTarget(sessionFile), sessionFile };
@@ -243,6 +245,10 @@ describe("codex conversation controls", () => {
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-supervised",
       appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
     });
     const harness = replyingHarness();
     trackTurn(target, "thread-supervised", harness);
@@ -303,6 +309,11 @@ describe("codex conversation controls", () => {
     const target = await boundTarget({
       threadId: "thread-supervised",
       connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-supervised",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
     });
 
     await expect(setModel({ ...target, model: "gpt-5.4" })).rejects.toThrow(

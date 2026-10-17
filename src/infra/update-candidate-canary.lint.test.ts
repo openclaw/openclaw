@@ -37,12 +37,14 @@ vi.mock("node:child_process", async (importOriginal) =>
     mocks.spawn,
   ),
 );
-vi.mock("../process/exec.js", async (importOriginal) =>
-  (await import("./update-candidate-canary-mocks.test-support.js")).mockCanarySnapshotCommands(
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const { mockCanarySnapshotCommands } =
+    await import("./update-candidate-canary-mocks.test-support.js");
+  return mockCanarySnapshotCommands(
     await importOriginal<typeof import("../process/exec.js")>(),
     mocks.snapshot,
-  ),
-);
+  );
+});
 vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/kill-tree.js")>()),
   signalProcessTree: mocks.signal,

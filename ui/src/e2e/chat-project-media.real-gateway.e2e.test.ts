@@ -43,7 +43,9 @@ const suite = createControlUiE2eSuite({
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
       await runQaGatewayFixture(
-        () => Promise.reject(error),
+        async () => {
+          throw error;
+        },
         () => owner.cleanup(),
       );
       throw error;

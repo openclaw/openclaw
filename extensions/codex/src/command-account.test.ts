@@ -66,7 +66,12 @@ describe("Codex account workspace identity", () => {
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir: path.join(tempDir, "agents", "main", "agent"),
-        store: { version: 1, profiles, order: { openai: order }, lastGood: { openai: lastGood } },
+        store: {
+          version: 1,
+          profiles,
+          order: { openai: order },
+          ...(lastGood === undefined ? {} : { lastGood: { openai: lastGood } }),
+        },
       },
     ]);
   }

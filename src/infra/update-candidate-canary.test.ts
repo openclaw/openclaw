@@ -39,6 +39,10 @@ import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
+// Readiness tests spy on timer exports, which native ESM namespaces cannot replace.
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+}));
 vi.mock("node:child_process", async (importOriginal) =>
   (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
     await importOriginal<typeof import("node:child_process")>(),
