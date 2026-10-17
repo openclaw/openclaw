@@ -137,9 +137,8 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   });
 } };`,
   });
-  const entered = Array.from({ length: gateCount }, () =>
-    createDeferred<Int32Array<SharedArrayBuffer>>(),
-  );
+  const makeGate = () => createDeferred<Int32Array<SharedArrayBuffer>>();
+  const entered = Array.from({ length: gateCount }, makeGate);
   const gates: Int32Array<SharedArrayBuffer>[] = [];
   const providerEntered = createDeferred();
   const authEntered = createDeferred();
@@ -220,6 +219,9 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     wait<T>(gate: PromiseLike<T>, operation: PromiseLike<unknown>, message: string) {
       return withinTest(awaitGateBeforeSettlement(gate, operation, message), signal);
     },
+    settled<T>(work: PromiseLike<T>) {
+      return withinTest(work, signal);
+    },
     holdProvider() {
       fs.writeFileSync(providerHold, "");
       return providerEntered.promise;
@@ -242,20 +244,14 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       waiting = completion;
       const foreground = snapshot.loadFullModelCatalog!({ refresh: true });
       void foreground.catch(completion.reject);
-      const completed = completion.promise.finally(() => {
-        if (waiting === completion) {
-          waiting = undefined;
-        }
-      });
+      const completed = completion.promise;
       void completed.catch(() => {});
       return { foreground, completed };
     },
   };
 }
 
-it("finishes progressing native admission once across Gateway catalog refreshes", async ({
-  signal,
-}) => {
+it("reuses progressing native admission across Gateway refreshes", async ({ signal }) => {
   await using fixture = await createGatewayNativeAdmissionFixture(3, signal);
   const first = fixture.refresh();
   for (const entered of fixture.entered) {
@@ -271,11 +267,11 @@ it("finishes progressing native admission once across Gateway catalog refreshes"
     expect(readCatalogWorkers()[0]!.threadId).not.toBe(-1);
     fixture.release(gate, 120_000);
   }
-  const catalog = await withinTest(first.completed, signal);
+  const catalog = await fixture.settled(first.completed);
   expect(catalog.entries).toContainEqual(catalogEntry("native-admitted"));
   // Publication precedes acquisition settlement; the next turn starts a separate refresh.
   await checkpoint();
-  const refreshed = await withinTest(fixture.refresh().completed, signal);
+  const refreshed = await fixture.settled(fixture.refresh().completed);
   expect(refreshed.entries).toEqual(catalog.entries);
   const records = fixture.records();
   const starts = records.filter(({ event }) => event === "started");
@@ -298,15 +294,13 @@ it("finishes progressing native admission once across Gateway catalog refreshes"
   const blocked = fixture.refresh();
   await fixture.wait(providerEntered, blocked.completed, "Provider hook did not enter");
   await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
-  await expect(withinTest(blocked.completed, signal)).rejects.toMatchObject({
+  await expect(fixture.settled(blocked.completed)).rejects.toMatchObject({
     name: "WorkerTaskError",
     code: "timeout",
   });
 });
 
-it("records a stalled native admission without restarting its Gateway capture", async ({
-  signal,
-}) => {
+it("keeps stalled native admission terminal after parent auth failure", async ({ signal }) => {
   await using fixture = await createGatewayNativeAdmissionFixture(1, signal);
   const first = fixture.refresh();
   await fixture.wait(fixture.entered[0]!.promise, first.completed, "Native capture did not enter");
@@ -325,15 +319,15 @@ it("records a stalled native admission without restarting its Gateway capture", 
   expect(failure.message).toContain(PROVIDER_ID);
   expect(failure.message).toContain("native reference verification");
   await expect(first.completed).rejects.toBe(failure);
-  const retained = await withinTest(first.foreground, signal);
+  const retained = await fixture.settled(first.foreground);
   expect([retained.refreshFailed, retained.pendingProviders]).toEqual([true, undefined]);
   expect(fixture.snapshot.isCurrent()).toBe(true);
-  await withinTest(exited, signal);
+  await fixture.settled(exited);
   expect(fixture.failures).toHaveLength(1);
   await expect(fixture.refresh().completed).rejects.toBe(failure);
   // A later parent-probe error must not recover the terminally stalled shared pool.
   fixture.failAuth();
-  await expect(withinTest(auth.completed, signal)).rejects.toThrow("fixture parent auth failed");
+  await expect(fixture.settled(auth.completed)).rejects.toThrow("fixture parent auth failed");
   await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS * 2);
   expect(fixture.snapshot.isCurrent()).toBe(true);
   expect(readCatalogWorkers()).toHaveLength(1);

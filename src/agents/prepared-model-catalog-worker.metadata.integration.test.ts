@@ -15,13 +15,14 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
   catalogEntry,
+  catalogInput,
   createCatalogFixture,
+  makeCatalogAgentFacts,
   PROVIDER_ID,
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
@@ -100,16 +101,8 @@ it.each([
       if (registry) {
         prepareOwnedPluginLoadContext(input, env, registry, metadata, true);
       }
-      const agentFacts = {
-        input,
-        env,
-        templateAuthStorage: AuthStorage.inMemory({}),
-        credentials: {},
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-      } satisfies Parameters<typeof prepareFullCatalogFacts>[0];
       const facts = await prepareFullCatalogFacts(
-        agentFacts,
+        makeCatalogAgentFacts(input),
         {
           pluginMetadataSnapshot: metadata,
           pluginRegistry: registry,
@@ -126,13 +119,11 @@ it.each([
       expect(fs.existsSync(siblingMarker)).toBe(scope === "all");
       const artifact = built ? "built" : "source";
       expect(fs.readFileSync(selectedMarker, "utf8")).toBe(`${artifact}\n`);
-      expect(
-        facts.modelCatalog.staticEntries?.map(({ provider, id }) => ({ provider, id })),
-      ).toEqual(
-        (scope === "all" ? ["selected", "sibling"] : ["selected"]).map((provider) => ({
+      expect(facts.modelCatalog.staticEntries?.map(({ provider, id }) => [provider, id])).toEqual(
+        (scope === "all" ? ["selected", "sibling"] : ["selected"]).map((provider) => [
           provider,
-          id: `${artifact}-model`,
-        })),
+          `${artifact}-model`,
+        ]),
       );
     });
   } finally {
@@ -145,25 +136,15 @@ it.each([
 
 it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog and native auth requests", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
-  const { agentDir, config, env, workspaceDir } = fixture;
+  const { config, env, workspaceDir } = fixture;
   const cache = createPluginCache();
   const metadata = withPluginCache(cache, () =>
     loadPluginMetadataSnapshot({ config, env, workspaceDir, allowCurrent: false }),
   );
-  const input = {
-    agentId: "main",
-    agentDir,
-    inheritedAuthDir: agentDir,
-    config,
-    env,
-    workspaceDir,
-  };
-  let current = true;
+  const input = catalogInput(fixture);
   const retirement = new AbortController();
-  retireAfterTest(() => {
-    current = false;
-    retirement.abort();
-  });
+  const isCurrent = () => !retirement.signal.aborted;
+  retireAfterTest(() => retirement.abort());
 
   // The operation owns this frozen graph across module evaluation, as retained
   // Gateway generations do. A new module must not reinstall its Map mutators.
@@ -191,9 +172,9 @@ it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog
           {
             input,
             catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-            isGenerationCurrent: () => current,
+            isGenerationCurrent: isCurrent,
             retirementSignal: retirement.signal,
-            isBuildCurrent: () => current,
+            isBuildCurrent: isCurrent,
           },
         ],
         new Map(),
@@ -202,12 +183,7 @@ it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog
         undefined,
         metadata,
       );
-      let prepared: Awaited<typeof build.pending>[number] | undefined;
-      try {
-        [prepared] = await build.pending;
-      } finally {
-        await build.completion;
-      }
+      const [prepared] = await build.pending.finally(() => build.completion);
       if (!prepared) {
         throw new Error("prepared runtime produced no snapshot");
       }
@@ -226,7 +202,6 @@ it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog
       expect(Object.isFrozen(metadata.byPluginId)).toBe(true);
     });
   } finally {
-    current = false;
     retirement.abort();
     try {
       await waitForWorkers();

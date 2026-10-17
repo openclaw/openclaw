@@ -17,7 +17,6 @@ import {
 } from "./prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { readCatalogCaptureFootprint } from "./test-helpers/catalog-capture-footprint.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
@@ -28,6 +27,11 @@ import {
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 const UNSEEN_NATIVE_PROVIDER = "native-only-fixture";
+const nativeRow = (revision: number) => ({
+  provider: revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID,
+  id: `native-${revision}`,
+  nativeRuntime: HARNESS_ID,
+});
 
 it("preserves native and provider renewals and explicitly refreshes scoped warm catalogs", async ({
   signal,
@@ -40,33 +44,10 @@ it("preserves native and provider renewals and explicitly refreshes scoped warm 
   let nativeEntered: ReturnType<typeof createDeferred<void>> | undefined;
   let nativeHeld: ReturnType<typeof createDeferred<void>> | undefined;
   let nativeTarget: { agent: string; revision: number } | undefined;
-  let snapshots: PreparedModelRuntimeSnapshot[] = [];
   const requests: Array<{ agent: string; revision: number; authorization: string | undefined }> =
     [];
   const work: Promise<unknown>[] = [];
   const publications: Promise<unknown>[] = [];
-  const waitForCatalogs = (expectedRevision: number) => {
-    const completed = createDeferred();
-    const check = () => {
-      if (
-        snapshots.length &&
-        snapshots.every((snapshot) =>
-          snapshot
-            .readFullModelCatalog?.()
-            ?.entries.some((entry) => entry.id === `provider-${expectedRevision}`),
-        )
-      ) {
-        completed.resolve();
-      }
-    };
-    const stop = registerPreparedModelRuntimePublicationListener(check);
-    check();
-    return withTestTimeout(
-      completed.promise,
-      30_000,
-      "Fleet provider catalogs did not publish",
-    ).finally(stop);
-  };
   const server = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
@@ -105,14 +86,7 @@ it("preserves native and provider renewals and explicitly refreshes scoped warm 
           send(
             native
               ? currentRevision
-                ? [
-                    {
-                      provider: currentRevision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID,
-                      id: `native-${currentRevision}`,
-                      name: "Native model",
-                      nativeRuntime: HARNESS_ID,
-                    },
-                  ]
+                ? [{ ...nativeRow(currentRevision), name: "Native model" }]
                 : []
               : {
                   provider: {
@@ -189,7 +163,26 @@ module.exports = {
       true,
       { agentCount: 2 },
     );
-    snapshots = fixture.snapshots;
+    const snapshots = fixture.snapshots;
+    const waitForCatalogs = (expectedRevision: number) => {
+      const completed = createDeferred();
+      const check = () => {
+        if (
+          snapshots.every((snapshot) =>
+            snapshot
+              .readFullModelCatalog?.()
+              ?.entries.some((entry) => entry.id === `provider-${expectedRevision}`),
+          )
+        ) {
+          completed.resolve();
+        }
+      };
+      const stop = registerPreparedModelRuntimePublicationListener(check);
+      check();
+      return withTestTimeout(completed.promise, 30_000, "Fleet catalogs did not publish").finally(
+        stop,
+      );
+    };
     const initialCatalogs = await Promise.all(
       snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
     );
@@ -216,11 +209,7 @@ module.exports = {
     expect(initialFootprint.bytes).toBeGreaterThanOrEqual(1024 * 1024);
     for (revision = 1; revision <= 3; revision++) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
-      const nativeEntry = {
-        provider: nativeProvider,
-        id: `native-${revision}`,
-        nativeRuntime: HARNESS_ID,
-      };
+      const nativeEntry = nativeRow(revision);
       clock += 1001;
       fs.writeFileSync(path.join(fixture.root, "catalog-clock.txt"), String(clock));
       held = createDeferred();

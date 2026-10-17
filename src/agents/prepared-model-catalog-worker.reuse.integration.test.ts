@@ -23,7 +23,6 @@ import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
-const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
 function readRecords<T>(root: string, file: string, allowEmptyLines = true): T[] {
   const lines = fs.readFileSync(path.join(root, file), "utf8").trim().split("\n");
@@ -36,7 +35,7 @@ it("prepares known provider owners once while keeping catalog execution and auth
   const providerIds = ["worker-reuse-0", "worker-reuse-1", "worker-reuse-2"];
   const profileId = (provider: string) => `${provider}:reuse`;
   const credential = (agentId: string) => `synthetic-${agentId}`;
-  const fixture = await createFleetFixture(
+  const fixture = await createCatalogFleetFixture(makeTempDir)(
     (seed) => {
       const file = (...parts: string[]) => path.join(seed.root, ...parts);
       const bundledRoot = file("bundled");
@@ -240,14 +239,13 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
       );
       expect(catalog.refreshFailed).toBeFalsy();
       expect(executions().slice(before)).toEqual([{ provider, agentDir: snapshot.agentDir }]);
-      expect(
-        catalog.entries.filter((entry) => entry.provider === provider).map(({ id }) => id),
-      ).toEqual([`auth-${key}`]);
+      const entries = catalog.entries.filter((entry) => entry.provider === provider);
+      expect(entries.map(({ id }) => id)).toEqual([`auth-${key}`]);
       // Catalog display and executable rows must share one provider observation.
       expect(snapshot.readPublishedModels?.()?.get(provider)).toContainEqual(
         expect.objectContaining({
           id: `auth-${key}`,
-          name: catalog.entries.find((entry) => entry.provider === provider)?.name,
+          name: entries[0]?.name,
         }),
       );
       expect(

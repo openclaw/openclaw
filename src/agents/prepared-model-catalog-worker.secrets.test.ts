@@ -3,23 +3,15 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
-import { createConfigIoContext } from "../config/io.context.js";
-import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
+import { createConfigIO } from "../config/io.factory.js";
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import * as configRuntime from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
 import { fingerprintPreparedModelCatalogPluginContext as fingerprint } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput as workerInput } from "./prepared-model-catalog-worker.js";
@@ -28,41 +20,20 @@ import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catal
 import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
 
 const provider = "worker-secret-fixture";
-let state: OpenClawTestState;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "catalog-worker-secrets" });
   await state.writeAuthProfiles({ version: 1, profiles: {} });
 });
 afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
-  clearRuntimeConfigSnapshot();
+  configRuntime.clearRuntimeConfigSnapshot();
   await state.cleanup();
 });
 
-function withApiKey(config: OpenClawConfig, apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig {
-  const providers = config.models!.providers!;
-  return {
-    ...config,
-    models: {
-      ...config.models,
-      providers: {
-        ...providers,
-        [provider]: { ...providers[provider]!, ...(apiKey === undefined ? {} : { apiKey }) },
-      },
-    },
-  };
-}
-
 async function loadConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   await state.writeConfig(config);
-  const snapshot = await readConfigFileSnapshotFromContext(
-    createConfigIoContext({
-      configPath: state.configPath,
-      env,
-      homedir: () => state.home,
-      observe: false,
-    }),
-  );
+  const snapshot = await createConfigIO({ env, observe: false }).readConfigFileSnapshot();
   expect(snapshot.valid).toBe(true);
   return snapshot;
 }
@@ -97,9 +68,7 @@ it.each<CredentialCase>([
         request.url === "/v1/models" && request.headers.authorization === `Bearer ${value}`,
       );
       response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({ data: [{ id: "discovered-model", name: "Discovered model" }] }),
-      );
+      response.end('{"data":[{"id":"discovered-model","name":"Discovered model"}]}');
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -139,48 +108,26 @@ module.exports = {
         configSchema: { type: "object", additionalProperties: false, properties: {} },
       });
       const ref = { source: "store", provider: "default", id: "WORKER_CONFIG_KEY" } as const;
-      const source = {
+      const makeConfig = (apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig => ({
         plugins: {
           allow: [provider],
           load: { paths: [pluginFile] },
           slots: { memory: "none" },
-          entries: { [provider]: { enabled: true } },
         },
-        agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            model: { primary: "healthy-fixture/model" },
-            modelPolicy: { allow: ["healthy-fixture/model", `${provider}/*`] },
-          },
-        },
+        agents: { defaults: { modelPolicy: { allow: [`${provider}/*`] } } },
         models: {
           providers: {
-            "healthy-fixture": {
-              baseUrl: "https://healthy.example/v1",
-              api: "openai-completions",
-              apiKey: "synthetic-healthy-key",
-              models: [
-                {
-                  id: "model",
-                  name: "Model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 4096,
-                  maxTokens: 512,
-                },
-              ],
-            },
             [provider]: {
               baseUrl,
               api: "openai-completions",
               models: [],
-              ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
+              ...(apiKey === undefined ? {} : { apiKey }),
             },
           },
         },
-      } satisfies OpenClawConfig;
-      let runtime = withApiKey(source, owner === "config" ? value : undefined);
+      });
+      const source = makeConfig(owner === "config" ? (loader?.authored ?? ref) : undefined);
+      let runtime = makeConfig(owner === "config" ? value : undefined);
       const env = {
         ...state.env,
         LITERAL_KEY: undefined,
@@ -189,12 +136,10 @@ module.exports = {
       };
       let runtimeSource: OpenClawConfig = source;
       if (loader) {
-        const snapshot = await loadConfig(source, env);
-        runtime = snapshot.config;
-        runtimeSource = snapshot.sourceConfig;
+        ({ config: runtime, sourceConfig: runtimeSource } = await loadConfig(source, env));
         expect(getConfigResolutionFacts(runtime)).not.toBeNull();
       }
-      setRuntimeConfigSnapshot(runtime, runtimeSource);
+      configRuntime.setRuntimeConfigSnapshot(runtime, runtimeSource);
       const prepared = await prepareWorkspaceBuildGroup(
         [
           {
@@ -209,20 +154,20 @@ module.exports = {
         "static",
       );
       expect(requests).toEqual([]);
-      const authStore: AuthProfileStore = {
-        version: 1,
-        profiles:
-          owner === "profile"
-            ? {
-                [`${provider}:fixture`]: { type: "api_key", provider, keyRef: ref, key: value },
-              }
-            : {},
-      };
+      const facts = prepared.agentFacts[0]!;
+      const authStore = facts.authStore;
+      if (owner === "profile") {
+        authStore.profiles[`${provider}:fixture`] = {
+          type: "api_key",
+          provider,
+          keyRef: ref,
+          key: value,
+        };
+      }
       const params = {
         agentFacts: {
-          ...prepared.agentFacts[0]!,
-          authStore,
-          input: { ...prepared.agentFacts[0]!.input, config: captureRuntimeConfig(runtime) },
+          ...facts,
+          input: { ...facts.input, config: captureRuntimeConfig(runtime) },
         },
         pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
       };
@@ -246,22 +191,16 @@ module.exports = {
       const serialized = structuredClone(workerInput(params));
       let alternativeFingerprint: string | undefined;
       if (owner === "config" && !loader?.pending) {
-        const alternativeSource = withApiKey(
-          source,
-          loader ? value : { ...ref, id: "OTHER_WORKER_KEY" },
-        );
+        const alternativeSource = makeConfig(loader ? value : { ...ref, id: "OTHER_WORKER_KEY" });
         let alternativeRuntime = runtime;
         let alternativeRuntimeSource = alternativeSource;
         if (loader) {
-          const snapshot = await loadConfig(alternativeSource, env);
-          expect({ config: snapshot.config, sourceConfig: snapshot.sourceConfig }).toEqual({
-            config: runtime,
-            sourceConfig: runtimeSource,
-          });
-          alternativeRuntime = snapshot.config;
-          alternativeRuntimeSource = snapshot.sourceConfig;
+          const { config, sourceConfig } = await loadConfig(alternativeSource, env);
+          expect([config, sourceConfig]).toEqual([runtime, runtimeSource]);
+          alternativeRuntime = config;
+          alternativeRuntimeSource = sourceConfig;
         }
-        setRuntimeConfigSnapshot(alternativeRuntime, alternativeRuntimeSource);
+        configRuntime.setRuntimeConfigSnapshot(alternativeRuntime, alternativeRuntimeSource);
         alternativeFingerprint = fingerprint(
           workerInput({
             ...params,
@@ -273,7 +212,7 @@ module.exports = {
         );
       }
       // Workers inherit neither the parent's source snapshot nor its WeakMap resolution facts.
-      clearRuntimeConfigSnapshot();
+      configRuntime.clearRuntimeConfigSnapshot();
       clearRuntimeAuthProfileStoreSnapshots();
       const request = async (failCatalog = false) => {
         const { pool, captureDirectory } = createCatalogInspectionPool(env);
@@ -320,13 +259,10 @@ module.exports = {
         }
       }
       expect(requests).toEqual([true]);
-      expect(result).toMatchObject({
-        snapshot: {
-          entries: expect.arrayContaining([
-            expect.objectContaining({ provider, id: "discovered-model" }),
-          ]),
-        },
-      });
+      expect(result).toHaveProperty(
+        "snapshot.entries",
+        expect.arrayContaining([expect.objectContaining({ provider, id: "discovered-model" })]),
+      );
       const plans = inspection.plans;
       expect(plans).toHaveLength(1);
       const catalog = plans[0]!.pluginCatalogs.find((entry) => entry.pluginId === provider);
