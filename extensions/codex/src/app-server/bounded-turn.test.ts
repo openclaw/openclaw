@@ -13,6 +13,25 @@ import {
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
+function requestParams(fake: ReturnType<typeof createClientFactory>, method: string) {
+  return fake.request.mock.calls.find(([name]) => name === method)?.[1];
+}
+
+function wireResults(
+  turn:
+    | ReturnType<typeof completedTurnResult>
+    | ReturnType<typeof inProgressTurnResult> = completedTurnResult(),
+) {
+  return {
+    "model/list": { data: [codexModel()], nextCursor: null },
+    "config/read": { config: {}, layers: [] },
+    "configRequirements/read": { requirements: null },
+    "thread/start": threadStartResult("gpt-5.4"),
+    "mcpServerStatus/list": { data: [], nextCursor: null },
+    "turn/start": turn,
+  };
+}
+
 function boundedTurnDefaults() {
   return {
     model: { mode: "required", id: "gpt-5.4" },
@@ -26,11 +45,15 @@ function boundedTurnDefaults() {
 
 type TurnParams = Parameters<typeof runBoundedCodexAppServerTurn>[0];
 
-function runTurn(params: Partial<TurnParams> & Pick<TurnParams, "options">) {
+function runTurn(
+  clientFactory: TurnParams["options"]["clientFactory"],
+  params: Partial<TurnParams> = {},
+) {
   return runBoundedCodexAppServerTurn({
     ...boundedTurnDefaults(),
     isolation: "private-stdio",
     ...params,
+    options: { ...params.options, clientFactory },
   });
 }
 
@@ -46,13 +69,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       });
 
       await expect(
-        runTurn({
-          options: { clientFactory: fake.factory },
+        runTurn(fake.factory, {
           requireNoExternalCapabilities: true,
         }),
       ).resolves.toMatchObject({ text: "The message was sent successfully." });
 
-      const start = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+      const start = requestParams(fake, "thread/start");
       expect(start).toMatchObject({
         environments: [],
         dynamicTools: [],
@@ -88,8 +110,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       managedRequirements: { featureRequirements: { hooks: true, shell_tool: true } },
     });
     await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
+      runTurn(fake.factory, {
         requireNoExternalCapabilities: true,
       }),
     ).rejects.toThrow("cannot override required feature shell_tool");
@@ -116,8 +137,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
             : []),
         ],
       });
-      const run = runTurn({
-        options: { clientFactory: fake.factory },
+      const run = runTurn(fake.factory, {
         requireNoExternalCapabilities: true,
       });
       if (hasRevision) {
@@ -158,15 +178,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
             declined.resolve();
             return;
           }
-          const results: Record<string, unknown> = {
-            "model/list": { data: [codexModel()], nextCursor: null },
-            "config/read": { config: {}, layers: [] },
-            "configRequirements/read": { requirements: null },
-            "thread/start": threadStartResult("gpt-5.4"),
-            "mcpServerStatus/list": { data: [], nextCursor: null },
-            "turn/start":
-              receipt === "terminal response" ? completedTurnResult() : inProgressTurnResult(),
-          };
+          const results: Record<string, unknown> = wireResults(
+            receipt === "terminal response" ? completedTurnResult() : inProgressTurnResult(),
+          );
           send({ id: request.id, result: results[request.method ?? ""] });
           if (request.method === "turn/start") {
             started.resolve();
@@ -178,8 +192,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           }
         },
       });
-      const run = runTurn({
-        options: { clientFactory: async () => harness.client },
+      const run = runTurn(async () => harness.client, {
         isolation: "configured-transport",
       });
       const result = expect(run).resolves.toMatchObject({
@@ -209,9 +222,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const fake = createClientFactory({ completeTurn: false });
     const controller = new AbortController();
     let outcome: unknown;
-    const run = runTurn({
+    const run = runTurn(fake.factory, {
       signal: controller.signal,
-      options: { clientFactory: fake.factory },
       isolation: "configured-transport",
     }).catch((error: unknown) => {
       outcome = error;
@@ -237,8 +249,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("bounds turn notifications received before turn/start acknowledges", async () => {
     const fake = createClientFactory({ preBindDeltaCount: 257 });
     await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
+      runTurn(fake.factory, {
         isolation: "configured-transport",
       }),
     ).rejects.toThrow("pre-bind notification buffer exceeded");
@@ -260,7 +271,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       const retired = new Error("bounded turn caller retired");
       let current = true;
       const params = {
-        options: { clientFactory: fake.factory },
         requireNoExternalCapabilities: true,
         assertCurrent: () => {
           if (!current) {
@@ -268,7 +278,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           }
         },
       };
-      const run = runTurn(params);
+      const run = runTurn(fake.factory, params);
       const rejection = expect(run).rejects.toBe(retired);
       await suspended.promise;
       const codexHome = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.env?.CODEX_HOME;
@@ -294,14 +304,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       const harness = createClientHarness({
         onWrite: (line, send) => {
           const request = JSON.parse(line) as { id: number; method: string };
-          const results: Record<string, unknown> = {
-            "model/list": { data: [codexModel()], nextCursor: null },
-            "config/read": { config: {}, layers: [] },
-            "configRequirements/read": { requirements: null },
-            "thread/start": threadStartResult("gpt-5.4"),
-            "mcpServerStatus/list": { data: [], nextCursor: null },
-            "turn/start": completedTurnResult(),
-          };
+          const results: Record<string, unknown> = wireResults();
           if (request.method === "mcpServerStatus/list" && blockedMethod === "turn/start") {
             current = false;
           }
@@ -313,13 +316,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       });
       try {
         await expect(
-          runTurn({
+          runTurn(async () => harness.client, {
             assertCurrent: () => {
               if (!current) {
                 throw expired;
               }
             },
-            options: { clientFactory: async () => harness.client },
             isolation: "configured-transport",
             requireNoExternalCapabilities: true,
           }),
@@ -333,8 +335,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
-    const run = runTurn({
-      options: { clientFactory: fake.factory },
+    const run = runTurn(fake.factory, {
       taskLabel: "hosted search",
     });
     await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
@@ -369,9 +370,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const first = createClientFactory({ completeTurn: false });
     let priorTimeout: unknown;
     try {
-      await runTurn({
+      await runTurn(first.factory, {
         timeoutMs: 100,
-        options: { clientFactory: first.factory },
         taskLabel: "first hosted search",
       });
     } catch (error) {
@@ -387,9 +387,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     caller.abort(priorTimeout);
     const second = createClientFactory({ completeTurn: false });
     await expect(
-      runTurn({
+      runTurn(second.factory, {
         signal: caller.signal,
-        options: { clientFactory: second.factory },
         taskLabel: "second hosted search",
       }),
     ).rejects.toMatchObject({
@@ -404,8 +403,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
+      runTurn(fake.factory, {
         taskLabel: "settled-turn finalization",
         requireNoExternalCapabilities: true,
       }),
@@ -431,8 +429,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       );
 
       await expect(
-        runTurn({
-          options: { clientFactory: fake.factory },
+        runTurn(fake.factory, {
           taskLabel: "settled-turn finalization",
           requireNoExternalCapabilities: true,
         }),
@@ -450,8 +447,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
+      runTurn(fake.factory, {
         taskLabel: "settled-turn finalization",
         requireNoExternalCapabilities: true,
       }),
@@ -465,11 +461,10 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       const preparedAuth = { kind: "api-key" as const, apiKey: "test-key" };
       const profile = "openai:bounded";
 
-      await runTurn({
+      await runTurn(fake.factory, {
         ...(authSelection === "prepared" ? { preparedAuth } : { profile }),
         authRequirement: "api-key",
         options: {
-          clientFactory: fake.factory,
           pluginConfig: { appServer: { homeScope: "user" } },
         },
         requireNoExternalCapabilities: true,
@@ -495,9 +490,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
   it("carries attached provider overrides into private turns without importing tool policy", async () => {
     const fake = createClientFactory();
-    await runTurn({
+    await runTurn(fake.factory, {
       options: {
-        clientFactory: fake.factory,
         pluginConfig: {
           appServer: {
             args: [
@@ -528,17 +522,17 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       "--listen",
       "stdio://",
     ]);
-    expect(
-      fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
-    ).toMatchObject({ sandbox: "read-only", approvalPolicy: "on-request" });
+    expect(requestParams(fake, "thread/start")).toMatchObject({
+      sandbox: "read-only",
+      approvalPolicy: "on-request",
+    });
   });
 
   it("resolves relative executable and model-catalog paths before entering the private workspace", async () => {
     const fake = createClientFactory();
     const command = "./bin/custom-codex";
-    await runTurn({
+    await runTurn(fake.factory, {
       options: {
-        clientFactory: fake.factory,
         pluginConfig: {
           appServer: {
             command,
@@ -560,9 +554,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("preserves the Node launcher while removing inherited native policy flags", async () => {
     const wrapper = "./bin/codex-wrapper.js";
     const fake = createClientFactory();
-    await runTurn({
+    await runTurn(fake.factory, {
       options: {
-        clientFactory: fake.factory,
         pluginConfig: {
           appServer: {
             command: "node",
@@ -597,17 +590,16 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       models: [codexModel(model)],
     });
 
-    const result = await runTurn({
+    const result = await runTurn(fake.factory, {
       model: { mode: "required", id: model },
       options: {
-        clientFactory: fake.factory,
         pluginConfig: { appServer: { homeScope: "user" } },
       },
       isolation: "configured-transport",
       requireNoExternalCapabilities: true,
     });
 
-    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    const startParams = requestParams(fake, "thread/start");
     expect(startParams).not.toHaveProperty("modelProvider");
     expect(result.nativeSelection).toEqual({
       model,
@@ -628,9 +620,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runTurn({
+      runTurn(fake.factory, {
         model: { mode: "live-default" },
-        options: { clientFactory: fake.factory },
         taskLabel: "hosted search",
       }),
     ).resolves.toMatchObject({
@@ -639,8 +630,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       text: "The message was sent successfully.",
     });
 
-    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    const threadStart = requestParams(fake, "thread/start");
+    const turnStart = requestParams(fake, "turn/start");
     expect(threadStart).toMatchObject({ model: "visible-execution-model" });
     expect(turnStart).not.toHaveProperty("model");
   });
@@ -649,118 +640,109 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const fake = createClientFactory();
 
     await expect(
-      runTurn({
+      runTurn(fake.factory, {
         model: { mode: "required", id: "missing-model" },
-        options: { clientFactory: fake.factory },
         isolation: "configured-transport",
       }),
     ).rejects.toThrow("Codex app-server model not found: missing-model");
     expect(fake.methods).toEqual(["model/list"]);
   });
 
-  it.each([true])(
-    "attests ring-zero and totals response usage (missing final usage: %s)",
-    async (missingFinalUsage) => {
-      const firstResponse = {
-        responseId: "response-first",
-        usage: {
-          totalTokens: 12,
-          inputTokens: 8,
-          cachedInputTokens: 2,
-          cacheWriteInputTokens: 1,
-          outputTokens: 4,
-          reasoningOutputTokens: 3,
-        },
-      };
-      const fake = createClientFactory({
-        responseCompletions: [
-          firstResponse,
-          {
-            responseId: "response-final",
-            usage: {
-              totalTokens: 20,
-              inputTokens: 15,
-              cachedInputTokens: 5,
-              cacheWriteInputTokens: 2,
-              outputTokens: 5,
-              reasoningOutputTokens: 2,
-            },
+  it("attests ring-zero and totals response usage when final usage is missing", async () => {
+    const firstResponse = {
+      responseId: "response-first",
+      usage: {
+        totalTokens: 12,
+        inputTokens: 8,
+        cachedInputTokens: 2,
+        cacheWriteInputTokens: 1,
+        outputTokens: 4,
+        reasoningOutputTokens: 3,
+      },
+    };
+    const fake = createClientFactory({
+      responseCompletions: [
+        firstResponse,
+        {
+          responseId: "response-final",
+          usage: {
+            totalTokens: 20,
+            inputTokens: 15,
+            cachedInputTokens: 5,
+            cacheWriteInputTokens: 2,
+            outputTokens: 5,
+            reasoningOutputTokens: 2,
           },
-          firstResponse,
-          ...(missingFinalUsage ? [{ responseId: "response-without-usage", usage: null }] : []),
-        ],
-      });
-      const historyItems: JsonValue[] = [
-        { type: "function_call", call_id: "call-1", name: "message", arguments: "{}" },
-        { type: "function_call_output", call_id: "call-1", output: "sent" },
-      ];
-
-      await expect(
-        runTurn({
-          options: { clientFactory: fake.factory },
-          taskLabel: "settled-turn finalization",
-          historyItems,
-          requireNoExternalCapabilities: true,
-        }),
-      ).resolves.toMatchObject({
-        text: "The message was sent successfully.",
-        model: "gpt-5.4",
-        usage: {
-          input: 13,
-          output: 9,
-          cacheRead: 7,
-          cacheWrite: 3,
-          reasoningTokens: 5,
-          total: 32,
-          contextUsage: missingFinalUsage
-            ? { state: "unavailable" }
-            : { state: "available", promptTokens: 15, totalTokens: 20 },
         },
-      });
+        firstResponse,
+        { responseId: "response-without-usage", usage: null },
+      ],
+    });
+    const historyItems: JsonValue[] = [
+      { type: "function_call", call_id: "call-1", name: "message", arguments: "{}" },
+      { type: "function_call_output", call_id: "call-1", output: "sent" },
+    ];
 
-      expect(fake.methods).toEqual([
-        "model/list",
-        "config/read",
-        "config/read",
-        "hooks/list",
-        "configRequirements/read",
-        "thread/start",
-        "mcpServerStatus/list",
-        "thread/inject_items",
-        "turn/start",
-      ]);
-      const startParams = fake.request.mock.calls.find(
-        ([method]) => method === "thread/start",
-      )?.[1] as Record<string, unknown> | undefined;
-      expect(startParams).toMatchObject({
-        baseInstructions: "",
-        environments: [],
-        dynamicTools: [],
-        ephemeral: true,
-        config: {
-          "agents.enabled": false,
-          "features.hooks": false,
-          "features.multi_agent": false,
-          "features.multi_agent_v2": false,
-          "features.code_mode": false,
-          "features.code_mode_only": false,
-          "skills.include_instructions": false,
-          include_environment_context: false,
-          mcp_servers: { inherited: { enabled: false } },
-          "tools.experimental_request_user_input.enabled": false,
-          "tools.update_plan.enabled": false,
-        },
-      });
-      const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
-      expect(turnParams).not.toHaveProperty("cwd");
-      expect(turnParams).not.toHaveProperty("environments");
-      expect(fake.request).toHaveBeenCalledWith(
-        "thread/inject_items",
-        { threadId: "thread-finalizer", items: historyItems },
-        expect.any(Object),
-      );
-    },
-  );
+    await expect(
+      runTurn(fake.factory, {
+        taskLabel: "settled-turn finalization",
+        historyItems,
+        requireNoExternalCapabilities: true,
+      }),
+    ).resolves.toMatchObject({
+      text: "The message was sent successfully.",
+      model: "gpt-5.4",
+      usage: {
+        input: 13,
+        output: 9,
+        cacheRead: 7,
+        cacheWrite: 3,
+        reasoningTokens: 5,
+        total: 32,
+        contextUsage: { state: "unavailable" },
+      },
+    });
+
+    expect(fake.methods).toEqual([
+      "model/list",
+      "config/read",
+      "config/read",
+      "hooks/list",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/inject_items",
+      "turn/start",
+    ]);
+    const startParams = requestParams(fake, "thread/start");
+    expect(startParams).toMatchObject({
+      baseInstructions: "",
+      environments: [],
+      dynamicTools: [],
+      ephemeral: true,
+      config: {
+        "agents.enabled": false,
+        "features.hooks": false,
+        "features.multi_agent": false,
+        "features.multi_agent_v2": false,
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+        "skills.include_instructions": false,
+        include_environment_context: false,
+        mcp_servers: { inherited: { enabled: false } },
+        "tools.experimental_request_user_input.enabled": false,
+        "tools.update_plan.enabled": false,
+      },
+    });
+    const turnParams = requestParams(fake, "turn/start");
+    expect(turnParams).not.toHaveProperty("cwd");
+    expect(turnParams).not.toHaveProperty("environments");
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/inject_items",
+      { threadId: "thread-finalizer", items: historyItems },
+      expect.any(Object),
+    );
+  });
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
     const fake = createClientFactory({
@@ -768,8 +750,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runTurn({
-        options: { clientFactory: fake.factory },
+      runTurn(fake.factory, {
         taskLabel: "settled-turn finalization",
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,

@@ -299,6 +299,43 @@ type AuthProfileCredential = AuthProfileStore["profiles"][string];
 
 type OAuthProfile = Extract<AuthProfileCredential, { type: "oauth" }>;
 
+function oauthTokens(
+  access: string,
+  refresh: string,
+  expires: number,
+): { access: string; refresh: string; expires: number };
+function oauthTokens(
+  access: string,
+  refresh: string,
+  expires: number,
+  accountId: string,
+): { access: string; refresh: string; expires: number; accountId: string };
+function oauthTokens(access: string, refresh: string, expires: number, accountId?: string) {
+  return { access, refresh, expires, ...(accountId ? { accountId } : {}) };
+}
+
+function refreshResult(accessToken: string, chatgptAccountId: string) {
+  return { accessToken, chatgptAccountId, chatgptPlanType: null };
+}
+
+function sendTokenRefresh(harness: ReturnType<typeof createClientHarness>, id: string) {
+  harness.send({
+    id,
+    method: "account/chatgptAuthTokens/refresh",
+    params: { reason: "unauthorized", previousAccountId: "account-a" },
+  });
+}
+
+function loginRequest(type = "chatgptAuthTokens") {
+  return vi.fn(async () => ({ type }));
+}
+
+function fallbackRequest() {
+  return vi.fn(async (method: string) =>
+    method === "account/read" ? { account: null, requiresOpenaiAuth: true } : { type: "apiKey" },
+  );
+}
+
 function oauthProfile(
   prefix: string,
   overrides: Partial<Omit<OAuthProfile, "type" | "provider">> = {},
@@ -456,9 +493,7 @@ describe("Codex auth bridge", () => {
       env: { CODEX_HOME: codexHomeDir(agentDir) },
     });
 
-    const request = vi.fn(async (method: string) =>
-      method === "account/read" ? { account: null, requiresOpenaiAuth: true } : { type: "apiKey" },
-    );
+    const request = fallbackRequest();
     await applyAuth({
       client: { request } as never,
       agentDir,
@@ -773,11 +808,7 @@ describe("Codex auth bridge", () => {
 
   it("applies a prepared API-key handoff without selecting an available OAuth profile", async () => {
     const authProfileStore: AuthProfileStore = profileStore(
-      oauthProfile("test", {
-        access: "subscription-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      }),
+      oauthProfile("test", oauthTokens("subscription-token", "refresh-token", Date.now() + 60_000)),
     );
     const handoff = await prepareHandoff({
       authRequirement: "api-key",
@@ -795,7 +826,7 @@ describe("Codex auth bridge", () => {
     if (handoff.preparedAuth?.kind !== "api-key") {
       throw new Error("Expected API-key handoff");
     }
-    const request = vi.fn(async () => ({ type: "apiKey" }));
+    const request = loginRequest("apiKey");
     await applyAuth({
       client: { request } as never,
       agentDir: "/tmp/openclaw-agent",
@@ -870,7 +901,7 @@ describe("Codex auth bridge", () => {
         CODEX_HOME: codexHomeDir(agentDir),
       },
     });
-    const request = vi.fn(async () => ({ type: "apiKey" }));
+    const request = loginRequest("apiKey");
     await expect(
       applyAuth({
         client: { request } as never,
@@ -910,12 +941,12 @@ describe("Codex auth bridge", () => {
         oauth.refresh.mockImplementationOnce(async () => {
           refreshing.resolve();
           await release.promise;
-          return {
-            access: chatgptAccessToken("scoped-account"),
-            refresh: "refreshed-token",
-            expires: Date.now() + 60_000,
-            accountId: "scoped-account",
-          };
+          return oauthTokens(
+            chatgptAccessToken("scoped-account"),
+            "refreshed-token",
+            Date.now() + 60_000,
+            "scoped-account",
+          );
         });
         let current = true;
         const harness = createClientHarness({
@@ -931,12 +962,10 @@ describe("Codex auth bridge", () => {
         });
         const retired = new Error("native login caller retired");
         const authProfileStore: AuthProfileStore = profileStore(
-          oauthProfile("test", {
-            access: "expired-access",
-            refresh: "refresh-token",
-            expires: Date.now() - 60_000,
-            accountId: "scoped-account",
-          }),
+          oauthProfile(
+            "test",
+            oauthTokens("expired-access", "refresh-token", Date.now() - 60_000, "scoped-account"),
+          ),
         );
         const params = {
           client: harness.client,
@@ -1012,12 +1041,15 @@ describe("Codex auth bridge", () => {
   it("keeps prepared persisted auth aligned across forced refresh-token rotations", async ({
     agentDir,
   }) => {
-    const credential = oauthProfile("test", {
-      access: "initial-access",
-      refresh: "initial-refresh",
-      expires: Date.now() + 60 * 60_000,
-      accountId: "rotating-account",
-    });
+    const credential = oauthProfile(
+      "test",
+      oauthTokens(
+        "initial-access",
+        "initial-refresh",
+        Date.now() + 60 * 60_000,
+        "rotating-account",
+      ),
+    );
     persistProfile(agentDir, credential);
     const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
     const currentCredential = {
@@ -1029,31 +1061,18 @@ describe("Codex auth bridge", () => {
     oauth.refresh
       .mockImplementationOnce(async () => {
         expect(readProfile(agentDir)).toEqual(currentCredential);
-        return {
-          access: "first-rotated-access",
-          refresh: "first-rotated-refresh",
-          expires: Date.now() + 60_000,
-        };
+        return oauthTokens("first-rotated-access", "first-rotated-refresh", Date.now() + 60_000);
       })
-      .mockResolvedValueOnce({
-        access: "second-rotated-access",
-        refresh: "second-rotated-refresh",
-        expires: Date.now() + 60_000,
-      });
+      .mockResolvedValueOnce(
+        oauthTokens("second-rotated-access", "second-rotated-refresh", Date.now() + 60_000),
+      );
     const params = { agentDir, authProfileId: "openai:work", authProfileStore };
     const first = await refreshTokens({
       ...params,
       previousAccountId: "rotating-account",
-      authHandoff: {
-        accessFingerprint: fingerprintTokenAuthProfileCacheKey(credential.access),
-        chatgptAccountId: "rotating-account",
-      },
+      authHandoff: authHandoff(credential.access, "rotating-account"),
     });
-    expect(first).toEqual({
-      accessToken: "first-rotated-access",
-      chatgptAccountId: "rotating-account",
-      chatgptPlanType: null,
-    });
+    expect(first).toEqual(refreshResult("first-rotated-access", "rotating-account"));
     const second = await refreshTokens(params);
     expect(second.accessToken).toBe("second-rotated-access");
     expect(oauth.refresh.mock.calls).toEqual([["updated-refresh"], ["first-rotated-refresh"]]);
@@ -1071,24 +1090,16 @@ describe("Codex auth bridge", () => {
     agentDir,
   }) => {
     vi.useFakeTimers();
-    const lateRefresh = createDeferred<{
-      access: string;
-      refresh: string;
-      expires: number;
-      accountId: string;
-    }>();
+    const lateRefresh = createDeferred<ReturnType<typeof oauthTokens>>();
     const refreshStarted = createDeferred<void>();
     oauth.refresh
       .mockImplementationOnce(() => {
         refreshStarted.resolve();
         return lateRefresh.promise;
       })
-      .mockResolvedValueOnce({
-        access: "duplicate-access",
-        refresh: "duplicate-refresh",
-        expires: Date.now() + 60_000,
-        accountId: "account-a",
-      });
+      .mockResolvedValueOnce(
+        oauthTokens("duplicate-access", "duplicate-refresh", Date.now() + 60_000, "account-a"),
+      );
     const harness = createClientHarness({
       onWrite: (line, send) => {
         const message = JSON.parse(line) as { id?: string | number; method?: string };
@@ -1109,11 +1120,7 @@ describe("Codex auth bridge", () => {
         }),
       );
 
-      harness.send({
-        id: "refresh-timeout",
-        method: "account/chatgptAuthTokens/refresh",
-        params: { reason: "unauthorized", previousAccountId: "account-a" },
-      });
+      sendTokenRefresh(harness, "refresh-timeout");
       await refreshStarted.promise;
       await vi.advanceTimersByTimeAsync(9_000);
       expect(JSON.parse(await harness.waitForWrite(1))).toMatchObject({
@@ -1121,12 +1128,9 @@ describe("Codex auth bridge", () => {
         error: { message: expect.stringContaining("token refresh timed out") },
       });
 
-      lateRefresh.resolve({
-        access: "late-access",
-        refresh: "late-refresh",
-        expires: Date.now() + 24 * 60 * 60_000,
-        accountId: "account-a",
-      });
+      lateRefresh.resolve(
+        oauthTokens("late-access", "late-refresh", Date.now() + 24 * 60 * 60_000, "account-a"),
+      );
       await vi.waitFor(() =>
         expect(authProfileStore.profiles["openai:work"]).toMatchObject({
           access: "late-access",
@@ -1134,33 +1138,17 @@ describe("Codex auth bridge", () => {
         }),
       );
 
-      harness.send({
-        id: "refresh-retry",
-        method: "account/chatgptAuthTokens/refresh",
-        params: { reason: "unauthorized", previousAccountId: "account-a" },
-      });
+      sendTokenRefresh(harness, "refresh-retry");
       expect(JSON.parse(await harness.waitForWrite(2))).toEqual({
         id: "refresh-retry",
-        result: {
-          accessToken: "late-access",
-          chatgptAccountId: "account-a",
-          chatgptPlanType: null,
-        },
+        result: refreshResult("late-access", "account-a"),
       });
       expect(oauth.refresh).toHaveBeenCalledTimes(1);
 
-      harness.send({
-        id: "refresh-after-handoff",
-        method: "account/chatgptAuthTokens/refresh",
-        params: { reason: "unauthorized", previousAccountId: "account-a" },
-      });
+      sendTokenRefresh(harness, "refresh-after-handoff");
       expect(JSON.parse(await harness.waitForWrite(3))).toEqual({
         id: "refresh-after-handoff",
-        result: {
-          accessToken: "duplicate-access",
-          chatgptAccountId: "account-a",
-          chatgptPlanType: null,
-        },
+        result: refreshResult("duplicate-access", "account-a"),
       });
       expect(oauth.refresh).toHaveBeenCalledTimes(2);
     } finally {
@@ -1172,12 +1160,9 @@ describe("Codex auth bridge", () => {
   it("does not commit a different workspace from a forced scoped refresh", async ({ agentDir }) => {
     const credential = oauthProfile("initial", { accountId: "account-a" });
     const authProfileStore: AuthProfileStore = profileStore(credential);
-    oauth.refresh.mockResolvedValueOnce({
-      access: "other-access",
-      refresh: "other-refresh",
-      expires: Date.now() + 24 * 60 * 60_000,
-      accountId: "account-b",
-    });
+    oauth.refresh.mockResolvedValueOnce(
+      oauthTokens("other-access", "other-refresh", Date.now() + 24 * 60 * 60_000, "account-b"),
+    );
 
     await expect(
       refreshTokens({
@@ -1194,12 +1179,14 @@ describe("Codex auth bridge", () => {
       access: chatgptAccessToken("account-a"),
       expires: Date.now() + 60 * 60_000,
     });
-    oauth.refresh.mockResolvedValueOnce({
-      access: chatgptAccessToken("account-b"),
-      refresh: "other-refresh",
-      expires: Date.now() + 24 * 60 * 60_000,
-      accountId: "account-b",
-    });
+    oauth.refresh.mockResolvedValueOnce(
+      oauthTokens(
+        chatgptAccessToken("account-b"),
+        "other-refresh",
+        Date.now() + 24 * 60 * 60_000,
+        "account-b",
+      ),
+    );
 
     persistProfile(agentDir, credential);
     const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
@@ -1266,11 +1253,7 @@ describe("Codex auth bridge", () => {
     authProfileStore.profiles["openai:work"] = oauthProfile("replacement", {
       accountId: "replacement-account",
     });
-    resolveRefresh?.({
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-      expires: Date.now() + 60_000,
-    });
+    resolveRefresh?.(oauthTokens("rotated-access", "rotated-refresh", Date.now() + 60_000));
 
     await refresh;
     expect(authProfileStore.profiles["openai:work"]).toMatchObject({
@@ -1286,11 +1269,9 @@ describe("Codex auth bridge", () => {
     const initialAccess = chatgptAccessToken("workspace-a", "initial");
     const refreshedAccess = chatgptAccessToken("workspace-a", "refreshed");
     const replacementAccess = chatgptAccessToken("workspace-b", "replacement");
-    oauth.refresh.mockResolvedValueOnce({
-      access: refreshedAccess,
-      refresh: "refreshed-refresh",
-      expires: Date.now() + 60_000,
-    });
+    oauth.refresh.mockResolvedValueOnce(
+      oauthTokens(refreshedAccess, "refreshed-refresh", Date.now() + 60_000),
+    );
     providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockImplementationOnce(
       async ({ context }) => {
         persistProfile(
@@ -1324,13 +1305,15 @@ describe("Codex auth bridge", () => {
   });
 
   it("keeps a runtime-external same-account OAuth profile scoped", async ({ agentDir }) => {
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
-    oauth.refresh.mockResolvedValueOnce({
-      access: "scoped-refreshed-access",
-      refresh: "scoped-refreshed-refresh",
-      expires: Date.now() + 60_000,
-      accountId: "shared-account",
-    });
+    const request = loginRequest();
+    oauth.refresh.mockResolvedValueOnce(
+      oauthTokens(
+        "scoped-refreshed-access",
+        "scoped-refreshed-refresh",
+        Date.now() + 60_000,
+        "shared-account",
+      ),
+    );
 
     persistProfile(agentDir, oauthProfile("persisted", { accountId: "shared-account" }));
     const scopedCredential = {
@@ -1365,15 +1348,12 @@ describe("Codex auth bridge", () => {
   });
 
   it("keeps changed-workspace clones scoped even when emails match", async ({ agentDir }) => {
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const request = loginRequest();
     const refreshedAccess = chatgptAccessToken("account-a", "refreshed");
     const replacementAccess = chatgptAccessToken("account-b");
-    oauth.refresh.mockResolvedValueOnce({
-      access: refreshedAccess,
-      refresh: "account-a-refreshed-refresh",
-      expires: Date.now() + 60_000,
-      accountId: "account-a",
-    });
+    oauth.refresh.mockResolvedValueOnce(
+      oauthTokens(refreshedAccess, "account-a-refreshed-refresh", Date.now() + 60_000, "account-a"),
+    );
 
     persistProfile(
       agentDir,
@@ -1405,12 +1385,7 @@ describe("Codex auth bridge", () => {
   });
 
   it("coalesces scoped startup logins and validates each refresh waiter", async ({ agentDir }) => {
-    const refresh = createDeferred<{
-      access: string;
-      refresh: string;
-      expires: number;
-      accountId: string;
-    }>();
+    const refresh = createDeferred<ReturnType<typeof oauthTokens>>();
     const started = createDeferred<void>();
     oauth.refresh.mockImplementationOnce(() => {
       started.resolve();
@@ -1419,14 +1394,12 @@ describe("Codex auth bridge", () => {
     const credential = oauthProfile("expired", { expires: Date.now() - 60_000 });
     const authProfileStore: AuthProfileStore = profileStore(credential);
 
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const request = loginRequest();
     const params = { client: { request } as never, ...profileParams(agentDir, authProfileStore) };
     const first = applyAuth(params);
     const second = applyAuth(params);
     const compatibleWaiter = refreshTokens({
-      agentDir,
-      authProfileId: "openai:work",
-      authProfileStore,
+      ...profileParams(agentDir, authProfileStore),
       previousAccountId: "account-a",
     });
     const incompatibleWaiter = refreshTokens({
@@ -1438,23 +1411,16 @@ describe("Codex auth bridge", () => {
     );
     await started.promise;
 
-    refresh.resolve({
-      access: "refreshed-access",
-      refresh: "refreshed-refresh",
-      expires: Date.now() + 60_000,
-      accountId: "account-a",
-    });
+    refresh.resolve(
+      oauthTokens("refreshed-access", "refreshed-refresh", Date.now() + 60_000, "account-a"),
+    );
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       authHandoff("refreshed-access", "account-a"),
       authHandoff("refreshed-access", "account-a"),
     ]);
     expectTokenLogin(request, "refreshed-access", "account-a", null, 2);
-    await expect(compatibleWaiter).resolves.toEqual({
-      accessToken: "refreshed-access",
-      chatgptAccountId: "account-a",
-      chatgptPlanType: null,
-    });
+    await expect(compatibleWaiter).resolves.toEqual(refreshResult("refreshed-access", "account-a"));
     await incompatibleRejection;
     expect(oauth.refresh).toHaveBeenCalledTimes(1);
   });
@@ -1511,7 +1477,7 @@ describe("Codex auth bridge", () => {
     expect(second).not.toBe(first);
     expect(first).not.toContain("first-prepared-key");
     expect(second).not.toContain("second-prepared-key");
-    const request = vi.fn(async () => ({ type: "apiKey" }));
+    const request = loginRequest("apiKey");
     await applyAuth({
       ...params,
       client: { request } as never,
@@ -1575,7 +1541,7 @@ describe("Codex auth bridge", () => {
     const osHome = path.join(root, "os-home");
     const openClawHome = path.join(root, "openclaw-home");
     const agentDir = path.join(openClawHome, "agents", "main", "agent");
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const request = loginRequest();
     vi.stubEnv("HOME", osHome);
     vi.stubEnv("OPENCLAW_HOME", openClawHome);
     vi.stubEnv("CODEX_HOME", undefined);
@@ -1648,12 +1614,7 @@ describe("Codex auth bridge", () => {
   }) => {
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
-    const request = vi.fn(async (method: string) => {
-      if (method === "account/read") {
-        return { account: null, requiresOpenaiAuth: true };
-      }
-      return { type: "apiKey" };
-    });
+    const request = fallbackRequest();
     vi.stubEnv("CODEX_HOME", codexHome);
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -1703,12 +1664,7 @@ describe("Codex auth bridge", () => {
   });
 
   it("honors clearEnv before env API-key fallback", async ({ agentDir }) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "account/read") {
-        return { account: null, requiresOpenaiAuth: true };
-      }
-      return { type: "apiKey" };
-    });
+    const request = fallbackRequest();
     vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
     vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
     vi.stubEnv("CODEX_HOME", path.join(agentDir, "empty-codex-home"));
@@ -1729,12 +1685,7 @@ describe("Codex auth bridge", () => {
   it("does not send env API-key fallback to websocket app-server connections", async ({
     agentDir,
   }) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "account/read") {
-        return { account: null, requiresOpenaiAuth: true };
-      }
-      return { type: "apiKey" };
-    });
+    const request = fallbackRequest();
     vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
     vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
 
@@ -1766,7 +1717,7 @@ describe("Codex auth bridge", () => {
   it("rejects retired openai-codex auth-provider profiles before app-server login", async ({
     agentDir,
   }) => {
-    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const request = loginRequest();
 
     persistProfile(agentDir, {
       type: "token",
@@ -1819,12 +1770,14 @@ describe("Codex auth bridge", () => {
     const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-    oauth.refresh.mockResolvedValueOnce({
-      access: "main-refreshed-access-token",
-      refresh: "main-refreshed-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-main",
-    });
+    oauth.refresh.mockResolvedValueOnce(
+      oauthTokens(
+        "main-refreshed-access-token",
+        "main-refreshed-refresh-token",
+        Date.now() + 60_000,
+        "account-main",
+      ),
+    );
 
     await fs.mkdir(childAgentDir, { recursive: true });
     await upsertAuthProfileAsync({
@@ -1848,30 +1801,32 @@ describe("Codex auth bridge", () => {
       }),
     });
     const staleChildProfile = expectOAuthProfile(readProfile(childAgentDir));
-    expect(staleChildProfile?.access).toBe("child-stale-access-token");
-    expect(staleChildProfile?.refresh).toBe("child-stale-refresh-token");
+    expect(staleChildProfile).toMatchObject({
+      access: "child-stale-access-token",
+      refresh: "child-stale-refresh-token",
+    });
 
     await expect(
       refreshTokens({
         agentDir: childAgentDir,
         authProfileId: "openai:work",
       }),
-    ).resolves.toEqual({
-      accessToken: "main-refreshed-access-token",
-      chatgptAccountId: "account-main",
-      chatgptPlanType: null,
-    });
+    ).resolves.toEqual(refreshResult("main-refreshed-access-token", "account-main"));
 
     expect(oauth.refresh).toHaveBeenCalledWith("main-owner-refresh-token");
     const mainProfile = expectOAuthProfile(readProfile());
-    expect(mainProfile?.provider).toBe("openai");
-    expect(mainProfile?.access).toBe("main-refreshed-access-token");
-    expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
+    expect(mainProfile).toMatchObject({
+      provider: "openai",
+      access: "main-refreshed-access-token",
+      refresh: "main-refreshed-refresh-token",
+    });
     const childProfile = expectOAuthProfile(readProfile(childAgentDir));
     // Refresh ownership writes the main profile; it does not silently mutate
     // the stale child clone that request-time resolution intentionally bypassed.
-    expect(childProfile?.access).toBe("child-stale-access-token");
-    expect(childProfile?.refresh).toBe("child-stale-refresh-token");
+    expect(childProfile).toMatchObject({
+      access: "child-stale-access-token",
+      refresh: "child-stale-refresh-token",
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -48,6 +48,54 @@ type JsonRpcResponse = {
   error?: { code?: number; message?: string };
 };
 
+function oauthProfile(prefix: string, overrides: Partial<OAuthCredential> = {}): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: `${prefix}-access`,
+    refresh: `${prefix}-refresh`,
+    expires: Date.now() + 60_000,
+    accountId: ACCOUNT_ID,
+    ...overrides,
+  };
+}
+
+function sendRefresh(harness: Harness, id: string) {
+  harness.send({
+    id,
+    method: "account/chatgptAuthTokens/refresh",
+    params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
+  });
+}
+
+async function refreshResponse(harness: Harness, id: string) {
+  sendRefresh(harness, id);
+  return waitForResponse(harness, id);
+}
+
+function expectRefreshError(response: JsonRpcResponse, message: string | RegExp) {
+  expect(response).toMatchObject({
+    error: {
+      code: -32603,
+      message:
+        typeof message === "string"
+          ? expect.stringContaining(message)
+          : expect.stringMatching(message),
+    },
+  });
+  expect(response.result).toBeUndefined();
+}
+
+function rotateCredential(credential: OAuthCredential, prefix: string, accountId = ACCOUNT_ID) {
+  return {
+    ...credential,
+    access: `${prefix}-access`,
+    refresh: `${prefix}-refresh`,
+    expires: Date.now() + 60_000,
+    accountId,
+  };
+}
+
 async function waitForResponse(harness: Harness, id: string): Promise<JsonRpcResponse> {
   for (let index = 0; ; index++) {
     const response = JSON.parse(await harness.waitForWrite(index)) as JsonRpcResponse;
@@ -116,26 +164,22 @@ async function withAuthRefreshHarness(
     for (const id of ["openai", "anthropic"]) {
       const rootDir = path.join(bundledRoot, id);
       fs.mkdirSync(rootDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(rootDir, "package.json"),
-        JSON.stringify({
+      const files = {
+        "package.json": JSON.stringify({
           name: `auth-refresh-fixture-${id}`,
           openclaw: { extensions: ["./index.js"] },
         }),
-      );
-      fs.writeFileSync(
-        path.join(rootDir, "openclaw.plugin.json"),
-        JSON.stringify({
+        "openclaw.plugin.json": JSON.stringify({
           id,
           providers: [id],
           enabledByDefault: true,
           configSchema: { type: "object", properties: {} },
         }),
-      );
-      fs.writeFileSync(
-        path.join(rootDir, "index.js"),
-        'throw new Error("Unexpected fixture cold load");\n',
-      );
+        "index.js": 'throw new Error("Unexpected fixture cold load");\n',
+      };
+      for (const [name, contents] of Object.entries(files)) {
+        fs.writeFileSync(path.join(rootDir, name), contents);
+      }
     }
     await withEnvAsync(
       {
@@ -192,14 +236,7 @@ async function withAuthRefreshHarness(
           await upsertAuthProfileAsync({
             agentDir,
             profileId: PROFILE_ID,
-            credential: {
-              type: "oauth",
-              provider: "openai",
-              access: INITIAL_ACCESS,
-              refresh: "initial-refresh",
-              expires: Date.now() + 60_000,
-              accountId: ACCOUNT_ID,
-            },
+            credential: oauthProfile("initial"),
           });
           const retainedStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
           ensureCodexAppServerClientRuntime(harness.client, {
@@ -256,25 +293,17 @@ describe("Codex app-server auth refresh authority", () => {
     },
     {
       name: "becomes another provider's OAuth credential",
-      credential: {
-        type: "oauth",
+      credential: oauthProfile("other-provider", {
         provider: "anthropic",
-        access: "other-provider-access",
-        refresh: "other-provider-refresh",
         expires: Date.now() + 24 * 60 * 60_000,
-        accountId: ACCOUNT_ID,
-      },
+      }),
     },
   ] satisfies Array<{ name: string; credential: AuthProfileCredential | undefined }>)(
     "rejects a retained persisted OAuth profile when canonical authority $name",
     async ({ credential }) => {
-      const refreshOAuth = vi.fn(async (current: OAuthCredential) => ({
-        ...current,
-        access: "retired-profile-rotated-access",
-        refresh: "retired-profile-rotated-refresh",
-        expires: Date.now() + 60_000,
-        accountId: ACCOUNT_ID,
-      }));
+      const refreshOAuth = vi.fn(async (current: OAuthCredential) =>
+        rotateCredential(current, "retired-profile-rotated"),
+      );
 
       await withAuthRefreshHarness(
         refreshOAuth,
@@ -296,22 +325,12 @@ describe("Codex app-server auth refresh authority", () => {
             access: INITIAL_ACCESS,
           });
 
-          harness.send({
-            id: "refresh-authority-lost",
-            method: "account/chatgptAuthTokens/refresh",
-            params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-          });
-          const response = await waitForResponse(harness, "refresh-authority-lost");
-          expect(response).toMatchObject({
-            error: {
-              code: -32603,
-              message: expect.stringContaining(
-                `auth profile "${PROFILE_ID}" is no longer an OpenAI OAuth credential in its persisted OpenClaw store.`,
-              ),
-            },
-          });
+          const response = await refreshResponse(harness, "refresh-authority-lost");
+          expectRefreshError(
+            response,
+            `auth profile "${PROFILE_ID}" is no longer an OpenAI OAuth credential in its persisted OpenClaw store.`,
+          );
           expect(response.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
-          expect(response.result).toBeUndefined();
           expect(refreshOAuth).not.toHaveBeenCalled();
           expect(otherProviderRefresh).not.toHaveBeenCalled();
 
@@ -324,44 +343,22 @@ describe("Codex app-server auth refresh authority", () => {
   );
 
   it("keeps a retained client fenced after a rejected account rotation", async () => {
-    const refreshOAuth = vi.fn(async (credential: OAuthCredential) => ({
-      ...credential,
-      access: "other-account-access",
-      refresh: "other-account-refresh",
-      expires: Date.now() + 60_000,
-      accountId: "account-b",
-    }));
+    const refreshOAuth = vi.fn(async (credential: OAuthCredential) =>
+      rotateCredential(credential, "other-account", "account-b"),
+    );
 
     await withAuthRefreshHarness(
       refreshOAuth,
       async ({ harness }) => {
-        harness.send({
-          id: "refresh-rejected",
-          method: "account/chatgptAuthTokens/refresh",
-          params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-        });
-        const rejected = await waitForResponse(harness, "refresh-rejected");
-        expect(rejected).toMatchObject({
-          error: { code: -32603, message: expect.stringMatching(/different OAuth account/i) },
-        });
-        expect(rejected.result).toBeUndefined();
+        const rejected = await refreshResponse(harness, "refresh-rejected");
+        expectRefreshError(rejected, /different OAuth account/i);
 
-        harness.send({
-          id: "refresh-after-fence",
-          method: "account/chatgptAuthTokens/refresh",
-          params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-        });
-        const afterFence = await waitForResponse(harness, "refresh-after-fence");
-        expect(afterFence).toMatchObject({
-          error: {
-            code: -32603,
-            message: expect.stringContaining(
-              `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
-            ),
-          },
-        });
+        const afterFence = await refreshResponse(harness, "refresh-after-fence");
+        expectRefreshError(
+          afterFence,
+          `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
+        );
         expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
-        expect(afterFence.result).toBeUndefined();
         expect(refreshOAuth).toHaveBeenCalledTimes(1);
 
         const responses = JSON.stringify([rejected, afterFence]);
@@ -374,25 +371,16 @@ describe("Codex app-server auth refresh authority", () => {
 
   it("returns and persists a retained stdio refresh after its first-turn scope closes", async () => {
     const firstTurn = new AsyncWorkScope();
-    const refreshOAuth = vi.fn(async (credential: OAuthCredential) => ({
-      ...credential,
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-      expires: Date.now() + 60_000,
-      accountId: ACCOUNT_ID,
-    }));
+    const refreshOAuth = vi.fn(async (credential: OAuthCredential) =>
+      rotateCredential(credential, "rotated"),
+    );
 
     await withAuthRefreshHarness(
       refreshOAuth,
       async ({ agentDir, harness, retainedStore }) => {
         await firstTurn.drain();
         expect(() => firstTurn.run(() => undefined)).toThrow("Async work scope is closed");
-        harness.send({
-          id: "refresh-accepted",
-          method: "account/chatgptAuthTokens/refresh",
-          params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-        });
-        await expect(waitForResponse(harness, "refresh-accepted")).resolves.toEqual({
+        await expect(refreshResponse(harness, "refresh-accepted")).resolves.toEqual({
           id: "refresh-accepted",
           result: {
             accessToken: "rotated-access",
@@ -424,24 +412,14 @@ describe("Codex app-server auth refresh authority", () => {
     const refreshOAuth = vi.fn(async (credential: OAuthCredential) => {
       providerStarted.resolve();
       await releaseProvider.promise;
-      return {
-        ...credential,
-        access: "closing-rotated-access",
-        refresh: "closing-rotated-refresh",
-        expires: Date.now() + 60_000,
-        accountId: ACCOUNT_ID,
-      };
+      return rotateCredential(credential, "closing-rotated");
     });
     const transport = createClientHarness({ autoEmitExit: false });
 
     await withAuthRefreshHarness(
       refreshOAuth,
       async ({ agentDir, harness, authRefreshFailed }) => {
-        harness.send({
-          id: "refresh-before-close",
-          method: "account/chatgptAuthTokens/refresh",
-          params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-        });
+        sendRefresh(harness, "refresh-before-close");
         await providerStarted.promise;
         let closed = false;
         const closing = harness.client.closeAndWait().then((result) => {
@@ -449,11 +427,7 @@ describe("Codex app-server auth refresh authority", () => {
           return result;
         });
         try {
-          harness.send({
-            id: "refresh-after-close",
-            method: "account/chatgptAuthTokens/refresh",
-            params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-          });
+          sendRefresh(harness, "refresh-after-close");
           transport.emitExit();
           await closeCodexAppServerTransportAndWait(transport.process);
           // An event-loop barrier after physical exit lets an incorrectly early
