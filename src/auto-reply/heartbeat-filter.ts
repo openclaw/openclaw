@@ -14,6 +14,7 @@ import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
+  HEARTBEAT_TASK_SILENT_COMPLETION_INSTRUCTION,
   INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
   isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
@@ -27,6 +28,7 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
     (token) => `After completing all due tasks, reply ${token}.`,
   ),
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  HEARTBEAT_TASK_SILENT_COMPLETION_INSTRUCTION,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };

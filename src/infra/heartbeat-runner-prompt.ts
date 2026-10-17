@@ -1,10 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  HEARTBEAT_TASK_SILENT_COMPLETION_INSTRUCTION,
   isHeartbeatContentEffectivelyEmpty,
 } from "../auto-reply/heartbeat.js";
 import { isStoredConversationRoute } from "../auto-reply/reply/prompt-session-context.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
@@ -351,7 +351,7 @@ export function resolveHeartbeatRunPrompt(params: {
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
-      : `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
+      : HEARTBEAT_TASK_SILENT_COMPLETION_INSTRUCTION;
     basePrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}

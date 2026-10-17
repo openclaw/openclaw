@@ -12,6 +12,8 @@ const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context w
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply ${SILENT_REPLY_TOKEN}.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
+/** Closing instruction of a periodic-task heartbeat prompt for runs without the response tool. */
+export const HEARTBEAT_TASK_SILENT_COMPLETION_INSTRUCTION = `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
 // A fallback backend may lack the direct-only tool; preserve both quiet and alert outcomes.
 const HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS = `If the heartbeat_respond tool is not available in this run, reply ${SILENT_REPLY_TOKEN} when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.`;
 export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
