@@ -2,6 +2,7 @@ import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { IMAGE_GENERATION_ASPECT_RATIOS } from "../../image-generation/aspect-ratio.js";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { collectOption } from "../program/helpers.js";
@@ -70,7 +71,11 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const model = opts.model as string | undefined;
           const count = parseOptionalPositiveInteger(opts.count, "--count");
           const size = opts.size as string | undefined;
-          const aspectRatio = opts.aspectRatio as string | undefined;
+          const aspectRatio = parseImageOption(
+            opts.aspectRatio,
+            IMAGE_GENERATION_ASPECT_RATIOS,
+            "--aspect-ratio",
+          );
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
             opts.outputFormat,
