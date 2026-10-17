@@ -16,6 +16,45 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 
 const tempDirs: string[] = [];
 
+function writeJson(filePath: string, data: unknown) {
+  fs.writeFileSync(filePath, JSON.stringify(data), "utf8");
+}
+
+function writePackage(packageDir: string, manifest: Record<string, unknown>) {
+  fs.mkdirSync(packageDir, { recursive: true });
+  writeJson(path.join(packageDir, "package.json"), manifest);
+}
+
+function peerPackage(packageDir: string) {
+  writePackage(packageDir, {
+    name: path.basename(packageDir),
+    peerDependencies: { openclaw: "*" },
+  });
+}
+
+function peerInstall(installedDir: string) {
+  return { installedDir, peerDependencies: { openclaw: "*" }, logger: {} };
+}
+
+function expectHostLink(linkPath: string, hostRoot = process.cwd()) {
+  expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+  expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(hostRoot));
+}
+
+function unreadablePackageFixture() {
+  const npmRoot = makeTempDir();
+  const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
+  const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
+  fs.mkdirSync(unreadableDir, { recursive: true });
+  fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
+  writePackage(peerDir, { name: "peer-plugin", peerDependencies: { openclaw: ">=2026.0.0" } });
+  const failures: Array<{ error: unknown; packageDir: string }> = [];
+  const onPackageReadError = (error: unknown, packageDir: string) => {
+    failures.push({ error, packageDir });
+  };
+  return { npmRoot, unreadableDir, peerDir, failures, onPackageReadError };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -32,18 +71,15 @@ describe("plugin peer links", () => {
     const runtime = path.join(root, "runtime");
     fs.mkdirSync(runtime, { recursive: true });
     fs.writeFileSync(path.join(runtime, "package.json"), '{"name":"openclaw"}');
-    fs.writeFileSync(
-      path.join(root, "manifest.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        mode: "jit",
-        executable: { path: "renamed-host", sha256: "a".repeat(64) },
-        runtime: { path: "runtime", sha256: "b".repeat(64) },
-        openclaw: { version: "2026.10.4", commit: "c".repeat(40) },
-        bun: { version: "1.4.3" },
-        ...overrides,
-      }),
-    );
+    writeJson(path.join(root, "manifest.json"), {
+      schemaVersion: 1,
+      mode: "jit",
+      executable: { path: "renamed-host", sha256: "a".repeat(64) },
+      runtime: { path: "runtime", sha256: "b".repeat(64) },
+      openclaw: { version: "2026.10.4", commit: "c".repeat(40) },
+      bun: { version: "1.4.3" },
+      ...overrides,
+    });
     return runtime;
   }
 
@@ -54,7 +90,7 @@ describe("plugin peer links", () => {
     const packageDir = path.join(root, "plugin");
     fs.mkdirSync(packageDir);
     vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${bundle}/`).href);
-    const install = { installedDir: packageDir, peerDependencies: { openclaw: "*" }, logger: {} };
+    const install = peerInstall(packageDir);
     expect(await linkOpenClawPeerDependencies({ ...install, hostRoot: bundle })).toEqual({
       repaired: 1,
       skipped: 0,
@@ -89,13 +125,10 @@ describe("plugin peer links", () => {
     expect(issue?.reason).toContain("instead of");
     expect(issue?.reason).toContain("openclaw doctor --fix");
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(previous));
-    expect(
-      await linkOpenClawPeerDependencies({
-        installedDir: packageDir,
-        peerDependencies: { openclaw: "*" },
-        logger: {},
-      }),
-    ).toEqual({ repaired: 1, skipped: 0 });
+    expect(await linkOpenClawPeerDependencies(peerInstall(packageDir))).toEqual({
+      repaired: 1,
+      skipped: 0,
+    });
     expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(current));
   });
@@ -113,17 +146,9 @@ describe("plugin peer links", () => {
         const nodeModulesDir = path.join(packageDir, "node_modules");
         const linkPath = path.join(nodeModulesDir, "openclaw");
         const oldHost = path.join(root, "old-host");
-        fs.mkdirSync(packageDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(packageDir, "package.json"),
-          JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
-        );
+        peerPackage(packageDir);
         const siblingDir = path.join(path.dirname(packageDir), "z-peer-plugin");
-        fs.mkdirSync(siblingDir);
-        fs.writeFileSync(
-          path.join(siblingDir, "package.json"),
-          JSON.stringify({ name: "z-peer-plugin", peerDependencies: { openclaw: "*" } }),
-        );
+        peerPackage(siblingDir);
         if (layout !== "missing-modules") {
           fs.mkdirSync(nodeModulesDir);
         }
@@ -159,19 +184,14 @@ describe("plugin peer links", () => {
                   mode: "repair",
                   ...guarded,
                 })
-              : linkOpenClawPeerDependencies({
-                  installedDir: packageDir,
-                  peerDependencies: { openclaw: "*" },
-                  ...guarded,
-                });
+              : linkOpenClawPeerDependencies({ ...peerInstall(packageDir), ...guarded });
         // Each entry has started asynchronous filesystem preparation but has not mutated yet.
         current = false;
         await expect(operation).rejects.toBe(failure);
         expect(warnings).toEqual([]);
         expect(fs.existsSync(path.join(siblingDir, "node_modules"))).toBe(false);
         if (layout === "stale-link") {
-          expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-          expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(oldHost));
+          expectHostLink(linkPath, oldHost);
         } else if (layout === "package-copy") {
           expect(fs.lstatSync(linkPath).isDirectory()).toBe(true);
           expect(fs.readFileSync(path.join(linkPath, "package.json"), "utf8")).toBe(
@@ -193,10 +213,7 @@ describe("plugin peer links", () => {
     const oldHost = path.join(root, "old-host");
     fs.mkdirSync(path.dirname(linkPath), { recursive: true });
     fs.mkdirSync(oldHost);
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
-    );
+    peerPackage(packageDir);
     fs.symlinkSync(oldHost, linkPath, "junction");
     const prepared = createDeferred();
     const release = createDeferred();
@@ -264,8 +281,7 @@ describe("plugin peer links", () => {
       const warnings: string[] = [];
       await expect(
         linkOpenClawPeerDependencies({
-          installedDir: packageDir,
-          peerDependencies: { openclaw: "*" },
+          ...peerInstall(packageDir),
           logger: { warn: (message) => warnings.push(message) },
           beforePersistentApply: () => {
             if (!current) {
@@ -292,8 +308,7 @@ describe("plugin peer links", () => {
     const warnings: string[] = [];
 
     const result = await linkOpenClawPeerDependencies({
-      installedDir: packageDir,
-      peerDependencies: { openclaw: "*" },
+      ...peerInstall(packageDir),
       beforePersistentApply: () => {},
       logger: { warn: (message) => warnings.push(message) },
     });
@@ -308,52 +323,28 @@ describe("plugin peer links", () => {
     async (declaration) => {
       const npmRoot = makeTempDir();
       const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
-      fs.mkdirSync(packageDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({
-          name: "runtime-plugin",
-          version: "1.0.0",
-          [declaration]: {
-            openclaw: "2026.7.1",
-          },
-        }),
-        "utf8",
-      );
-
-      const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
-        npmRoot,
-        logger: {},
+      writePackage(packageDir, {
+        name: "runtime-plugin",
+        version: "1.0.0",
+        [declaration]: { openclaw: "2026.7.1" },
       });
+
+      const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} });
 
       const linkPath = path.join(packageDir, "node_modules", "openclaw");
       expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
-      expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-      expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+      expectHostLink(linkPath);
     },
   );
 
   it("reports one unreadable package and continues repairing its sibling", async () => {
-    const npmRoot = makeTempDir();
-    const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
-    const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
-    fs.mkdirSync(unreadableDir, { recursive: true });
-    fs.mkdirSync(peerDir, { recursive: true });
-    fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
-    fs.writeFileSync(
-      path.join(peerDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        peerDependencies: { openclaw: ">=2026.0.0" },
-      }),
-      "utf8",
-    );
-    const failures: Array<{ error: unknown; packageDir: string }> = [];
+    const { npmRoot, unreadableDir, peerDir, failures, onPackageReadError } =
+      unreadablePackageFixture();
 
     const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
       npmRoot,
       logger: {},
-      onPackageReadError: (error, packageDir) => failures.push({ error, packageDir }),
+      onPackageReadError,
     });
 
     expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
@@ -366,25 +357,12 @@ describe("plugin peer links", () => {
   });
 
   it("reports one unreadable package and continues auditing its sibling", async () => {
-    const npmRoot = makeTempDir();
-    const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
-    const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
-    fs.mkdirSync(unreadableDir, { recursive: true });
-    fs.mkdirSync(peerDir, { recursive: true });
-    fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
-    fs.writeFileSync(
-      path.join(peerDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        peerDependencies: { openclaw: ">=2026.0.0" },
-      }),
-      "utf8",
-    );
-    const failures: Array<{ error: unknown; packageDir: string }> = [];
+    const { npmRoot, unreadableDir, peerDir, failures, onPackageReadError } =
+      unreadablePackageFixture();
 
     const result = await auditOpenClawPeerDependenciesInManagedNpmRoot({
       npmRoot,
-      onPackageReadError: (error, packageDir) => failures.push({ error, packageDir }),
+      onPackageReadError,
     });
 
     expect(result.checked).toBe(1);
@@ -405,17 +383,12 @@ describe("plugin peer links", () => {
     const messages: string[] = [];
     const result = await linkOpenClawPeerDependencies({
       installedDir: packageDir,
-      peerDependencies: {
-        openclaw: ">=2026.0.0",
-      },
-      logger: {
-        info: (message) => messages.push(message),
-      },
+      peerDependencies: { openclaw: ">=2026.0.0" },
+      logger: { info: (message) => messages.push(message) },
     });
 
     expect(result).toEqual({ repaired: 1, skipped: 0 });
-    expect(fs.lstatSync(existingOpenClawDir).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(existingOpenClawDir)).toBe(fs.realpathSync(process.cwd()));
+    expectHostLink(existingOpenClawDir);
     expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
   });
 
@@ -433,12 +406,8 @@ describe("plugin peer links", () => {
     const warnings: string[] = [];
     const result = await linkOpenClawPeerDependencies({
       installedDir: packageDir,
-      peerDependencies: {
-        openclaw: ">=2026.0.0",
-      },
-      logger: {
-        warn: (message) => warnings.push(message),
-      },
+      peerDependencies: { openclaw: ">=2026.0.0" },
+      logger: { warn: (message) => warnings.push(message) },
     });
 
     expect(result).toEqual({ repaired: 0, skipped: 1 });
@@ -455,10 +424,7 @@ describe("plugin peer links", () => {
       const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
       const outsideManifest = path.join(root, "outside-package.json");
       fs.mkdirSync(staleHostDir, { recursive: true });
-      fs.writeFileSync(
-        outsideManifest,
-        JSON.stringify({ name: "email", peerDependencies: { openclaw: "*" } }),
-      );
+      writeJson(outsideManifest, { name: "email", peerDependencies: { openclaw: "*" } });
       fs.symlinkSync(outsideManifest, path.join(packageDir, "package.json"), "file");
       fs.writeFileSync(path.join(staleHostDir, "package.json"), '{"name":"openclaw"}');
       const failures: Array<{ error: unknown; packageDir: string }> = [];
@@ -490,10 +456,10 @@ describe("plugin peer links", () => {
       const packageDir = path.join(extensionsDir, "email");
       const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
       fs.mkdirSync(staleHostDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "email", dependencies: { openclaw: "2026.7.1" } }),
-      );
+      writeJson(path.join(packageDir, "package.json"), {
+        name: "email",
+        dependencies: { openclaw: "2026.7.1" },
+      });
       fs.writeFileSync(path.join(staleHostDir, "package.json"), '{"name":"openclaw"}');
 
       const result = await reconcileRegisteredOpenClawHostLinks({
@@ -503,8 +469,7 @@ describe("plugin peer links", () => {
       });
 
       expect(result.repaired).toBe(1);
-      expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
-      expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+      expectHostLink(staleHostDir);
     },
   );
 
@@ -518,10 +483,10 @@ describe("plugin peer links", () => {
       const outsideHost = path.join(outsideModules, "openclaw");
       fs.mkdirSync(packageDir, { recursive: true });
       fs.mkdirSync(outsideHost, { recursive: true });
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "email", peerDependencies: { openclaw: "*" } }),
-      );
+      writeJson(path.join(packageDir, "package.json"), {
+        name: "email",
+        peerDependencies: { openclaw: "*" },
+      });
       fs.writeFileSync(path.join(outsideHost, "package.json"), '{"name":"openclaw"}');
       fs.symlinkSync(outsideModules, path.join(packageDir, "node_modules"), "dir");
       const warnings: string[] = [];

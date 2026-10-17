@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
-import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
@@ -44,6 +43,16 @@ function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-plugin-registry-migration", tempDirs);
 }
 
+function migrationEnv(rootDir: string): NodeJS.ProcessEnv {
+  return {
+    HOME: rootDir,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+    OPENCLAW_VERSION: "2026.7.1",
+    VITEST: "true",
+  };
+}
+
 function requirePlugin(snapshot: PluginMetadataSnapshot, pluginId: string) {
   const plugin = snapshot.index.plugins.find((candidate) => candidate.pluginId === pluginId);
   if (!plugin) {
@@ -74,14 +83,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
         manifest: { channels: [], channelConfigs: {}, providers: [], providerAuthChoices: [] },
       });
     }
-    const env = {
-      HOME: rootDir,
-      OPENCLAW_HOME: rootDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_VERSION: "2026.7.1",
-      VITEST: "true",
-    };
+    const env = { ...migrationEnv(rootDir), OPENCLAW_HOME: rootDir };
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -96,38 +98,22 @@ describe("persisted plugin registry Doctor contract freshness", () => {
         entries: { "shared-plugin": { enabled: true }, "secondary-plugin": { enabled: true } },
       },
     };
-    const snapshot = createConfigFileSnapshot({
-      path: path.join(stateDir, "openclaw.json"),
-      exists: true,
-      raw: JSON.stringify(config),
-      parsed: config,
-      sourceConfig: config,
-      runtimeConfig: config,
-      valid: true,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    });
-    const readSnapshot = async () => {
+    const readSnapshot = () => {
       clearPluginMetadataLifecycleCaches();
-      const pluginMetadataSnapshot = resolveConfigWidePluginMetadataSnapshot({
+      return resolveConfigWidePluginMetadataSnapshot({
         config,
         env,
         stateDir,
         allowCurrent: false,
       });
-      return {
-        snapshot,
-        pluginMetadataSnapshot,
-      };
     };
-    const derived = await readSnapshot();
-    expect(derived.pluginMetadataSnapshot?.registrySource).toBe("derived");
-    expect(derived.pluginMetadataSnapshot?.index.plugins.map((plugin) => plugin.pluginId)).toEqual([
+    const derived = readSnapshot();
+    expect(derived?.registrySource).toBe("derived");
+    expect(derived?.index.plugins.map((plugin) => plugin.pluginId)).toEqual([
       "shared-plugin",
       "secondary-plugin",
     ]);
-    expect(derived.pluginMetadataSnapshot?.diagnostics).toHaveLength(2);
+    expect(derived?.diagnostics).toHaveLength(2);
 
     await withPluginLifecycleLease({ env }, async (lease) =>
       refreshPluginRegistry({
@@ -138,32 +124,25 @@ describe("persisted plugin registry Doctor contract freshness", () => {
         lease,
       }),
     );
-    const persisted = await readSnapshot();
-    expect(persisted.pluginMetadataSnapshot?.registrySource).toBe("persisted");
-    expect(persisted.pluginMetadataSnapshot?.index.plugins).toEqual(
-      derived.pluginMetadataSnapshot?.index.plugins,
-    );
-    expect(persisted.pluginMetadataSnapshot?.diagnostics).toEqual(
-      derived.pluginMetadataSnapshot?.diagnostics,
-    );
+    const persisted = readSnapshot();
+    expect(persisted?.registrySource).toBe("persisted");
+    expect(persisted?.index.plugins).toEqual(derived?.index.plugins);
+    expect(persisted?.diagnostics).toEqual(derived?.diagnostics);
     const durable = readPersistedInstalledPluginIndexSync({ env });
     expect(durable?.workspaceDir).toBe(primaryWorkspace);
     expect(durable?.plugins.map((plugin) => plugin.pluginId)).toEqual(["shared-plugin"]);
     expect(durable?.diagnostics).toHaveLength(1);
-    expect((await readSnapshot()).pluginMetadataSnapshot?.registrySource).toBe("persisted");
+    expect(readSnapshot()?.registrySource).toBe("persisted");
   });
 
   it("replays state migrations after a Doctor-only contract change", async () => {
     const rootDir = makeTempDir();
     const stateDir = path.join(rootDir, "state");
     const env = {
-      HOME: rootDir,
+      ...migrationEnv(rootDir),
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_VERSION: "2026.7.1",
-      VITEST: "true",
     };
+    const loadSnapshot = () => loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     const pluginId = "doctor-replay";
     const pluginDir = writeManagedNpmPlugin({
       stateDir,
@@ -176,11 +155,11 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     fs.writeFileSync(contractPath, "module.exports = { stateMigrations: [] };\n", "utf8");
     fs.writeFileSync(markerPath, "pending\n", "utf8");
 
-    const derived = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    const derived = loadSnapshot();
     expect(derived.registrySource).toBe("derived");
     await writePersistedInstalledPluginIndex(derived.index, { stateDir });
 
-    const persisted = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    const persisted = loadSnapshot();
     const persistedPlugin = requirePlugin(persisted, pluginId);
     expect(persisted.registrySource).toBe("persisted");
     expect(persistedPlugin.doctorContractHash).toMatch(/^[a-f0-9]{64}$/u);
@@ -189,7 +168,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
       mtimeMs: expect.any(Number),
       ctimeMs: expect.any(Number),
     });
-    const reused = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    const reused = loadSnapshot();
     expect(reused.registrySource).toBe("persisted");
     expect(reused.configFingerprint).toBe(persisted.configFingerprint);
 
@@ -217,10 +196,10 @@ module.exports = {
       "utf8",
     );
     // Package changes are visible to an explicit owner refresh, not to retained generations.
-    expect(loadPluginMetadataSnapshot({ config: {}, env, stateDir })).toBe(persisted);
+    expect(loadSnapshot()).toBe(persisted);
     clearPluginMetadataLifecycleCaches();
     await withPluginCache(createPluginCache(), async () => {
-      const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+      const refreshed = loadSnapshot();
       const refreshedPlugin = requirePlugin(refreshed, pluginId);
       expect(refreshed.registrySource).toBe("derived");
       expect(refreshed.registryDiagnostics.map((diagnostic) => diagnostic.code)).toContain(
