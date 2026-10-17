@@ -153,7 +153,7 @@ it("parks and remounts presentation subscriptions using the runtime's context wi
   const acquired = subscriptions.mock.calls.length;
   render.mockClear();
   navigation.update({ navCollapsed: true });
-  pane.requestUpdate();
+  pane.invalidate();
   await Promise.resolve();
   flush();
   expect(render).not.toHaveBeenCalled();

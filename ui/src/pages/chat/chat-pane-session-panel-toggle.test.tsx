@@ -384,7 +384,6 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
             narrow: false,
             panelDefinitions: definitions,
             primary: conversation,
-            requestUpdate,
           }),
         );
         return <SidebarRegionView {...region()} />;

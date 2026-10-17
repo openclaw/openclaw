@@ -744,15 +744,25 @@ in-place writes; SQLite's integrity checks still apply.
 Doctor reports existing btrfs stores without NOCOW. Explicit `openclaw doctor --fix`
 can rewrite them under its stopped-Gateway maintenance owner. The repair needs
 `lsattr`, `chattr`, `fuser`, `getfacl`, `setfacl`, GNU `mv` with `--exchange` and `--no-copy`, and
-free space of at least twice the uncompressed store directory size. It takes
-verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
-preserves ownership, modes, and access/default ACLs, checks copy size and
-`PRAGMA quick_check`, then atomically exchanges directories.
-Before inventory or copying, Doctor checks `fuser` against a known open file and
-tries a scratch directory exchange in the store's parent, once per filesystem.
-The kernel and filesystem must support `RENAME_EXCHANGE`; unsupported hosts
-leave stores in place with a warning. Doctor checks for open store files again
-immediately before the real exchange.
+free space of at least twice the SQLite file size. It sets NOCOW on the existing
+directory for future files, takes verified WAL-aware SQLite backups, then streams
+byte-identical copies of only the selected database and its `-wal`, `-shm`, and
+`-journal` files into a private NOCOW staging directory. Ownership, modes, and
+access ACLs are preserved in a batch. The directory's default ACLs and unrelated
+files or subdirectories, including harness homes and migration backups, stay in
+place. Copy hashes are checked before atomic file exchanges.
+
+Before copying, Doctor checks `fuser` against a known open file and tries a scratch
+file exchange in the store's parent, once per filesystem. The kernel and
+filesystem must support `RENAME_EXCHANGE`; unsupported hosts leave stores in
+place with a warning. Doctor checks for open SQLite files again immediately
+before exchanging them. Byte-identical copies preserve a valid database family
+even if the repair stops between file exchanges.
+
+Doctor reports backup, copy, and exchange progress. On the next repair, it removes
+uninstalled copies from its identity-marked staging directories, retains any
+exchanged originals, and skips files that already have NOCOW. Unmarked backups
+from older or unknown operations are never deleted automatically.
 
 The official Debian bookworm Docker image cannot perform this optional repair:
 its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
@@ -761,14 +771,12 @@ A derived image needs those tools and an exchange-capable GNU `mv`, as well as
 kernel/filesystem support on the mounted state volume. Updates still proceed
 with the existing stores.
 
-After publication, Doctor re-records the relocated identity of any recorded migration recovery
-original and destination database it rewrites, so `update cleanup` eligibility
-survives the rewrite; a copy that no longer matches the recorded content keeps
-its original record and stays protected.
-Symbolic links retain their exact link text and ownership without following targets (including dangling links), and empty regular files are preserved.
-The report names the retained original directory and the standalone backups.
-Keep them until the updated Gateway has been verified; do not overwrite newer
-runtime state with an old copy.
+After publication, Doctor re-records the identity of each destination database
+it rewrites so `update cleanup` eligibility survives the rewrite. Recorded
+migration recovery originals are untouched. The report names the directory
+holding the original SQLite files and standalone WAL-aware snapshots. Keep it
+until the updated Gateway has been verified; do not overwrite newer runtime
+state with an old copy.
 
 During a managed update (`OPENCLAW_UPDATE_IN_PROGRESS` is truthy), Doctor still
 reports stores without NOCOW, but `--fix`/`--repair` defers the rewrite unless the

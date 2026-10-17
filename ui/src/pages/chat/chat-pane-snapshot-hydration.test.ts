@@ -54,7 +54,7 @@ describe("stored chat snapshot hydration", () => {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+    vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
     pane.context = createInitializationContext(
@@ -381,7 +381,7 @@ describe("stored chat snapshot hydration", () => {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+    vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     const sharedMessages: ChatMessageCache = new Map();
     pane.chatMessagesBySession = sharedMessages;

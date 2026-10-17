@@ -367,6 +367,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/feishu/src/outbound.send-authority.test.ts",
   "extensions/github-copilot/index.test.ts",
   "extensions/google-meet/participation-runtime-registration.test.ts",
+  "extensions/imessage/src/monitor.approval-poll-ingress.test.ts",
   "extensions/imessage/src/monitor.approval-reaction-replay.test.ts",
   "extensions/imessage/src/message-resource.test.ts",
   "extensions/imessage/src/monitor-reply-cache.test.ts",
