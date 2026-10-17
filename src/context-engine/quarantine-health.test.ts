@@ -1,4 +1,3 @@
-// Context-engine quarantine health tests cover cross-process status visibility.
 import { spawn } from "node:child_process";
 import { mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -10,6 +9,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
+import type { ContextEngineQuarantineRecord } from "../plugin-state/runtime-health-records.js";
 import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
 import { loadOpenClawPlugins } from "../plugins/loader-runtime-load.js";
 import {
@@ -21,8 +21,8 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
+  captureActivePluginRegistrySnapshot as captureRegistry,
+  restoreActivePluginRegistrySnapshot as restoreRegistry,
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -34,59 +34,46 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { MockContextEngine } from "./context-engine.test-support.js";
 import {
-  clearPersistedContextEngineQuarantineForProcess,
-  listPersistedContextEngineQuarantines,
-  recordPersistedContextEngineQuarantine,
+  clearPersistedContextEngineQuarantineForProcess as clearPersisted,
+  listPersistedContextEngineQuarantines as listPersisted,
+  recordPersistedContextEngineQuarantine as recordPersisted,
 } from "./quarantine-health.js";
 import {
   getContextEngineQuarantine,
   recordContextEngineQuarantine,
 } from "./registry-quarantine.js";
-import * as contextEngineRegistry from "./registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
+import * as engines from "./registry.js";
+import { resetContextEngineRuntimeQuarantineForTests as resetQuarantine } from "./registry.test-support.js";
 
 // Sibling records need a verifiable /proc starttime, so sibling-visibility
 // coverage only runs where that identity source exists.
 const hasProcessStartTimes = process.platform === "linux";
 
-type ContextEngineQuarantineTestRecord = {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-  failedAtMs: number;
-  processId: number;
-  processToken: string;
-  processStartTime: number | null;
-};
-
 async function withLiveSiblingProcess<T>(fn: (pid: number) => Promise<T>): Promise<T> {
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], {
-    stdio: "ignore",
+  return await withStateDirEnv("openclaw-context-engine-sibling-", async () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], {
+      stdio: "ignore",
+    });
+    if (!child.pid) {
+      throw new Error("failed to start live sibling process");
+    }
+    try {
+      return await fn(child.pid);
+    } finally {
+      child.kill();
+    }
   });
-  if (!child.pid) {
-    throw new Error("failed to start live sibling process");
-  }
-  try {
-    return await fn(child.pid);
-  } finally {
-    child.kill();
-  }
 }
 
-function seedPersistedContextEngineQuarantineForTest(
-  record: ContextEngineQuarantineTestRecord,
-): void {
-  createCorePluginStateSyncKeyedStore<ContextEngineQuarantineTestRecord>({
+function seedRecord(record: ContextEngineQuarantineRecord): void {
+  createCorePluginStateSyncKeyedStore<ContextEngineQuarantineRecord>({
     ownerId: "core:context-engine-quarantine-health",
     namespace: "runtime-quarantines",
     maxEntries: 64,
   }).register(JSON.stringify([record.engineId, record.processId]), record);
 }
 
-function makeQuarantine(
-  overrides: Partial<Parameters<typeof recordPersistedContextEngineQuarantine>[0]> = {},
-) {
+function makeQuarantine(overrides: Partial<Parameters<typeof recordPersisted>[0]> = {}) {
   return {
     engineId: "lossless-claw",
     owner: "plugin:lossless-claw",
@@ -103,7 +90,7 @@ function seedSiblingQuarantineForTest(params: {
   reason: string;
   failedAtMs: number;
 }): void {
-  seedPersistedContextEngineQuarantineForTest({
+  seedRecord({
     engineId: "lossless-claw",
     owner: "plugin:lossless-claw",
     operation: "bootstrap",
@@ -138,7 +125,7 @@ describe("context engine quarantine health", () => {
       await withStateDirEnv("openclaw-context-engine-quarantine-", async ({ stateDir }) => {
         if (mode === "absent") {
           expect(readdirSync(stateDir)).toEqual([]);
-          await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+          await clearPersisted(undefined, process.pid);
           expect(readdirSync(stateDir)).toEqual([]);
           return;
         }
@@ -156,7 +143,7 @@ describe("context engine quarantine health", () => {
             database.close();
           }
         })();
-        await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+        await clearPersisted(undefined, process.pid);
         const readOnly = new DatabaseSync(databasePath, { readOnly: true });
         try {
           expect(readOnly.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
@@ -172,12 +159,12 @@ describe("context engine quarantine health", () => {
     "keeps accepted registration when its health cleanup is superseded (%s)",
     async (superseded) => {
       await withStateDirEnv("openclaw-context-engine-registration-", async () => {
-        const previous = captureActivePluginRegistrySnapshot();
+        const previous = captureRegistry();
         const registry = previous.activeRegistry ?? createEmptyPluginRegistry();
         if (!previous.activeRegistry) {
           setActivePluginRegistry(registry);
         }
-        const publication = captureActivePluginRegistrySnapshot();
+        const publication = captureRegistry();
         const engineId = `health-registration-${superseded}`;
         const record = makeQuarantine({
           engineId,
@@ -185,9 +172,9 @@ describe("context engine quarantine health", () => {
           operation: "resolve",
           reason: "not registered",
         });
-        await recordPersistedContextEngineQuarantine(record);
+        await recordPersisted(record);
         const { reached, release, observer } = gateHealthCleanup();
-        const registration = contextEngineRegistry.registerContextEngineForOwner(
+        const registration = engines.registerContextEngineForOwner(
           engineId,
           () => new MockContextEngine(),
           "test:health-registration",
@@ -209,13 +196,13 @@ describe("context engine quarantine health", () => {
           release.resolve();
           expect(await observed).toEqual({ result: { ok: true } });
           expect(registry.contextEngines.get(engineId)?.owner).toBe("test:health-registration");
-          expect(await listPersistedContextEngineQuarantines()).toEqual(superseded ? [record] : []);
+          expect(await listPersisted()).toEqual(superseded ? [record] : []);
         } finally {
           release.resolve();
           await observed;
           observer.mockRestore();
           registry.contextEngines.delete(engineId);
-          restoreActivePluginRegistrySnapshot(previous);
+          restoreRegistry(previous);
         }
       });
     },
@@ -224,73 +211,67 @@ describe("context engine quarantine health", () => {
   it.runIf(hasProcessStartTimes).each(["engine", "process"])(
     "clears the selected %s records while preserving live sibling quarantines",
     async (scope) => {
-      await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
-        await withLiveSiblingProcess(async (siblingProcessId) => {
-          const record = makeQuarantine();
-          await recordPersistedContextEngineQuarantine(record);
-          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([record]);
-          if (scope === "process") {
-            seedPersistedContextEngineQuarantineForTest({
-              engineId: "local-b",
-              operation: "assemble",
-              reason: "current process failure b",
-              ...createRuntimeHealthRecordEnvelope(new Date(234)),
-            });
-          }
-          seedSiblingQuarantineForTest({
-            reason: "sibling process failure",
-            failedAtMs: 789,
-            processId: siblingProcessId,
-            processStartTime: getProcessStartTime(siblingProcessId),
+      await withLiveSiblingProcess(async (siblingProcessId) => {
+        const record = makeQuarantine();
+        await recordPersisted(record);
+        expect(await engines.listContextEngineQuarantines()).toEqual([record]);
+        if (scope === "process") {
+          seedRecord({
+            engineId: "local-b",
+            operation: "assemble",
+            reason: "current process failure b",
+            ...createRuntimeHealthRecordEnvelope(new Date(234)),
           });
-          if (scope === "engine") {
-            await clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
-          } else {
-            await resetContextEngineRuntimeQuarantineForTests();
-          }
-          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([
-            makeQuarantine({
-              reason: "sibling process failure",
-              failedAt: new Date(789),
-            }),
-          ]);
+        }
+        seedSiblingQuarantineForTest({
+          reason: "sibling process failure",
+          failedAtMs: 789,
+          processId: siblingProcessId,
+          processStartTime: getProcessStartTime(siblingProcessId),
         });
+        if (scope === "engine") {
+          await clearPersisted("lossless-claw", process.pid);
+        } else {
+          await resetQuarantine();
+        }
+        expect(await engines.listContextEngineQuarantines()).toEqual([
+          makeQuarantine({
+            reason: "sibling process failure",
+            failedAt: new Date(789),
+          }),
+        ]);
       });
     },
   );
 
   it.each(["stale incarnation", "unverified sibling"])("drops %s records", async (mode) => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-stale-", async () => {
-      await withLiveSiblingProcess(async (siblingProcessId) => {
-        await resetContextEngineRuntimeQuarantineForTests();
-        seedPersistedContextEngineQuarantineForTest({
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "bootstrap",
-          reason: "stale process failure",
-          ...createRuntimeHealthRecordEnvelope(new Date(123)),
-          processToken: "stale-incarnation-token",
-          ...(mode === "unverified sibling"
-            ? { processId: siblingProcessId, processStartTime: null }
-            : {}),
-        });
-        expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([]);
+    await withLiveSiblingProcess(async (siblingProcessId) => {
+      await resetQuarantine();
+      seedRecord({
+        engineId: "lossless-claw",
+        owner: "plugin:lossless-claw",
+        operation: "bootstrap",
+        reason: "stale process failure",
+        ...createRuntimeHealthRecordEnvelope(new Date(123)),
+        processToken: "stale-incarnation-token",
+        ...(mode === "unverified sibling"
+          ? { processId: siblingProcessId, processStartTime: null }
+          : {}),
       });
+      expect(await engines.listContextEngineQuarantines()).toEqual([]);
     });
   });
 
   it.runIf(hasProcessStartTimes)("drops records from a reused sibling PID", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-pid-reuse-", async () => {
-      await withLiveSiblingProcess(async (processId) => {
-        await resetContextEngineRuntimeQuarantineForTests();
-        seedSiblingQuarantineForTest({
-          reason: "stale process failure",
-          failedAtMs: 123,
-          processId,
-          processStartTime: (getProcessStartTime(processId) ?? 0) + 1,
-        });
-        expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([]);
+    await withLiveSiblingProcess(async (processId) => {
+      await resetQuarantine();
+      seedSiblingQuarantineForTest({
+        reason: "stale process failure",
+        failedAtMs: 123,
+        processId,
+        processStartTime: (getProcessStartTime(processId) ?? 0) + 1,
       });
+      expect(await engines.listContextEngineQuarantines()).toEqual([]);
     });
   });
 
@@ -306,7 +287,7 @@ describe("context engine quarantine health", () => {
   ] as const)("joins worker-backed activation health cleanup (%s)", async (mode) => {
     await withStateDirEnv("openclaw-activation-quarantine-", async () => {
       useNoBundledPlugins();
-      const previous = captureActivePluginRegistrySnapshot();
+      const previous = captureRegistry();
       const engineId = "activation-health";
       const plugin = writePlugin({
         id: engineId,
@@ -344,10 +325,10 @@ describe("context engine quarantine health", () => {
       }
       const { DatabaseSync } = requireNodeSqlite();
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const activate = contextEngineRegistry.activateContextEngineRegistrations;
+      const activate = engines.activateContextEngineRegistrations;
       let activationHostPrepares = 0;
       const activationObserver = vi
-        .spyOn(contextEngineRegistry, "activateContextEngineRegistrations")
+        .spyOn(engines, "activateContextEngineRegistrations")
         .mockImplementation((...args) => {
           const before = prepare.mock.calls.length;
           try {
@@ -365,16 +346,14 @@ describe("context engine quarantine health", () => {
         }
         return ensureCliPluginRegistryLoaded({ scope: "all", config });
       };
-      const loading = load().then(
-        () => {
+      const loading = load()
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        .finally(() => {
           settled = true;
-          return undefined;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
+        });
       let retirement: ReturnType<typeof pluginRuntime.waitForPluginRegistryRetirement> | undefined;
       try {
         const phase = await Promise.race([
@@ -404,7 +383,7 @@ describe("context engine quarantine health", () => {
         release.resolve();
         expect(await loading).toBe(publicationThrows ? failure : undefined);
         await retirement;
-        expect(await listPersistedContextEngineQuarantines()).toEqual(
+        expect(await listPersisted()).toEqual(
           mode === "new failure"
             ? [getContextEngineQuarantine(engineId)]
             : mode === "superseded" || mode === "sync superseded" || publicationThrows
@@ -419,9 +398,9 @@ describe("context engine quarantine health", () => {
         observer.mockRestore();
         activationObserver.mockRestore();
         commit.mockRestore();
-        await resetContextEngineRuntimeQuarantineForTests();
+        await resetQuarantine();
         resetPluginLoaderTestStateForTest();
-        restoreActivePluginRegistrySnapshot(previous);
+        restoreRegistry(previous);
       }
     });
   });

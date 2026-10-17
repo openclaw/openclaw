@@ -54,12 +54,12 @@ function registerTestContextEngine(id: string, factory: ContextEngineFactory) {
   });
 }
 
-const { compactEmbeddedAgentSessionOnDemandMock } = vi.hoisted(() => ({
-  compactEmbeddedAgentSessionOnDemandMock: vi.fn(),
+const { compactRuntime } = vi.hoisted(() => ({
+  compactRuntime: vi.fn(),
 }));
 
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
-  compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
+  compactEmbeddedAgentSessionOnDemand: compactRuntime,
 }));
 
 const compactionResult = (sessionTarget: ContextEngineSessionTarget) => ({
@@ -76,10 +76,8 @@ const compactionResult = (sessionTarget: ContextEngineSessionTarget) => ({
   },
 });
 
-function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
-  const params = compactEmbeddedAgentSessionOnDemandMock.mock.calls[callIndex]?.[0] as
-    | Record<string, unknown>
-    | undefined;
+function runtimeParams(callIndex: number): Record<string, unknown> {
+  const params = compactRuntime.mock.calls[callIndex]?.[0] as Record<string, unknown> | undefined;
   if (!params) {
     throw new Error(`missing compact runtime call ${callIndex}`);
   }
@@ -190,15 +188,13 @@ function createLease(engineId?: string, warn = vi.fn()) {
 describe("Engine contract tests", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    compactEmbeddedAgentSessionOnDemandMock.mockReset();
+    compactRuntime.mockReset();
     clearMemoryPluginState();
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
     const target = { ...callerTarget, storePath: "/tmp/openclaw-agent.sqlite" };
-    const compactRuntimeSpy = compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue(
-      compactionResult(target),
-    );
+    const compactRuntimeSpy = compactRuntime.mockResolvedValue(compactionResult(target));
     const runtimeContext = {
       workspaceDir: "/tmp/workspace",
       currentTokenCount: 12345,
@@ -217,7 +213,7 @@ describe("Engine contract tests", () => {
     });
 
     expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
-    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    const compactRuntimeParams = runtimeParams(0);
     expect(compactRuntimeParams).toMatchObject({
       abortSignal,
       agentId: "main",
@@ -246,7 +242,7 @@ describe("Engine contract tests", () => {
         tokenBudget: 4096,
       }),
     ).rejects.toThrow("successor target conflicts with the caller session identity");
-    expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
+    expect(compactRuntime).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -262,7 +258,7 @@ describe("Engine contract tests", () => {
   ])(
     "rejects $name before a backend with no nested result can run",
     async ({ name: _name, projectSessionKey, ...input }) => {
-      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: true });
+      compactRuntime.mockResolvedValue({ ok: true, compacted: true });
       await withCompactionDelegateFixture(!projectSessionKey, async (engine) => {
         await expect(
           engine.compact({
@@ -272,7 +268,7 @@ describe("Engine contract tests", () => {
             ...input,
           }),
         ).rejects.toThrow(/conflicts with/);
-        expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
+        expect(compactRuntime).not.toHaveBeenCalled();
       });
     },
   );
@@ -289,7 +285,7 @@ describe("Engine contract tests", () => {
       sessionKey: "agent:main:session",
       sessionTarget,
     };
-    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: true });
+    compactRuntime.mockResolvedValue({ ok: true, compacted: true });
     await withCompactionDelegateFixture(false, async (engine) => {
       const result = await engine.compact({
         sessionId: "session",
@@ -297,13 +293,13 @@ describe("Engine contract tests", () => {
         runtimeContext,
       });
       expect(result).toEqual({ ok: true, compacted: true, reason: undefined, result: undefined });
-      expect(requireCompactRuntimeParams(0)).toMatchObject({
+      expect(runtimeParams(0)).toMatchObject({
         agentId: "main",
         sessionId: "session",
         sessionKey: "agent:main:session",
         sessionTarget,
       });
-      expect(requireCompactRuntimeParams(0).contextEngineRuntimeContext).toBe(runtimeContext);
+      expect(runtimeParams(0).contextEngineRuntimeContext).toBe(runtimeContext);
     });
   });
 
@@ -623,18 +619,11 @@ describe("Default engine selection", () => {
   );
 });
 
-describe("Read-only plugin discovery registrations", () => {
-  beforeEach(async () => {
+it("does not construct or quarantine read-only discovery context-engine factories", async () => {
+  try {
     await registerLegacyContextEngine();
     await resetContextEngineRuntimeQuarantineForTests();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("does not construct or quarantine read-only discovery context-engine factories", async () => {
     const engineId = uniqueEngineId("lossless-readonly");
     const owner = "plugin:lossless-claw";
     const readOnly = vi.fn(() => {
@@ -664,7 +653,9 @@ describe("Read-only plugin discovery registrations", () => {
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
     expect(readOnly).not.toHaveBeenCalled();
     expect(runtime).toHaveBeenCalledTimes(2);
-  });
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 describe("Invalid engine fallback", () => {
@@ -786,24 +777,39 @@ describe("Invalid engine fallback", () => {
     expect(ingest).not.toHaveBeenCalled();
   });
 
-  it("quarantines compact failures without same-call legacy fallback", async () => {
-    const engineId = uniqueEngineId("runtime-fail-compact");
-    const compact = vi.fn(async () => {
-      throw new Error("plugin compaction failed");
-    });
-    await registerOwnedEngine(engineId, { compact });
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-
-    await expect(engine.compact({ sessionId: "s1", sessionKey: "agent:main:s1" })).rejects.toThrow(
-      "plugin compaction failed",
-    );
-
-    expect(engine.info.id).toBe("legacy");
-    expect(engine.info.ownsCompaction).toBeUndefined();
-    expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
-    expect(compact).toHaveBeenCalledTimes(1);
-  });
+  it.each([
+    ["compact", "plugin compaction failed"],
+    ["prepareSubagentSpawn", "child context projection failed"],
+  ] as const)(
+    "quarantines %s failures without replaying the active operation",
+    async (method, reason) => {
+      const engineId = uniqueEngineId(method);
+      const failure = new Error(reason);
+      const action = vi.fn(async () => {
+        throw failure;
+      });
+      await registerOwnedEngine(
+        engineId,
+        method === "compact" ? { compact: action } : { prepareSubagentSpawn: action },
+      );
+      const engine = await resolveContextEngine(configWithSlot(engineId));
+      const operation =
+        method === "compact"
+          ? engine.compact({ sessionId: "s1", sessionKey: "agent:main:s1" })
+          : engine.prepareSubagentSpawn?.({
+              parentSessionKey: "agent:main",
+              childSessionKey: "agent:child",
+              contextMode: "isolated",
+            });
+      await expect(operation).rejects.toBe(failure);
+      expect(engine.info.id).toBe("legacy");
+      expect(engine.info.ownsCompaction).toBeUndefined();
+      expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+      expect(action).toHaveBeenCalledOnce();
+      expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
+      await expectQuarantine(engineId, method, reason);
+    },
+  );
 
   it("clears a missing-engine quarantine when the plugin registers later", async () => {
     const engineId = uniqueEngineId("late-register");
@@ -904,31 +910,6 @@ describe("Invalid engine fallback", () => {
     },
   );
 
-  it("quarantines subagent preparation failures while failing the active spawn closed", async () => {
-    const engineId = uniqueEngineId("prepare-subagent-fail");
-    await registerTestContextEngine(engineId, () =>
-      createEngine(engineId, {
-        async prepareSubagentSpawn() {
-          throw new Error("child context projection failed");
-        },
-      }),
-    );
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-
-    await expect(
-      engine.prepareSubagentSpawn?.({
-        parentSessionKey: "agent:main",
-        childSessionKey: "agent:child",
-        contextMode: "isolated",
-      }),
-    ).rejects.toThrow("child context projection failed");
-
-    const nextEngine = await resolveContextEngine(configWithSlot(engineId));
-    expect(nextEngine.info.id).toBe("legacy");
-    await expectQuarantine(engineId, "prepareSubagentSpawn", "child context projection failed");
-  });
-
   it("throws when the default engine itself is not registered", async () => {
     const engines = requireActivePluginRegistry().contextEngines;
     const snapshot = new Map(engines);
@@ -957,39 +938,37 @@ describe("Invalid engine fallback", () => {
   });
 });
 
-describe("Bundle chunk isolation (#40096)", () => {
-  it("shares registrations and keeps concurrent chunk registration visible", async () => {
-    const ts = Date.now().toString(36);
-    const registryUrl = new URL("./registry.ts", import.meta.url).href;
-    const dynamicChunk = await import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-dynamic`);
-    const chunks = [
-      {
-        registerContextEngineForOwner,
-        getContextEngineRegistration,
-        resolveContextEngine,
-      },
-      dynamicChunk,
-    ];
+it("shares registrations across bundle chunks and concurrent registration (#40096)", async () => {
+  const ts = Date.now().toString(36);
+  const registryUrl = new URL("./registry.ts", import.meta.url).href;
+  const dynamicChunk = await import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-dynamic`);
+  const chunks = [
+    {
+      registerContextEngineForOwner,
+      getContextEngineRegistration,
+      resolveContextEngine,
+    },
+    dynamicChunk,
+  ];
 
-    const engineId = `cross-chunk-${ts}`;
-    const factory = () => createEngine(engineId);
-    await chunks[0].registerContextEngineForOwner(engineId, factory, `test:${engineId}`);
+  const engineId = `cross-chunk-${ts}`;
+  const factory = () => createEngine(engineId);
+  await chunks[0].registerContextEngineForOwner(engineId, factory, `test:${engineId}`);
 
-    expect(chunks[1].getContextEngineRegistration(engineId)?.factory).toBe(factory);
-    const engine = await chunks[1].resolveContextEngine(configWithSlot(engineId));
-    expect(engine.info.id).toBe(engineId);
+  expect(chunks[1].getContextEngineRegistration(engineId)?.factory).toBe(factory);
+  const engine = await chunks[1].resolveContextEngine(configWithSlot(engineId));
+  expect(engine.info.id).toBe(engineId);
 
-    const ids = chunks.map((_, i) => `concurrent-${ts}-${i}`);
-    const registrationTasks = chunks.map((chunk, i) =>
-      Promise.resolve().then(async () => {
-        const id = `concurrent-${ts}-${i}`;
-        await chunk.registerContextEngineForOwner(id, () => new MockContextEngine(), `test:${id}`);
-      }),
-    );
-    await Promise.all(registrationTasks);
+  const ids = chunks.map((_, i) => `concurrent-${ts}-${i}`);
+  const registrationTasks = chunks.map((chunk, i) =>
+    Promise.resolve().then(async () => {
+      const id = `concurrent-${ts}-${i}`;
+      await chunk.registerContextEngineForOwner(id, () => new MockContextEngine(), `test:${id}`);
+    }),
+  );
+  await Promise.all(registrationTasks);
 
-    for (const id of ids) {
-      expect(chunks[0].getContextEngineRegistration(id)).toBeDefined();
-    }
-  });
+  for (const id of ids) {
+    expect(chunks[0].getContextEngineRegistration(id)).toBeDefined();
+  }
 });

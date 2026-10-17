@@ -2,22 +2,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createContextEngineLogicalTurnLease } from "../agents/harness/context-engine-logical-turn.js";
+import { createContextEngineLogicalTurnLease as createLease } from "../agents/harness/context-engine-logical-turn.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import * as initialization from "./init.js";
 import { LegacyContextEngine } from "./legacy.js";
+import { createNativeSource } from "./registry-resources.test-support.js";
 import * as contextEngineRegistry from "./registry.js";
 import {
   adoptRuntimeContextEngineRegistrations,
-  registerContextEngineInRegistry,
+  registerContextEngineInRegistry as registerEngine,
   resolveLogicalTurnContextEngines,
 } from "./registry.js";
 import type { ContextEngineFactory } from "./registry.js";
@@ -47,35 +49,25 @@ it.each([
 ] as const)("retains the adopted engine's native source through %s", async (mode) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-source-"));
   const databasePath = path.join(directory, "source.sqlite");
-  const database = new DatabaseSync(databasePath);
-  const source = new PluginRegistryInspectionResources(retireInspectionInstances);
   const donor = createEmptyPluginRegistry();
   const supplyingView = createEmptyPluginRegistry();
   const viewSource = new PluginRegistryInspectionResources(retireInspectionInstances);
   const plugin = { id: "engine-source-fixture", source: path.join(directory, "plugin.cjs") };
   donor.plugins.push(createPluginRecord(plugin));
   supplyingView.plugins.push(createPluginRecord(plugin));
-  source.attach(donor);
   if (mode !== "raw-view") {
     viewSource.attach(supplyingView);
   }
-  let sourceDisposals = 0;
-  const sourceDisposed = createDeferred();
-  source.register(plugin.id, {
-    id: "native",
-    dispose() {
-      sourceDisposals++;
-      database.close();
-      sourceDisposed.resolve();
-      if (mode === "factory-cleanup-error") {
-        throw new Error("registration disposer failed");
-      }
-    },
+  const native = createNativeSource(databasePath, donor, plugin.id, () => {
+    if (mode === "factory-cleanup-error") {
+      throw new Error("registration disposer failed");
+    }
   });
+  const { database, resources: source } = native;
   const reads: number[] = [];
   const read = () => {
     try {
-      reads.push(Number(database.prepare("SELECT 42 AS value").get()?.value));
+      reads.push(native.read());
     } catch {
       reads.push(-1);
     }
@@ -87,6 +79,11 @@ it.each([
   const disposeGate = createDeferred();
   const disposeTail = createDeferred();
   const tails: Promise<unknown>[] = [];
+  const readAfter = (gate: { promise: PromiseLike<unknown> }, readValue = read) =>
+    trackAsyncWork(async () => {
+      await gate.promise;
+      readValue();
+    });
   const contexts: Array<string | undefined> = [];
   const signals: AbortSignal[] = [];
   let engineDisposals = 0;
@@ -120,12 +117,7 @@ it.each([
       }
       if (mode === "dispose-tail" || mode === "invalid-tail") {
         cleanupSignal = getAsyncWorkSignal();
-        tails.push(
-          trackAsyncWork(async () => {
-            await disposeTail.promise;
-            this.#read();
-          }),
-        );
+        tails.push(readAfter(disposeTail, () => this.#read()));
       }
       this.#read();
     }
@@ -140,12 +132,7 @@ it.each([
           "abort",
           () => {
             abortInOrigin = getAsyncWorkSignal() === signal;
-            tails.push(
-              trackAsyncWork(async () => {
-                await disposeTail.promise;
-                read();
-              }),
-            );
+            tails.push(readAfter(disposeTail));
           },
           { once: true },
         );
@@ -156,10 +143,7 @@ it.each([
       await factoryGate.promise;
     }
     if (mode === "factory-tail" || mode === "closing-factory") {
-      const tail = trackAsyncWork(async () => {
-        await factoryTail.promise;
-        read();
-      });
+      const tail = readAfter(factoryTail);
       void tail.catch(() => {});
       tails.push(tail);
     }
@@ -183,7 +167,7 @@ it.each([
     return new NativeEngine();
   };
   source.runRegistration(plugin.id, () => {
-    registerContextEngineInRegistry(donor, "selected", factory, `plugin:${plugin.id}`);
+    registerEngine(donor, "selected", factory, `plugin:${plugin.id}`);
   });
   const copiedView = adoptRuntimeContextEngineRegistrations(supplyingView, donor);
   if (mode !== "raw-view") {
@@ -193,7 +177,7 @@ it.each([
   const cleanupScope = createAgentCleanupScope();
   const parent = new AsyncWorkScope();
   const foreign = new AsyncWorkScope();
-  const leases: Array<Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>>> = [];
+  const leases: Array<Awaited<ReturnType<typeof createLease>>> = [];
   const pending: Array<Promise<unknown>> = [];
   const initializationStarted = createDeferred();
   const initializationGate = createDeferred();
@@ -209,8 +193,8 @@ it.each([
   const start = async () => {
     const create = () =>
       cleanupScope.run(() =>
-        withPluginRuntimeRegistryScope(copiedView, () =>
-          createContextEngineLogicalTurnLease({
+        withRegistry(copiedView, () =>
+          createLease({
             identity: { runId: "fixture-run", sessionId: "fixture-session" },
             config,
             agentDir: path.join(directory, "staged-agent"),
@@ -245,13 +229,12 @@ it.each([
         }
         await expect(first).rejects.toBe(failure);
         await parent.drain();
-        expect(sourceDisposals).toBe(1);
-        expect(database.isOpen).toBe(false);
+        expect(native.state).toMatchObject({ disposals: 1, open: false });
         expect(engineDisposals).toBe(0);
         return;
       }
       const replacement = vi.fn(() => new LegacyContextEngine());
-      registerContextEngineInRegistry(copiedView, "selected", replacement, `plugin:${plugin.id}`, {
+      registerEngine(copiedView, "selected", replacement, `plugin:${plugin.id}`, {
         allowSameOwnerRefresh: true,
       });
       initializationGate.resolve();
@@ -268,8 +251,7 @@ it.each([
       await start();
     }
     await source.release();
-    expect.soft(database.isOpen).toBe(true);
-    expect.soft(sourceDisposals).toBe(0);
+    expect.soft(native.state).toMatchObject({ open: true, disposals: 0 });
     if (mode === "closing-factory") {
       let parentDrained = false;
       pending.push(
@@ -281,9 +263,7 @@ it.each([
       expect.soft(parentDrained).toBe(false);
     }
     if (mode === "invalid-factory-tail") {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect.soft(signals.every((signal) => signal.aborted)).toBe(true);
       expect.soft(factoryWorkFinished).toBe(true);
       expect.soft(cleanupSignal?.aborted).toBe(false);
@@ -311,9 +291,7 @@ it.each([
           foreignDrained = true;
         }),
       );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect.soft(foreignDrained).toBe(true);
     }
     vi.useFakeTimers();
@@ -335,7 +313,7 @@ it.each([
       expect.soft(abortInOrigin).toBe(true);
     }
     if (mode === "last-user") {
-      expect.soft(sourceDisposals).toBe(0);
+      expect.soft(native.state.disposals).toBe(0);
       await leases[1]!.dispose();
     }
     if (mode === "dispose-tail" || mode === "invalid-tail") {
@@ -350,9 +328,8 @@ it.each([
     const settledTails = await Promise.allSettled(tails);
     expect.soft(settledTails.every((tail) => tail.status === "fulfilled")).toBe(true);
     await parent.drain();
-    await sourceDisposed.promise;
-    expect(sourceDisposals).toBe(1);
-    expect(database.isOpen).toBe(false);
+    await native.disposed.promise;
+    expect(native.state).toMatchObject({ disposals: 1, open: false });
     if (mode === "factory-cleanup-error") {
       expect.soft(cleanupScope.outcome).toBe("uncertain");
     }
@@ -393,33 +370,21 @@ it.each([
 
 it("disposes a shared engine once while releasing both factory source claims", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-alias-"));
-  const database = new DatabaseSync(path.join(directory, "source.sqlite"));
-  const registry = createEmptyPluginRegistry();
-  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-  resources.attach(registry);
-  const sourceDisposed = createDeferred();
+  const native = createNativeSource(path.join(directory, "source.sqlite"));
+  const { database, registry, resources } = native;
   const finishTail = createDeferred();
   const tails: Promise<unknown>[] = [];
-  let sourceDisposals = 0;
   let engineDisposals = 0;
   const reads: number[] = [];
-  resources.register("fixture", {
-    id: "native",
-    dispose() {
-      sourceDisposals++;
-      database.close();
-      sourceDisposed.resolve();
-    },
-  });
   class SharedEngine extends LegacyContextEngine {
-    #database = database;
+    #read = native.read;
     async dispose() {
       engineDisposals++;
       tails.push(
         trackAsyncWork(async () => {
           await finishTail.promise;
           try {
-            reads.push(Number(this.#database.prepare("SELECT 42 AS value").get()?.value));
+            reads.push(this.#read());
           } catch {
             reads.push(-1);
           }
@@ -429,19 +394,17 @@ it("disposes a shared engine once while releasing both factory source claims", a
   }
   const engine = new SharedEngine();
   resources.runRegistration("fixture", () => {
-    registerContextEngineInRegistry(registry, "legacy", () => engine, "core");
-    registerContextEngineInRegistry(registry, "selected", () => engine, "plugin:fixture");
+    registerEngine(registry, "legacy", () => engine, "core");
+    registerEngine(registry, "selected", () => engine, "plugin:fixture");
   });
   const config = { plugins: { slots: { contextEngine: "selected" } } };
-  const resolution = await withPluginRuntimeRegistryScope(registry, () =>
-    resolveLogicalTurnContextEngines(config),
-  );
+  const resolution = await withRegistry(registry, () => resolveLogicalTurnContextEngines(config));
   // Feed the actual acquired pair to its existing logical owner without replacing the factories.
   const resolve = vi
     .spyOn(contextEngineRegistry, "resolveLogicalTurnContextEngines")
     .mockResolvedValueOnce(resolution);
-  const lease = await withPluginRuntimeRegistryScope(registry, () =>
-    createContextEngineLogicalTurnLease({
+  const lease = await withRegistry(registry, () =>
+    createLease({
       identity: { runId: "alias-run", sessionId: "alias-session" },
       config,
       warn: () => {},
@@ -457,13 +420,12 @@ it("disposes a shared engine once while releasing both factory source claims", a
     await vi.advanceTimersByTimeAsync(25);
     await cleanup;
     expect.soft(engineDisposals).toBe(1);
-    expect.soft(sourceDisposals).toBe(0);
+    expect.soft(native.state.disposals).toBe(0);
     finishTail.resolve();
     await Promise.allSettled(tails);
-    await sourceDisposed.promise;
+    await native.disposed.promise;
     expect.soft(reads).toEqual([42]);
-    expect(sourceDisposals).toBe(1);
-    expect(database.isOpen).toBe(false);
+    expect(native.state).toMatchObject({ disposals: 1, open: false });
   } finally {
     finishTail.resolve();
     await Promise.allSettled(tails);
