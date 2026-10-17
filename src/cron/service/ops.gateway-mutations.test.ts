@@ -6,40 +6,24 @@ import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "../../agents/tools/in-process-gateway.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService, type CronEvent } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
-import type { CronServiceDeps } from "../../cron/service/state.js";
-import { loadCronStore, saveCronStore } from "../../cron/store.js";
-import {
-  createCoreGatewayMethodDescriptors,
-  createGatewayMethodRegistry,
-} from "../../gateway/methods/registry.js";
+import { loadCronStore } from "../../cron/store.js";
 import * as gatewayProcess from "../../gateway/process-instance.js";
-import { cronHandlers } from "../../gateway/server-methods/cron.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { getTotalQueueSize } from "../../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  occupyWorkers,
+  readJob,
+  withCronGatewayState,
+  type CronGatewayFixture,
+} from "./ops.gateway.test-support.js";
+import type { CronServiceDeps } from "./state.js";
 
 type CallerClosure = "revoked" | "aborted";
-type CronGatewayFixture = {
-  storePath: string;
-  cron: CronService;
-  logger: ReturnType<typeof createNoopLogger>;
+type CallerFixture = CronGatewayFixture & {
   closeCaller: (closure: CallerClosure) => void;
   call: AgentToolGatewayRequestCaller;
-  settle: () => Promise<void>;
-  runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
-  finished: (jobId: string) => Promise<CronEvent>;
 };
-
 const jobInput = {
   name: "joined Cron mutation",
   agentId: "main",
@@ -51,88 +35,22 @@ const jobInput = {
 } as const;
 
 async function withCronGateway(
-  run: (fixture: CronGatewayFixture) => Promise<void>,
+  run: (fixture: CallerFixture) => Promise<void>,
   listConfiguredChannels?: CronServiceDeps["listConfiguredChannels"],
 ) {
-  await withOpenClawTestState({ prefix: "cron-mutation-dispatch-" }, async (state) => {
-    resetCommandQueueStateForTest();
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: {} },
-        defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" },
-      },
-      cron: { enabled: false },
-    };
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        "openai:mutation-fixture": {
-          type: "api_key",
-          provider: "openai",
-          key: "synthetic-mutation-inference-key",
-        },
-      },
-    });
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const storePath = state.statePath("cron", "jobs.json");
-    await saveCronStore(storePath, { version: 1, jobs: [] });
-    const logger = createNoopLogger();
-    const finishedJobs = new Map<string, ReturnType<typeof createDeferredCore<CronEvent>>>();
-    const finished = (jobId: string) => {
-      let entry = finishedJobs.get(jobId);
-      if (!entry) {
-        entry = createDeferredCore<CronEvent>();
-        finishedJobs.set(jobId, entry);
-      }
-      return entry;
-    };
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: false,
-      defaultAgentId: "main",
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-      listConfiguredChannels,
-      onEvent: (event) => {
-        if (event.action === "finished") {
-          finished(event.jobId).resolve(event);
-        }
-      },
-    });
-    const registry = createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(cronHandlers));
-    const gatewayWork = new AsyncWorkScope();
-    const context = {
-      cron,
-      cronStorePath: storePath,
-      trackExecution: gatewayWork.track.bind(gatewayWork),
-      deps: {},
-      getRuntimeConfig: () => cfg,
-      getGatewayMethodRegistry: () => registry,
-      logGateway: createNoopLogger(),
-    } as unknown as GatewayRequestContext;
-    context.resolveGatewayContext = () => context;
-    const controller = new AbortController();
-    let current = true;
-    const caller = {
-      agentId: "main",
-      sessionKey: "agent:main:cron-mutation-fixture",
-      operationalRunInstance: { instanceId: "cron-mutation-fixture", runId: "fixture-run" },
-      receiptAuthority: () => current,
-      gatewayContextResolver: () => context,
-    };
-    try {
+  await withCronGatewayState(
+    async (fixture) => {
+      const controller = new AbortController();
+      let current = true;
+      const caller = {
+        agentId: "main",
+        sessionKey: "agent:main:cron-mutation-fixture",
+        operationalRunInstance: { instanceId: "cron-mutation-fixture", runId: "fixture-run" },
+        receiptAuthority: () => current,
+        gatewayContextResolver: () => fixture.context,
+      };
       await run({
-        storePath,
-        cron,
-        logger,
-        runIsolatedAgentJob,
-        finished: (jobId) => finished(jobId).promise,
-        settle: () => gatewayWork.runWhenIdle(() => undefined),
+        ...fixture,
         closeCaller: (closure) => {
           if (closure === "aborted") {
             controller.abort(new Error("Cron request aborted"));
@@ -145,47 +63,10 @@ async function withCronGateway(
             callAgentToolGatewayRequest<T>({ ...request, signal: controller.signal }),
           ),
       });
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-      await gatewayWork.drain();
-      await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
-      resetCommandQueueStateForTest();
-    }
-  });
-}
-
-async function occupyWorkers(
-  fixture: CronGatewayFixture,
-  job: ReturnType<typeof createDueIsolatedJob>,
-  runTarget: NonNullable<CronServiceDeps["runIsolatedAgentJob"]> = async () => ({ status: "ok" }),
-) {
-  const now = job.createdAtMs;
-  const blockerJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
-    createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
+    },
+    listConfiguredChannels,
+    true,
   );
-  await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
-  const started = createDeferredCore();
-  const releaseBlocker = createDeferredCore();
-  let count = 0;
-  vi.mocked(fixture.runIsolatedAgentJob).mockImplementation(async (input) => {
-    if (input.job.id === job.id) {
-      return await runTarget(input);
-    }
-    if (++count === blockerJobs.length) {
-      started.resolve();
-    }
-    await releaseBlocker.promise;
-    return { status: "ok" };
-  });
-  const blocker = Promise.all(blockerJobs.map((entry) => fixture.cron.run(entry.id, "force")));
-  await started.promise;
-  const targetCalls = () =>
-    vi.mocked(fixture.runIsolatedAgentJob).mock.calls.filter(([input]) => input.job.id === job.id);
-  return { blocker, releaseBlocker, targetCalls };
-}
-async function readJob(fixture: CronGatewayFixture, id: string) {
-  return (await loadCronStore(fixture.storePath)).jobs.find((entry) => entry.id === id);
 }
 
 describe("Cron mutation outcomes through the in-process router", () => {

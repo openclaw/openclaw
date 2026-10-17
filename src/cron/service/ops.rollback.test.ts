@@ -1,4 +1,3 @@
-// Cron mutation rollback, publication ordering, and failure recovery.
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -65,12 +64,9 @@ describe("cron service ops persist rollback", () => {
     } as const;
   }
 
-  async function withCronJobWriteFailure(
-    targetStorePath: string,
-    mutate: () => Promise<void>,
-  ): Promise<void> {
+  async function withCronJobWriteFailure(mutate: () => Promise<void>) {
     const database = openOpenClawStateDatabase().db;
-    const storeKey = cronStoreKey(targetStorePath).replaceAll("'", "''");
+    const storeKey = cronStoreKey(storePath).replaceAll("'", "''");
     const triggers = ["INSERT", "UPDATE", "DELETE"].map((operation) => {
       const name = `ops_fail_cron_${operation.toLowerCase()}`;
       const row = operation === "DELETE" ? "OLD" : "NEW";
@@ -133,7 +129,7 @@ describe("cron service ops persist rollback", () => {
       }
       const liveBefore = structuredClone(state.store?.jobs ?? []);
       const durableBefore = (await loadCronStore(storePath)).jobs;
-      await withCronJobWriteFailure(storePath, async () => {
+      await withCronJobWriteFailure(async () => {
         const mutation = job
           ? operation === "update"
             ? update(state, job.id, { name: "renamed cleanup" })
@@ -184,7 +180,7 @@ describe("cron service ops persist rollback", () => {
       order.push("heartbeat");
     });
     const trigger = () => add(state, makeCreateInput("trigger mutation"));
-    await withCronJobWriteFailure(storePath, async () => {
+    await withCronJobWriteFailure(async () => {
       await expect(trigger()).rejects.toThrow("disk full");
     });
 
@@ -254,7 +250,7 @@ describe("cron service ops persist rollback", () => {
       );
       onTestFinished(scratchWrites.restore);
       if (outcome !== "failed") {
-        await withCronJobWriteFailure(storePath, async () => {
+        await withCronJobWriteFailure(async () => {
           const first = removeAgentJobsTransactional(state, "doomed", commit);
           if (outcome === "uncertain") {
             await expect(first).rejects.toBeInstanceOf(AgentDeletionCommitUncertainError);
@@ -316,22 +312,14 @@ describe("cron service ops persist rollback", () => {
     const before = structuredClone(job);
     const persistedBefore = structuredClone(await readJob(job.id));
     const { enqueueSystemEvent, requestHeartbeat } = notifications();
-    const computeSpy = vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation(() => {
+    vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation(() => {
       throw new Error("simulated preflight schedule failure");
     });
 
-    try {
-      await expect(run(state, job.id)).resolves.toEqual({
-        ok: true,
-        ran: false,
-        reason: "not-due",
-      });
-      expect(job).toEqual(before);
-      expect(await readJob(job.id)).toEqual(persistedBefore);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
-    } finally {
-      computeSpy.mockRestore();
-    }
+    await expect(run(state, job.id)).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    expect(job).toEqual(before);
+    expect(await readJob(job.id)).toEqual(persistedBefore);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 });

@@ -66,30 +66,29 @@ describe("scheduled tool policy provenance", () => {
       await done;
     };
   }
-  it("guards scratch and removal at their locked mutation owners", async () => {
-    const job = await add(state, {
-      ...jobInput,
-      name: "guarded",
-    });
-    const commitGuard = vi.fn(() => {
-      throw new TypeError("authority closed");
-    });
-
-    const releaseScratch = await blockMutation(job.id);
-    const scratchWrite = writeScratch(state, job.id, { content: "notes", commitGuard });
-    expect(commitGuard).not.toHaveBeenCalled();
-    await releaseScratch();
-    await expect(scratchWrite).rejects.toThrow("authority closed");
-    expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
-
-    const releaseRemove = await blockMutation(job.id);
-    const removal = remove(state, job.id, { commitGuard });
-    expect(commitGuard).toHaveBeenCalledOnce();
-    await releaseRemove();
-    await expect(removal).rejects.toThrow("authority closed");
-    expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
-    expect(commitGuard).toHaveBeenCalledTimes(2);
-  });
+  it.each(["scratch", "remove"] as const)(
+    "guards %s at its locked mutation owner",
+    async (operation) => {
+      const job = await add(state, { ...jobInput, name: "guarded" });
+      const commitGuard = vi.fn(() => {
+        throw new TypeError("authority closed");
+      });
+      const release = await blockMutation(job.id);
+      const pending =
+        operation === "scratch"
+          ? writeScratch(state, job.id, { content: "notes", commitGuard })
+          : remove(state, job.id, { commitGuard });
+      expect(commitGuard).not.toHaveBeenCalled();
+      await release();
+      await expect(pending).rejects.toThrow("authority closed");
+      expect(commitGuard).toHaveBeenCalledOnce();
+      if (operation === "scratch") {
+        expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
+      } else {
+        expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
+      }
+    },
+  );
 
   it.each(["add validation", "update precondition"] as const)(
     "captures authority once only after %s succeeds",
@@ -153,42 +152,22 @@ describe("scheduled tool policy provenance", () => {
   );
 
   it("stores final-surface provenance privately and never synthesizes it from the default marker", async () => {
+    const input = {
+      ...jobInput,
+      payload: { ...jobInput.payload, toolsAllow: ["notes__read"], toolsAllowIsDefault: true },
+    };
+    const provenance = {
+      version: 1 as const,
+      source: "final-executable-surface" as const,
+      callerOrigin: { kind: "unknown" as const },
+    };
     const proven = await add(
       state,
-      {
-        ...jobInput,
-        name: "proven",
-        payload: {
-          kind: "agentTurn" as const,
-          message: "run",
-          toolsAllow: ["notes__read"],
-          toolsAllowIsDefault: true,
-        },
-      },
-      {
-        toolsAllowProvenance: {
-          version: 1,
-          source: "final-executable-surface",
-          callerOrigin: { kind: "unknown" },
-        },
-      },
+      { ...input, name: "proven" },
+      { toolsAllowProvenance: provenance },
     );
-    expect(proven.toolsAllowProvenance).toEqual({
-      version: 1,
-      source: "final-executable-surface",
-      callerOrigin: { kind: "unknown" },
-    });
-
-    const legacy = await add(state, {
-      ...jobInput,
-      name: "legacy-default",
-      payload: {
-        kind: "agentTurn",
-        message: "run",
-        toolsAllow: ["notes__read"],
-        toolsAllowIsDefault: true,
-      },
-    });
+    expect(proven.toolsAllowProvenance).toEqual(provenance);
+    const legacy = await add(state, { ...input, name: "legacy-default" });
     expect(legacy.toolsAllowProvenance).toBeUndefined();
     const stored = await loadCronStore(storePath);
     expect(stored.jobs.find((job) => job.id === proven.id)?.toolsAllowProvenance).toEqual(
@@ -228,28 +207,35 @@ describe("scheduled tool policy provenance", () => {
         toolsAllow?: string[],
         options?: Pick<CronAddOptions, "commitGuard" | "captureRuntimeAuthority">,
       ) => {
+        const patch = {
+          description,
+          ...(toolsAllow === undefined
+            ? {}
+            : { payload: { kind: "agentTurn" as const, toolsAllow } }),
+        };
+        return mode === "update"
+          ? await update(state, job.id, patch, options)
+          : requireDeclarativeAddResult(
+              await add(
+                state,
+                {
+                  ...input,
+                  ...patch,
+                  payload: { ...jobInput.payload, ...patch.payload },
+                },
+                options,
+              ),
+            ).job;
+      };
+      const checkAuthority = async (
+        changed: CronAddResult,
+        authority: CronAddResult["runtimeAuthority"],
+        recovery?: true,
+      ) => {
+        expectAuthority(changed, authority, recovery);
         if (mode === "update") {
-          return await update(
-            state,
-            job.id,
-            {
-              description,
-              ...(toolsAllow === undefined ? {} : { payload: { kind: "agentTurn", toolsAllow } }),
-            },
-            options,
-          );
+          expectAuthority(await readJob(job.id), authority, recovery);
         }
-        return requireDeclarativeAddResult(
-          await add(
-            state,
-            {
-              ...input,
-              description,
-              payload: { ...jobInput.payload, ...(toolsAllow === undefined ? {} : { toolsAllow }) },
-            },
-            options,
-          ),
-        ).job;
       };
       expect(job.runtimeAuthority).toEqual(baseAuthority);
       if (mode === "update") {
@@ -265,18 +251,13 @@ describe("scheduled tool policy provenance", () => {
       expect(commitGuard).toHaveBeenCalled();
       expect(validated.runtimeAuthority).toEqual(baseAuthority);
 
-      const explicit = await mutate("new tool cap", ["read"]);
-      expectAuthority(explicit, undefined, true);
-      if (mode === "update") {
-        expectAuthority(await readJob(job.id), undefined, true);
-      }
+      await checkAuthority(await mutate("new tool cap", ["read"]), undefined, true);
       const replacement = { ...baseAuthority, payload: { apps: [{ id: "mail" }] } };
       const replaced = await mutate("recaptured", mode === "declarative" ? ["read"] : undefined, {
         captureRuntimeAuthority: () => replacement,
       });
-      expectAuthority(replaced, replacement);
+      await checkAuthority(replaced, replacement);
       if (mode === "update") {
-        expectAuthority(await readJob(job.id), replacement);
         const freshEmptyCapture = await mutate("recaptured without runtime authority", undefined, {
           captureRuntimeAuthority: () => undefined,
         });
@@ -317,11 +298,7 @@ describe("scheduled tool policy provenance", () => {
 
     const account = await add(
       state,
-      {
-        ...base,
-        name: "account",
-        owner,
-      },
+      { ...base, name: "account", owner },
       {
         scheduledToolPolicy: accountPolicy,
       },
