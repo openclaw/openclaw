@@ -37,7 +37,7 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-const runtimeMocks = vi.hoisted(() => ({ log: vi.fn() }));
+const runtimeMocks = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn() }));
 
 async function createDockerMock() {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
