@@ -24,6 +24,13 @@ const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl
 type ReloadOptions = Parameters<typeof startGatewayConfigReloaderImpl>[0];
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
+function mockCallback<F extends (...args: never[]) => unknown>(
+  callback: F | undefined,
+  fallback: NoInfer<F>,
+) {
+  return vi.fn<F>(callback ?? fallback);
+}
+
 export function prepareConfigReloadTest(
   { task, signal }: TestContext,
   options: { mockWatcher?: boolean } = {},
@@ -268,27 +275,17 @@ export function createReloaderHarness(
 ) {
   const watcher = installWatcherMock();
   const callbacks = {
-    onConfigChange: vi.fn<NonNullable<ReloadOptions["onConfigChange"]>>(
-      options.onConfigChange ?? (async () => {}),
-    ),
-    onConfigApplied: vi.fn<NonNullable<ReloadOptions["onConfigApplied"]>>(
-      options.onConfigApplied ?? (async () => {}),
-    ),
-    onConfigAccepted: vi.fn(options.onConfigAccepted ?? (async () => {})),
-    onConfigRevisionApplied: vi.fn<NonNullable<ReloadOptions["onConfigRevisionApplied"]>>(
-      options.onConfigRevisionApplied ?? (() => {}),
-    ),
+    onConfigChange: mockCallback(options.onConfigChange, async () => {}),
+    onConfigApplied: mockCallback(options.onConfigApplied, async () => {}),
+    onConfigAccepted: mockCallback(options.onConfigAccepted, async () => {}),
+    onConfigRevisionApplied: mockCallback(options.onConfigRevisionApplied, () => {}),
     onReloadEnabledChange: vi.fn<(enabled: boolean) => void>(),
-    onEffectiveConfigUnchanged: vi.fn(
-      options.onEffectiveConfigUnchanged ?? (async () => ({ rollback: async () => {} })),
-    ),
-    onNoopConfigCommit: vi.fn<ReloadOptions["onNoopConfigCommit"]>(
-      options.onNoopConfigCommit ?? (async () => {}),
-    ),
-    onHotReload: vi.fn<ReloadOptions["onHotReload"]>(
-      options.onHotReload ?? (async () => "applied"),
-    ),
-    onRestart: vi.fn<ReloadOptions["onRestart"]>(options.onRestart ?? (() => {})),
+    onEffectiveConfigUnchanged: mockCallback(options.onEffectiveConfigUnchanged, async () => ({
+      rollback: async () => {},
+    })),
+    onNoopConfigCommit: mockCallback(options.onNoopConfigCommit, async () => {}),
+    onHotReload: mockCallback(options.onHotReload, async () => "applied"),
+    onRestart: mockCallback(options.onRestart, () => {}),
     onConfigCandidateCommitted: vi.fn<NonNullable<ReloadOptions["onConfigCandidateCommitted"]>>(),
   };
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
@@ -339,13 +336,17 @@ export async function flushWatcherChange(harness: ReloaderHarness) {
   await flushReload(harness.reloader);
 }
 
-export function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
-  expect(harness.onRestart).toHaveBeenCalledTimes(1);
-  const call = harness.onRestart.mock.calls[0];
-  if (!call) {
-    throw new Error("expected one restart call");
-  }
+function onlyReloadCall(
+  callback: ReloaderHarness["onRestart"] | ReloaderHarness["onHotReload"],
+): [GatewayReloadPlan, OpenClawConfig] {
+  expect(callback).toHaveBeenCalledTimes(1);
+  const call = callback.mock.calls[0];
+  assert.isDefined(call);
   return [call[0], call[1]];
+}
+
+export function getOnlyRestartCall(harness: ReloaderHarness) {
+  return onlyReloadCall(harness.onRestart);
 }
 
 // Writer-focused cases own a persisted snapshot as well as the notification.
@@ -363,13 +364,6 @@ export function createWriteReloaderHarness(
   };
 }
 
-export function getOnlyHotReloadCall(
-  harness: ReloaderHarness,
-): [GatewayReloadPlan, OpenClawConfig] {
-  expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-  const call = harness.onHotReload.mock.calls[0];
-  if (!call) {
-    throw new Error("expected one hot reload call");
-  }
-  return [call[0], call[1]];
+export function getOnlyHotReloadCall(harness: ReloaderHarness) {
+  return onlyReloadCall(harness.onHotReload);
 }

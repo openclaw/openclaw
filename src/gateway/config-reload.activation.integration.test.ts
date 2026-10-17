@@ -43,15 +43,17 @@ let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "activation-reloader" });
   await resetPreparedModelRuntimeHarness(state);
-  bindPluginMetadataSnapshotCache(getPreparedModelRuntimeMocks().pluginMetadataSnapshot);
-  getPreparedModelRuntimeMocks().configuredAgentIds = ["default"];
-  getPreparedModelRuntimeMocks().configuredWorkspaces.set("default", state.workspaceDir);
+  const mocks = getPreparedModelRuntimeMocks();
+  bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot);
+  mocks.configuredAgentIds = ["default"];
+  mocks.configuredWorkspaces.set("default", state.workspaceDir);
 });
 afterEach(async ({ task }) => {
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
 it("the real reloader restores the working connection after failed credential activation", async () => {
+  const agentDir = state.agentDir("default");
   const previous: OpenClawConfig = {
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
@@ -155,11 +157,11 @@ it("the real reloader restores the working connection after failed credential ac
         resolveAgentModelPrimaryValue(sourceConfig.agents?.defaults?.model) ===
         "openai/fixture-verified"
       ) {
-        expect(
-          loadAuthProfileStoreWithoutExternalProfiles(state.agentDir("default")).profiles[
-            profileId
-          ],
-        ).toEqual({ type: "api_key", provider: "openai", key: "fixture-replacement-key" });
+        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual({
+          type: "api_key",
+          provider: "openai",
+          key: "fixture-replacement-key",
+        });
         promotionObserved = true;
         throw new Error("fixture candidate runtime preparation failed");
       }
@@ -239,7 +241,7 @@ it("the real reloader restores the working connection after failed credential ac
       assertCurrent: () => {},
       activate: () =>
         activateSavedSetupCredential({
-          agentDir: state.agentDir("default"),
+          agentDir,
           profileId,
           credential: pendingCredential,
         }),
@@ -256,20 +258,15 @@ it("the real reloader restores the working connection after failed credential ac
     for (const section of ["agents", "models", "gateway", "plugins"] as const) {
       expect(restored[section]).toEqual(previous[section]);
     }
-    const store = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir("default"));
+    const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
     expect(store.profiles[profileId]).toEqual(pendingCredential);
     await expect(
-      resolveApiKeyForProfile({
-        cfg: restored,
-        store,
-        profileId,
-        agentDir: state.agentDir("default"),
-      }),
+      resolveApiKeyForProfile({ cfg: restored, store, profileId, agentDir }),
     ).resolves.toBeNull();
     const normal = await prepareModelRuntimeSnapshot({
       agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      agentDir,
+      inheritedAuthDir: agentDir,
       workspaceDir: state.workspaceDir,
       config: restored,
     });

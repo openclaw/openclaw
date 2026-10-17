@@ -15,11 +15,8 @@ import {
   OpenClawStateLeaseError,
 } from "../state/openclaw-state-lease-error.js";
 import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import {
   closeTestConfigReloaders,
+  createConfigReloadTestClock,
   createReloaderHarness,
   flushReload,
   makeSnapshot,
@@ -48,15 +45,29 @@ function busyError(reason: "lifecycle-busy" | "sqlite-busy" = "lifecycle-busy") 
   });
 }
 
+async function readyHarness(
+  hash: string,
+  options: Parameters<typeof createReloaderHarness>[1] = {},
+) {
+  const write = makeZeroDebounceHookWrite(hash);
+  const harness = createReloaderHarness(async () => write.snapshot, options);
+  await harness.reloader.ready;
+  return { ...harness, write };
+}
+
+async function admittedWrite(hash: string) {
+  const harness = await readyHarness(hash);
+  const application = createRuntimeConfigWriteApplication();
+  harness.emitWrite(attachRuntimeConfigWriteApplication(harness.write, application));
+  return { ...harness, application };
+}
+
 it("coalesces config writes after a delayed Gateway scheduler wake", async () => {
-  const clock = createGatewaySchedulerClock(Date.now());
-  const scheduler = createTestGatewayScheduler(clock.clock);
-  const write = makeZeroDebounceHookWrite("delayed-wake");
-  const harness = createReloaderHarness(async () => write.snapshot, { scheduler });
+  const { clock, scheduler } = createConfigReloadTestClock();
+  const harness = await readyHarness("delayed-wake", { scheduler });
   try {
-    await harness.reloader.ready;
-    harness.emitWrite(write);
-    harness.emitWrite({ ...write, revision: 2 });
+    harness.emitWrite(harness.write);
+    harness.emitWrite({ ...harness.write, revision: 2 });
     await clock.advanceBy(60_000);
     expect(harness.onHotReload).toHaveBeenCalledOnce();
     expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
@@ -108,12 +119,10 @@ it.each([false, true])(
 );
 
 it("applies an automatic write after the same source was accepted without runtime application", async () => {
-  const write = makeZeroDebounceHookWrite("source-only-follow-up");
   const initialConfig = { gateway: { reload: {} } };
-  const harness = createReloaderHarness(async () => write.snapshot, { initialConfig });
-  await harness.reloader.ready;
+  const harness = await readyHarness("source-only-follow-up", { initialConfig });
   harness.emitWrite({
-    ...write,
+    ...harness.write,
     afterWrite: { mode: "none", reason: "source owner handles follow-up" },
   });
   await flushReload(harness.reloader);
@@ -125,7 +134,7 @@ it("applies an automatic write after the same source was accepted without runtim
   harness.emitWrite(
     attachRuntimeConfigWriteApplication(
       {
-        ...write,
+        ...harness.write,
         revision: 2,
         preparedCandidate: { runtimeConfig: initialConfig, compareConfig: initialConfig },
       },
@@ -143,14 +152,12 @@ it("applies an automatic write after the same source was accepted without runtim
 });
 
 it("joins an admitted reload when its Gateway scheduler stops", async () => {
-  const clock = createGatewaySchedulerClock(Date.now());
-  const scheduler = createTestGatewayScheduler(clock.clock);
+  const { clock, scheduler } = createConfigReloadTestClock();
   const started = createDeferred();
   const release = createDeferred();
   const releaseChild = createDeferred();
   let workSignal: AbortSignal | undefined;
-  const write = makeZeroDebounceHookWrite("scheduler-close");
-  const harness = createReloaderHarness(async () => write.snapshot, {
+  const harness = await readyHarness("scheduler-close", {
     scheduler,
     onHotReload: async () => {
       workSignal = getAsyncWorkSignal();
@@ -160,8 +167,7 @@ it("joins an admitted reload when its Gateway scheduler stops", async () => {
       return "applied";
     },
   });
-  await harness.reloader.ready;
-  harness.emitWrite(write);
+  harness.emitWrite(harness.write);
   const waking = clock.advanceBy(0);
   let closing: Promise<void> | undefined;
   try {
@@ -200,12 +206,10 @@ it.each([
     const acquire = vi
       .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
       .mockRejectedValueOnce(busyError(reason));
-    const write = makeZeroDebounceHookWrite("lease-retry");
-    const harness = createReloaderHarness(async () => write.snapshot);
-    await harness.reloader.ready;
+    const harness = await readyHarness("lease-retry");
 
     if (source === "write") {
-      harness.emitWrite(write);
+      harness.emitWrite(harness.write);
     } else {
       harness.watcher.emit("change");
     }
@@ -217,7 +221,7 @@ it.each([
     await flushReload(harness.reloader, 250);
     expect(acquire).toHaveBeenCalledTimes(2);
     expect(harness.onHotReload).toHaveBeenCalledOnce();
-    expect(harness.onConfigApplied.mock.calls[0]?.[1]).toEqual(write.runtimeConfig);
+    expect(harness.onConfigApplied.mock.calls[0]?.[1]).toEqual(harness.write.runtimeConfig);
     expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
     expect(harness.log.error).not.toHaveBeenCalled();
     await flushReload(harness.reloader, 10_000);
@@ -230,13 +234,9 @@ it("settles an exhausted admission receipt and retries a later observation with 
   const acquire = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
     .mockRejectedValue(busyError());
-  const write = makeZeroDebounceHookWrite("backoff");
-  const application = createRuntimeConfigWriteApplication();
+  const harness = await admittedWrite("backoff");
   const settled = vi.fn();
-  void application.result.then(settled);
-  const harness = createReloaderHarness(async () => write.snapshot);
-  await harness.reloader.ready;
-  harness.emitWrite(attachRuntimeConfigWriteApplication(write, application));
+  void harness.application.result.then(settled);
   await flushReload(harness.reloader);
 
   for (const delayMs of [250, 500, 1000, 2000, 4000, 5000]) {
@@ -270,16 +270,12 @@ it("cancels a pending admission retry on shutdown without applying or leaking ti
   const acquire = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
     .mockRejectedValueOnce(busyError());
-  const write = makeZeroDebounceHookWrite("shutdown");
-  const application = createRuntimeConfigWriteApplication();
-  const harness = createReloaderHarness(async () => write.snapshot);
-  await harness.reloader.ready;
-  harness.emitWrite(attachRuntimeConfigWriteApplication(write, application));
+  const harness = await admittedWrite("shutdown");
   await flushReload(harness.reloader);
   expect(vi.getTimerCount()).toBe(1);
 
   await harness.reloader.stop();
-  await expect(application.result).resolves.toBe("stopped");
+  await expect(harness.application.result).resolves.toBe("stopped");
   expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(acquire).toHaveBeenCalledTimes(1);
@@ -319,13 +315,9 @@ it.each([
   } else {
     acquire.mockRejectedValueOnce(error);
   }
-  const write = makeZeroDebounceHookWrite("permanent-failure");
-  const application = createRuntimeConfigWriteApplication();
+  const harness = await admittedWrite("permanent-failure");
   const settled = vi.fn();
-  void application.result.then(settled);
-  const harness = createReloaderHarness(async () => write.snapshot);
-  await harness.reloader.ready;
-  harness.emitWrite(attachRuntimeConfigWriteApplication(write, application));
+  void harness.application.result.then(settled);
   await flushReload(harness.reloader);
   await flushReload(harness.reloader, 10_000);
   expect(acquire).toHaveBeenCalledTimes(1);
@@ -341,12 +333,9 @@ it("settles a superseded write while lease admission is still pending", async ({
     entered.resolve();
     return lease.promise;
   });
-  const write = makeZeroDebounceHookWrite("superseded");
-  const application = createRuntimeConfigWriteApplication();
+  const harness = await admittedWrite("superseded");
+  const { application, write } = harness;
   const replacement = createRuntimeConfigWriteApplication();
-  const harness = createReloaderHarness(async () => write.snapshot);
-  await harness.reloader.ready;
-  harness.emitWrite(attachRuntimeConfigWriteApplication(write, application));
   await vi.advanceTimersByTimeAsync(0);
   await entered.promise;
   harness.emitWrite(attachRuntimeConfigWriteApplication({ ...write, revision: 2 }, replacement));
