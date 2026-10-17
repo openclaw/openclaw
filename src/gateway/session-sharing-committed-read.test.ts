@@ -26,6 +26,7 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
+import type { SessionMutationAuthorization } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -36,6 +37,38 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { advancePlacementFixtureToActive } from "./worker-environments/placement-test-fixtures.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+async function captureAuthorization(
+  stack: DisposableStack,
+  params: Parameters<typeof resolveSessionMutationAuthorizationAsync>[0],
+) {
+  const result = await resolveSessionMutationAuthorizationAsync(params);
+  stack.defer(() => result.authorization?.release?.());
+  expect(result.error).toBeNull();
+  expect(result.authorization).toBeDefined();
+  return result.authorization!;
+}
+
+function expectCurrent(authorization: SessionMutationAuthorization, error?: string) {
+  const current = expect(() => authorization.assertCurrent());
+  if (error) {
+    current.toThrow(error);
+  } else {
+    current.not.toThrow();
+  }
+}
+
+async function projectedContext(cfg: ReturnType<typeof rolePolicyConfig>, resident: boolean) {
+  const projection = resident ? await createSessionRowProjection({ cfg }) : undefined;
+  await projection?.ensureMaterialized();
+  return {
+    projection,
+    context: bindSessionRowProjection(
+      createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      () => projection,
+    ),
+  };
+}
 
 function inWriterTransaction(connection: EngineConnection, check: () => void) {
   const db = requireNativeSqliteDatabase(connection);
@@ -111,24 +144,16 @@ describe("committed session mutation authorization", () => {
         replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, visibility: "shared" });
         const identityId = client.authenticatedUserProfile!.profileId;
         addSessionMember(scope, { identityId, addedBy: "test-owner" });
-        const projection =
-          mode === "resident" ? await createSessionRowProjection({ cfg }) : undefined;
-        await projection?.ensureMaterialized();
-        const context = bindSessionRowProjection(
-          createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          () => projection,
-        );
-        const result = await resolveSessionMutationAuthorizationAsync({
+        const { projection, context } = await projectedContext(cfg, mode === "resident");
+        const captured = await captureAuthorization(authorizations, {
           client,
           context,
           method: "sessions.move",
           requestParams: { key: sessionKey },
         });
-        authorizations.defer(() => result.authorization?.release?.());
-        expect(result.error).toBeNull();
         let connected = true;
         const authorization = withSessionMutationCommitGuard(
-          result.authorization,
+          captured,
           () => {
             if (!connected) {
               throw new Error("Placement request connection closed");
@@ -152,7 +177,7 @@ describe("committed session mutation authorization", () => {
             preparationSql.restore();
             messages.mockRestore();
           }
-          result.authorization?.release?.();
+          captured.release?.();
           const database = openOpenClawStateDatabase();
           const placements = createWorkerSessionPlacementStore({ database });
           const active = await advancePlacementFixtureToActive(placements, database, {
@@ -202,7 +227,7 @@ describe("committed session mutation authorization", () => {
           expect(await placements.getPlacementMoveAsync(sessionId)).toMatchObject({ operationId });
         } finally {
           await grant?.release();
-          result.authorization?.release?.();
+          captured.release?.();
           projection?.dispose();
         }
       });
@@ -235,65 +260,47 @@ describe("committed session mutation authorization", () => {
         }
         const identityId = client.authenticatedUserProfile!.profileId;
         addSessionMember(scope, { identityId, addedBy: "test-owner" });
-        const projection = resident ? await createSessionRowProjection({ cfg }) : undefined;
-        await projection?.ensureMaterialized();
-        const context = bindSessionRowProjection(
-          createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          () => projection,
-        );
-        const capture = () =>
-          resolveSessionMutationAuthorizationAsync({
+        const { projection, context } = await projectedContext(cfg, resident);
+        const capture = (
+          expectedTarget?: Parameters<
+            typeof resolveSessionMutationAuthorizationAsync
+          >[0]["expectedTarget"],
+        ) =>
+          captureAuthorization(authorizations, {
             client,
             method: "chat.send",
             requestParams: { sessionKey },
             context,
+            expectedTarget,
           });
         try {
           const warm = await capture();
-          authorizations.defer(() => warm.authorization?.release?.());
-          expect(warm.error).toBeNull();
-          warm.authorization!.assertCurrent();
+          warm.assertCurrent();
           const queries = observeSqliteReadSql(StatementSync.prototype);
           const messages = vi.spyOn(Worker.prototype, "postMessage");
           try {
             for (let turn = 0; turn < 50; turn += 1) {
               await Promise.resolve();
-              warm.authorization!.assertCurrent();
+              warm.assertCurrent();
             }
             expect(queries.queries).toHaveLength(0);
             expect(messages).not.toHaveBeenCalled();
             if (resident) {
-              await expect(
-                warm.authorization!.withCurrent!(() => Promise.resolve()),
-              ).rejects.toThrow("Sharing authorization consumers must remain synchronous");
+              await expect(warm.withCurrent!(() => Promise.resolve())).rejects.toThrow(
+                "Sharing authorization consumers must remain synchronous",
+              );
             }
           } finally {
             queries.restore();
             messages.mockRestore();
           }
-          const prepared = await resolveSessionMutationAuthorizationAsync({
-            client,
-            method: "chat.send",
-            requestParams: { sessionKey },
-            context,
-            expectedTarget: {
-              ...scope,
-              storePath: resolveDefaultSessionStorePath("main"),
-              sessionId: shared.sessionId,
-            },
+          const prepared = await capture({
+            ...scope,
+            storePath: resolveDefaultSessionStorePath("main"),
+            sessionId: shared.sessionId,
           });
-          authorizations.defer(() => prepared.authorization?.release?.());
-          expect(prepared.error).toBeNull();
-          expect(prepared.authorization).toBeDefined();
-          prepared.authorization!.assertCurrent();
-          const result = await capture();
-          authorizations.defer(() => result.authorization?.release?.());
-          expect(result.error).toBeNull();
-          const authorization = result.authorization;
-          expect(authorization).toBeDefined();
-          if (!authorization) {
-            throw new Error("Expected session mutation authorization");
-          }
+          prepared.assertCurrent();
+          const authorization = await capture();
           await authorization.admittedInputAuthority!.withCurrent((facts) => {
             expect(facts.members).toContainEqual(
               expect.objectContaining({ identityId, addedBy: "test-owner" }),
@@ -301,7 +308,7 @@ describe("committed session mutation authorization", () => {
           });
           const owner = openOpenClawAgentDatabase({ agentId: "main" });
           registerOpenClawAgentDatabase({ agentId: "main", path: owner.path });
-          expect(() => authorization.assertCurrent()).not.toThrow();
+          expectCurrent(authorization);
           removeSessionMember(scope, identityId);
           await Promise.resolve();
           const effect = vi.fn();
@@ -309,11 +316,9 @@ describe("committed session mutation authorization", () => {
             "session is shared for this connection",
           );
           expect(effect).not.toHaveBeenCalled();
-          expect(() => authorization.assertCurrent()).toThrow(
-            "session is shared for this connection",
-          );
+          expectCurrent(authorization, "session is shared for this connection");
           addSessionMember(scope, { identityId, addedBy: "test-owner" });
-          expect(() => authorization.assertCurrent()).not.toThrow();
+          expectCurrent(authorization);
           await projection?.ensureMaterialized();
           const parse = vi.spyOn(JSON, "parse");
           const unrelatedParses = () =>
@@ -324,36 +329,28 @@ describe("committed session mutation authorization", () => {
             owner.db
               .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
               .run(JSON.stringify({ ...shared, visibility: "draft" }), sessionKey);
-            expect(() => authorization.assertCurrent()).not.toThrow();
+            expectCurrent(authorization);
             expect(unrelatedParses()).toBe(0);
             for (let index = 0; index < 4; index += 1) {
-              expect(() => authorization.assertCurrent()).not.toThrow();
+              expectCurrent(authorization);
             }
             expect(unrelatedParses()).toBe(0);
           });
 
           replaceSessionEntrySync(scope, { ...shared, visibility: "draft", updatedAt: 2 });
-          inWriterTransaction(owner.db, () => {
-            expect(() => authorization.assertCurrent()).toThrow(
-              "session is draft for this connection",
-            );
-          });
-          replaceSessionEntrySync(scope, { ...shared, updatedAt: 3 });
-          inWriterTransaction(owner.db, () => {
-            expect(() => authorization.assertCurrent()).not.toThrow();
-          });
-          removeSessionMember(scope, identityId);
-          expect(() => authorization.assertCurrent()).toThrow(
-            "session is shared for this connection",
+          inWriterTransaction(owner.db, () =>
+            expectCurrent(authorization, "session is draft for this connection"),
           );
+          replaceSessionEntrySync(scope, { ...shared, updatedAt: 3 });
+          inWriterTransaction(owner.db, () => expectCurrent(authorization));
+          removeSessionMember(scope, identityId);
+          expectCurrent(authorization, "session is shared for this connection");
           addSessionMember(scope, { identityId, addedBy: "test-owner" });
-          expect(() => authorization.assertCurrent()).not.toThrow();
+          expectCurrent(authorization);
           replaceSessionEntrySync(scope, { ...shared, sessionId: "replacement", updatedAt: 4 });
           inWriterTransaction(owner.db, () => {
-            expect(() => authorization.assertCurrent()).toThrow("session changed before chat.send");
-            expect(() => prepared.authorization!.assertCurrent()).toThrow(
-              "session changed before chat.send",
-            );
+            expectCurrent(authorization, "session changed before chat.send");
+            expectCurrent(prepared, "session changed before chat.send");
           });
           expect(unrelatedParses()).toBe(0);
         } finally {
@@ -381,44 +378,34 @@ describe("committed session mutation authorization", () => {
           { agentId: "main", sessionKey: "agent:main:main" },
           { sessionId: "main-session", updatedAt: 1, visibility: "shared" },
         );
-        const result = await resolveSessionMutationAuthorizationAsync({
+        const authorization = await captureAuthorization(authorizations, {
           client,
           method: "chat.send",
           requestParams: { sessionKey },
           context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
         });
-        authorizations.defer(() => result.authorization?.release?.());
-        expect(result.error).toBeNull();
-        const authorization = result.authorization;
-        if (!authorization) {
-          throw new Error("Expected session mutation authorization");
-        }
         const owner = openOpenClawAgentDatabase({ agentId: "main" });
         runOpenClawAgentWriteTransaction(
           () => {
             if (opened === "before") {
-              expect(() => authorization.assertCurrent()).not.toThrow();
+              expectCurrent(authorization);
             }
             setCanonicalSqliteSessionMainKey(owner, "work");
             owner.db
               .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
               .run("agent:main:unrecorded-parent", "agent:main:main");
-            expect(() => authorization.assertCurrent()).not.toThrow();
-            expect(() => authorization.assertCurrent()).not.toThrow();
+            expectCurrent(authorization);
+            expectCurrent(authorization);
           },
           { agentId: "main" },
         );
 
         // A policy change never makes this valid target depend on an invalid sibling.
-        inWriterTransaction(owner.db, () => {
-          expect(() => authorization.assertCurrent()).not.toThrow();
-        });
+        inWriterTransaction(owner.db, () => expectCurrent(authorization));
         owner.db
           .prepare("UPDATE session_nodes SET parent_session_key = NULL WHERE session_key = ?")
           .run("agent:main:main");
-        inWriterTransaction(owner.db, () => {
-          expect(() => authorization.assertCurrent()).not.toThrow();
-        });
+        inWriterTransaction(owner.db, () => expectCurrent(authorization));
       });
     },
   );

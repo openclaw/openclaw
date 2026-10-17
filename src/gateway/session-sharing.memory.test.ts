@@ -55,8 +55,39 @@ async function fixture() {
   return { owner, actor, storage: actor.storage, binding };
 }
 
+function operations(storage: Awaited<ReturnType<typeof fixture>>["storage"]) {
+  const mutate = (command: Parameters<typeof storage.mutate>[0]) =>
+    storage.mutate(command, authority);
+  return {
+    create: (sessionId: string) =>
+      mutate({
+        type: "session.entry.create",
+        input: { entry: { sessionId, updatedAt: 1 }, cwd: "/synthetic" },
+      }),
+    add: (identityId: string) =>
+      mutate({
+        type: "session.collaboration.add",
+        input: { params: { identityId, addedBy: "owner", addedAt: 1 } },
+      }),
+    remove: (identityId: string) =>
+      mutate({ type: "session.collaboration.remove", input: { identityId } }),
+    label: (label: string) =>
+      mutate({
+        type: "session.entry.patch",
+        input: { operation: { kind: "fields", patch: { label } } },
+      }),
+  };
+}
+
+const prepareSource = (storePath: string, key = sessionKey) =>
+  prepareSessionSharingSource(
+    { agentId: "main", canonicalKey: key, storeKey: key, storePath },
+    () => authority.assertCurrent(),
+  );
+
 it("prepares unbound sharing facts and observes committed creation and membership without SQLite", async () => {
   const { owner, storage, binding } = await fixture();
+  const ops = operations(storage);
   const prepared = {
     facts: await prepareSessionMutationFacts({
       cfg,
@@ -65,40 +96,18 @@ it("prepares unbound sharing facts and observes committed creation and membershi
       allowMissing: true,
     }),
     read: await prepareSessionSharingRead({ cfg, sessionKey, agentId: "main" }),
-    source: await prepareSessionSharingSource(
-      { agentId: "main", canonicalKey: sessionKey, storeKey: sessionKey, storePath: binding.path },
-      () => authority.assertCurrent(),
-    ),
+    source: await prepareSource(binding.path),
   };
   try {
     expect(prepared.facts.readCurrent(cfg).target).toBeNull();
     expect(prepared.source.target).toBeNull();
-    expect(
-      await storage.mutate(
-        {
-          type: "session.entry.create",
-          input: { entry: { sessionId: "memory-sharing", updatedAt: 1 }, cwd: "/synthetic" },
-        },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
-    expect(
-      await storage.mutate(
-        {
-          type: "session.collaboration.add",
-          input: { params: { identityId: "reader", addedBy: "owner", addedAt: 1 } },
-        },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
+    expect(await ops.create("memory-sharing")).toMatchObject({ kind: "committed" });
+    expect(await ops.add("reader")).toMatchObject({ kind: "committed" });
     expect(prepared.facts.readCurrent(cfg).target?.entry.sessionId).toBe("memory-sharing");
     expect(prepared.read.readCurrent(cfg).membership).toEqual(new Set(["reader"]));
     expect(prepared.source.members).toEqual(["reader"]);
 
-    await storage.mutate(
-      { type: "session.collaboration.remove", input: { identityId: "reader" } },
-      authority,
-    );
+    await ops.remove("reader");
     expect(prepared.facts.readCurrent(cfg).membership).toEqual(new Set());
     expect(prepared.source.members).toEqual([]);
     await runWithSessionActorStorage(binding, async () => {
@@ -135,59 +144,27 @@ it("reads unbound sibling sharing from the captured owner", async () => {
   if (!sibling.storage) {
     throw new Error("Missing sibling memory storage");
   }
-  await sibling.storage.mutate(
-    {
-      type: "session.entry.create",
-      input: { entry: { sessionId: "sibling-session", updatedAt: 1 }, cwd: "/synthetic" },
-    },
-    authority,
-  );
-  const prepared = await (async () => {
-    const scope = { agentId: "main", sessionKey: siblingKey, storePath: binding.path };
-    expect(
-      await sibling.storage!.mutate(
-        {
-          type: "session.collaboration.add",
-          input: { params: { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 } },
-        },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([
-      { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 },
-    ]);
-    await sibling.storage!.mutate(
-      { type: "session.collaboration.remove", input: { identityId: "sibling-reader" } },
-      authority,
-    );
-    expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
-    expect(
-      await readSessionMembersInWorker({
-        agentId: "other",
-        sessionKey: "agent:other:dashboard:incognito-absent-owner",
-      }),
-    ).toEqual({ entry: undefined, members: [] });
-    return {
-      facts: await prepareSessionMutationFacts({ cfg, sessionKey: siblingKey, agentId: "main" }),
-      source: await prepareSessionSharingSource(
-        {
-          agentId: "main",
-          canonicalKey: siblingKey,
-          storeKey: siblingKey,
-          storePath: binding.path,
-        },
-        () => authority.assertCurrent(),
-      ),
-    };
-  })();
+  const ops = operations(sibling.storage);
+  await ops.create("sibling-session");
+  const scope = { agentId: "main", sessionKey: siblingKey, storePath: binding.path };
+  expect(await ops.add("sibling-reader")).toMatchObject({ kind: "committed" });
+  expect((await readSessionMembersInWorker(scope)).members).toEqual([
+    { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 },
+  ]);
+  await ops.remove("sibling-reader");
+  expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+  expect(
+    await readSessionMembersInWorker({
+      agentId: "other",
+      sessionKey: "agent:other:dashboard:incognito-absent-owner",
+    }),
+  ).toEqual({ entry: undefined, members: [] });
+  const prepared = {
+    facts: await prepareSessionMutationFacts({ cfg, sessionKey: siblingKey, agentId: "main" }),
+    source: await prepareSource(binding.path, siblingKey),
+  };
   try {
-    await sibling.storage.mutate(
-      {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { label: "Sibling postimage" } } },
-      },
-      authority,
-    );
+    await ops.label("Sibling postimage");
     expect(prepared.facts.readCurrent(cfg).target?.entry).toMatchObject({
       label: "Sibling postimage",
     });
@@ -207,13 +184,8 @@ it.each(["chat.send", "sessions.dispatch", "sessions.move"] as const)(
   "retains memory sharing for %s and refuses revoked incognito access at the effect",
   async (method) => {
     const { binding, storage } = await fixture();
-    await storage.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { sessionId: "authorized-memory", updatedAt: 1 }, cwd: "/synthetic" },
-      },
-      authority,
-    );
+    const ops = operations(storage);
+    await ops.create("authorized-memory");
     const context = createGatewayRequestContext(makeContextParams());
     context.getRuntimeConfig = () => cfg;
     context.getCommittedRuntimeConfig = () => cfg;
@@ -250,13 +222,7 @@ it.each(["chat.send", "sessions.dispatch", "sessions.move"] as const)(
           assertCurrent();
         });
       }
-      await storage.mutate(
-        {
-          type: "session.entry.patch",
-          input: { operation: { kind: "fields", patch: { label: "Current" } } },
-        },
-        authority,
-      );
+      await ops.label("Current");
       prepared.assertCurrent();
       client.connect.scopes = ["operator.read", "operator.write"];
       client.authenticatedUserId = "other-person";

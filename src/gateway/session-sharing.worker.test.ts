@@ -21,6 +21,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
+  GatewayClient,
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
@@ -29,6 +30,54 @@ import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
+
+type PolicyConfig = ReturnType<typeof rolePolicyConfig>;
+const createdActor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
+function authorize(
+  client: GatewayClient,
+  scope: { agentId: string; sessionKey: string },
+  getRuntimeConfig: () => PolicyConfig,
+) {
+  return resolveSessionMutationAuthorizationAsync({
+    client,
+    method: "chat.send",
+    requestParams: scope,
+    context: { getRuntimeConfig } as GatewayRequestContext,
+  });
+}
+async function memberSession(client: GatewayClient, sessionKey: string, sessionId: string) {
+  const scope = { agentId: "main", sessionKey };
+  replaceSessionEntrySync(scope, {
+    sessionId,
+    updatedAt: 1,
+    visibility: "read-only",
+    createdActor: createdActor("another-profile"),
+  });
+  await addSessionMember(scope, {
+    identityId: client.authenticatedUserProfile!.profileId,
+    addedBy: "another-profile",
+  });
+  return scope;
+}
+function restrictView(
+  cfg: PolicyConfig,
+  restriction: { agents: string[] } | { sandbox: "required" },
+) {
+  const roles = cfg.gateway!.roles!;
+  return {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      roles: {
+        ...roles,
+        definitions: {
+          ...roles.definitions,
+          view: { ...roles.definitions.view!, ...restriction },
+        },
+      },
+    },
+  };
+}
 
 it.each([
   { phase: "before", listing: "available" },
@@ -151,12 +200,7 @@ it.each([
       const effect = vi.fn();
       const host = observeHostDataSql();
       try {
-        const result = await resolveSessionMutationAuthorizationAsync({
-          client,
-          method: "chat.send",
-          requestParams: scope,
-          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-        });
+        const result = await authorize(client, scope, () => cfg);
         expect(result.error).toBeNull();
         await withQualifiedGatewaySessionEntry({
           cfg,
@@ -236,18 +280,9 @@ it("allows unrelated config reloads after session authority is prepared", async 
     replaceSessionEntrySync(scope, {
       sessionId: "reload-current",
       updatedAt: 1,
-      createdActor: {
-        type: "human",
-        source: "profile",
-        id: client.authenticatedUserProfile!.profileId,
-      },
+      createdActor: createdActor(client.authenticatedUserProfile!.profileId),
     });
-    const result = await resolveSessionMutationAuthorizationAsync({
-      client,
-      method: "chat.send",
-      requestParams: scope,
-      context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-    });
+    const result = await authorize(client, scope, () => cfg);
     try {
       expect(result.error).toBeNull();
       cfg = { ...cfg, logging: { level: "debug" } };
@@ -268,19 +303,10 @@ it("does not replay an authorization consumer after its own effect changes the r
     const entry = {
       sessionId: "consumer-session",
       updatedAt: 1,
-      createdActor: {
-        type: "human" as const,
-        source: "profile" as const,
-        id: client.authenticatedUserProfile!.profileId,
-      },
+      createdActor: createdActor(client.authenticatedUserProfile!.profileId),
     };
     replaceSessionEntrySync(scope, entry);
-    const result = await resolveSessionMutationAuthorizationAsync({
-      client,
-      method: "chat.send",
-      requestParams: scope,
-      context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-    });
+    const result = await authorize(client, scope, () => cfg);
     expect(result.error).toBeNull();
     const effect = vi.fn();
     try {
@@ -302,21 +328,13 @@ it.for([false, true])(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       const client = roleClient("view", "contended-member");
-      const scope = { agentId: "main", sessionKey: "agent:main:contended-sharing" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "contended-session",
-        updatedAt: 1,
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "another-profile" },
-      });
-      const identityId = client.authenticatedUserProfile!.profileId;
-      await addSessionMember(scope, { identityId, addedBy: "another-profile" });
-      const result = await resolveSessionMutationAuthorizationAsync({
+      const scope = await memberSession(
         client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
+        "agent:main:contended-sharing",
+        "contended-session",
+      );
+      const identityId = client.authenticatedUserProfile!.profileId;
+      const result = await authorize(client, scope, () => cfg);
       expect(result.error).toBeNull();
       if (revoked) {
         await removeSessionMember(scope, identityId);
@@ -358,27 +376,12 @@ it.each([
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
     const client = roleClient("view", "worker-member");
-    const scope = { agentId: "main", sessionKey: "agent:main:worker-sharing" };
-    replaceSessionEntrySync(scope, {
-      sessionId: "sharing-current",
-      updatedAt: 1,
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: "another-profile" },
-    });
-    await addSessionMember(scope, {
-      identityId: client.authenticatedUserProfile!.profileId,
-      addedBy: "another-profile",
-    });
+    const scope = await memberSession(client, "agent:main:worker-sharing", "sharing-current");
     const database = openOpenClawAgentDatabase(scope);
     const host = observeHostDataSql();
     let authorization: SessionMutationAuthorization | undefined;
     try {
-      const result = await resolveSessionMutationAuthorizationAsync({
-        client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
+      const result = await authorize(client, scope, () => cfg);
       expect(result.error).toBeNull();
       const currentAuthorization = result.authorization;
       if (!currentAuthorization) {
@@ -447,7 +450,7 @@ it.each([
           lifecycleRevision: "successor",
           updatedAt: 2,
           visibility: "read-only",
-          createdActor: { type: "human", source: "profile", id: "another-profile" },
+          createdActor: createdActor("another-profile"),
         });
       } else {
         invalidateSessionReadFacts(scope);
@@ -471,23 +474,8 @@ it.each(["membership", "routing", "policy"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
       const client = roleClient("view", "scoped-member");
-      const scope = { agentId: "main", sessionKey: "agent:main:scoped-sharing" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "scoped-current",
-        updatedAt: 1,
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "another-profile" },
-      });
-      await addSessionMember(scope, {
-        identityId: client.authenticatedUserProfile!.profileId,
-        addedBy: "another-profile",
-      });
-      const result = await resolveSessionMutationAuthorizationAsync({
-        client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
+      const scope = await memberSession(client, "agent:main:scoped-sharing", "scoped-current");
+      const result = await authorize(client, scope, () => cfg);
       expect(result.error).toBeNull();
       const authorization = result.authorization!;
       let checked = false;
@@ -496,20 +484,7 @@ it.each(["membership", "routing", "policy"] as const)(
         if (change === "membership") {
           removeSessionMemberSync(scope, client.authenticatedUserProfile!.profileId);
         } else if (change === "policy") {
-          const roles = cfg.gateway!.roles!;
-          cfg = {
-            ...cfg,
-            gateway: {
-              ...cfg.gateway,
-              roles: {
-                ...roles,
-                definitions: {
-                  ...roles.definitions,
-                  view: { ...roles.definitions.view!, agents: [] },
-                },
-              },
-            },
-          };
+          cfg = restrictView(cfg, { agents: [] });
         } else {
           cfg = { ...cfg, session: { store: "replacement/sessions.json" } };
         }
@@ -536,26 +511,11 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         setUserProfileRole(client.authenticatedUserProfile!.profileId, "view");
         expect(client.preparedSessionProfile).toBeUndefined();
       }
-      const scope = { agentId: "main", sessionKey: "agent:main:policy-sharing" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "policy-current",
-        updatedAt: 1,
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "another-profile" },
-      });
-      await addSessionMember(scope, {
-        identityId: client.authenticatedUserProfile!.profileId,
-        addedBy: "another-profile",
-      });
+      const scope = await memberSession(client, "agent:main:policy-sharing", "policy-current");
       const host = observeHostDataSql();
       let authorization: SessionMutationAuthorization;
       try {
-        const result = await resolveSessionMutationAuthorizationAsync({
-          client,
-          method: "chat.send",
-          requestParams: scope,
-          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-        });
+        const result = await authorize(client, scope, () => cfg);
         expect(result.error, "prepared role authorization").toBeNull();
         authorization = result.authorization!;
         await authorization.withCurrent!(() => authorization.assertCurrent());
@@ -566,23 +526,7 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
       if (change === "role" || change === "unprepared-role") {
         setUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
       } else {
-        const roles = cfg.gateway!.roles!;
-        cfg = {
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              ...roles,
-              definitions: {
-                ...roles.definitions,
-                view: {
-                  ...roles.definitions.view!,
-                  ...(change === "agent" ? { agents: [] } : { sandbox: "required" as const }),
-                },
-              },
-            },
-          },
-        };
+        cfg = restrictView(cfg, change === "agent" ? { agents: [] } : { sandbox: "required" });
       }
       const effect = vi.fn();
       await expect(authorization.withCurrent!(effect)).rejects.toThrow();
