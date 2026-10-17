@@ -65,6 +65,42 @@ describe("startup recovery admission", () => {
   const { makeMainSessionFixture, writeCompletedToolTranscript } =
     createRestartRecoveryStoreFixture(() => tmpDir);
 
+  function schedule(
+    options: Partial<Parameters<typeof scheduleRestartAbortedMainSessionRecovery>[0]> = {},
+  ) {
+    return scheduleRestartAbortedMainSessionRecovery({
+      getConfig: () => ({}),
+      delayMs: 0,
+      stateDir: tmpDir,
+      gatewayRuntime,
+      ...options,
+    });
+  }
+
+  function observeAdmission(settled: (origin?: string) => void) {
+    const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    return vi
+      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+      .mockImplementation(
+        async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+          try {
+            return await admit(run, origin, signal);
+          } finally {
+            settled(origin);
+          }
+        },
+      );
+  }
+
+  function failDispatch() {
+    vi.mocked(callGateway).mockImplementation(async ({ method }) => {
+      if (method === "agent") {
+        throw new Error("final ambiguous dispatch failure");
+      }
+      return { status: "timeout" };
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(callGateway).mockReset().mockResolvedValue({ runId: "run-resumed" });
@@ -92,30 +128,14 @@ describe("startup recovery admission", () => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
       const now = Date.now();
       let activeBootId: string | undefined;
-      if (action !== "healthy") {
-        for (let i = 0; i < 3; i++) {
-          const boot = (await beginGatewayBootLifecycle(env, now - 295_000 + i)).id;
-          await completeGatewayBootLifecycle(
-            boot,
-            { outcome: "startup_failed" },
-            env,
-            now - 295_000 + i,
-          );
-        }
-        activeBootId = (await beginGatewayBootLifecycle(env, now - 290_000)).id;
-      } else {
-        // Two previous crashes plus the live boot must not independently trip safe mode.
-        for (let i = 0; i < 2; i++) {
-          const boot = (await beginGatewayBootLifecycle(env, now - 1_000 + i)).id;
-          await completeGatewayBootLifecycle(
-            boot,
-            { outcome: "startup_failed" },
-            env,
-            now - 1_000 + i,
-          );
-        }
-        activeBootId = (await beginGatewayBootLifecycle(env, now)).id;
+      const healthy = action === "healthy";
+      // Two previous crashes plus the live boot must not independently trip safe mode.
+      for (let i = 0; i < (healthy ? 2 : 3); i++) {
+        const failedAt = now - (healthy ? 1_000 : 295_000) + i;
+        const boot = (await beginGatewayBootLifecycle(env, failedAt)).id;
+        await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, failedAt);
       }
+      activeBootId = (await beginGatewayBootLifecycle(env, healthy ? now : now - 290_000)).id;
       const lifetime = new AbortController();
       let suppression: object | null =
         action === "healthy" ? null : { reason: "crash-loop-breaker" };
@@ -186,10 +206,7 @@ describe("startup recovery admission", () => {
         dispatched.resolve();
         return { runId: "run-resumed" };
       });
-      const recovery = scheduleRestartAbortedMainSessionRecovery({
-        getConfig: () => ({}),
-        delayMs: 0,
-        stateDir: tmpDir,
+      const recovery = schedule({
         startupCheckedStorePaths,
         gatewayRuntime: runtime,
       });
@@ -406,25 +423,13 @@ describe("startup recovery admission", () => {
           }
         });
       const passFinished = createDeferred();
-      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-      const admissionSpy = vi
-        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-        .mockImplementation(
-          async <T>(run: () => Promise<T>, origin?: string, abort?: AbortSignal) => {
-            try {
-              return await admit(run, origin, abort);
-            } finally {
-              if (origin === "main-session:startup-recovery") {
-                passFinished.resolve();
-              }
-            }
-          },
-        );
-      const recovery = scheduleRestartAbortedMainSessionRecovery({
+      const admissionSpy = observeAdmission((origin) => {
+        if (origin === "main-session:startup-recovery") {
+          passFinished.resolve();
+        }
+      });
+      const recovery = schedule({
         getConfig: () => ({ agents: { entries: { main: {}, other: {} } } }),
-        delayMs: 0,
-        stateDir: tmpDir,
-        gatewayRuntime,
       });
       try {
         await withinTest(prepared.promise, signal);
@@ -542,29 +547,19 @@ describe("startup recovery admission", () => {
           throw new Error("transcript temporarily unavailable");
         });
       }
-      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-      const admissionSpy = vi
-        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-        .mockImplementation(
-          async <T>(run: () => Promise<T>, origin?: string, admissionSignal?: AbortSignal) => {
-            try {
-              return await admit(run, origin, admissionSignal);
-            } finally {
-              if (origin === "main-session:preparation-recovery") {
-                if (holdPreparationRead) {
-                  holdPreparationRead = false;
-                  replayLoaded.reject(
-                    new Error("Preparation replay finished before reading its target"),
-                  );
-                }
-                firstPreparationSettled.resolve();
-                if (failedRead) {
-                  failedAttempt.resolve();
-                }
-              }
-            }
-          },
-        );
+      const admissionSpy = observeAdmission((origin) => {
+        if (origin !== "main-session:preparation-recovery") {
+          return;
+        }
+        if (holdPreparationRead) {
+          holdPreparationRead = false;
+          replayLoaded.reject(new Error("Preparation replay finished before reading its target"));
+        }
+        firstPreparationSettled.resolve();
+        if (failedRead) {
+          failedAttempt.resolve();
+        }
+      });
       const info = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation((line) => {
         if (line.includes("startup complete:")) {
           startup.resolve();
@@ -577,12 +572,7 @@ describe("startup recovery admission", () => {
         resumed.resolve();
         return { runId: "run-resumed" };
       });
-      const recovery = scheduleRestartAbortedMainSessionRecovery({
-        getConfig: () => ({}),
-        delayMs: 0,
-        stateDir: tmpDir,
-        gatewayRuntime,
-      });
+      const recovery = schedule();
       try {
         await withinTest(startup.promise, signal);
         expect(callGateway).not.toHaveBeenCalled();
@@ -690,13 +680,7 @@ describe("startup recovery admission", () => {
         },
       );
     vi.useFakeTimers();
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      getConfig: () => ({}),
-      delayMs: 0,
-      maxRetries: 2,
-      stateDir: tmpDir,
-      gatewayRuntime,
-    });
+    const recovery = schedule({ maxRetries: 2 });
 
     try {
       await firstAttempt.promise;
@@ -758,12 +742,7 @@ describe("startup recovery admission", () => {
       }
       const { storePath } = targets[0]!;
       if (multipleStores) {
-        vi.mocked(callGateway).mockImplementation(async ({ method }) => {
-          if (method === "agent") {
-            throw new Error("final ambiguous dispatch failure");
-          }
-          return { status: "timeout" };
-        });
+        failDispatch();
       } else {
         vi.mocked(callGateway)
           .mockImplementationOnce(async () => {
@@ -785,12 +764,9 @@ describe("startup recovery admission", () => {
           })
           .mockResolvedValueOnce({ runId: "run-resumed" });
       }
-      const recovery = scheduleRestartAbortedMainSessionRecovery({
+      const recovery = schedule({
         getConfig: () => ({ agents: { entries: { [agentId]: {} } } }),
-        delayMs: 0,
         maxRetries: 1,
-        stateDir: tmpDir,
-        gatewayRuntime,
       });
       await gatewayRuntime.expectFailedRecovery(2 * targets.length, recovery, signal, ...targets);
       for (const [index, target] of targets.entries()) {
@@ -839,12 +815,7 @@ describe("startup recovery admission", () => {
         }),
       );
     }
-    vi.mocked(callGateway).mockImplementation(async ({ method }) => {
-      if (method === "agent") {
-        throw new Error("final ambiguous dispatch failure");
-      }
-      return { status: "timeout" };
-    });
+    failDispatch();
     const entered = createDeferred();
     const release = createDeferred();
     const prepare = recoveryTargets.prepareExpectedRestartRecoveryCurrent;
@@ -869,13 +840,7 @@ describe("startup recovery admission", () => {
         }
       });
     const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      getConfig: () => ({}),
-      delayMs: 0,
-      maxRetries: 1,
-      stateDir: tmpDir,
-      gatewayRuntime,
-    });
+    const recovery = schedule({ maxRetries: 1 });
     try {
       await withinTest(entered.promise, signal);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -929,13 +894,7 @@ describe("startup recovery admission", () => {
         }
         return admitted;
       });
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      getConfig: () => ({}),
-      delayMs: 0,
-      maxRetries: 1,
-      stateDir: tmpDir,
-      gatewayRuntime,
-    });
+    const recovery = schedule({ maxRetries: 1 });
     try {
       await reconciliationEntered.promise;
       expect(suspension.lease).not.toBeNull();

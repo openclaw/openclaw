@@ -1,38 +1,28 @@
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import type {
-  InternalSessionEntry as SessionEntry,
-  MainRestartRecoveryState,
-} from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
-function recoveryState(
-  overrides: Partial<MainRestartRecoveryState> = {},
-): MainRestartRecoveryState {
-  return { cycleId: "cycle-1", revision: 1, chargedAttempts: 0, ...overrides };
-}
 function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
     updatedAt: 100,
     abortedLastRun: false,
-    mainRestartRecovery: recoveryState(),
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
     ...overrides,
   };
 }
-function claimForeground(
-  session: SessionEntry,
-  options: { sessionId?: string; sessionKey?: string; runId?: string } = {},
-) {
+function claimForeground(session: SessionEntry, runId?: string) {
   return transitionMainSessionRecovery(session, {
     kind: "claim_foreground",
     cycleId: "unused",
     lifecycleGeneration: "generation-1",
-    sessionId: options.sessionId ?? "session-1",
-    sessionKey: options.sessionKey ?? sessionKey,
+    sessionId: "session-1",
+    sessionKey,
     claimId: "foreground-1",
-    runId: options.runId,
+    runId,
   });
 }
 
@@ -95,10 +85,8 @@ describe("empty main session recovery aggregate", () => {
       observation: { sessionId: session.sessionId, cycleId: "cycle-1", revision: 1 },
       runId: "recovery-1",
     });
-    if (reserved.kind !== "reserved") {
-      throw new Error("expected recovery reservation");
-    }
-    expect(claimForeground(session, { runId: "foreground-run" }).kind).toBe("foreground_claimed");
+    assert(reserved.kind === "reserved", "expected recovery reservation");
+    expect(claimForeground(session, "foreground-run").kind).toBe("foreground_claimed");
     // Foreground preparation admits the turn without consuming the recovery reservation.
     session.abortedLastRun = false;
     const settled = projectMainSessionRecoveryLifecycle({
@@ -111,9 +99,7 @@ describe("empty main session recovery aggregate", () => {
       },
       snapshotPatch: { status: "done", abortedLastRun: false },
     });
-    if (settled.action !== "apply") {
-      throw new Error("expected foreground settlement");
-    }
+    assert(settled.action === "apply", "expected foreground settlement");
     Object.assign(session, settled.patch);
     expect(session.mainRestartRecovery?.foregroundClaims).toBeUndefined();
     expect(session.restartRecoveryRuns).toBeUndefined();
