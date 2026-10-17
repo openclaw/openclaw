@@ -127,25 +127,20 @@ it("returns null for invalid refs", () => {
 });
 
 it.each([
-  {
-    name: "splits legacy combined refs when provider is not stored separately",
-    params: {
-      defaultProvider: "anthropic",
-      overrideModel: "ollama-beelink2/qwen2.5-coder:7b",
-    },
-    expected: { provider: "ollama-beelink2", model: "qwen2.5-coder:7b" },
-  },
-  {
-    name: "preserves explicit runtime provider for vendor-prefixed model ids",
-    params: {
-      defaultProvider: "anthropic",
-      runtimeProvider: "openrouter",
-      runtimeModel: "anthropic/claude-haiku-4.5",
-    },
-    expected: { provider: "openrouter", model: "anthropic/claude-haiku-4.5" },
-  },
-])("$name", ({ params, expected }) => {
-  expect(resolvePersistedSelectedModelRef(params)).toEqual(expected);
+  [
+    "splits legacy combined refs",
+    { overrideModel: "ollama-beelink2/qwen2.5-coder:7b" },
+    { provider: "ollama-beelink2", model: "qwen2.5-coder:7b" },
+  ],
+  [
+    "preserves explicit runtime provider for vendor-prefixed ids",
+    { runtimeProvider: "openrouter", runtimeModel: "anthropic/claude-haiku-4.5" },
+    { provider: "openrouter", model: "anthropic/claude-haiku-4.5" },
+  ],
+] as const)("%s", (_name, params, expected) => {
+  expect(resolvePersistedSelectedModelRef({ defaultProvider: "anthropic", ...params })).toEqual(
+    expected,
+  );
 });
 
 it("ignores malformed persisted model metadata instead of throwing", () => {
@@ -559,57 +554,39 @@ it("keeps per-agent fallback overrides out of explicit selection", () => {
 });
 
 it.each([
-  {
-    name: "strips trailing auth profile suffix before allowlist matching",
-    params: {
-      cfg: {
-        agents: { defaults: { models: { "openai/@cf/openai/gpt-oss-20b": {} } } },
-      } as unknown as OpenClawConfig,
+  [
+    "strips trailing auth profile suffix",
+    "anthropic",
+    "openai/@cf/openai/gpt-oss-20b@cf:default",
+    { "openai/@cf/openai/gpt-oss-20b": {} },
+    "openai",
+    "@cf/openai/gpt-oss-20b",
+  ],
+  [
+    "infers bare ids from the allowlist (#48369)",
+    "openai",
+    "kimi-k2.6",
+    { "openai/gpt-5.4": {}, "opencode-go/kimi-k2.6": {}, "opencode-go/glm-5": {} },
+    "opencode-go",
+    "kimi-k2.6",
+  ],
+  [
+    "resolves slash-form aliases before parsing",
+    "openai",
+    "xiaomi/mimo-v2-pro-mit",
+    { "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" } },
+    "openai",
+    "xiaomi/mimo-v2-pro-mit",
+  ],
+] as const)("%s", (_name, defaultProvider, raw, modelEntries, provider, model) => {
+  expect(
+    resolveAllowedModelRef({
+      cfg: createConfiguredModelRefConfig({ modelEntries }),
       catalog: [],
-      raw: "openai/@cf/openai/gpt-oss-20b@cf:default",
-      defaultProvider: "anthropic",
-    },
-    expected: {
-      key: "openai/@cf/openai/gpt-oss-20b",
-      ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
-    },
-  },
-  {
-    name: "infers provider from allowlist for bare model ids to prevent prefix drift (#48369)",
-    params: {
-      cfg: createConfiguredModelRefConfig({
-        modelEntries: {
-          "openai/gpt-5.4": {},
-          "opencode-go/kimi-k2.6": {},
-          "opencode-go/glm-5": {},
-        },
-      }),
-      catalog: [],
-      raw: "kimi-k2.6",
-      defaultProvider: "openai",
-    },
-    expected: {
-      key: "opencode-go/kimi-k2.6",
-      ref: { provider: "opencode-go", model: "kimi-k2.6" },
-    },
-  },
-  {
-    name: "resolves slash-form aliases before provider/model parsing",
-    params: {
-      cfg: createConfiguredModelRefConfig({
-        modelEntries: { "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" } },
-      }),
-      catalog: [],
-      raw: "xiaomi/mimo-v2-pro-mit",
-      defaultProvider: "openai",
-    },
-    expected: {
-      key: "openai/xiaomi/mimo-v2-pro-mit",
-      ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
-    },
-  },
-])("$name", ({ params, expected }) => {
-  expect(resolveAllowedModelRef(params)).toEqual(expected);
+      raw,
+      defaultProvider,
+    }),
+  ).toEqual({ key: `${provider}/${model}`, ref: { provider, model } });
 });
 
 it.each([false, true])("preserves provider identity with manifest normalization %s", (enabled) => {

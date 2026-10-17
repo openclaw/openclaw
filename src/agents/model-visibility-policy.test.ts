@@ -5,6 +5,15 @@ import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { getModelRefStatus } from "./model-selection-resolve.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
+const sonnet = { provider: "anthropic", model: "claude-sonnet-4-6" };
+const sol = { provider: "openai", model: "gpt-5.6-sol" };
+const gpt = { provider: "openai", model: "gpt-5.5" };
+const sensitive = { provider: "external", model: "sensitive" };
+const haiku = { provider: "clawrouter", model: "anthropic/claude-haiku-4-5" };
+const flash = { provider: "clawrouter", model: "google/gemini-3.5-flash" };
+type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+const defaultsConfig = (defaults: Defaults): OpenClawConfig => ({ agents: { defaults } });
+
 function createPolicy(cfg: OpenClawConfig, agentId?: string) {
   return createModelVisibilityPolicy({
     cfg,
@@ -84,39 +93,25 @@ describe("explicit model visibility policy", () => {
   it("keeps overrides open when model entries only configure aliases or params", () => {
     const policy = createPolicy({
       meta: { migrations: { modelPolicyAllowlist: true } },
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-          },
-        },
-      },
+      ...defaultsConfig({ models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } } }),
     });
 
     expect(policy.allowAny).toBe(true);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+    expect(policy.allows(sol)).toBe(true);
   });
 
   it("retains automatic defaults and fallbacks without permitting manual overrides", () => {
-    const policy = createPolicy({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["external/sensitive"],
-          },
-          modelPolicy: { allow: ["openai/safe"] },
-        },
-      },
-    });
+    const policy = createPolicy(
+      defaultsConfig({
+        model: { primary: "openai/gpt-5.5", fallbacks: ["external/sensitive"] },
+        modelPolicy: { allow: ["openai/safe"] },
+      }),
+    );
 
-    expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(false);
-    expect(policy.resolveSelection({ provider: "openai", model: "gpt-5.5" })).toEqual({
-      provider: "openai",
-      model: "gpt-5.5",
-    });
+    expect(policy.allows(gpt)).toBe(false);
+    expect(policy.resolveSelection(gpt)).toEqual(gpt);
     expect(policy.allows({ provider: "openai", model: "safe" })).toBe(true);
-    expect(policy.allows({ provider: "external", model: "sensitive" })).toBe(false);
+    expect(policy.allows(sensitive)).toBe(false);
     expect(
       policy.allowedCatalog.some(
         (entry) => entry.provider === "external" && entry.id === "sensitive",
@@ -128,14 +123,10 @@ describe("explicit model visibility policy", () => {
   });
 
   it("retains the selected default identity after manifest alias resolution", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: "custom/latest",
-          modelPolicy: { allow: ["custom/other"] },
-        },
-      },
-    };
+    const cfg = defaultsConfig({
+      model: "custom/latest",
+      modelPolicy: { allow: ["custom/other"] },
+    });
     const manifestPlugins = [
       {
         modelIdNormalization: {
@@ -185,7 +176,7 @@ describe("explicit model visibility policy", () => {
     ["custom/team", "Reader", "custom/*"],
     ["custom", "custom/team/Reader", "custom/team/*"],
   ])("keeps %s/%s outside the literal wildcard %s", (provider, model, allow) => {
-    const cfg = { agents: { defaults: { modelPolicy: { allow: [allow] } } } };
+    const cfg = defaultsConfig({ modelPolicy: { allow: [allow] } });
     const allowed = { provider: "custom", model: "team/Reader" };
     const candidate = { provider, model };
     const policy = createModelVisibilityPolicy({
@@ -218,30 +209,21 @@ describe("explicit model visibility policy", () => {
   });
 
   it("matches nested prefix wildcards on canonical model-key segment boundaries", () => {
-    const policy = createPolicy({
-      agents: {
-        defaults: {
-          modelPolicy: { allow: ["clawrouter/anthropic/*", "openai/gpt-5.5"] },
-        },
-      },
-    });
-
-    expect(policy.allows({ provider: "clawrouter", model: "anthropic/claude-haiku-4-5" })).toBe(
-      true,
-    );
-    expect(
-      policy.allowsByWildcard({
-        provider: "clawrouter",
-        model: "anthropic/claude-haiku-4-5",
+    const policy = createPolicy(
+      defaultsConfig({
+        modelPolicy: { allow: ["clawrouter/anthropic/*", "openai/gpt-5.5"] },
       }),
-    ).toBe(true);
+    );
+
+    expect(policy.allows(haiku)).toBe(true);
+    expect(policy.allowsByWildcard(haiku)).toBe(true);
     expect(policy.allows({ provider: "clawrouter", model: "anthropicX/claude-haiku-4-5" })).toBe(
       false,
     );
-    expect(policy.allows({ provider: "clawrouter", model: "google/gemini-3.5-flash" })).toBe(false);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
-    expect(policy.allowsByWildcard({ provider: "openai", model: "gpt-5.5" })).toBe(false);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
+    expect(policy.allows(flash)).toBe(false);
+    expect(policy.allows(gpt)).toBe(true);
+    expect(policy.allowsByWildcard(gpt)).toBe(false);
+    expect(policy.allows(sol)).toBe(false);
     expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
       "clawrouter/anthropic/claude-haiku-4-5",
       "openai/gpt-5.5",
@@ -249,22 +231,16 @@ describe("explicit model visibility policy", () => {
   });
 
   it("keeps nested prefix wildcards scoped when segments carry boundary whitespace", () => {
-    const policy = createPolicy({
-      agents: {
-        defaults: {
-          modelPolicy: { allow: [" clawrouter / anthropic / * ", " openai / gpt-5.5 "] },
-        },
-      },
-    });
-
-    // The padded nested wildcard must keep its namespace rather than widening to
-    // every clawrouter model.
-    expect(policy.allows({ provider: "clawrouter", model: "anthropic/claude-haiku-4-5" })).toBe(
-      true,
+    const policy = createPolicy(
+      defaultsConfig({
+        modelPolicy: { allow: [" clawrouter / anthropic / * ", " openai / gpt-5.5 "] },
+      }),
     );
-    expect(policy.allows({ provider: "clawrouter", model: "google/gemini-3.5-flash" })).toBe(false);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
+
+    expect(policy.allows(haiku)).toBe(true);
+    expect(policy.allows(flash)).toBe(false);
+    expect(policy.allows(gpt)).toBe(true);
+    expect(policy.allows(sol)).toBe(false);
     expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
       "clawrouter/anthropic/claude-haiku-4-5",
       "openai/gpt-5.5",
@@ -288,12 +264,12 @@ describe("explicit model visibility policy", () => {
     };
 
     const research = createPolicy(cfg, "research");
-    expect(research.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(true);
-    expect(research.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
+    expect(research.allows(sonnet)).toBe(true);
+    expect(research.allows(sol)).toBe(false);
 
     const writer = createPolicy(cfg, "writer");
-    expect(writer.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
-    expect(writer.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
+    expect(writer.allows(sol)).toBe(true);
+    expect(writer.allows(sonnet)).toBe(false);
   });
 
   it("resolves an inherited default policy alias in the default scope", () => {
@@ -311,8 +287,8 @@ describe("explicit model visibility policy", () => {
       "research",
     );
 
-    expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(true);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
+    expect(policy.allows(sonnet)).toBe(true);
+    expect(policy.allows(sol)).toBe(false);
   });
 
   it("does not let unmarked per-agent metadata override an explicit default policy", () => {
@@ -328,8 +304,8 @@ describe("explicit model visibility policy", () => {
 
     expect(policy.allowAny).toBe(false);
     expect(policy.allowConfigPath).toBe("agents.defaults.modelPolicy.allow");
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
-    expect(policy.allows({ provider: "external", model: "sensitive" })).toBe(false);
+    expect(policy.allows(sol)).toBe(true);
+    expect(policy.allows(sensitive)).toBe(false);
   });
 
   it("inherits the unmarked legacy default restriction despite per-agent metadata", () => {
@@ -346,7 +322,7 @@ describe("explicit model visibility policy", () => {
     expect(policy.allowAny).toBe(false);
     expect(policy.allowConfigPath).toBe("agents.defaults.models");
     expect(policy.allowRepairConfigPath).toBe("agents.defaults.modelPolicy.allow");
-    expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+    expect(policy.allows(sonnet)).toBe(false);
+    expect(policy.allows(sol)).toBe(true);
   });
 });

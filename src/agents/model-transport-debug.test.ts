@@ -42,39 +42,38 @@ const model = makeProviderModelFixture<"openai-responses">({
 });
 const requestUrl = "https://api.openai.com/v1/responses";
 
-describe("emitModelTransportDebug", () => {
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", undefined);
-    vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", undefined);
-    vi.stubEnv("OPENCLAW_DEBUG_SSE", undefined);
-    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", undefined);
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  function createLogger() {
-    const info = vi.fn();
-    const debug = vi.fn();
-    return {
-      log: { info, debug },
-      info,
-      debug,
-    };
+beforeEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  for (const logger of Object.values(log)) {
+    logger.mockClear();
   }
+  for (const name of ["MODEL_TRANSPORT", "MODEL_PAYLOAD", "SSE", "CODE_MODE"]) {
+    vi.stubEnv(`OPENCLAW_DEBUG_${name}`, undefined);
+  }
+});
 
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await closeProviderTransportDispatcherPool();
+});
+
+function guardedResponse(init: ResponseInit) {
+  return {
+    response: new Response("ok", init),
+    finalUrl: requestUrl,
+    release: async () => undefined,
+  };
+}
+
+describe("emitModelTransportDebug", () => {
   it.each([
     "[model-fetch] start provider=openai api=chat model=gpt method=POST",
     "[model-fetch] response provider=openai api=chat model=gpt status=200 elapsedMs=42",
     "[model-sse] event type=response.output_text.delta",
   ])("keeps transport diagnostics at debug by default: %s", (message) => {
-    const { log: logger, info, debug } = createLogger();
-
-    emitModelTransportDebug(logger, message);
-
-    expect(debug).toHaveBeenCalledWith(message);
-    expect(info).not.toHaveBeenCalled();
+    emitModelTransportDebug(log, message);
+    expect(log.debug).toHaveBeenCalledWith(message);
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -84,13 +83,11 @@ describe("emitModelTransportDebug", () => {
     ["OPENCLAW_DEBUG_CODE_MODE", "1"],
   ])("promotes transport diagnostics when %s=%s", (name, value) => {
     vi.stubEnv(name, value);
-    const { log: logger, info, debug } = createLogger();
     const message = "[model-fetch] response provider=openai api=chat model=gpt status=200";
 
-    emitModelTransportDebug(logger, message);
-
-    expect(info).toHaveBeenCalledWith(message);
-    expect(debug).not.toHaveBeenCalled();
+    emitModelTransportDebug(log, message);
+    expect(log.info).toHaveBeenCalledWith(message);
+    expect(log.debug).not.toHaveBeenCalled();
   });
 });
 
@@ -101,11 +98,7 @@ describe("guarded model fetch logging", () => {
       await new Promise<void>((resolve) => {
         pending.push(resolve);
       });
-      return {
-        response: new Response("ok", { headers: { "x-request-id": "req_upstream" } }),
-        finalUrl: requestUrl,
-        release: async () => undefined,
-      };
+      return guardedResponse({ headers: { "x-request-id": "req_upstream" } });
     });
     const fetch = buildGuardedModelFetch(model);
     const identities = ["1", '2\n\r\u001b[31m"\\'];
@@ -149,57 +142,34 @@ describe("guarded model fetch logging", () => {
     }
   });
 
-  beforeEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
-    log.info.mockClear();
-    log.debug.mockClear();
-    log.warn.mockClear();
-    vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", undefined);
-    vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", undefined);
-    vi.stubEnv("OPENCLAW_DEBUG_SSE", undefined);
-    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", undefined);
-  });
-
-  afterEach(async () => {
-    vi.unstubAllEnvs();
-    await closeProviderTransportDispatcherPool();
-  });
-
   it.each([
-    { status: 200, elapsedMs: 999, level: "debug" },
-    { status: 299, elapsedMs: 42, level: "debug" },
-    { status: 200, elapsedMs: 1_000, level: "debug" },
-    { status: 200, elapsedMs: 30_000, level: "debug" },
-    { status: 300, elapsedMs: 42, level: "info" },
-    { status: 500, elapsedMs: 42, level: "info" },
-  ] as const)(
-    "logs response status=$status elapsedMs=$elapsedMs at $level",
-    async ({ status, elapsedMs, level }) => {
-      let now = 1_000;
-      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-      fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
-        now += elapsedMs;
-        return {
-          response: new Response("ok", { status }),
-          finalUrl: requestUrl,
-          release: vi.fn(async () => undefined),
-        };
-      });
+    [200, 999, "debug"],
+    [299, 42, "debug"],
+    [200, 1_000, "debug"],
+    [200, 30_000, "debug"],
+    [300, 42, "info"],
+    [500, 42, "info"],
+  ] as const)("logs response status=%s elapsedMs=%s at %s", async (status, elapsedMs, level) => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
+      now += elapsedMs;
+      return guardedResponse({ status });
+    });
 
-      try {
-        const response = await buildGuardedModelFetch(model)(requestUrl, { method: "POST" });
-        await response.text();
+    try {
+      const response = await buildGuardedModelFetch(model)(requestUrl, { method: "POST" });
+      await response.text();
 
-        expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] start "));
-        expect(log[level]).toHaveBeenCalledWith(
-          expect.stringContaining(`status=${status} elapsedMs=${elapsedMs}`),
-        );
-        expect(log.info).toHaveBeenCalledTimes(level === "info" ? 1 : 0);
-      } finally {
-        nowSpy.mockRestore();
-      }
-    },
-  );
+      expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] start "));
+      expect(log[level]).toHaveBeenCalledWith(
+        expect.stringContaining(`status=${status} elapsedMs=${elapsedMs}`),
+      );
+      expect(log.info).toHaveBeenCalledTimes(level === "info" ? 1 : 0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 
   it.each([
     { abort: false, error: new Error("network down"), level: "warn" },

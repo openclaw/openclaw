@@ -5,18 +5,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 
-function normalizeLegacyFixtureModel({
-  provider,
-  context,
-}: {
-  provider: string;
-  context: { modelId?: string };
-}) {
-  return provider === "custom-provider" && context.modelId === "custom-legacy-model"
-    ? "custom-modern-model"
-    : undefined;
-}
-
 const emptyPluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const loadPreparedModelCatalogSnapshotMock = vi.hoisted(() => vi.fn());
@@ -45,6 +33,17 @@ function aliasSnapshot(provider: string, aliases: Record<string, string>) {
   return createPluginMetadataSnapshotFixture({
     plugins: [{ id: provider, modelIdNormalization: { providers: { [provider]: { aliases } } } }],
   });
+}
+
+function captureAliases(cfg: OpenClawConfig, provider: string, aliases: Record<string, string>) {
+  const snapshot = aliasSnapshot(provider, aliases);
+  getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+    params?.config === cfg ? snapshot : undefined,
+  );
+}
+
+function pin(provider: string, model: string, sessionId: string) {
+  return { sessionId, updatedAt: 1, providerOverride: provider, modelOverride: model };
 }
 
 function selectModel(
@@ -87,7 +86,12 @@ describe("model-selection plugin runtime normalization", () => {
   });
 
   it("keeps model visibility policy construction off plugin runtime hooks by default", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+    normalizeProviderModelIdWithPluginMock.mockImplementation(
+      ({ provider, context }: { provider: string; context: { modelId?: string } }) =>
+        provider === "custom-provider" && context.modelId === "custom-legacy-model"
+          ? "custom-modern-model"
+          : undefined,
+    );
     const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
     const policy = createModelVisibilityPolicy({
       cfg: { agents: { defaults: { models: { "custom-provider/custom-legacy-model": {} } } } },
@@ -103,10 +107,7 @@ describe("model-selection plugin runtime normalization", () => {
 
   it("resolves bare reply defaults from the captured manifest once", async () => {
     const cfg = { agents: { defaults: { model: "entry" } } };
-    const snapshot = aliasSnapshot("openai", { entry: "middle", middle: "final" });
-    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
-      params?.config === cfg ? snapshot : undefined,
-    );
+    captureAliases(cfg, "openai", { entry: "middle", middle: "final" });
     const { resolveDefaultModel } =
       await import("../auto-reply/reply/directive-handling.defaults.js");
     const { defaultProvider, defaultModel } = resolveDefaultModel({ cfg });
@@ -126,20 +127,12 @@ describe("model-selection plugin runtime normalization", () => {
           },
         },
       };
-      const metadataSnapshot = aliasSnapshot("snapshot-fixture", {
+      captureAliases(cfg, "snapshot-fixture", {
         "stored-legacy": "stored-modern",
       });
-      getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
-        params?.config === cfg ? metadataSnapshot : undefined,
-      );
       const sessionKey = "agent:main:snapshot-child";
       const parentSessionKey = "agent:main:snapshot-parent";
-      const storedEntry = {
-        sessionId: "snapshot-pin",
-        updatedAt: 1,
-        providerOverride: "snapshot-fixture",
-        modelOverride: "stored-legacy",
-      };
+      const storedEntry = pin("snapshot-fixture", "stored-legacy", "snapshot-pin");
       const sessionEntry =
         source === "session" ? storedEntry : { sessionId: sessionKey, updatedAt: 1 };
       const state = await selectModel(cfg, "snapshot-fixture", "default", {
@@ -177,18 +170,12 @@ describe("model-selection plugin runtime normalization", () => {
 
   it("keeps concurrent model-policy runs isolated while sharing metadata", async () => {
     normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
-    let signalFirstCatalogLoad: (() => void) | undefined;
-    let releaseFirstCatalogLoad: (() => void) | undefined;
-    const firstCatalogLoadStarted = new Promise<void>((resolve) => {
-      signalFirstCatalogLoad = resolve;
-    });
-    const firstCatalogLoadRelease = new Promise<void>((resolve) => {
-      releaseFirstCatalogLoad = resolve;
-    });
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     loadPreparedModelCatalogSnapshotMock
       .mockImplementationOnce(async () => {
-        signalFirstCatalogLoad?.();
-        await firstCatalogLoadRelease;
+        started.resolve();
+        await release.promise;
         return { entries: [], authoritative: true };
       })
       .mockResolvedValue({ entries: [], authoritative: true });
@@ -207,10 +194,10 @@ describe("model-selection plugin runtime normalization", () => {
       selectModel(cfg, "custom-provider", model, { hasModelDirective: true });
 
     const firstPromise = select(firstConfig, "first");
-    await firstCatalogLoadStarted;
+    await started.promise;
     const second = await select(secondConfig, "second");
     expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(2);
-    releaseFirstCatalogLoad?.();
+    release.resolve();
     const first = await firstPromise;
 
     expect([...first.allowedModelKeys]).toContain("custom-provider/first");
@@ -253,12 +240,7 @@ describe("model-selection plugin runtime normalization", () => {
       },
     };
     const sessionKey = "agent:main:discord:channel:c1";
-    const sessionEntry = {
-      sessionId: sessionKey,
-      updatedAt: 1,
-      providerOverride: "custom-provider",
-      modelOverride: "stored-legacy",
-    };
+    const sessionEntry = pin("custom-provider", "stored-legacy", sessionKey);
 
     const state = await selectModel(cfg, "custom-provider", "configured-legacy", {
       sessionEntry,
@@ -266,8 +248,7 @@ describe("model-selection plugin runtime normalization", () => {
       sessionKey,
     });
 
-    expect(state.provider).toBe("custom-provider");
-    expect(state.model).toBe("stored-modern");
+    expect(state).toMatchObject({ provider: "custom-provider", model: "stored-modern" });
     expect([...state.allowedModelKeys]).toEqual(
       expect.arrayContaining([
         "custom-provider/configured-modern",
