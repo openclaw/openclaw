@@ -20,6 +20,9 @@ export function createUiIsolatedVitestConfig(
     isolate: true,
     name: "ui-isolated",
     setupFiles: ["ui/src/test-helpers/dom.setup.ts"],
+    // Same native Web Awesome split as the shared UI runner. Keep the inline
+    // scoped here so the package runner can keep its prebundled component graph.
+    serverDepsInline: ["@awesome.me/webawesome"],
     useNonIsolatedRunner: false,
   });
   return {
