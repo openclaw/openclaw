@@ -163,10 +163,7 @@ export function gateSubagentRequesterSettlement(
   const released = createDeferred();
   let pending: Promise<boolean> | undefined;
   const calls = observeSubagentRequesterWake((params) => {
-    pending = (async () => {
-      await released.promise;
-      return await settle(params);
-    })();
+    pending = released.promise.then(() => settle(params));
     return pending;
   });
   return {
@@ -193,11 +190,8 @@ export function observeSubagentRequesterWake(
       if (calls >= count) {
         return Promise.resolve();
       }
-      let waiter = admitted.get(count);
-      if (!waiter) {
-        waiter = createDeferred();
-        admitted.set(count, waiter);
-      }
+      const waiter = admitted.get(count) ?? createDeferred();
+      admitted.set(count, waiter);
       return waiter.promise;
     },
   };
@@ -258,27 +252,17 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
   return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 }
 
-/** Expands shorthand test records into the canonical nested persistence shape. */
 export function createCanonicalSubagentRunFixture(run: SubagentRunFixture): SubagentRunRecord {
-  const { startedAt, endedAt, outcome, ...record } = run;
-  const terminal = typeof endedAt === "number";
-  return {
-    ...record,
-    execution:
-      run.execution ??
-      (terminal
-        ? { status: "terminal", startedAt, endedAt, outcome }
-        : { status: "running", startedAt }),
+  return createSubagentRunRecord({
+    ...run,
     completion: run.completion ?? { required: run.expectsCompletionMessage === true },
     delivery: run.delivery ?? {
       status:
-        run.expectsCompletionMessage === false
+        run.expectsCompletionMessage === false || typeof run.endedAt !== "number"
           ? "not_required"
-          : terminal
-            ? "pending"
-            : "not_required",
+          : "pending",
     },
-  };
+  });
 }
 
 export function canonicalSubagentRunFixtures(
@@ -287,14 +271,12 @@ export function canonicalSubagentRunFixtures(
   return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
 }
 
-/** Reads test session entries through the active SQLite accessor. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(
     listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   ) as unknown as SessionStore;
 }
 
-/** Writes or updates one SQLite-backed subagent session entry for persistence tests. */
 export async function writeSubagentSessionEntry(params: {
   stateDir: string;
   sessionKey: string;
@@ -320,7 +302,6 @@ export async function writeSubagentSessionEntry(params: {
   return storePath;
 }
 
-/** Removes one SQLite-backed subagent session entry for persistence tests. */
 export async function removeSubagentSessionEntry(params: {
   stateDir: string;
   sessionKey: string;
@@ -379,18 +360,21 @@ export function createOrphanedRequiredDelivery(
   const runId = `run-orphan-${status}-delivery`;
   const childSessionKey = `agent:main:subagent:orphan-${status}-delivery`;
   const terminalReply = { disposition: "visible" as const, text: "durable final reply" };
-  return createSubagentRunRecord({
-    runId,
+  const result = {
     childSessionKey,
     task: "deliver after restart",
+    startedAt: now - 50,
+    endedAt: now,
+    outcome: { status: "ok" as const },
+    expectsCompletionMessage: true,
+  };
+  return createSubagentRunRecord({
+    ...result,
+    runId,
     childSessionIdentity: { sessionId: `sess-${runId}` },
     cleanup: "delete",
     createdAt: now - 100,
-    expectsCompletionMessage: true,
     cleanupHandled: false,
-    startedAt: now - 50,
-    endedAt: now,
-    outcome: { status: "ok" },
     completion: {
       required: true,
       resultText: "canonical final reply",
@@ -404,27 +388,17 @@ export function createOrphanedRequiredDelivery(
         ? { disposition: "session_queued" as const, queueId: "queue-1" }
         : {}),
       payload: {
+        ...result,
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
-        childSessionKey,
         childRunId: runId,
-        task: "deliver after restart",
-        startedAt: now - 50,
-        endedAt: now,
-        outcome: { status: "ok" },
-        expectsCompletionMessage: true,
         terminalReply,
       },
     },
   });
 }
 
-export function registerSubagentRegistrationPersistenceTests({
-  getRegistry,
-  mocks,
-  mockPendingAgentWait,
-  findRequesterRun,
-}: {
+export function registerSubagentRegistrationPersistenceTests(ctx: {
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
@@ -433,6 +407,7 @@ export function registerSubagentRegistrationPersistenceTests({
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
 }) {
+  const { getRegistry, mocks, mockPendingAgentWait, findRequesterRun } = ctx;
   const diskFull = () => {
     throw new Error("disk full");
   };
@@ -462,13 +437,10 @@ export function registerSubagentRegistrationPersistenceTests({
     }
   });
 
-  it.each([
-    { name: "running", queued: false },
-    { name: "queued", queued: true },
-  ])("persists the $name native admission before returning", async ({ queued }) => {
+  it.each([false, true])("persists native admission (queued: %s)", async (queued) => {
     mockPendingAgentWait();
 
-    const runId = `run-single-persist-${queued ? "queued" : "running"}`;
+    const runId = "native-admission";
     await register(runId, { queued });
 
     expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);

@@ -27,6 +27,13 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRun } from "./subagent-run-generation.js";
 
 type RegistryMocks = ReturnType<typeof createSubagentRegistryMockState>;
+type RestoreContext<Keys extends keyof RegistryMocks> = {
+  mocks: Pick<RegistryMocks, Keys>;
+  hydrateAndActivateRegistry: () => Promise<void>;
+};
+type RestoredRunsContext<Keys extends keyof RegistryMocks> = RestoreContext<Keys> & {
+  mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
+};
 const expectRequest = (
   mock: RegistryMocks["callGateway"],
   method: string,
@@ -70,24 +77,16 @@ export async function activateSubagentRegistryWithRecoveryRuntime(
   await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
 }
 
-export function registerRestoredRollbackPublicationTest({
-  mocks,
-  hydrateAndActivateRegistry,
-  mockSingleCollectorConcurrency,
-  mockRestoredRuns,
-}: {
-  mocks: Pick<
-    RegistryMocks,
+export function registerRestoredRollbackPublicationTest(
+  ctx: RestoredRunsContext<
     "entries" | "persistRegistryRows" | "callGateway" | "emitSessionLifecycleEvent"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
-  mockSingleCollectorConcurrency: () => void;
-  mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
-}): void {
+  > & { mockSingleCollectorConcurrency: () => void },
+): void {
+  const { mocks } = ctx;
   it("holds restored rollback for publication and cleanup without relaunching", async () => {
     vi.useRealTimers();
     const now = Date.now();
-    mockSingleCollectorConcurrency();
+    ctx.mockSingleCollectorConcurrency();
     const makeRestoredRuns = () =>
       ["one", "two"].map((sessionId, index) =>
         makeQueuedRun({
@@ -97,7 +96,7 @@ export function registerRestoredRollbackPublicationTest({
           createdAt: now + index,
         }),
       );
-    mockRestoredRuns(makeRestoredRuns);
+    ctx.mockRestoredRuns(makeRestoredRuns);
     mocks.entries = Object.fromEntries(
       makeRestoredRuns().map((entry) => [
         entry.childSessionKey,
@@ -136,7 +135,7 @@ export function registerRestoredRollbackPublicationTest({
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    await hydrateAndActivateRegistry();
+    await ctx.hydrateAndActivateRegistry();
     await launchEntered.promise;
     mocks.persistRegistryRows.mockImplementationOnce(() => {
       throw new Error("sqlite unavailable after Gateway acceptance");
@@ -204,18 +203,12 @@ export function registerRestoredRollbackPublicationTest({
   });
 }
 
-export function registerRestoredSessionReadTests({
-  mocks,
-  hydrateAndActivateRegistry,
-  mockPendingAgentWait,
-}: {
-  mocks: Pick<
-    RegistryMocks,
+export function registerRestoredSessionReadTests(
+  ctx: RestoreContext<
     "entries" | "callGateway" | "mockRestoredRuns" | "withSessionEntryReadOnlyInWorker"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
-  mockPendingAgentWait: () => void;
-}): void {
+  > & { mockPendingAgentWait: () => void },
+): void {
+  const { mocks } = ctx;
   it.each(["newer session run", "completed sibling"])(
     "restores active waits beside a %s",
     async (scenario) => {
@@ -259,8 +252,8 @@ export function registerRestoredSessionReadTests({
           return readSession(...args);
         });
       }
-      mockPendingAgentWait();
-      await hydrateAndActivateRegistry();
+      ctx.mockPendingAgentWait();
+      await ctx.hydrateAndActivateRegistry();
       if (newer) {
         expect(mocks.callGateway).toHaveBeenCalledOnce();
       }
@@ -269,14 +262,7 @@ export function registerRestoredSessionReadTests({
   );
 }
 
-export function registerRestoredRequesterWakeSettlementTests({
-  getRegistry,
-  mocks,
-  wakeRequester,
-  bindWakeMutation,
-  activateRegistry,
-  recoveryRuntime,
-}: {
+export function registerRestoredRequesterWakeSettlementTests(ctx: {
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     RegistryMocks,
@@ -287,10 +273,11 @@ export function registerRestoredRequesterWakeSettlementTests({
   activateRegistry: () => Promise<void>;
   recoveryRuntime: GatewayRecoveryRuntime;
 }): void {
+  const { mocks } = ctx;
   it.each(["after Gateway closure", "partial restore", "without instance binding"])(
-    "replays a past-due requester-settle obligation restored %s",
+    "replays restored requester settlement %s",
     async (restoreTiming) => {
-      const mod = getRegistry();
+      const mod = ctx.getRegistry();
       const endedAt = Date.now() - 1_000;
       const runIds =
         restoreTiming === "partial restore"
@@ -350,10 +337,10 @@ export function registerRestoredRequesterWakeSettlementTests({
         (gateway) => ({ gateway }),
         (error: unknown) => ({ error }),
       );
-      wakeRequester.mockImplementation(async (params) => {
+      ctx.wakeRequester.mockImplementation(async (params) => {
         try {
           const gateway = getSharedGatewayContextResolver(restored)?.()?.recoveryRuntime;
-          bindWakeMutation(restored);
+          ctx.bindWakeMutation(restored);
           await params.completeBatch(restored);
           wakeGateway.resolve(gateway);
           return false;
@@ -365,7 +352,7 @@ export function registerRestoredRequesterWakeSettlementTests({
       let gatewayOpen = true;
       const instanceContext = {
         chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-        recoveryRuntime,
+        recoveryRuntime: ctx.recoveryRuntime,
       } as never;
       const resolveInstance = () => (gatewayOpen ? instanceContext : undefined);
       const resolveGatewayContext = () =>
@@ -377,10 +364,10 @@ export function registerRestoredRequesterWakeSettlementTests({
         await mod.initSubagentRegistry();
         await mod.activateSubagentRegistry(resolveGatewayContext);
         await mod.activateSubagentRegistry(resolveGatewayContext);
-        expect(wakeRequester).not.toHaveBeenCalled();
+        expect(ctx.wakeRequester).not.toHaveBeenCalled();
         if (restoreTiming === "partial restore") {
           await mod.testing.runSweeperTickForTests();
-          expect(wakeRequester).not.toHaveBeenCalled();
+          expect(ctx.wakeRequester).not.toHaveBeenCalled();
         }
         gatewayOpen = restoreTiming !== "after Gateway closure";
         await mod.initSubagentRegistry();
@@ -388,16 +375,16 @@ export function registerRestoredRequesterWakeSettlementTests({
         await vi.advanceTimersByTimeAsync(1_000);
         if (!gatewayOpen || restoreTiming === "without instance binding") {
           await vi.advanceTimersByTimeAsync(5_000);
-          expect(wakeRequester).not.toHaveBeenCalled();
+          expect(ctx.wakeRequester).not.toHaveBeenCalled();
           expect(getGatewayContextResolver(restored[0]!)).toBeUndefined();
           expect(restored[0]!.requesterSettleWake?.attemptCount).toBe(1);
-          await activateRegistry();
+          await ctx.activateRegistry();
         }
         const outcome = await wakeOutcome;
         if ("error" in outcome) {
           throw outcome.error;
         }
-        expect(outcome.gateway).toBe(recoveryRuntime);
+        expect(outcome.gateway).toBe(ctx.recoveryRuntime);
       } finally {
         await settleRootWork();
       }
@@ -408,7 +395,7 @@ export function registerRestoredRequesterWakeSettlementTests({
         expect(mod.getSubagentRunByRunId(entry.runId)).toBeUndefined();
       }
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(wakeRequester).toHaveBeenCalledWith(
+      expect(ctx.wakeRequester).toHaveBeenCalledWith(
         expect.objectContaining({
           requesterSessionKey: "agent:main:main",
           settledEntry: expect.objectContaining({ runId: "run-settle-restore" }),
@@ -420,19 +407,14 @@ export function registerRestoredRequesterWakeSettlementTests({
   );
 }
 
-export function registerRestoredLegacyAuthorityTests({
-  getRegistry,
-  mocks,
-  hydrateAndActivateRegistry,
-  mockRestoredRuns,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<RegistryMocks, "entries" | "callGateway" | "runSubagentAnnounceFlow">;
-  hydrateAndActivateRegistry: () => Promise<void>;
-  mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
-}): void {
+export function registerRestoredLegacyAuthorityTests(
+  ctx: RestoredRunsContext<"entries" | "callGateway" | "runSubagentAnnounceFlow"> & {
+    getRegistry: () => SubagentRegistryHarness;
+  },
+): void {
+  const { mocks } = ctx;
   it("resumes a restored legacy terminal announcement without child-session effects", async () => {
-    const mod = getRegistry();
+    const mod = ctx.getRegistry();
     const endedAt = Date.now() - 1_000;
     const entry = createSubagentRunRecord({
       runId: "restored-legacy-announcement",
@@ -451,9 +433,9 @@ export function registerRestoredLegacyAuthorityTests({
     };
     mocks.entries[entry.childSessionKey] = currentChild;
     await prepareSubagentRecoveryFixture(entry, { entries: mocks.entries });
-    mockRestoredRuns(() => [entry]);
+    ctx.mockRestoredRuns(() => [entry]);
 
-    await hydrateAndActivateRegistry();
+    await ctx.hydrateAndActivateRegistry();
     await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
     await waitForFast(() =>
       expect(mod.getSubagentRunByRunId(entry.runId)).toMatchObject({
@@ -474,9 +456,9 @@ export function registerRestoredLegacyAuthorityTests({
   });
 
   it.each([false, true])(
-    "settles restored queued launch failures without a lifecycle revision once (descriptor: %s)",
+    "settles legacy queued failure once (descriptor: %s)",
     async (hasDescriptor) => {
-      const mod = getRegistry();
+      const mod = ctx.getRegistry();
       const entry = makeQueuedRun({
         runId: "restored-legacy-queued-failure",
         childSessionIdentity: { sessionId: "legacy-queued-session" },
@@ -490,9 +472,9 @@ export function registerRestoredLegacyAuthorityTests({
         sessionId: "legacy-queued-session",
         updatedAt: Date.now(),
       };
-      mockRestoredRuns(() => [entry]);
+      ctx.mockRestoredRuns(() => [entry]);
 
-      await hydrateAndActivateRegistry();
+      await ctx.hydrateAndActivateRegistry();
       await waitForFast(() =>
         expect(mod.getSubagentRunByRunId(entry.runId)).toMatchObject({
           execution: { status: "terminal", suppressSessionEffects: true },
@@ -501,7 +483,7 @@ export function registerRestoredLegacyAuthorityTests({
           cleanupCompletedAt: expect.any(Number),
         }),
       );
-      await hydrateAndActivateRegistry();
+      await ctx.hydrateAndActivateRegistry();
 
       expectNoRequest(mocks.callGateway, "sessions.delete");
       expectNoRequest(mocks.callGateway, "agent");
