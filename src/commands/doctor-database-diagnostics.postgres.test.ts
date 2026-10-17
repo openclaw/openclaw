@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
+import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
   createDiagnosticStores,
@@ -80,9 +81,20 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
     ).stores!;
   }
 
+  function createdStores(stores: DatabaseStoreDiagnostic[], root: string) {
+    const expectedPaths = new Set(
+      [...Object.values(diagnosticPaths), matrixRoot, retainedAgentRoot].map((relative) =>
+        path.join(root, relative),
+      ),
+    );
+    const physical = stores.filter((store) => store.path !== null && expectedPaths.has(store.path));
+    expect(physical).toHaveLength(expectedPaths.size);
+    return physical;
+  }
+
   it("reports each PostgreSQL family and Matrix namespace while safety stores stay local", async () => {
     const stores = await inspect(postgresRoot, diagnosticConfig(connection));
-    const physical = stores.filter((store) => !store.configured.fixedLocal);
+    const physical = createdStores(stores, postgresRoot);
     expect(physical.map((store) => store.family)).toEqual([
       "state",
       "state",
@@ -142,7 +154,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
         postgres: { connection },
       };
       const stores = await inspect(root, config);
-      for (const store of stores.filter((row) => !row.configured.fixedLocal)) {
+      for (const store of createdStores(stores, root)) {
         expect(store.observed).toBe(store.family === postgresFamily ? "postgres" : "sqlite");
         expect(store.mismatch).toBe(false);
         expect(store.schema.pending).toBe(0);
@@ -167,7 +179,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       "postgresql://synthetic-user:synthetic-password@127.0.0.1:1/unreachable";
     const config = diagnosticConfig(unreachableConnection);
     const stores = await inspect(postgresRoot, config);
-    for (const store of stores.filter((row) => !row.configured.fixedLocal)) {
+    for (const store of createdStores(stores, postgresRoot)) {
       expect(store).toMatchObject({
         observed: "postgres",
         connectivity: "unreachable",

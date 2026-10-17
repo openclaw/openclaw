@@ -27,17 +27,33 @@ it("projects retained SQLite facts and unknowns without reading stores or the fi
     "CREATE TABLE workboard_schema_migrations (version INTEGER); PRAGMA user_version = 0;",
   );
   admitSqliteSchema(plugin);
+  const agentFile = path.join(directory, "openclaw-agent.sqlite");
+  const missingAgentDir = path.join(directory, "missing");
+  using agent = openNodeSqliteDatabase(agentFile);
+  agent.exec(`
+    CREATE TABLE schema_meta (version INTEGER);
+    CREATE TABLE session_nodes (id TEXT);
+    CREATE TABLE transcript_events (id TEXT);
+    PRAGMA user_version = 28;
+  `);
+  admitSqliteSchema(agent);
   const denyProbe = () => {
     throw new Error("Status must not perform a database or filesystem probe");
   };
   vi.spyOn(db, "prepare").mockImplementation(denyProbe);
+  vi.spyOn(agent, "prepare").mockImplementation(denyProbe);
   vi.spyOn(fs, "readFileSync").mockImplementation(denyProbe);
   vi.spyOn(fs, "statSync").mockImplementation(denyProbe);
   vi.spyOn(fs, "openSync").mockImplementation(denyProbe);
   vi.spyOn(postgresMetadata, "withPostgresConnection").mockImplementation(denyProbe);
   let rows: ReturnType<typeof describeAdmittedDatabaseStores>;
   try {
-    rows = describeAdmittedDatabaseStores({ database: { engine: "postgres" } });
+    rows = describeAdmittedDatabaseStores({
+      database: { engine: "postgres" },
+      agents: {
+        entries: { main: { agentDir: directory }, missing: { agentDir: missingAgentDir } },
+      },
+    });
   } finally {
     vi.restoreAllMocks();
   }
@@ -56,7 +72,13 @@ it("projects retained SQLite facts and unknowns without reading stores or the fi
     observed: "sqlite",
     schema: { versioning: "unknown", version: null, pending: null },
   });
-  expect(rows.find((row) => row.family === "agent")).toMatchObject({
+  expect(rows.find((row) => row.path === agentFile)).toMatchObject({
+    family: "agent",
+    observed: "sqlite",
+  });
+  expect(
+    rows.find((row) => row.path === path.join(missingAgentDir, "openclaw-agent.sqlite")),
+  ).toMatchObject({
     observed: "unknown",
     connectivity: "unknown",
     schema: { version: null, pending: null },

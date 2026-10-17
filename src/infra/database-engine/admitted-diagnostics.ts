@@ -1,3 +1,9 @@
+import path from "node:path";
+import {
+  hasAgentRosterProperty,
+  listAgentIds,
+  resolveEffectiveAgentDir,
+} from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -39,7 +45,7 @@ function unknownStore(
   };
 }
 
-/** Pure admission projection: never opens stores, resolves roots, or probes PostgreSQL. */
+/** Configured paths and admission facts only; never opens stores or probes PostgreSQL. */
 export function describeAdmittedDatabaseStores(config: OpenClawConfig): DatabaseStoreDiagnostic[] {
   const selections = describeDatabaseEngineSelection(config);
   const observed = new Map<string, DatabaseStoreDiagnostic[]>();
@@ -92,17 +98,29 @@ export function describeAdmittedDatabaseStores(config: OpenClawConfig): Database
     observed.set(selection.id, entries);
   }
   const rows = selections.flatMap((selection) => {
-    const entries = observed.get(selection.id);
-    return entries?.length
+    const configured = {
+      default: selection.default,
+      override: selection.override,
+      effective: selection.effective,
+      fixedLocal: selection.fixedLocal,
+    };
+    const entries = observed.get(selection.id) ?? [];
+    if (selection.id === "agent" && hasAgentRosterProperty(config)) {
+      for (const agentId of listAgentIds(config)) {
+        const pathname = path.join(
+          resolveEffectiveAgentDir(config, agentId),
+          "openclaw-agent.sqlite",
+        );
+        if (!entries.some((entry) => entry.path === pathname)) {
+          const row = unknownStore(selection.id, configured);
+          row.path = pathname;
+          entries.push(row);
+        }
+      }
+    }
+    return entries.length
       ? entries.toSorted((first, second) => (first.path ?? "").localeCompare(second.path ?? ""))
-      : [
-          unknownStore(selection.id, {
-            default: selection.default,
-            override: selection.override,
-            effective: selection.effective,
-            fixedLocal: selection.fixedLocal,
-          }),
-        ];
+      : [unknownStore(selection.id, configured)];
   });
   for (const store of listLocalDatabaseDiagnosticStores()) {
     if (!selections.some((selection) => selection.id === store.id)) {

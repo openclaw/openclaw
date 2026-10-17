@@ -109,6 +109,8 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
             const stat = fs.statSync(root, { throwIfNoEntry: false });
             if (stat?.isFile()) {
               files.add(fs.realpathSync(root));
+            } else if (!stat && root.endsWith(".sqlite")) {
+              files.add(root);
             } else if (stat?.isDirectory()) {
               const walked = await walkDirectory(root, {
                 symlinks: "include",

@@ -36,6 +36,7 @@ describe("Doctor per-store output", () => {
     expect(stores.map((store) => store.family)).toEqual([
       "state",
       "state",
+      "state",
       "agent",
       "agent",
       "workboard",
@@ -46,7 +47,9 @@ describe("Doctor per-store output", () => {
       "package-activation",
       "credentials",
     ]);
-    for (const store of stores.filter((row) => !row.configured.fixedLocal)) {
+    const present = stores.filter((row) => row.path && files.includes(row.path));
+    expect(present).toHaveLength(files.length);
+    for (const store of present) {
       expect(store).toMatchObject({ observed: "sqlite", mismatch: false, connectivity: "local" });
       expect(store.schema.pending).toBe(0);
       expect(store.issues).toEqual([]);
@@ -141,4 +144,31 @@ describe("Doctor per-store output", () => {
       }
     },
   );
+
+  it("keeps a missing configured agent store alongside existing stores", async () => {
+    const root = tempDirs.make("doctor-store-missing-agent-");
+    await createDiagnosticStores(root);
+    const agentDir = path.join(root, "agents/missing/agent");
+    const inspection = await inspectDoctorDatabaseEngines({
+      config: {
+        ...diagnosticConfig(),
+        agents: { list: [{ id: "main" }, { id: "missing", agentDir }] },
+      },
+      stateDir: root,
+      env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
+    });
+    expect(
+      inspection.stores!.find((store) => store.path === path.join(root, diagnosticPaths.agent)),
+    ).toMatchObject({ family: "agent", observed: "sqlite" });
+    const missing = inspection.stores!.find(
+      (store) => store.path === path.join(agentDir, "openclaw-agent.sqlite"),
+    );
+    expect(missing).toMatchObject({
+      family: "agent",
+      observed: "unknown",
+      connectivity: "unknown",
+      schema: { version: null, pending: null },
+    });
+    expect(missing!.nextSteps.join(" ")).toContain("Initialize it through its owning feature");
+  });
 });
