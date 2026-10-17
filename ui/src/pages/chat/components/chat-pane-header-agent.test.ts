@@ -18,7 +18,7 @@ function fixture() {
     client: createTestGatewayClient(request),
   });
   const navigate = vi.fn();
-  pane.context.navigate = navigate;
+  Object.defineProperty(pane.context, "navigate", { configurable: true, value: navigate });
   state.settings = { ...state.settings, sidebarAgentsMode: "roster" };
   pane.context.agents.state.agentsList = {
     defaultId: "main",
