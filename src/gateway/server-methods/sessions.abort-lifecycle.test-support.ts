@@ -12,7 +12,23 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
+
+export function revocableAuthority(message: string) {
+  let current = true;
+  const error = new Error(message);
+  return {
+    error,
+    revoke: () => {
+      current = false;
+    },
+    assertCurrent: () => {
+      if (!current) {
+        throw error;
+      }
+    },
+  };
+}
 
 export function abortContext() {
   return createChatAbortContext({
@@ -24,9 +40,9 @@ export function abortContext() {
 export function stopSession(
   key: string,
   respond: RespondFn,
-  context = abortContext(),
+  context: ReturnType<typeof abortContext> | GatewayRequestContext = abortContext(),
   params: { runId?: string; clearQueued?: boolean } = {},
-  client: { connId?: string; connect: { scopes: string[] } } = {
+  client: { connId?: string; connect: { scopes: string[] } } | null = {
     connId: "operator",
     connect: { scopes: ["operator.read", "operator.write"] },
   },
@@ -80,6 +96,18 @@ export function expectStopResult(respond: { mock: { calls: unknown[][] } }, stat
   expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
     true,
     { ok: true, abortedRunId: null, status },
+  ]);
+}
+
+export function expectAbortFailure(
+  respond: { mock: { calls: unknown[][] } },
+  message: unknown,
+  code = "UNAVAILABLE",
+) {
+  expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
+    false,
+    undefined,
+    expect.objectContaining({ code, message }),
   ]);
 }
 

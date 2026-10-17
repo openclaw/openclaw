@@ -6,7 +6,7 @@ import {
 } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -56,11 +56,53 @@ function yieldTool(requesterTurnRunId: string) {
   return { tool, onYield };
 }
 
+function writeSession(sessionKey = requesterSessionKey, lifecycleRevision = "original") {
+  return writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey,
+    defaultSessionId: `${sessionKey}-session`,
+    lifecycleRevision,
+  });
+}
+
+function registerChild(
+  requesterTurnRunId: string,
+  runId: string,
+  sessionEntry = { sessionId: `${runId}-session` },
+) {
+  return registerSubagentRun({
+    runId,
+    childSessionKey: `agent:main:subagent:${runId}`,
+    childAgentId: "main",
+    sessionEntry,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    requesterTurnRunId,
+    requesterDisplayKey: requesterSessionKey,
+    task: "Finish the acknowledged cohort handoff",
+    cleanup: "keep",
+    expectsCompletionMessage: true,
+  });
+}
+
+function pauseGate() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    hold: () => {
+      entered.resolve();
+      return release.promise;
+    },
+  };
+}
+
 function observeCohortWrites(onFirstCommit?: () => void | Promise<void>) {
   const counter = { writes: 0 };
-  const worker = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+    (context, operation, options) =>
       runSubagentStateWorkerOperation(
         context,
         (scope) =>
@@ -79,51 +121,38 @@ function observeCohortWrites(onFirstCommit?: () => void | Promise<void>) {
           }),
         options,
       ),
-    );
-  return { counter, worker };
+  );
+  return counter;
 }
 
 async function createYieldedChild(withSibling = false) {
   const requesterTurnRunId = "staged-cohort-parent";
   const runId = "staged-cohort-child";
-  const childSessionKey = "agent:main:subagent:staged-cohort-child";
-  const children = [{ runId, childSessionKey, expectsCompletionMessage: true }];
-  if (withSibling) {
-    children.push({
-      runId: `${runId}-sibling`,
-      childSessionKey: `${childSessionKey}-sibling`,
-      expectsCompletionMessage: true,
-    });
-  }
+  const children = (withSibling ? [runId, `${runId}-sibling`] : [runId]).map((childRunId) => ({
+    runId: childRunId,
+    childSessionKey: `agent:main:subagent:${childRunId}`,
+    expectsCompletionMessage: true,
+  }));
   for (const sessionKey of [
     requesterSessionKey,
     ...children.map((child) => child.childSessionKey),
   ]) {
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey,
-      defaultSessionId: `${sessionKey}-session`,
-      lifecycleRevision: "initial-transfer",
-    });
+    await writeSession(sessionKey, "initial-transfer");
   }
   for (const child of children) {
-    await registerSubagentRun({
-      ...child,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
-      requesterSessionKey,
-      requesterAgentId: "main",
+    await registerChild(
       requesterTurnRunId,
-      requesterDisplayKey: requesterSessionKey,
-      task: "Finish the acknowledged cohort handoff",
-      cleanup: "keep",
-    });
+      child.runId,
+      expectDefined(
+        loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
+        "cohort child session",
+      ),
+    );
   }
   const nativePersistence = await vi.importActual<typeof registryPersistence>(
     "../../agents/subagents/registry/subagent-registry-persistence.js",
   );
-  const { tool, onYield } = yieldTool(requesterTurnRunId);
+  const { tool } = yieldTool(requesterTurnRunId);
   await expect(tool.execute("yield-cohort", {})).resolves.toMatchObject({
     details: { status: "yielded" },
   });
@@ -131,7 +160,6 @@ async function createYieldedChild(withSibling = false) {
     entry: expectDefined(subagentRuns.get(runId), "original cohort child"),
     entries: children.map((child) => expectDefined(subagentRuns.get(child.runId), "cohort member")),
     nativePersistence,
-    onYield,
     settle: (requesterYielded = true) =>
       settleRequesterAfterSessionSpawns({
         requesterSessionKey,
@@ -148,13 +176,7 @@ it.each(["unchanged", "empty"] as const)(
   async (mode) => {
     const requesterTurnRunId = "cold-initial-parent";
     const runId = "cold-initial-child";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: requesterSessionKey,
-      defaultSessionId: `${requesterSessionKey}-session`,
-      lifecycleRevision: "original",
-    });
+    const storePath = await writeSession();
     const physicalPath = resolvePhysicalSessionStorePath({
       storePath,
       sessionKey: requesterSessionKey,
@@ -162,33 +184,19 @@ it.each(["unchanged", "empty"] as const)(
     });
     await closeOpenClawAgentDatabaseByPathAsync(physicalPath, "main");
     if (mode !== "empty") {
-      await registerSubagentRun({
-        runId,
-        childSessionKey: "agent:main:subagent:cold-initial-child",
-        childAgentId: "main",
-        sessionEntry: { sessionId: "cold-initial-child-session" },
-        requesterSessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId,
-        requesterDisplayKey: requesterSessionKey,
-        task: "Retain the original session source",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
+      await registerChild(requesterTurnRunId, runId);
     }
     await resetSubagentRegistryForTests({ persist: false });
     await closeOpenClawStateDatabaseAsync();
-    const restoreEntered = createDeferred();
-    const releaseRestore = createDeferred();
+    const restoreGate = pauseGate();
     const restore = registryPersistence.restoreSubagentRunsFromDisk;
-    const restoreSpy = vi
-      .spyOn(registryPersistence, "restoreSubagentRunsFromDisk")
-      .mockImplementation(async (...args) => {
+    vi.spyOn(registryPersistence, "restoreSubagentRunsFromDisk").mockImplementation(
+      async (...args) => {
         const result = await restore(...args);
-        restoreEntered.resolve();
-        await releaseRestore.promise;
+        await restoreGate.hold();
         return result;
-      });
+      },
+    );
     const preparations = vi.spyOn(sessionSharing, "prepareSessionMutationFacts");
     const { tool, onYield } = yieldTool(requesterTurnRunId);
     const hostSql = observeParentSqlite();
@@ -199,19 +207,18 @@ it.each(["unchanged", "empty"] as const)(
           (error: unknown) => ({ error }),
         );
         try {
-          await Promise.race([
-            restoreEntered.promise,
-            yielding.then(() => {
-              throw new Error("Yield bypassed the held canonical restore");
-            }),
-          ]);
+          await awaitGateBeforeSettlement(
+            restoreGate.entered,
+            yielding,
+            "Yield bypassed the held canonical restore",
+          );
           const facts = await Promise.all(
             preparations.mock.results.flatMap((result) =>
               result.type === "return" ? [result.value] : [],
             ),
           );
           const releases = facts.map((read) => vi.spyOn(read, "release"));
-          releaseRestore.resolve();
+          restoreGate.release();
           const outcome = await yielding;
           if (mode === "empty") {
             expect(outcome).toMatchObject({ result: { details: { status: "nothing_pending" } } });
@@ -219,10 +226,7 @@ it.each(["unchanged", "empty"] as const)(
           } else {
             expect(outcome).toMatchObject({ result: { details: { status: "yielded" } } });
             expect(onYield).toHaveBeenCalledOnce();
-            expect(
-              expectDefined(subagentRuns.get(runId), "restored original child")
-                .requesterTurnYielded,
-            ).toBe(true);
+            expect(subagentRuns.get(runId)).toMatchObject({ requesterTurnYielded: true });
           }
           revokeRequesterCronAuthority(requesterSessionKey);
           expect(facts).toHaveLength(1);
@@ -230,14 +234,12 @@ it.each(["unchanged", "empty"] as const)(
             expect(release).toHaveBeenCalled();
           }
         } finally {
-          releaseRestore.resolve();
+          restoreGate.release();
           await yielding;
         }
       });
     } finally {
       hostSql.restore();
-      preparations.mockRestore();
-      restoreSpy.mockRestore();
     }
     expect(hostSql.counts).toEqual(emptySqliteCounts());
   },
@@ -249,7 +251,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
     vi.useFakeTimers();
     const { entry, settle, nativePersistence } = await createYieldedChild();
     let closing: Promise<void> | undefined;
-    const { counter, worker } = observeCohortWrites(() => {
+    const counter = observeCohortWrites(() => {
       if (outcome === "transport failure after commit") {
         throw new SqliteWorkerError("cohort release acknowledgement lost", "outcome-unknown");
       }
@@ -282,7 +284,6 @@ it.each(["source retirement", "transport failure after commit"] as const)(
       expect(counter.writes).toBe(1);
     } finally {
       await closing;
-      worker.mockRestore();
     }
   },
 );
@@ -290,7 +291,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
 it("recovers an untransferred requester cohort after restart in one write", async () => {
   vi.useFakeTimers();
   const { entries } = await createYieldedChild(true);
-  const { counter, worker } = observeCohortWrites();
+  const counter = observeCohortWrites();
   try {
     await resetSubagentRegistryForTests({ persist: false });
     await closeOpenClawStateDatabaseAsync();
@@ -302,9 +303,10 @@ it("recovers an untransferred requester cohort after restart in one write", asyn
     const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
     context.resolveGatewayContext = () => context;
     await activateSubagentRegistry(context.resolveGatewayContext);
-    expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBeUndefined();
-    expect(subagentRuns.get(restored.runId)?.requesterTurnYielded).toBeUndefined();
-    expect(subagentRuns.get(restored.runId)?.requesterSettleWake).toMatchObject({
+    const activated = subagentRuns.get(restored.runId);
+    expect(activated?.requesterTurnRunId).toBeUndefined();
+    expect(activated?.requesterTurnYielded).toBeUndefined();
+    expect(activated?.requesterSettleWake).toMatchObject({
       batchRunIds: entries.map((entry) => entry.runId).toSorted(),
       rearmGeneration: 1,
     });
@@ -312,7 +314,6 @@ it("recovers an untransferred requester cohort after restart in one write", asyn
     expect(fixture.wake).not.toHaveBeenCalled();
   } finally {
     await resetSubagentRegistryForTests({ persist: false });
-    worker.mockRestore();
   }
 });
 
@@ -320,26 +321,21 @@ it.each([false, true])(
   "does not acknowledge the opposite settlement while a cohort write is pending (yielded: %s)",
   async (requesterYielded) => {
     const { entry, settle } = await createYieldedChild();
-    const acknowledged = createDeferred();
-    const releaseAcknowledgement = createDeferred();
-    const { counter, worker } = observeCohortWrites(async () => {
-      acknowledged.resolve();
-      await releaseAcknowledgement.promise;
-    });
+    const acknowledgement = pauseGate();
+    const counter = observeCohortWrites(acknowledgement.hold);
     const first = settle(requesterYielded);
     void first.catch(() => {});
     let opposite: Promise<boolean> | undefined;
     try {
-      await Promise.race([
-        acknowledged.promise,
-        first.then(() => {
-          throw new Error("Cohort skipped its held acknowledgement");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(
+        acknowledgement.entered,
+        first,
+        "Cohort skipped its held acknowledgement",
+      );
       opposite = settle(!requesterYielded);
       void opposite.catch(() => {});
       await vi.dynamicImportSettled();
-      releaseAcknowledgement.resolve();
+      acknowledgement.release();
       await expect(first).resolves.toBe(true);
       await expect(opposite).rejects.toThrow("Another requester transfer is already pending");
       expect(counter.writes).toBe(1);
@@ -354,9 +350,8 @@ it.each([false, true])(
       expect(stored.requesterSettleWake?.requesterYieldBatch === true).toBe(requesterYielded);
       expect(fixture.wake).not.toHaveBeenCalled();
     } finally {
-      releaseAcknowledgement.resolve();
+      acknowledgement.release();
       await Promise.allSettled([first, ...(opposite ? [opposite] : [])]);
-      worker.mockRestore();
     }
   },
 );
@@ -364,96 +359,61 @@ it.each([false, true])(
 it("rejects an overlapping claim without releasing the first authority preparation", async () => {
   const requesterTurnRunId = "joined-authority-parent";
   const runId = "joined-authority-child";
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: requesterSessionKey,
-    defaultSessionId: `${requesterSessionKey}-session`,
-    lifecycleRevision: "original",
-  });
-  await registerSubagentRun({
-    runId,
-    childSessionKey: "agent:main:subagent:joined-authority-child",
-    childAgentId: "main",
-    sessionEntry: { sessionId: "joined-authority-child-session" },
-    requesterSessionKey,
-    requesterAgentId: "main",
-    requesterTurnRunId,
-    requesterDisplayKey: requesterSessionKey,
-    task: "Join the original authority handoff",
-    cleanup: "keep",
-    expectsCompletionMessage: true,
-  });
+  await writeSession();
+  await registerChild(requesterTurnRunId, runId);
   type Facts = Awaited<ReturnType<typeof sessionSharing.prepareSessionMutationFacts>>;
   const acceptedFacts: Facts[] = [];
-  const secondRead = createDeferred();
-  const releaseSecondRead = createDeferred();
+  const secondRead = pauseGate();
   const prepare = sessionSharing.prepareSessionMutationFacts;
   let reads = 0;
-  const preparation = vi
-    .spyOn(sessionSharing, "prepareSessionMutationFacts")
-    .mockImplementation((...args) => {
-      const index = reads++;
-      return prepare(...args).then(async (facts) => {
-        acceptedFacts[index] = facts;
-        if (index === 1) {
-          secondRead.resolve();
-          await releaseSecondRead.promise;
-        }
-        return facts;
-      });
-    });
-  const acknowledged = createDeferred();
-  const releaseAcknowledgement = createDeferred();
-  const { counter, worker } = observeCohortWrites(async () => {
-    acknowledged.resolve();
-    await releaseAcknowledgement.promise;
-  });
-  try {
-    await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
-      const { tool, onYield } = yieldTool(requesterTurnRunId);
-      const first = tool.execute("first-authority-yield", {});
-      void first.catch(() => {});
-      let second: ReturnType<typeof tool.execute> | undefined;
-      let secondSettled = false;
-      try {
-        await Promise.race([
-          acknowledged.promise,
-          first.then(() => {
-            throw new Error("Initial intent skipped its held acknowledgement");
-          }),
-        ]);
-        second = tool.execute("joined-authority-yield", {}).finally(() => {
-          secondSettled = true;
-        });
-        void second.catch(() => {});
-        await secondRead.promise;
-        const releases = acceptedFacts.map((facts) => vi.spyOn(facts, "release"));
-        releaseAcknowledgement.resolve();
-        await expect(first).resolves.toMatchObject({ details: { status: "yielded" } });
-        await vi.dynamicImportSettled();
-        expect(secondSettled).toBe(false);
-        expect(onYield).toHaveBeenCalledOnce();
-        releaseSecondRead.resolve();
-        await expect(second).rejects.toThrow("Another requester transfer is already pending");
-        expect(counter.writes).toBe(1);
-        expect(reads).toBe(2);
-        expect(onYield).toHaveBeenCalledOnce();
-        expect(releases[0]).not.toHaveBeenCalled();
-        expect(releases[1]).toHaveBeenCalledOnce();
-        revokeRequesterCronAuthority(requesterSessionKey);
-        for (const release of releases) {
-          expect(release).toHaveBeenCalledOnce();
-        }
-      } finally {
-        releaseAcknowledgement.resolve();
-        releaseSecondRead.resolve();
-        await Promise.allSettled([first, ...(second ? [second] : [])]);
-        revokeRequesterCronAuthority(requesterSessionKey);
+  vi.spyOn(sessionSharing, "prepareSessionMutationFacts").mockImplementation((...args) => {
+    const index = reads++;
+    return prepare(...args).then(async (facts) => {
+      acceptedFacts[index] = facts;
+      if (index === 1) {
+        await secondRead.hold();
       }
+      return facts;
     });
-  } finally {
-    preparation.mockRestore();
-    worker.mockRestore();
-  }
+  });
+  const acknowledgement = pauseGate();
+  const counter = observeCohortWrites(acknowledgement.hold);
+  await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
+    const { tool, onYield } = yieldTool(requesterTurnRunId);
+    const first = tool.execute("first-authority-yield", {});
+    void first.catch(() => {});
+    let second: ReturnType<typeof tool.execute> | undefined;
+    let secondSettled = false;
+    try {
+      await awaitGateBeforeSettlement(
+        acknowledgement.entered,
+        first,
+        "Initial intent skipped its held acknowledgement",
+      );
+      second = tool.execute("joined-authority-yield", {}).finally(() => {
+        secondSettled = true;
+      });
+      void second.catch(() => {});
+      await secondRead.entered;
+      const releases = acceptedFacts.map((facts) => vi.spyOn(facts, "release"));
+      acknowledgement.release();
+      await expect(first).resolves.toMatchObject({ details: { status: "yielded" } });
+      await vi.dynamicImportSettled();
+      expect(secondSettled).toBe(false);
+      expect(onYield).toHaveBeenCalledOnce();
+      secondRead.release();
+      await expect(second).rejects.toThrow("Another requester transfer is already pending");
+      expect(counter.writes).toBe(1);
+      expect(reads).toBe(2);
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(releases.map((release) => release.mock.calls.length)).toEqual([0, 1]);
+      revokeRequesterCronAuthority(requesterSessionKey);
+      expect(releases.map((release) => release.mock.calls.length)).toEqual([1, 1]);
+    } finally {
+      acknowledgement.release();
+      secondRead.release();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      revokeRequesterCronAuthority(requesterSessionKey);
+    }
+  });
 });

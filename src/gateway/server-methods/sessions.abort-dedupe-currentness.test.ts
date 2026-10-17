@@ -30,20 +30,19 @@ import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import * as transcriptPersistence from "./chat-transcript-persistence.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import { stopSession } from "./sessions.abort-lifecycle.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const fixture = useChatAbortRegistryFixture();
+type CommandReply = Pick<AgentCommandDeliveryResult, "payloads"> & {
+  meta: Partial<AgentCommandDeliveryResult["meta"]>;
+};
 
 const dispatchMocks = vi.hoisted(() => ({
-  agentCommand: vi.fn(
-    async (
-      _options: AgentCommandOpts,
-    ): Promise<
-      Pick<AgentCommandDeliveryResult, "payloads"> & {
-        meta: Partial<AgentCommandDeliveryResult["meta"]>;
-      }
-    > => ({ payloads: [], meta: {} }),
-  ),
+  agentCommand: vi.fn<(options: AgentCommandOpts) => Promise<CommandReply>>(async () => ({
+    payloads: [],
+    meta: {},
+  })),
 }));
 vi.mock("../../commands/agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/agent.js")>()),
@@ -233,13 +232,16 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
     const original = mode === "unchanged" || mode === "successor" ? reserve() : undefined;
     const originalReceipt = context.dedupe.get(key);
     const removed = createDeferred();
-    const registration = registerChatAbortController({
+    const controllerOptions = {
       chatAbortControllers: context.chatAbortControllers,
       ...scope,
       sessionId,
       runId,
-      kind: "agent",
+      kind: "agent" as const,
       timeoutMs: 60_000,
+    };
+    const registration = registerChatAbortController({
+      ...controllerOptions,
       onRemoved: () => removed.resolve(),
     });
     expect(registration.registered).toBe(true);
@@ -258,14 +260,7 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
       });
     const respond = vi.fn<RespondFn>();
     const request = Promise.resolve(
-      sessionAbortHandlers["sessions.abort"]!({
-        req: { type: "req", id: "abort-receipt", method: "sessions.abort" },
-        params: { key: scope.sessionKey, runId },
-        context,
-        client: null,
-        respond,
-        isWebchatConnect: () => false,
-      }),
+      stopSession(scope.sessionKey, respond, context, { runId }, null),
     );
     let successor: ReturnType<typeof registerChatAbortController> | undefined;
     try {
@@ -303,14 +298,7 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
           sessionId,
           sessionKey: scope.sessionKey,
         });
-        successor = registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
-          ...scope,
-          sessionId,
-          runId,
-          kind: "agent",
-          timeoutMs: 60_000,
-        });
+        successor = registerChatAbortController(controllerOptions);
         expect(successor.registered).toBe(true);
         context.chatRunState.getOrCreate(runId).buffer = "Successor partial";
       }

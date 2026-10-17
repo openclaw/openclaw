@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
@@ -19,8 +19,6 @@ import {
   enqueueCommandInLane,
   getQueueSize,
 } from "../../process/command-queue.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -30,6 +28,7 @@ import {
 } from "../session-sharing.test-utils.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import { revocableAuthority } from "./sessions.abort-lifecycle.test-support.js";
 
 useChatAbortRegistryFixture();
 const key = "agent:main:queued-stop";
@@ -43,8 +42,6 @@ afterEach(() => {
 });
 
 async function setup() {
-  ensureUserProfilesSchema({});
-  onTestFinished((await prepareUserProfileCatalog()).release);
   const client = roleClient("view", "queued-stop-owner");
   client.connId = "queued-stop-connection";
   client.connect.scopes = ["operator.sessions.write"];
@@ -63,19 +60,17 @@ async function setup() {
     },
   );
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const active = createActiveRun(key, {
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
-  const queued = createActiveRun(key, {
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
+  const ownedRun = (targetSessionId = sessionId) =>
+    createActiveRun(key, {
+      agentId: "main",
+      sessionId: targetSessionId,
+      owner: { connId: client.connId },
+    });
+  const active = ownedRun();
+  const queued = ownedRun();
   context.chatAbortControllers.set("active", active);
   context.chatQueuedTurns.set("queued", queued);
-  let current = true;
+  const authority = revocableAuthority("original queue authority revoked");
   const respond = vi.fn();
   const stop = () =>
     handleGatewayRequest({
@@ -89,23 +84,17 @@ async function setup() {
       context,
       respond,
       isWebchatConnect: () => false,
-      sessionMutationCommitGuard: () => {
-        if (!current) {
-          throw new Error("original queue authority revoked");
-        }
-      },
+      sessionMutationCommitGuard: authority.assertCurrent,
       extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
     });
   return {
-    client,
+    ownedRun,
     context,
     active,
     queued,
     respond,
     stop,
-    revoke: () => {
-      current = false;
-    },
+    revoke: authority.revoke,
   };
 }
 
@@ -127,11 +116,7 @@ function followup(
 
 it("UI-style narrow Stop clears owned lane entries through their signals and preserves foreign work", async () => {
   const fixture = await setup();
-  const foreign = createActiveRun(key, {
-    agentId: "main",
-    sessionId: "previous-incarnation",
-    owner: { connId: fixture.client.connId },
-  });
+  const foreign = fixture.ownedRun("previous-incarnation");
   fixture.context.chatQueuedTurns.set("foreign", foreign);
   const ownFollowup = followup("owned");
   const foreignFollowup = followup("foreign", "previous-incarnation");
@@ -228,21 +213,17 @@ it.each([true, false])(
       await release.promise;
     });
     await entered.promise;
+    const command = (label: string, target?: { agentId: string; sessionId: string }) =>
+      enqueueCommandInLane(
+        lane,
+        async () => label,
+        target ? { sessionTarget: { ...target, sessionKey: sharedKey } } : undefined,
+      );
     const commands = [
-      enqueueCommandInLane(lane, async () => "main tagged", {
-        sessionTarget: { agentId: "main", sessionKey: sharedKey, sessionId: "main-shared" },
-      }),
-      enqueueCommandInLane(lane, async () => "main untagged"),
-      enqueueCommandInLane(lane, async () => "research", {
-        sessionTarget: { agentId: "research", sessionKey: sharedKey, sessionId: researchSessionId },
-      }),
-      enqueueCommandInLane(lane, async () => "research previous", {
-        sessionTarget: {
-          agentId: "research",
-          sessionKey: sharedKey,
-          sessionId: "research-previous",
-        },
-      }),
+      command("main tagged", { agentId: "main", sessionId: "main-shared" }),
+      command("main untagged"),
+      command("research", { agentId: "research", sessionId: researchSessionId }),
+      command("research previous", { agentId: "research", sessionId: "research-previous" }),
     ];
     const settled = Promise.allSettled(commands);
     try {

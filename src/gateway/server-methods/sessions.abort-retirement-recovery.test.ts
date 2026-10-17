@@ -168,56 +168,49 @@ it("does not terminalize a parent whose pending final delivery owns its continua
   expect(loadSessionEntry(target)).toEqual(pendingFinal);
 });
 
-it("retains a replacement parent revision across the terminal write await", async () => {
-  const replacement = { ...loadSessionEntry(target)!, lifecycleRevision: "replacement-revision" };
-  const persist = lifecycleState.persistGatewaySessionLifecycleEvent;
-  const gate = vi
-    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-    .mockImplementation(async (params) => {
-      if (params.sessionKey === parentKey && params.expectedWriter) {
-        replaceSessionEntrySync(target, replacement);
-      }
-      await persist(params);
-    });
-  try {
-    expect((await stopParent())?.[0]).toBe(true);
-    expect(loadSessionEntry(target)).toEqual(replacement);
-    expect(child()?.execution.outcome?.status).toBe("ok");
-  } finally {
-    gate.mockRestore();
-  }
-});
-
-it("does not acknowledge or replay an unknown parent persistence outcome", async () => {
-  const before = parent();
-  const persist = lifecycleState.persistGatewaySessionLifecycleEvent;
-  const unknown = new SqliteWorkerError(
-    "controlled parent write outcome unknown",
-    "outcome-unknown",
-  );
-  // Controlled writer outcome; this does not claim a real lost SQLite reply.
-  const gate = vi
-    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-    .mockImplementation(async (params) => {
-      if (params.sessionKey === parentKey && params.expectedWriter) {
-        throw unknown;
-      }
-      await persist(params);
-    });
-  try {
-    const result = await stopParent().then(
-      () => undefined,
-      (error: unknown) => error,
+it.each(["replacement revision", "unknown outcome"] as const)(
+  "preserves parent write custody for %s",
+  async (mode) => {
+    const expected =
+      mode === "replacement revision"
+        ? { ...parent()!, lifecycleRevision: "replacement-revision" }
+        : parent();
+    const persist = lifecycleState.persistGatewaySessionLifecycleEvent;
+    const unknown = new SqliteWorkerError(
+      "controlled parent write outcome unknown",
+      "outcome-unknown",
     );
-    expect(hasSqliteWorkerOutcomeUnknown(result)).toBe(true);
-    expect(gate).toHaveBeenCalledOnce();
-    expect(parent()).toEqual(before);
-    expect(child()?.execution.outcome?.status).toBe("ok");
-    expect(child()?.requesterSettleWake).toBeUndefined();
-  } finally {
-    gate.mockRestore();
-  }
-});
+    // Controlled writer outcome; this does not claim a real lost SQLite reply.
+    const gate = vi
+      .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+      .mockImplementation(async (params) => {
+        if (params.sessionKey === parentKey && params.expectedWriter) {
+          if (mode === "unknown outcome") {
+            throw unknown;
+          }
+          replaceSessionEntrySync(target, expected!);
+        }
+        await persist(params);
+      });
+    try {
+      if (mode === "unknown outcome") {
+        const result = await stopParent().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(hasSqliteWorkerOutcomeUnknown(result)).toBe(true);
+        expect(gate).toHaveBeenCalledOnce();
+        expect(child()?.requesterSettleWake).toBeUndefined();
+      } else {
+        expect((await stopParent())?.[0]).toBe(true);
+      }
+      expect(parent()).toEqual(expected);
+      expect(child()?.execution.outcome?.status).toBe("ok");
+    } finally {
+      gate.mockRestore();
+    }
+  },
+);
 
 it("preserves a newer wake generation instead of reporting its retirement", async () => {
   const parentBefore = parent();
