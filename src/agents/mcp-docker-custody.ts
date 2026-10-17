@@ -9,7 +9,7 @@ import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { z } from "zod";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   GatewayProcessNamespaceSchema,
   readGatewayLockProcessNamespace,
@@ -20,7 +20,8 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runExec } from "../process/exec.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { runExec, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { parseMcpDockerCommand } from "./mcp-docker-command.js";
 
@@ -99,7 +100,7 @@ async function engineFor(
   assertCurrent: () => void,
   cwd?: string,
 ): Promise<Engine> {
-  const executable = resolveExecutableFromPathEnv(binary, env.PATH ?? "", env, { cwd });
+  const executable = resolveExecutablePath(binary, { env, cwd });
   if (!executable) {
     throw new Error("Docker MCP executable is unavailable");
   }
@@ -164,6 +165,69 @@ async function confirmAbsent(engine: Engine, id: string): Promise<boolean> {
   return (await inspect(engine, id)) === undefined;
 }
 
+async function settleRemovalError(engine: Engine, id: string, error: unknown): Promise<boolean> {
+  if (isMissingContainer(error) || (await confirmAbsent(engine, id))) {
+    return true;
+  }
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("stderr" in error) ||
+    typeof error.stderr !== "string" ||
+    !error.stderr.includes(`removal of container ${id} is already in progress`)
+  ) {
+    return false;
+  }
+
+  // --rm can still be deleting the container after stop returns. Join that
+  // daemon operation; neither its error nor a still-present inspect proves removal.
+  const stop = new AbortController();
+  let output = "";
+  let destroyed = false;
+  const result = await runUtf8CommandWithTimeout(
+    [
+      engine.command,
+      "events",
+      "--since",
+      "0",
+      "--filter",
+      `container=${id}`,
+      "--filter",
+      "event=destroy",
+      "--format",
+      "{{.Actor.ID}}",
+    ],
+    {
+      baseEnv: engine.env,
+      cwd: engine.cwd,
+      input: "",
+      timeoutMs: 10_000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      signal: stop.signal,
+      onOutputChunk(chunk, stream) {
+        if (stream === "stdout") {
+          output += chunk.toString("utf8");
+          if (output.split(/\r?\n/u).includes(id)) {
+            destroyed = true;
+            stop.abort();
+          }
+        }
+      },
+    },
+  );
+  if (result.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  if (
+    !destroyed ||
+    (result.termination !== "signal" && !(result.termination === "exit" && result.code === 0))
+  ) {
+    throw new Error(`Docker MCP removal could not be confirmed: ${result.stderr.trim()}`);
+  }
+  return await confirmAbsent(engine, id);
+}
+
 async function remove(
   engine: Engine,
   id: string,
@@ -189,7 +253,7 @@ async function remove(
         return;
       }
       if (!forceSignal?.aborted) {
-        if (await confirmAbsent(engine, id)) {
+        if (await settleRemovalError(engine, id, error)) {
           return;
         }
         throw error;
@@ -200,10 +264,7 @@ async function remove(
   try {
     await command(engine, ["rm", "--force", id]);
   } catch (error) {
-    // --rm may win between stopping and explicit removal.
-    // Docker's automatic --rm may be in progress when this command arrives.
-    // A failed command is success only when the same daemon proves absence.
-    if (!isMissingContainer(error) && !(await confirmAbsent(engine, id))) {
+    if (!(await settleRemovalError(engine, id, error))) {
       throw error;
     }
   }

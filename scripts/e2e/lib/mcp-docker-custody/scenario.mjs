@@ -110,7 +110,7 @@ async function exercise(mode) {
   const server =
     mode === "shell-close"
       ? { command: "sh", args: ["-c", `exec docker ${args.map(quote).join(" ")}`] }
-      : { command: "docker", args };
+      : { command: mode === "close" ? "/usr/bin/docker" : "docker", args };
   await fs.writeFile(
     path.join(stateDir, "openclaw.json"),
     JSON.stringify({
@@ -181,6 +181,7 @@ async function exercise(mode) {
       await fs.writeFile(path.join(directory, "release"), "release");
     }
     const result = await cli.done;
+    assert.doesNotMatch(result.stderr, /cleanup is unconfirmed/iu);
     assert.equal(result.signal, null, JSON.stringify(result));
     if (mode === "timeout") {
       assert.notEqual(

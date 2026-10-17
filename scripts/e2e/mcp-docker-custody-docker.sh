@@ -27,12 +27,14 @@ cleanup() {
 trap cleanup EXIT
 
 [ -S "$DOCKER_SOCKET" ] || { echo "Docker socket not found: $DOCKER_SOCKET" >&2; exit 1; }
-if SOCKET_GID="$(stat -c '%g' "$DOCKER_SOCKET" 2>/dev/null)"; then :; else
-  SOCKET_GID="$(stat -f '%g' "$DOCKER_SOCKET")"
-fi
 docker_e2e_build_or_reuse "$FUNCTIONAL_IMAGE" mcp-docker-custody
 docker_e2e_docker_cmd pull "$FIXTURE_IMAGE"
 docker_e2e_docker_cmd run --rm "$FIXTURE_IMAGE" true
+# Desktop Docker engines can project a different socket GID than the host sees.
+SOCKET_GID="$(docker_e2e_docker_cmd run --rm \
+  --label "openclaw.test.mcp-custody=$RUN_ID" \
+  -v "$DOCKER_SOCKET:/var/run/docker.sock" "$FIXTURE_IMAGE" \
+  stat -c '%g' /var/run/docker.sock)"
 
 cat >"$SCENARIO_ROOT/Dockerfile" <<'EOF'
 ARG BASE_IMAGE
