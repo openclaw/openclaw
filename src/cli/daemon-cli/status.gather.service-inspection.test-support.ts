@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -13,6 +13,25 @@ import {
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
 } from "./status.gather.probes.test-support.js";
+
+export function statusCommand() {
+  const program = new Command().enablePositionalOptions().exitOverride();
+  registerGatewayCli(program);
+  const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+    throw new Error("status-exit");
+  });
+  onTestFinished(() => {
+    writeJson.mockRestore();
+    exit.mockRestore();
+  });
+  return {
+    run: (...flags: string[]) =>
+      program.parseAsync(["gateway", "status", ...flags], { from: "user" }),
+    writeJson,
+    exit,
+  };
+}
 
 export function registerServiceInspectionStatusTests(params: {
   serviceFixture: { useSystemdCommand: boolean };
@@ -52,50 +71,40 @@ export function registerServiceInspectionStatusTests(params: {
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
       whatsapp: { source: "npm", resolvedName: "@openclaw/whatsapp", resolvedVersion: "2026.5.6" },
     });
-    const program = new Command().enablePositionalOptions().exitOverride();
-    registerGatewayCli(program);
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-      throw new Error("status-exit");
-    });
-    try {
-      await program.parseAsync(["gateway", "status", "--json"], { from: "user" });
+    const { run, writeJson, exit } = statusCommand();
+    await run("--json");
 
-      expect(exit).not.toHaveBeenCalled();
-      expect(writeJson).toHaveBeenCalledOnce();
-      expect(writeJson.mock.calls[0]?.[0]).toMatchObject({
-        service: {
-          loaded: null,
-          loadState: { status: "unknown" },
-          command: null,
-          targetRole: "diagnostic-only",
-          runtime: {
-            status: "unknown",
-            inspectionFailure: {
-              code: "service-runtime-inspection-failed",
-            },
+    expect(exit).not.toHaveBeenCalled();
+    expect(writeJson).toHaveBeenCalledOnce();
+    expect(writeJson.mock.calls[0]?.[0]).toMatchObject({
+      service: {
+        loaded: null,
+        loadState: { status: "unknown" },
+        command: null,
+        targetRole: "diagnostic-only",
+        runtime: {
+          status: "unknown",
+          inspectionFailure: {
+            code: "service-runtime-inspection-failed",
           },
         },
-        config: { daemon: { path: "/tmp/openclaw-cli/openclaw.json" } },
-        pluginVersionDrift: { gatewayVersion: "2026.5.6", drifts: [] },
-        rpc: { ok: true, server: { version: "2026.5.6", buildId: "build-2026.5.6" } },
-      });
-      expect(JSON.stringify(writeJson.mock.calls)).not.toContain("systemdInstallation");
-      expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private.env");
-      expect(serviceIsLoaded).not.toHaveBeenCalled();
-      expect(serviceReadRuntime).not.toHaveBeenCalled();
-      expect(inspectGatewayRestart).not.toHaveBeenCalled();
-      expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "ws://127.0.0.1:18789",
-          token: "caller-token",
-          configPath: "/tmp/openclaw-cli/openclaw.json",
-        }),
-      );
-    } finally {
-      writeJson.mockRestore();
-      exit.mockRestore();
-    }
+      },
+      config: { daemon: { path: "/tmp/openclaw-cli/openclaw.json" } },
+      pluginVersionDrift: { gatewayVersion: "2026.5.6", drifts: [] },
+      rpc: { ok: true, server: { version: "2026.5.6", buildId: "build-2026.5.6" } },
+    });
+    expect(JSON.stringify(writeJson.mock.calls)).not.toContain("systemdInstallation");
+    expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private.env");
+    expect(serviceIsLoaded).not.toHaveBeenCalled();
+    expect(serviceReadRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: "caller-token",
+        configPath: "/tmp/openclaw-cli/openclaw.json",
+      }),
+    );
   });
 
   it.each(["systemd ownership", "command cleanup"] as const)(
@@ -109,28 +118,16 @@ export function registerServiceInspectionStatusTests(params: {
       } else {
         serviceReadRuntime.mockRejectedValueOnce(new CommandProcessCleanupError());
       }
-      const program = new Command().enablePositionalOptions().exitOverride();
-      registerGatewayCli(program);
-      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-        throw new Error("status-exit");
-      });
-      try {
-        await expect(
-          program.parseAsync(["gateway", "status", "--json"], { from: "user" }),
-        ).rejects.toThrow("status-exit");
-        expect(exit).toHaveBeenCalledWith(1);
-        expect(JSON.stringify(writeJson.mock.calls)).toContain(
-          kind === "systemd ownership"
-            ? "manager identity changed"
-            : "Command cleanup could not confirm that owned work stopped",
-        );
-        expect(callGatewayStatusProbe).not.toHaveBeenCalled();
-        expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-      } finally {
-        writeJson.mockRestore();
-        exit.mockRestore();
-      }
+      const { run, writeJson, exit } = statusCommand();
+      await expect(run("--json")).rejects.toThrow("status-exit");
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(JSON.stringify(writeJson.mock.calls)).toContain(
+        kind === "systemd ownership"
+          ? "manager identity changed"
+          : "Command cleanup could not confirm that owned work stopped",
+      );
+      expect(callGatewayStatusProbe).not.toHaveBeenCalled();
+      expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     },
   );
 
