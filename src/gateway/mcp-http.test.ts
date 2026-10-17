@@ -1944,6 +1944,28 @@ describe("mcp loopback server", () => {
     },
   );
 
+  it("accepts JSON tool calls with a mixed-case content type", async () => {
+    const { port, runtime } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "Application/JSON" },
+      body: "{}",
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("still rejects a mixed-case non-JSON media type", async () => {
+    const { port, runtime } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "Application/XML" },
+      body: "{}",
+    });
+    expect(response.status).toBe(415);
+  });
+
   it.each<{
     name: string;
     body: string;
