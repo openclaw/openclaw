@@ -58,9 +58,9 @@ describe("probeTelegram response body deadlines over real sockets", () => {
   let probeIndex = 0;
 
   it.each([
-    ["stall", /response body stalled/i],
-    ["trickle", /response body timed out/i],
-  ] as const)("closes %s bodies within their deadline", async (mode, expectedError) => {
+    ["stall", expect.stringMatching(/response body stalled/i), 100],
+    ["trickle", expect.stringMatching(/response body timed out/i), 200],
+  ] as const)("times out %s bodies", async (mode, error, elapsedMs) => {
     // Connection setup and socket scheduling must not consume the probe's budget.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     socketClosed = createDeferred<void>();
@@ -127,9 +127,7 @@ describe("probeTelegram response body deadlines over real sockets", () => {
       }
       await vi.advanceTimersByTimeAsync(mode === "trickle" ? 40 : 100);
       const result = await probe;
-      expect(result.ok).toBe(false);
-      expect(result.error).toMatch(expectedError);
-      expect(result.elapsedMs).toBe(mode === "stall" ? 100 : 200);
+      expect(result).toMatchObject({ ok: false, error, elapsedMs });
       expect(requestCount).toBe(previousRequestCount + 1);
       await socketClosed.promise;
     } finally {
@@ -146,8 +144,7 @@ describe("probeTelegram response body deadlines over real sockets", () => {
 
     const result = await probeTelegram(`deadline-webhook-${++probeIndex}`, 200, { apiRoot });
 
-    expect(result.ok).toBe(true);
-    expect(result.bot).toMatchObject({ id: 123, username: "bot" });
+    expect(result).toMatchObject({ ok: true, bot: { id: 123, username: "bot" } });
     expect(result.webhook).toBeUndefined();
     expect(requestCount).toBe(previousRequestCount + 2);
     await webhookClosed.promise;

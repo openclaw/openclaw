@@ -1,4 +1,3 @@
-import { Api } from "grammy";
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
 import {
   createReplyDispatcher,
@@ -36,7 +35,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     });
     const preview = reasoningSnapshots.length
       ? createTelegramDraftStream({
-          api: new Api(cfg.channels.telegram.botToken, { apiRoot: cfg.channels.telegram.apiRoot }),
+          api: fixture.bot.api,
           chatId: 123,
           renderText: (text) => ({ text, markdownSource: { text } }),
         })

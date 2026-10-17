@@ -21,16 +21,19 @@ describe("probeTelegram retry logic", () => {
   let token = "";
   const originalFetch = global.fetch;
   let forceFallbackMock: Mock;
+  const transport = (proxyFetch?: typeof fetch, close = async () => {}) => ({
+    fetch: proxyFetch ?? fetch,
+    sourceFetch: proxyFetch ?? fetch,
+    forceFallback: forceFallbackMock,
+    close,
+  });
 
   const installFetchMock = (fetchMock: Mock = vi.fn()): Mock => {
     global.fetch = withFetchPreconnect(fetchMock);
     forceFallbackMock = vi.fn().mockReturnValue(true);
-    resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) => ({
-      fetch: proxyFetch ?? fetch,
-      sourceFetch: proxyFetch ?? fetch,
-      forceFallback: forceFallbackMock,
-      close: async () => {},
-    }));
+    resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) =>
+      transport(proxyFetch),
+    );
     makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
     return fetchMock;
   };
@@ -129,12 +132,7 @@ describe("probeTelegram retry logic", () => {
     resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) => {
       const close = vi.fn(async () => undefined);
       closeSpies.push(close);
-      return {
-        fetch: proxyFetch ?? fetch,
-        sourceFetch: proxyFetch ?? fetch,
-        forceFallback: forceFallbackMock,
-        close,
-      };
+      return transport(proxyFetch, close);
     });
     for (let i = 0; i < 65; i += 1) {
       mockSuccess(fetchMock);

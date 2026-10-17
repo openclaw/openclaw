@@ -4,9 +4,7 @@ import { measureInputRichBlocks, type InputRichBlock } from "./rich-block-model.
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
-function blocksFor(markdown: string): InputRichBlock[] {
-  return markdownToTelegramRichBlocks(markdown).blocks;
-}
+const blocksFor = (markdown: string) => markdownToTelegramRichBlocks(markdown).blocks;
 
 const contains = expect.objectContaining;
 const typed = (type: InputRichBlock["type"], fields: object = {}) => contains({ type, ...fields });
@@ -27,27 +25,22 @@ function single(markdown: string): InputRichBlock {
 function expectLiteral(markdown: string, ...content: string[]) {
   const blocks = blocksFor(markdown);
   expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
-  for (const text of content) {
-    expect(JSON.stringify(blocks)).toContain(text);
-  }
+  expectJson(blocks, content);
 }
 function expectJson(value: unknown, includes: string[], excludes: string[] = []) {
   const json = JSON.stringify(value);
-  for (const text of includes) {
-    expect(json).toContain(text);
-  }
-  for (const text of excludes) {
-    expect(json).not.toContain(text);
-  }
+  includes.forEach((text) => expect(json).toContain(text));
+  excludes.forEach((text) => expect(json).not.toContain(text));
 }
 
 describe("block HTML islands", () => {
   it("keeps Markdown lists inside <details> islands", () => {
     const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
-    assert(block.type === "details");
-    expect(block.summary).toBe("List");
-    expect(block.blocks).toHaveLength(1);
-    expect(block.blocks[0]?.type).toBe("paragraph");
+    expect(block).toMatchObject({
+      type: "details",
+      summary: "List",
+      blocks: [{ type: "paragraph" }],
+    });
     expectJson(block, ["• item A", "• item B"], ["<details>"]);
   });
 
@@ -291,8 +284,7 @@ describe("block HTML islands", () => {
     expect(quotes.filter((quote) => quote.credit !== undefined)).toHaveLength(1);
     expect(quotes.at(-1)?.credit).toBe("Author");
     for (const chunk of pieces) {
-      const { chars } = measureInputRichBlocks(chunk);
-      expect(chars).toBeLessThanOrEqual(64);
+      expect(measureInputRichBlocks(chunk).chars).toBeLessThanOrEqual(64);
     }
   });
 
@@ -331,24 +323,21 @@ describe("block HTML islands", () => {
   });
 });
 
-describe("inline HTML islands", () => {
-  it.each<[string, string[], string[]]>([
-    [
-      'H<sub>2</sub>O E=mc<sup>2</sup> <mark>note</mark> <tg-spoiler>secret</tg-spoiler> <tg-math>E=mc^2</tg-math> <tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>',
-      "subscript superscript marked spoiler mathematical_expression custom_emoji"
-        .split(" ")
-        .map((type) => JSON.stringify(type))
-        .concat("5368324170671202286"),
-      [],
-    ],
-    [
-      'go <a href="#top">back</a> and [also](#top)',
-      ['"anchor_link"', '"anchor_name":"top"'],
-      ['"url":"#top"'],
-    ],
-    ['<tg-emoji emoji-id="not-numeric">😀</tg-emoji> hi', ["😀"], ['"custom_emoji"']],
-    ["value is <sup>oops and more text", ["<sup>oops"], ['"superscript"']],
-  ])("preserves inline HTML: %s", (markdown, includes, excludes) => {
-    expectJson(blocksFor(markdown), includes, excludes);
-  });
+it.each<[string, string[], string[]]>([
+  [
+    'H<sub>2</sub>O E=mc<sup>2</sup> <mark>note</mark> <tg-spoiler>secret</tg-spoiler> <tg-math>E=mc^2</tg-math> <tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>',
+    '"subscript" "superscript" "marked" "spoiler" "mathematical_expression" "custom_emoji"'
+      .split(" ")
+      .concat("5368324170671202286"),
+    [],
+  ],
+  [
+    'go <a href="#top">back</a> and [also](#top)',
+    ['"anchor_link"', '"anchor_name":"top"'],
+    ['"url":"#top"'],
+  ],
+  ['<tg-emoji emoji-id="not-numeric">😀</tg-emoji> hi', ["😀"], ['"custom_emoji"']],
+  ["value is <sup>oops and more text", ["<sup>oops"], ['"superscript"']],
+])("preserves inline HTML: %s", (markdown, includes, excludes) => {
+  expectJson(blocksFor(markdown), includes, excludes);
 });
