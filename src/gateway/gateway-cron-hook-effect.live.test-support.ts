@@ -12,7 +12,7 @@ export async function createCronHookEffectProbe(state: OpenClawTestState) {
     string,
     { entered: ReturnType<typeof createDeferred<void>>; response?: ServerResponse; effects: number }
   >(
-    ["HOOK_ALLOWED", "HOOK_ROTATED"].map((marker) => [
+    ["HOOK_ALLOWED", "HOOK_ROTATED", "HOOK_WAITS"].map((marker) => [
       marker,
       { entered: createDeferred(), effects: 0 },
     ]),
@@ -61,12 +61,13 @@ export async function createCronHookEffectProbe(state: OpenClawTestState) {
   );
   await fs.writeFile(
     path.join(pluginPath, "index.cjs"),
-    `const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } = require("openclaw/plugin-sdk/ssrf-runtime");
+    `const crypto = require("node:crypto");
+const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } = require("openclaw/plugin-sdk/ssrf-runtime");
 const base = ${JSON.stringify(url)};
 // Startup methods and request-scoped plugin instances share one test observation owner.
 const state = globalThis[Symbol.for("openclaw.test.cronHookEffect")] ??= {
   calls: {}, runs: new Map(), providerStarts: 0,
-  settled: Object.fromEntries(["HOOK_ALLOWED", "HOOK_ROTATED"].map(marker => [marker, Promise.withResolvers()])),
+  settled: Object.fromEntries(["HOOK_ALLOWED", "HOOK_ROTATED", "HOOK_WAITS"].map(marker => [marker, Promise.withResolvers()])),
 };
 const { calls, runs, settled } = state;
 async function request(action, marker) {
@@ -81,7 +82,7 @@ module.exports = {
   id: "${CRON_HOOK_PROBE_ID}",
   register(api) {
     api.on("before_agent_reply", async (event, ctx) => {
-      const marker = ["HOOK_ALLOWED", "HOOK_ROTATED"].find(value => event.cleanedBody.includes(value));
+      const marker = ["HOOK_ALLOWED", "HOOK_ROTATED", "HOOK_WAITS"].find(value => event.cleanedBody.includes(value));
       if (!marker) return;
       runs.set(ctx.runId, marker);
       const record = calls[marker] ??= { hooks: 0, providers: 0 };
@@ -101,6 +102,29 @@ module.exports = {
       const marker = runs.get(ctx.runId);
       if (marker) calls[marker].providers++;
     });
+    api.registerGatewayMethod("cronHookProof.rotateGeneration", async ({ params, respond }) => {
+      const entry = api.runtime.agent.session.getSessionEntry({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      });
+      if (!entry) throw new Error("hook proof session is missing");
+      if (entry.sessionId !== params.expectedSessionId) {
+        throw new Error("hook proof session generation changed before rotation");
+      }
+      const sessionId = crypto.randomUUID();
+      await api.runtime.agent.session.upsertSessionEntry({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        entry: {
+          ...entry,
+          sessionId,
+          lifecycleRevision: crypto.randomUUID(),
+          updatedAt: Date.now(),
+        },
+      });
+      respond(true, { sessionId });
+    }, { scope: "operator.admin" });
     api.registerGatewayMethod("cronHookProof.settled", async ({ params, respond }) => {
       await settled[params.marker].promise;
       respond(true, {});
