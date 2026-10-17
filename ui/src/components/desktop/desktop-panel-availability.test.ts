@@ -21,13 +21,18 @@ const workstation: EnvironmentSummary = {
   desktop: true,
   desktopAvailability: { state: "locked" },
 };
+const native = (state: "locked" | "unlocked" | "unknown", id = workstation.id) => ({
+  ...workstation,
+  id,
+  desktopAvailability: { state },
+});
+const unlocked = native("unlocked");
+const refresh = (
+  gateway: ReturnType<typeof createGatewayClient>,
+  nodeId: unknown = "workstation",
+) => gateway.emit("node.runnerInventory.changed", { nodeId });
 
-const observed = {
-  transport: "rfb",
-  wsPath: "/desktop/observe?token=synthetic",
-  expiresAtMs: 60_000,
-  control: false,
-};
+const observed = { transport: "rfb", wsPath: "/desktop/observe", control: false };
 
 afterEach(() => document.body.replaceChildren());
 
@@ -55,10 +60,6 @@ async function mount(
 
 describe("Desktop native availability", () => {
   it("refreshes the same node after a DOM reconnect without accepting its old availability", async () => {
-    const unlocked: EnvironmentSummary = {
-      ...workstation,
-      desktopAvailability: { state: "unlocked" },
-    };
     let statusReply = Promise.resolve(unlocked);
     const request = vi.fn(async (method: string) =>
       method === "environments.status" ? statusReply : observed,
@@ -66,16 +67,16 @@ describe("Desktop native availability", () => {
     const { gateway, connect, panel } = await mount(request, { documentMode: true });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     statusReply = Promise.resolve(workstation);
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+    refresh(gateway);
     await waitForSolid(() => expect(panel.textContent).toContain("This Mac is locked"));
     const oldStatus = createDeferred<EnvironmentSummary>();
     statusReply = oldStatus.promise;
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+    refresh(gateway);
     const oldStatusRequest = request.mock.results.at(-1)!.value;
     await unmountPanel(panel);
     expect(gateway.unsubscribe).toHaveBeenCalledOnce();
     const requestsAfterUnmount = request.mock.calls.length;
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+    refresh(gateway);
     expect(request).toHaveBeenCalledTimes(requestsAfterUnmount);
     statusReply = Promise.resolve(unlocked);
     await mountPanel(panel);
@@ -100,11 +101,7 @@ describe("Desktop native availability", () => {
       const handle = createConnectionHandle();
       const { gateway, connect, panel } = await mount(
         request,
-        {
-          embedded: true,
-          presented: true,
-          documentMode,
-        },
+        { embedded: true, presented: true, documentMode },
         handle,
       );
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
@@ -112,17 +109,17 @@ describe("Desktop native availability", () => {
       expect(panel.textContent).toContain("Sign in");
 
       const initialRequests = request.mock.calls.length;
-      current = { ...workstation, desktopAvailability: { state: "unknown" } };
-      gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+      current = native("unknown");
+      refresh(gateway);
       await waitForSolid(() => expect(panel.textContent).toContain("lock state is unknown"));
       gateway.emit("presence", { presence: [{ deviceId: "workstation", reason: "input" }] });
-      gateway.emit("node.runnerInventory.changed", { nodeId: "other" });
-      gateway.emit("node.runnerInventory.changed", { nodeId: 1 });
+      refresh(gateway, "other");
+      refresh(gateway, 1);
       await panel.updateComplete;
       expect(panel.textContent).toContain("lock state is unknown");
 
-      current = { ...workstation, desktopAvailability: { state: "unlocked" } };
-      gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+      current = unlocked;
+      refresh(gateway);
       await waitForSolid(() => expect(panel.textContent).not.toContain("lock state is unknown"));
       expect(panel.textContent).not.toContain("This Mac is locked");
       expect(connect).toHaveBeenCalledOnce();
@@ -138,16 +135,9 @@ describe("Desktop native availability", () => {
 
   it("rejects late availability replies from an older refresh, source, or Gateway", async () => {
     const initialStatus = createDeferred<EnvironmentSummary>();
-    const other: EnvironmentSummary = {
-      ...workstation,
-      id: "node:other",
-      desktopAvailability: { state: "unlocked" },
-    };
+    const other = native("unlocked", "node:other");
     const replies = new Map<string, Promise<EnvironmentSummary>>([
-      [
-        workstation.id,
-        Promise.resolve({ ...workstation, desktopAvailability: { state: "unknown" } }),
-      ],
+      [workstation.id, Promise.resolve(native("unknown"))],
       [other.id, Promise.resolve(other)],
     ]);
     let firstStatus = true;
@@ -167,45 +157,41 @@ describe("Desktop native availability", () => {
       documentMode: true,
     });
     await waitForSolid(() => expect(request).toHaveBeenCalled());
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+    refresh(gateway);
     await request.mock.results.at(-1)!.value;
     await panel.updateComplete;
     initialStatus.resolve(workstation);
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(panel.textContent).toContain("lock state is unknown");
 
-    const oldRefresh = createDeferred<EnvironmentSummary>();
-    replies.set(workstation.id, oldRefresh.promise);
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
-    const oldRefreshRequest = request.mock.results.at(-1)!.value;
-    replies.set(
-      workstation.id,
-      Promise.resolve({ ...workstation, desktopAvailability: { state: "unlocked" } }),
-    );
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+    const hold = (id = workstation.id) => {
+      const reply = createDeferred<EnvironmentSummary>();
+      replies.set(id, reply.promise);
+      refresh(gateway, id.slice("node:".length));
+      const requested = request.mock.results.at(-1)!.value;
+      return async (value = workstation) => {
+        reply.resolve(value);
+        await requested;
+      };
+    };
+    const releaseRefresh = hold();
+    replies.set(workstation.id, Promise.resolve(unlocked));
+    refresh(gateway);
     await waitForSolid(() => expect(panel.textContent).not.toContain("lock state is unknown"));
-    oldRefresh.resolve(workstation);
-    await oldRefreshRequest;
+    await releaseRefresh();
     await panel.updateComplete;
     expect(panel.textContent).not.toContain("This Mac is locked");
 
-    const oldSource = createDeferred<EnvironmentSummary>();
-    replies.set(workstation.id, oldSource.promise);
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
-    const oldSourceRequest = request.mock.results.at(-1)!.value;
+    const releaseSource = hold();
     updatePanel(panel, { requestedSource: other.id });
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-    oldSource.resolve(workstation);
-    await oldSourceRequest;
-    gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
+    await releaseSource();
+    refresh(gateway);
     await panel.updateComplete;
     expect(panel.textContent).not.toContain("This Mac is locked");
     expect(panel.textContent).not.toContain("lock state is unknown");
 
-    const oldGateway = createDeferred<EnvironmentSummary>();
-    replies.set(other.id, oldGateway.promise);
-    gateway.emit("node.runnerInventory.changed", { nodeId: "other" });
-    const oldGatewayRequest = request.mock.results.at(-1)!.value;
+    const releaseGateway = hold(other.id);
     let replacementStatus = other;
     const replacement = createGatewayClient(
       vi.fn(async (method: string) =>
@@ -214,15 +200,14 @@ describe("Desktop native availability", () => {
     );
     updatePanel(panel, { client: replacement.client });
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
-    oldGateway.resolve({ ...other, desktopAvailability: { state: "locked" } });
-    await oldGatewayRequest;
-    gateway.emit("node.runnerInventory.changed", { nodeId: "other" });
+    await releaseGateway(native("locked", other.id));
+    refresh(gateway, "other");
     await panel.updateComplete;
     expect(panel.textContent).not.toContain("This Mac is locked");
     expect(connect).toHaveBeenCalledTimes(3);
 
-    replacementStatus = { ...other, desktopAvailability: { state: "locked" } };
-    replacement.emit("node.runnerInventory.changed", { nodeId: "other" });
+    replacementStatus = native("locked", other.id);
+    refresh(replacement, "other");
     await waitForSolid(() => expect(panel.textContent).toContain("This Mac is locked"));
     expect(connect).toHaveBeenCalledTimes(3);
   });

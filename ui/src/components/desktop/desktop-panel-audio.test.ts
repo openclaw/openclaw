@@ -21,6 +21,12 @@ import {
 } from "./desktop-panel.test-support.ts";
 import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 
+const observation: DesktopObserveResult = {
+  transport: "rfb",
+  wsPath: "/desktop/observe",
+  control: false,
+  audio: desktopAudioStream,
+};
 describe("desktop panel audio wiring", () => {
   beforeEach(() => {
     stubDesktopAudio();
@@ -38,16 +44,14 @@ describe("desktop panel audio wiring", () => {
     audio = true,
     documentMode = false,
     setupUnavailable = false,
-    observation?: Promise<DesktopObserveResult>,
+    pending?: Promise<DesktopObserveResult>,
   ) {
     const request = vi.fn(async (method: string) =>
       method === "environments.status"
         ? desktopEnvironment
-        : (observation ?? {
-            transport: "rfb",
-            wsPath: "/desktop/observe",
-            control: false,
-            ...(audio ? { audio: desktopAudioStream } : {}),
+        : (pending ?? {
+            ...observation,
+            audio: audio ? desktopAudioStream : undefined,
             ...(setupUnavailable ? { audioUnavailableReason: "setup-unavailable" } : {}),
           }),
     );
@@ -70,7 +74,7 @@ describe("desktop panel audio wiring", () => {
     await mountPanel(panel);
     await panel.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
-    if (!observation) {
+    if (!pending) {
       expect(connect).toHaveBeenCalledOnce();
     }
     AudioSocketMock.instances[0]?.open();
@@ -78,31 +82,28 @@ describe("desktop panel audio wiring", () => {
     return { panel, handle, connect, request };
   }
 
-  it.each([false, true])(
-    "offers real click-to-unmute in document mode %s",
-    async (documentMode) => {
-      const { panel } = await setup(true, documentMode);
-      const socket = AudioSocketMock.instances[0]!;
-      expect(AudioContextMock.instances).toHaveLength(0);
-      expect(socket.send).not.toHaveBeenCalled();
-      clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
-      expect(AudioContextMock.instances[0]!.resume).toHaveBeenCalledOnce();
-      await panel.updateComplete;
-      expect(socket.send).toHaveBeenCalledWith('{"action":"start"}');
-      socket.message('{"state":"started"}');
-      await panel.updateComplete;
-      clickPanelButton(panel, "[aria-label='Mute desktop audio']");
-      expect(socket.send).toHaveBeenLastCalledWith('{"action":"stop"}');
-      expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([false, true])("clicks to unmute (document=%s)", async (documentMode) => {
+    const { panel } = await setup(true, documentMode);
+    const socket = AudioSocketMock.instances[0]!;
+    expect(AudioContextMock.instances).toHaveLength(0);
+    expect(socket.send).not.toHaveBeenCalled();
+    clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
+    expect(AudioContextMock.instances[0]!.resume).toHaveBeenCalledOnce();
+    await panel.updateComplete;
+    expect(socket.send).toHaveBeenCalledWith('{"action":"start"}');
+    socket.message('{"state":"started"}');
+    await panel.updateComplete;
+    clickPanelButton(panel, "[aria-label='Mute desktop audio']");
+    expect(socket.send).toHaveBeenLastCalledWith('{"action":"stop"}');
+    expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { documentMode: false, setupUnavailable: false },
     { documentMode: false, setupUnavailable: true },
     { documentMode: true, setupUnavailable: true },
   ])(
-    "keeps unavailable audio inert with setup guidance=$setupUnavailable (document $documentMode)",
+    "unavailable: setup=$setupUnavailable, document=$documentMode",
     async ({ documentMode, setupUnavailable }) => {
       const { panel, handle } = await setup(false, documentMode, setupUnavailable);
       const button = panel.querySelector<HTMLButtonElement>(".desktop-audio-button")!;
@@ -136,66 +137,53 @@ describe("desktop panel audio wiring", () => {
     },
   );
 
-  it.each([false, true])(
-    "reconnects hidden audio only explicitly (observation pending=%s)",
-    async (pending) => {
-      const observed = createDeferred<DesktopObserveResult>();
-      const { panel, handle, connect, request } = await setup(
-        true,
-        false,
-        false,
-        pending ? observed.promise : undefined,
-      );
-      if (pending) {
-        expect(request).toHaveBeenCalledWith("desktop.observe", expect.anything());
-        expect(connect).not.toHaveBeenCalled();
-        const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-        document.dispatchEvent(new Event("visibilitychange"));
-        observed.resolve({
-          transport: "rfb",
-          wsPath: "/desktop/observe",
-          control: false,
-          audio: desktopAudioStream,
-          expiresAtMs: 60_000,
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        await panel.updateComplete;
-        expect(connect).toHaveBeenCalledOnce();
-        expect(AudioSocketMock.instances).toHaveLength(0);
-        expect(AudioContextMock.instances).toHaveLength(0);
-        hidden.mockReturnValue(false);
-        document.dispatchEvent(new Event("visibilitychange"));
-      } else {
-        clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
-        await panel.updateComplete;
-        updatePanel(panel, { presented: false });
-        await panel.updateComplete;
-        expect(AudioSocketMock.instances[0]!.close).toHaveBeenCalledOnce();
-        expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
-        expect(handle.disconnect).not.toHaveBeenCalled();
-        updatePanel(panel, { presented: true });
-      }
+  it.each([false, true])("explicitly reconnects hidden audio (pending=%s)", async (pending) => {
+    const observed = createDeferred<DesktopObserveResult>();
+    const pendingObservation = pending ? observed.promise : undefined;
+    const { panel, handle, connect, request } = await setup(true, false, false, pendingObservation);
+    if (pending) {
+      expect(request).toHaveBeenCalledWith("desktop.observe", expect.anything());
+      expect(connect).not.toHaveBeenCalled();
+      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      observed.resolve({ ...observation, expiresAtMs: 60_000 });
+      await vi.advanceTimersByTimeAsync(0);
       await panel.updateComplete;
       expect(connect).toHaveBeenCalledOnce();
-      const reconnect = panel.querySelector<HTMLButtonElement>(
-        "[aria-label='Reconnect desktop for audio']",
-      );
-      expect(reconnect).not.toBeNull();
-      expect(reconnect!.disabled).toBe(false);
-      expect(AudioSocketMock.instances).toHaveLength(pending ? 0 : 1);
-      expect(AudioContextMock.instances).toHaveLength(pending ? 0 : 1);
-      expect(handle.disconnect).not.toHaveBeenCalled();
-      reconnect!.click();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(connect).toHaveBeenCalledTimes(2);
-      const socket = AudioSocketMock.instances.at(-1)!;
-      socket.open();
+      expect(AudioSocketMock.instances).toHaveLength(0);
+      expect(AudioContextMock.instances).toHaveLength(0);
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else {
+      clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
       await panel.updateComplete;
-      expect(socket.send).not.toHaveBeenCalled();
-      expect(AudioContextMock.instances).toHaveLength(pending ? 0 : 1);
-      expect(panel.querySelector("[aria-label='Unmute desktop audio']")).not.toBeNull();
-    },
-  );
+      updatePanel(panel, { presented: false });
+      await panel.updateComplete;
+      expect(AudioSocketMock.instances[0]!.close).toHaveBeenCalledOnce();
+      expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
+      expect(handle.disconnect).not.toHaveBeenCalled();
+      updatePanel(panel, { presented: true });
+    }
+    await panel.updateComplete;
+    expect(connect).toHaveBeenCalledOnce();
+    const reconnect = panel.querySelector<HTMLButtonElement>(
+      "[aria-label='Reconnect desktop for audio']",
+    );
+    expect(reconnect).not.toBeNull();
+    expect(reconnect!.disabled).toBe(false);
+    expect(AudioSocketMock.instances).toHaveLength(pending ? 0 : 1);
+    expect(AudioContextMock.instances).toHaveLength(pending ? 0 : 1);
+    expect(handle.disconnect).not.toHaveBeenCalled();
+    reconnect!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connect).toHaveBeenCalledTimes(2);
+    const socket = AudioSocketMock.instances.at(-1)!;
+    socket.open();
+    await panel.updateComplete;
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(AudioContextMock.instances).toHaveLength(pending ? 0 : 1);
+    expect(panel.querySelector("[aria-label='Unmute desktop audio']")).not.toBeNull();
+  });
 
   it.each(["source", "disconnect", "unmount", "unmount-pending", "tab-hidden"])(
     "tears down playback on %s",
@@ -241,7 +229,6 @@ describe("desktop panel audio wiring", () => {
     updatePanel(panel, { presented: false });
     button.click();
     expect(AudioContextMock.instances).toHaveLength(0);
-    // The event closure must also observe current document visibility.
     updatePanel(panel, { presented: true });
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     button.click();

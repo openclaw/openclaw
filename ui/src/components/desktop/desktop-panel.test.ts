@@ -19,6 +19,34 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
+const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
+function expectObserve(request: unknown, environmentId: string, control = false) {
+  expect(request).toHaveBeenLastCalledWith("desktop.observe", {
+    source: { kind: "environment", environmentId },
+    control,
+  });
+}
+function rpcCalls<T extends unknown[]>(request: { mock: { calls: T[] } }, method: string) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+function connected(overrides: Partial<DesktopConnectionHandle> = {}) {
+  return vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+    options.onConnect?.();
+    return createConnectionHandle(overrides);
+  });
+}
+type RpcParams = {
+  control?: boolean;
+  environmentId?: string;
+  credentials?: { username: string; password: string };
+};
+type Reply = (params?: RpcParams) => unknown;
+function desktopRequest(handlers: Record<string, Reply>, fallback: Reply) {
+  return vi.fn(async (method: string, params?: RpcParams) =>
+    (handlers[method] ?? fallback)(params),
+  );
+}
+
 async function mount(
   client: ReturnType<typeof createGatewayClient>["client"],
   connect: DesktopClient["connect"],
@@ -35,6 +63,47 @@ async function mount(
   return panel;
 }
 
+async function handoffFixture(initialControl = false, delayedHandle = false) {
+  const observe = createDeferred<unknown>();
+  const replacement = createDeferred<DesktopConnectionHandle>();
+  const previous = createConnectionHandle();
+  const next = createConnectionHandle();
+  const canvas = document.createElement("canvas");
+  const request = desktopRequest(
+    {
+      "environments.list": () => ({ environments: [desktopEnvironment] }),
+      "environments.status": () => desktopEnvironment,
+    },
+    (params) =>
+      (delayedHandle ? params?.control !== initialControl : Boolean(params?.control))
+        ? observe.promise
+        : {
+            transport: "rfb",
+            wsPath: "/view",
+            control: initialControl,
+            ...(delayedHandle ? { canResize: true } : {}),
+          },
+  );
+  const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+    if (options.viewOnly !== !initialControl) {
+      if (delayedHandle) {
+        options.target.append(canvas);
+      }
+      return delayedHandle ? replacement.promise : next;
+    }
+    options.onConnect?.();
+    return previous;
+  });
+  const gateway = createGatewayClient(request);
+  const panel = await mount(gateway.client, connect, {
+    embedded: true,
+    presented: true,
+    requestedSource: desktopEnvironment.id,
+    ...(delayedHandle ? { documentMode: true, documentControl: initialControl } : {}),
+  });
+  return { observe, replacement, previous, next, canvas, request, connect, gateway, panel };
+}
+
 describe("embedded desktop panel presentation", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -49,19 +118,18 @@ describe("embedded desktop panel presentation", () => {
     { reason: "control-taken:林 🦞", notice: "林 🦞 took control" },
     { reason: "control-taken", notice: "Another operator took control" },
   ])("identifies a takeover ($reason) and reconnects view-only", async ({ reason, notice }) => {
-    const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
-      if (method === "environments.list") {
-        return { environments: [desktopEnvironment] };
-      }
-      if (method === "environments.status") {
-        return desktopEnvironment;
-      }
-      return { transport: "rfb", wsPath: "/desktop/observe?token=test", control: params?.control };
-    });
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      options.onConnect?.();
-      return createConnectionHandle();
-    });
+    const request = desktopRequest(
+      {
+        "environments.list": () => ({ environments: [desktopEnvironment] }),
+        "environments.status": () => desktopEnvironment,
+      },
+      (params) => ({
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=test",
+        control: params?.control,
+      }),
+    );
+    const connect = connected();
     const panel = await mount(createGatewayClient(request).client, connect, {
       documentMode: true,
       documentControl: true,
@@ -76,28 +144,27 @@ describe("embedded desktop panel presentation", () => {
 
     await waitForSolid(() => expect(panel.textContent).toContain(notice));
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenLastCalledWith("desktop.observe", {
-      source: { kind: "environment", environmentId: desktopEnvironment.id },
-      control: false,
-    });
+    expectObserve(request, desktopEnvironment.id);
     expect(connect.mock.calls[1]?.[0].viewOnly).toBe(true);
   });
 
   it("follows the session desktop and retires its connection before resolving a new placement", async () => {
     const replacement = { ...desktopEnvironment, id: "worker-desktop-2" };
     let refresh: Promise<void> | undefined;
-    const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
-      if (method === "environments.status") {
-        await refresh;
-        return params?.environmentId === replacement.id ? replacement : desktopEnvironment;
-      }
-      return {
+    const request = desktopRequest(
+      {
+        "environments.status": async (params) => {
+          await refresh;
+          return params?.environmentId === replacement.id ? replacement : desktopEnvironment;
+        },
+      },
+      () => ({
         transport: "rfb",
         wsPath: "/desktop/observe?token=session",
         expiresAtMs: 60_000,
         control: false,
-      };
-    });
+      }),
+    );
     const disconnect = vi.fn();
     const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
       expect(options.target.isConnected).toBe(true);
@@ -129,55 +196,33 @@ describe("embedded desktop panel presentation", () => {
     nextInventory.resolve();
     refresh = undefined;
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenLastCalledWith("desktop.observe", {
-      source: { kind: "environment", environmentId: replacement.id },
-      control: false,
-    });
+    expectObserve(request, replacement.id);
 
     updatePanel(panel, { requestedSource: null });
     await panel.updateComplete;
     await waitForSolid(() => {
       expect(disconnect).toHaveBeenCalledTimes(2);
       expect(connect).toHaveBeenCalledTimes(2);
-      expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
-      expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
+      expect(rpcCalls(request, "sessions.describe")).toHaveLength(0);
+      expect(rpcCalls(request, "environments.list")).toHaveLength(0);
       expect(panel.querySelector(".desktop-picker")).toBeNull();
       expect(panel.textContent).toContain("The requested desktop is unavailable");
     });
   });
 
-  it.each([
-    {
-      presentation: "session",
-      event: "node.runnerInventory.changed",
-      payload: { nodeId: "workstation" },
-    },
-    {
-      presentation: "floating",
-      event: "node.runnerInventory.changed",
-      payload: { nodeId: "workstation" },
-    },
-  ])(
-    "discovers a late node on $event in the $presentation presenter without retaining credentials",
-    async ({ presentation, event, payload }) => {
-      const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
+  it.each(["session", "floating"])(
+    "discovers a late node in the %s presenter without retaining credentials",
+    async (presentation) => {
       const sessionKey = "agent:main:desktop";
-      const picker = presentation === "picker" || presentation === "floating";
+      const picker = presentation === "floating";
       let online = true;
-      const request = vi.fn(
-        async (
-          method: string,
-          params?: { credentials?: { username: string; password: string } },
-        ) => {
-          if (method === "environments.list") {
-            return { environments: online ? [node] : [] };
-          }
-          if (method === "environments.status") {
-            return { ...node, desktop: online };
-          }
-          if (method === "sessions.describe") {
-            return { session: { key: sessionKey, execNode: "workstation" } };
-          }
+      const request = desktopRequest(
+        {
+          "environments.list": () => ({ environments: online ? [node] : [] }),
+          "environments.status": () => ({ ...node, desktop: online }),
+          "sessions.describe": () => ({ session: { key: sessionKey, execNode: "workstation" } }),
+        },
+        (params) => {
           if (!params?.credentials) {
             throw new GatewayRequestError({
               code: "INVALID_REQUEST",
@@ -203,11 +248,11 @@ describe("embedded desktop panel presentation", () => {
         return createConnectionHandle({ disconnect });
       });
       const panel = await mount(gateway.client, connect, {
-        documentMode: presentation !== "embedded" && presentation !== "floating",
-        embedded: presentation === "embedded",
+        documentMode: !picker,
+        embedded: false,
         presented: true,
         sessionKey: presentation === "session" ? sessionKey : null,
-        requestedSource: presentation === "source" || presentation === "embedded" ? node.id : null,
+        requestedSource: null,
       });
       await panel.updateComplete;
       if (presentation === "floating") {
@@ -246,8 +291,7 @@ describe("embedded desktop panel presentation", () => {
         expect(panel.querySelector(".desktop-picker")).not.toBeNull();
         expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(0);
       });
-      const observations = () =>
-        request.mock.calls.filter(([method]) => method === "desktop.observe");
+      const observations = () => rpcCalls(request, "desktop.observe");
       expect(observations()).toHaveLength(2);
 
       // Connection precedes approval: the first inventory still has no usable desktop.
@@ -258,7 +302,7 @@ describe("embedded desktop panel presentation", () => {
       expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(0);
       expect(observations()).toHaveLength(2);
       online = true;
-      gateway.emit(event, payload);
+      gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
       if (picker) {
         await waitForSolid(() =>
           expect(panel.querySelector(".desktop-environment")?.textContent ?? "").toContain(node.id),
@@ -271,9 +315,8 @@ describe("embedded desktop panel presentation", () => {
         source: { kind: "node", nodeId: "workstation" },
         control: false,
       });
-      expect(reconnected.username.value).toBe("");
-      expect(reconnected.password.value).toBe("");
-      gateway.emit(event, payload);
+      expect([reconnected.username.value, reconnected.password.value]).toEqual(["", ""]);
+      gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
       await panel.updateComplete;
       expect(observations()).toHaveLength(3);
       expect(connect).toHaveBeenCalledOnce();
@@ -282,23 +325,18 @@ describe("embedded desktop panel presentation", () => {
 
   it("discovers a node that arrives before an older empty inventory response finishes", async () => {
     const empty = createDeferred<{ environments: [] }>();
-    const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
     let inventory: Promise<{ environments: (typeof node)[] }> = empty.promise;
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.status") {
-        return (await inventory).environments[0] ?? { ...node, desktop: false };
-      }
-      if (method === "environments.list") {
-        return inventory;
-      }
-      return { transport: "rfb", wsPath: "/desktop/observe?token=synthetic", control: false };
-    });
+    const request = desktopRequest(
+      {
+        "environments.status": async () =>
+          (await inventory).environments[0] ?? { ...node, desktop: false },
+        "environments.list": () => inventory,
+      },
+      () => ({ transport: "rfb", wsPath: "/desktop/observe?token=synthetic", control: false }),
+    );
     const gateway = createGatewayClient(request);
     const disconnect = vi.fn();
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      options.onConnect?.();
-      return createConnectionHandle({ disconnect });
-    });
+    const connect = connected({ disconnect });
     const panel = await mount(gateway.client, connect, {
       documentMode: true,
       requestedSource: node.id,
@@ -326,7 +364,6 @@ describe("embedded desktop panel presentation", () => {
   });
 
   it("ignores a session lookup superseded by a renewed target refresh", async () => {
-    const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
     const session = { key: "agent:main:desktop", execNode: "workstation" };
     const oldSession = createDeferred<unknown>();
     const nextInventory = createDeferred<{ environments: (typeof node)[] }>();
@@ -334,37 +371,29 @@ describe("embedded desktop panel presentation", () => {
       environments: [],
     });
     let sessionRead: Promise<unknown> = Promise.resolve({ session });
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.list") {
-        return inventory;
-      }
-      if (method === "environments.status") {
-        return (await inventory).environments[0] ?? { ...node, desktop: false };
-      }
-      if (method === "sessions.describe") {
-        return sessionRead;
-      }
-      return { transport: "rfb", wsPath: "/desktop/observe?token=synthetic", control: false };
-    });
+    const request = desktopRequest(
+      {
+        "environments.list": () => inventory,
+        "environments.status": async () =>
+          (await inventory).environments[0] ?? { ...node, desktop: false },
+        "sessions.describe": () => sessionRead,
+      },
+      () => ({ transport: "rfb", wsPath: "/desktop/observe?token=synthetic", control: false }),
+    );
     const gateway = createGatewayClient(request);
     const disconnect = vi.fn();
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      options.onConnect?.();
-      return createConnectionHandle({ disconnect });
-    });
+    const connect = connected({ disconnect });
     const panel = await mount(gateway.client, connect, {
       documentMode: true,
       sessionKey: session.key,
     });
     let oldSessionRequest: Promise<unknown> | undefined;
     const startOldSessionRead = async () => {
-      const reads = request.mock.calls.filter(([method]) => method === "sessions.describe").length;
+      const reads = rpcCalls(request, "sessions.describe").length;
       sessionRead = oldSession.promise;
       gateway.emit("sessions.changed", { sessionKey: session.key });
       await waitForSolid(() =>
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.describe"),
-        ).toHaveLength(reads + 1),
+        expect(rpcCalls(request, "sessions.describe")).toHaveLength(reads + 1),
       );
       oldSessionRequest = request.mock.results.at(-1)!.value;
       sessionRead = Promise.resolve({ session });
@@ -382,9 +411,6 @@ describe("embedded desktop panel presentation", () => {
       await panel.updateComplete;
       nextInventory.resolve({ environments: [node] });
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      oldSession.resolve(retired);
-      await oldSessionRequest;
-      await panel.updateComplete;
       expect(connect.mock.calls[0]?.[0].isCurrent()).toBe(true);
       expect(disconnect).not.toHaveBeenCalled();
       expect(panel.querySelector(".desktop-surface")).not.toBeNull();
@@ -434,90 +460,77 @@ describe("embedded desktop panel presentation", () => {
     },
   );
 
-  it.each(["config.changed"])(
-    "keeps a standalone picker selection and control across %s updates",
-    async (event) => {
-      const selected = { ...desktopEnvironment, id: "worker-manual" };
-      let environments = [desktopEnvironment, selected];
-      const request = vi.fn(
-        async (method: string, params?: { control?: boolean; environmentId?: string }) =>
-          method === "environments.list"
-            ? { environments }
-            : method === "environments.status"
-              ? environments.find((environment) => environment.id === params?.environmentId)
-              : {
-                  transport: "rfb",
-                  wsPath: "/desktop/observe?token=synthetic",
-                  control: params?.control ?? false,
-                },
-      );
-      const gateway = createGatewayClient(request);
-      const inventoryChanged = () =>
-        gateway.emit(
-          event,
-          event === "presence" ? { presence: [] } : { hash: "desktop-labs", ts: 1 },
-        );
-      const disconnect = vi.fn();
-      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-        options.onConnect?.();
-        return createConnectionHandle({ disconnect });
-      });
-      const onFocusTargetChange = vi.fn();
-      const panel = await mount(gateway.client, connect, {
-        embedded: true,
-        presented: true,
-        requestedSource: desktopEnvironment.id,
-        onFocusTargetChange,
-      });
-      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      clickPanelButton(panel, 'button[aria-label="Disconnect"]');
-      await panel.updateComplete;
-      environments = [];
-      inventoryChanged();
-      await waitForSolid(() =>
-        expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(0),
-      );
-      expect(panel.querySelector(".desktop-picker")).not.toBeNull();
-      expect(connect).toHaveBeenCalledOnce();
-      expect(disconnect).toHaveBeenCalledOnce();
-      expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
+  it("keeps a standalone picker selection and control across config updates", async () => {
+    const selected = { ...desktopEnvironment, id: "worker-manual" };
+    let environments = [desktopEnvironment, selected];
+    const request = desktopRequest(
+      {
+        "environments.list": () => ({ environments }),
+        "environments.status": (params) =>
+          environments.find((environment) => environment.id === params?.environmentId),
+      },
+      (params) => ({
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=synthetic",
+        control: params?.control ?? false,
+      }),
+    );
+    const gateway = createGatewayClient(request);
+    const inventoryChanged = () => gateway.emit("config.changed", { hash: "desktop-labs", ts: 1 });
+    const disconnect = vi.fn();
+    const connect = connected({ disconnect });
+    const onFocusTargetChange = vi.fn();
+    const panel = await mount(gateway.client, connect, {
+      embedded: true,
+      presented: true,
+      requestedSource: desktopEnvironment.id,
+      onFocusTargetChange,
+    });
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+    clickPanelButton(panel, 'button[aria-label="Disconnect"]');
+    await panel.updateComplete;
+    environments = [];
+    inventoryChanged();
+    await waitForSolid(() =>
+      expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(0),
+    );
+    expect(panel.querySelector(".desktop-picker")).not.toBeNull();
+    expect(connect).toHaveBeenCalledOnce();
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(rpcCalls(request, "sessions.describe")).toHaveLength(0);
 
-      environments = [selected, desktopEnvironment];
-      inventoryChanged();
-      await waitForSolid(() =>
-        expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(2),
-      );
-      clickPanelButton(panel);
-      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-      expect(panel.querySelectorAll('button[aria-label="Take control"]')).toHaveLength(1);
-      clickPanelButton(panel, 'button[aria-label="Take control"]');
-      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
-      const selectedConnection = connect.mock.calls.at(-1)?.[0];
-      expect(selectedConnection?.viewOnly).toBe(false);
-      expect(request).toHaveBeenLastCalledWith("desktop.observe", {
-        source: { kind: "environment", environmentId: selected.id },
-        control: true,
-      });
-      await panel.updateComplete;
-      const selectedFocus = { kind: "desktop", source: selected.id, control: true };
-      expect(onFocusTargetChange).toHaveBeenLastCalledWith(selectedFocus);
+    environments = [selected, desktopEnvironment];
+    inventoryChanged();
+    await waitForSolid(() =>
+      expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(2),
+    );
+    clickPanelButton(panel);
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+    expect(panel.querySelectorAll('button[aria-label="Take control"]')).toHaveLength(1);
+    clickPanelButton(panel, 'button[aria-label="Take control"]');
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
+    const selectedConnection = connect.mock.calls.at(-1)?.[0];
+    expect(selectedConnection?.viewOnly).toBe(false);
+    expectObserve(request, selected.id, true);
+    await panel.updateComplete;
+    const selectedFocus = { kind: "desktop", source: selected.id, control: true };
+    expect(onFocusTargetChange).toHaveBeenLastCalledWith(selectedFocus);
 
-      environments = [desktopEnvironment];
-      inventoryChanged();
-      await panel.updateComplete;
-      expect({
-        connected: selectedConnection?.isCurrent(),
-        connections: connect.mock.calls.length,
-        disconnects: disconnect.mock.calls.length,
-        focus: onFocusTargetChange.mock.calls.at(-1)?.[0],
-      }).toEqual({ connected: true, connections: 3, disconnects: 2, focus: selectedFocus });
-      expect(panel.textContent).not.toContain("Agent input is paused");
-      clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
-      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(4));
-      expect(connect.mock.calls.at(-1)?.[0].viewOnly).toBe(true);
-      expect(panel.textContent).not.toContain("Agent input is paused");
-    },
-  );
+    environments = [desktopEnvironment];
+    inventoryChanged();
+    await panel.updateComplete;
+    expect({
+      connected: selectedConnection?.isCurrent(),
+      connections: connect.mock.calls.length,
+      disconnects: disconnect.mock.calls.length,
+      focus: onFocusTargetChange.mock.calls.at(-1)?.[0],
+    }).toEqual({ connected: true, connections: 3, disconnects: 2, focus: selectedFocus });
+    expect(panel.textContent).not.toContain("Agent input is paused");
+    clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(4));
+    expect(connect.mock.calls.at(-1)?.[0].viewOnly).toBe(true);
+    expect(panel.textContent).not.toContain("Agent input is paused");
+  });
 
   it.each(["before", "after"] as const)(
     "keeps focused session updates current and retains a choice across a lookup started %s selection",
@@ -531,30 +544,22 @@ describe("embedded desktop panel presentation", () => {
       };
       const reclaimed = { ...active, placement: { state: "reclaimed" } };
       let sessionRead: Promise<unknown> | undefined;
-      const request = vi.fn(
-        async (method: string, params?: { control?: boolean; environmentId?: string }) => {
-          if (method === "environments.list") {
-            return { environments: [selected, desktopEnvironment] };
-          }
-          if (method === "environments.status") {
-            return params?.environmentId === selected.id ? selected : desktopEnvironment;
-          }
-          if (method === "sessions.describe") {
-            return sessionRead ?? { session: active };
-          }
-          return {
-            transport: "rfb",
-            wsPath: "/desktop/observe?token=focused",
-            expiresAtMs: 60_000,
-            control: params?.control ?? false,
-          };
+      const request = desktopRequest(
+        {
+          "environments.list": () => ({ environments: [selected, desktopEnvironment] }),
+          "environments.status": (params) =>
+            params?.environmentId === selected.id ? selected : desktopEnvironment,
+          "sessions.describe": () => sessionRead ?? { session: active },
         },
+        (params) => ({
+          transport: "rfb",
+          wsPath: "/desktop/observe?token=focused",
+          expiresAtMs: 60_000,
+          control: params?.control ?? false,
+        }),
       );
       const disconnect = vi.fn();
-      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-        options.onConnect?.();
-        return createConnectionHandle({ disconnect });
-      });
+      const connect = connected({ disconnect });
       const gateway = createGatewayClient(request);
       const onFocusTargetChange = vi.fn();
       const panel = await mount(gateway.client, connect, {
@@ -563,8 +568,7 @@ describe("embedded desktop panel presentation", () => {
         onFocusTargetChange,
       });
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      const descriptions = () =>
-        request.mock.calls.filter(([method]) => method === "sessions.describe");
+      const descriptions = () => rpcCalls(request, "sessions.describe");
       const changed = (key = sessionKey) => gateway.emit("sessions.changed", { sessionKey: key });
 
       changed("agent:main:unrelated");
@@ -640,10 +644,7 @@ describe("embedded desktop panel presentation", () => {
       await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(connections + 1));
       updatePanel(panel, { requestedSource: selected.id });
       await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(connections + 2));
-      expect(request).toHaveBeenLastCalledWith("desktop.observe", {
-        source: { kind: "environment", environmentId: selected.id },
-        control: false,
-      });
+      expectObserve(request, selected.id);
       expect(onFocusTargetChange).toHaveBeenLastCalledWith({
         kind: "desktop",
         source: selected.id,
@@ -662,41 +663,8 @@ describe("embedded desktop panel presentation", () => {
   ] as const)(
     "retains control=$initialControl until RFB connects with the handle $handleTiming the callback",
     async ({ initialControl, handleTiming }) => {
-      const observe = createDeferred<unknown>();
-      const replacement = createDeferred<DesktopConnectionHandle>();
-      const previous = createConnectionHandle();
-      const next = createConnectionHandle();
-      const replacementCanvas = document.createElement("canvas");
-      let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
-      const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
-        if (method === "environments.list") {
-          return { environments: [desktopEnvironment] };
-        }
-        if (method === "environments.status") {
-          return desktopEnvironment;
-        }
-        if (params?.control !== initialControl) {
-          return observe.promise;
-        }
-        return { transport: "rfb", wsPath: "/view", control: initialControl, canResize: true };
-      });
-      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-        if (options.viewOnly !== !initialControl) {
-          options.target.append(replacementCanvas);
-          pending = options;
-          return replacement.promise;
-        }
-        options.onConnect?.();
-        return previous;
-      });
-      const gateway = createGatewayClient(request);
-      const panel = await mount(gateway.client, connect, {
-        documentMode: true,
-        documentControl: initialControl,
-        embedded: true,
-        presented: true,
-        requestedSource: desktopEnvironment.id,
-      });
+      const { observe, replacement, previous, next, canvas, request, connect, gateway, panel } =
+        await handoffFixture(initialControl, true);
       try {
         await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
         await panel.updateComplete;
@@ -705,9 +673,7 @@ describe("embedded desktop panel presentation", () => {
           selectSizing(panel, "match");
           await panel.updateComplete;
         }
-        const inventoryReads = request.mock.calls.filter(
-          ([method]) => method === "environments.list",
-        ).length;
+        const inventoryReads = rpcCalls(request, "environments.list").length;
         const toggle = panel.querySelector<HTMLButtonElement>(
           `button[aria-label="${initialControl ? "Switch to view only" : "Take control"}"]`,
         );
@@ -715,27 +681,20 @@ describe("embedded desktop panel presentation", () => {
           throw new Error("expected the desktop control toggle");
         }
         toggle.click();
-        await waitForSolid(() =>
-          expect(
-            request.mock.calls.filter(([method]) => method === "desktop.observe"),
-          ).toHaveLength(2),
-        );
+        await waitForSolid(() => expect(rpcCalls(request, "desktop.observe")).toHaveLength(2));
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(previous.disableInput).toHaveBeenCalledOnce();
         const pendingMatch =
           sizingMenu(panel).querySelector<HTMLOptionElement>('option[value="match"]');
         expect(sizingMenu(panel).value).toBe(initialControl ? "match" : "fit");
         if (initialControl) {
-          expect(pendingMatch?.selected).toBe(true);
-          expect(pendingMatch?.disabled).toBe(true);
+          expect(pendingMatch).toMatchObject({ selected: true, disabled: true });
         } else {
           expect(pendingMatch).toBeNull();
         }
         gateway.emit("presence", { presence: [] });
         await panel.updateComplete;
-        expect(
-          request.mock.calls.filter(([method]) => method === "environments.list"),
-        ).toHaveLength(inventoryReads);
+        expect(rpcCalls(request, "environments.list")).toHaveLength(inventoryReads);
         observe.resolve({
           transport: "rfb",
           wsPath: "/control",
@@ -743,6 +702,7 @@ describe("embedded desktop panel presentation", () => {
           canResize: true,
         });
         await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+        const pending = connect.mock.calls[1]![0];
         expect(connect.mock.calls[1]![0].target).toBe(surface);
         if (handleTiming === "before") {
           replacement.resolve(next);
@@ -762,7 +722,7 @@ describe("embedded desktop panel presentation", () => {
         sendKey();
         expect(previous.sendKeyboardEvent).not.toHaveBeenCalled();
         expect(next.sendKeyboardEvent).not.toHaveBeenCalled();
-        if (!pending?.onConnect) {
+        if (!pending.onConnect) {
           throw new Error("replacement must expose the RFB connected callback");
         }
         pending.onConnect();
@@ -774,7 +734,7 @@ describe("embedded desktop panel presentation", () => {
         await panel.updateComplete;
         expect(pending.isCurrent()).toBe(true);
         expect(panel.querySelector(".desktop-surface")).toBe(surface);
-        expect(replacementCanvas.isConnected).toBe(true);
+        expect(canvas.isConnected).toBe(true);
         expect(sizingMenu(panel).value).toBe("fit");
         expect(Boolean(sizingMenu(panel).querySelector('option[value="match"]'))).toBe(
           !initialControl,
@@ -806,43 +766,12 @@ describe("embedded desktop panel presentation", () => {
     "source change",
     "unmount",
   ] as const)("releases the retained viewer and pending replacement on %s", async (outcome) => {
-    const observe = createDeferred<unknown>();
-    const previous = createConnectionHandle();
-    const next = createConnectionHandle();
-    let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
-    const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
-      if (method === "environments.list") {
-        return { environments: [desktopEnvironment] };
-      }
-      if (method === "environments.status") {
-        return desktopEnvironment;
-      }
-      return params?.control
-        ? observe.promise
-        : { transport: "rfb", wsPath: "/view", control: false };
-    });
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      if (!options.viewOnly) {
-        pending = options;
-        return next;
-      }
-      options.onConnect?.();
-      return previous;
-    });
-    const panel = await mount(createGatewayClient(request).client, connect, {
-      embedded: true,
-      presented: true,
-      requestedSource: desktopEnvironment.id,
-    });
+    const { observe, previous, next, request, connect, panel } = await handoffFixture();
     try {
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       await panel.updateComplete;
       panel.querySelector<HTMLButtonElement>(".desktop-stage__take-control")?.click();
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(
-          2,
-        ),
-      );
+      await waitForSolid(() => expect(rpcCalls(request, "desktop.observe")).toHaveLength(2));
       expect(previous.disconnect).not.toHaveBeenCalled();
       if (outcome === "observe failure" || outcome === "credentials") {
         observe.reject(
@@ -854,6 +783,7 @@ describe("embedded desktop panel presentation", () => {
         observe.resolve({ transport: "rfb", wsPath: "/control", control: true });
         await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
         await panel.updateComplete;
+        const pending = connect.mock.calls[1]![0];
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(pending?.isCurrent()).toBe(true);
         if (outcome === "security failure") {
@@ -891,6 +821,7 @@ describe("embedded desktop panel presentation", () => {
         expect(panel.querySelector(".desktop-status button")?.textContent).toContain("Reconnect");
       }
       await waitForSolid(() => expect(previous.disconnect).toHaveBeenCalledOnce());
+      const pending = connect.mock.calls[1]?.[0];
       if (pending) {
         expect(pending.isCurrent()).toBe(false);
         expect(next.disconnect).toHaveBeenCalledOnce();

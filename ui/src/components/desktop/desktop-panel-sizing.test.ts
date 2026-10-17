@@ -16,6 +16,9 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
+type Connect = DesktopClient["connect"];
+type Panel = ReturnType<typeof createPanel>;
+
 describe("desktop panel sizing", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -26,26 +29,46 @@ describe("desktop panel sizing", () => {
     vi.unstubAllGlobals();
   });
 
-  function observeRequest(observed: object) {
-    return vi.fn(async (method: string) => {
+  function observeRequest(
+    observed: object | ((params?: { control?: boolean }) => object),
+    environments = [desktopEnvironment],
+  ) {
+    return vi.fn(async (method: string, params?: { control?: boolean; environmentId?: string }) => {
       if (method === "environments.list") {
-        return { environments: [desktopEnvironment] };
+        return { environments };
       }
       if (method === "environments.status") {
-        return desktopEnvironment;
+        const environment = environments.find((entry) => entry.id === params?.environmentId);
+        if (!environment) {
+          throw new Error("Unexpected desktop environment");
+        }
+        return environment;
       }
       if (method === "desktop.observe") {
-        return { transport: "rfb", wsPath: "/view", ...observed };
+        return {
+          transport: "rfb",
+          wsPath: "/view",
+          ...(typeof observed === "function" ? observed(params) : observed),
+        };
       }
       throw new Error(`Unexpected desktop RPC: ${method}`);
     });
   }
 
-  async function mount(
-    request: unknown,
-    connect: DesktopClient["connect"],
-    options: Partial<ReturnType<typeof createPanel>> = {},
-  ) {
+  function connections(authenticate = false) {
+    const handles: ReturnType<typeof createConnectionHandle>[] = [];
+    const connect = vi.fn(async (options: Parameters<Connect>[0]) => {
+      const handle = createConnectionHandle();
+      handles.push(handle);
+      if (authenticate) {
+        options.onConnect?.();
+      }
+      return handle;
+    });
+    return { handles, connect };
+  }
+
+  async function mount(request: unknown, connect: Connect, options: Partial<Panel> = {}) {
     const panel = createPanel();
     updatePanel(panel, {
       client: createGatewayClient(request).client,
@@ -57,60 +80,51 @@ describe("desktop panel sizing", () => {
       ...options,
     });
     await mountPanel(panel);
+    await connected(panel, connect, 1);
     return panel;
   }
 
+  async function connected(panel: Panel, connect: Connect, count: number) {
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(count));
+    await panel.updateComplete;
+  }
+
   it.each([
-    {
-      name: "worker password without auth metadata",
-      observed: { vncPassword: "synthetic" },
-      credentials: { password: "synthetic" },
-    },
-    {
-      name: "explicit VNC password",
-      observed: { auth: "vnc-password", vncPassword: "synthetic" },
-      credentials: { password: "synthetic" },
-    },
-    {
-      name: "preauthenticated VNC",
-      observed: { auth: "vnc-password", vncPassword: "synthetic", preauthenticated: true },
-      credentials: undefined,
-    },
-    {
-      name: "preauthenticated ARD",
-      observed: { auth: "ard-account", preauthenticated: true },
-      credentials: undefined,
-    },
-  ])("passes only resolved credentials to noVNC for $name", async ({ observed, credentials }) => {
+    ["worker password", { vncPassword: "synthetic" }, { password: "synthetic" }],
+    ["explicit VNC", { auth: "vnc-password", vncPassword: "synthetic" }, { password: "synthetic" }],
+    [
+      "preauthenticated VNC",
+      { auth: "vnc-password", vncPassword: "synthetic", preauthenticated: true },
+      undefined,
+    ],
+    ["preauthenticated ARD", { auth: "ard-account", preauthenticated: true }, undefined],
+  ] as const)("resolves %s credentials", async (_name, observed, credentials) => {
     const request = observeRequest({ control: false, ...observed });
-    const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) =>
-      createConnectionHandle(),
-    );
+    const { connect } = connections();
     await mount(request, connect);
 
-    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(connect.mock.calls[0]![0].credentials).toEqual(credentials);
   });
 
   it.each(
     [false, true].flatMap((documentMode) =>
-      [
-        { canResize: true, control: true },
-        { canResize: true, control: false },
-        { canResize: false, control: true },
-        { canResize: undefined, control: true },
-      ].map(({ canResize, control }) => ({ documentMode, canResize, control })),
+      (
+        [
+          [true, true],
+          [true, false],
+          [false, true],
+          [undefined, true],
+        ] as const
+      ).map(([canResize, control]) => ({ documentMode, canResize, control })),
     ),
   )(
-    "offers Match only after capable controller authentication ($documentMode/$canResize/$control)",
+    "gates Match ($documentMode/$canResize/$control)",
     async ({ documentMode, canResize, control }) => {
       const request = observeRequest({ control, canResize });
-      const handle = createConnectionHandle();
-      const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) => handle);
+      const { connect, handles } = connections();
       const panel = await mount(request, connect, { documentMode, documentControl: control });
 
-      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      await panel.updateComplete;
+      const handle = handles[0]!;
       const options = connect.mock.calls[0]![0];
       expect(options).toMatchObject({ canResize, viewOnly: !control, sizingMode: "fit" });
       expect(sizingMenu(panel).value).toBe("fit");
@@ -144,36 +158,12 @@ describe("desktop panel sizing", () => {
     async (transition) => {
       const replacement = { ...desktopEnvironment, id: "worker-desktop-2" };
       let canResize = true;
-      const request = vi.fn(
-        async (method: string, params?: { control?: boolean; environmentId?: string }) => {
-          if (method === "environments.list") {
-            return { environments: [desktopEnvironment, replacement] };
-          }
-          if (method === "environments.status") {
-            const environment = [desktopEnvironment, replacement].find(
-              (candidate) => candidate.id === params?.environmentId,
-            );
-            if (!environment) {
-              throw new Error("Unexpected desktop environment");
-            }
-            return environment;
-          }
-          if (method === "desktop.observe") {
-            return { transport: "rfb", wsPath: "/view", control: params?.control, canResize };
-          }
-          throw new Error(`Unexpected desktop RPC: ${method}`);
-        },
+      const request = observeRequest(
+        (params) => ({ control: params?.control, canResize }),
+        [desktopEnvironment, replacement],
       );
-      const handles: ReturnType<typeof createConnectionHandle>[] = [];
-      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-        const handle = createConnectionHandle();
-        handles.push(handle);
-        options.onConnect?.();
-        return handle;
-      });
+      const { handles, connect } = connections(true);
       const panel = await mount(request, connect, { documentMode: true, documentControl: true });
-      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      await panel.updateComplete;
       selectSizing(panel, "match");
       await panel.updateComplete;
 
@@ -188,8 +178,7 @@ describe("desktop panel sizing", () => {
         await panel.updateComplete;
         clickPanelButton(panel, ".desktop-status button");
       }
-      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-      await panel.updateComplete;
+      await connected(panel, connect, 2);
       expect(handles[0]!.disconnect).toHaveBeenCalledOnce();
       expect(original.isCurrent()).toBe(false);
       expect(connect.mock.calls[1]![0].sizingMode).toBe(transition === "retry" ? "match" : "fit");
@@ -205,14 +194,8 @@ describe("desktop panel sizing", () => {
 
   it("applies Fit selected during a Match reconnect before authentication enables sizing", async () => {
     const request = observeRequest({ control: true, canResize: true });
-    const handles = [createConnectionHandle(), createConnectionHandle()];
-    let connectionIndex = 0;
-    const connect = vi.fn(
-      async (_options: Parameters<DesktopClient["connect"]>[0]) => handles[connectionIndex++]!,
-    );
+    const { handles, connect } = connections();
     const panel = await mount(request, connect, { documentMode: true, documentControl: true });
-    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-    await panel.updateComplete;
     const initial = connect.mock.calls[0]![0];
     initial.onConnect?.();
     await panel.updateComplete;
@@ -220,8 +203,7 @@ describe("desktop panel sizing", () => {
     initial.onDisconnect?.({ clean: false, code: 1006 });
     await panel.updateComplete;
     clickPanelButton(panel, ".desktop-status button");
-    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-    await panel.updateComplete;
+    await connected(panel, connect, 2);
     const pending = connect.mock.calls[1]![0];
     expect(pending.sizingMode).toBe("match");
     expect(sizingMenu(panel).value).toBe("match");
