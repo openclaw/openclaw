@@ -201,17 +201,9 @@ export function createAgentsPageState(
   });
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
-    onIdentityChange: (change) => {
-      if (change.sourceChanged) {
-        resetForSourceChange();
-      } else {
-        // Reconnecting to this Gateway retires requests, but keeps the selected
-        // agent and its draft visible while a fresh transport is established.
-        clearIdentityAutosave();
-        invalidateTransientRequests();
-        resetModelCatalog();
-      }
-    },
+    // A new source or client owns a new set of drafts. A same-client reconnect
+    // only invalidates in-flight requests below and keeps its drafts visible.
+    onIdentityChange: () => resetForSourceChange(),
     invalidateRequests: (change) => {
       if (change.identityChanged) {
         return;
@@ -317,6 +309,7 @@ export function createAgentsPageState(
   }
 
   function resetForSourceChange() {
+    clearIdentityAutosave();
     selectionDrafts.clear();
     identitySaves = selectionDrafts.bindContext(context);
     state.agentsList = null;
