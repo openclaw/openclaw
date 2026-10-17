@@ -1223,6 +1223,10 @@ Gateway combined listings, search preparation, cron owner discovery, delivery
 context recovery, and ordered runtime candidate selection await the existing
 session history/discovery worker. Target selection returns logical and physical
 store facts together; durable reads do not run SQLite on the Gateway thread.
+Canonical per-agent paths already identify their owner, so discovery does not
+queue a shared-state registry read for them. Fixed and shared stores still require
+registry ownership before selecting a target, and an unavailable registry refuses
+those selections.
 Combined topology and row reads share the federation policy used by the native
 maintenance entrypoint. Bound and unbound incognito targets use the memory actor
 without opening a SQLite database or allocating a database worker.

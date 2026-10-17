@@ -46,12 +46,6 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       log.warn(diagnostic.message);
     }
   };
-  // Ownership must not fall back while the authoritative registry is unreadable:
-  // doing so can project the same physical DB under a different configured default.
-  const registeredDatabases = readSessionStoreRegistryRows(
-    options.registeredDatabases,
-    options.env,
-  );
   const grouped = new Map<
     string,
     Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string; shared: boolean }>
@@ -88,7 +82,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       agentId: target.agentId,
       defaultAgentId: options.defaultAgentId,
       env: options.env,
-      registeredDatabases,
+      registeredDatabases: options.registeredDatabases,
       isSameDatabasePath,
       readCandidates: options.readCandidates,
     });
@@ -149,14 +143,14 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       group.map(({ target }) => [normalizeAgentId(target.agentId), target] as const),
     );
     const pathOwners = [...new Set(group.flatMap((entry) => entry.databaseOwnerAgentId ?? []))];
-    // A unique path owner outranks registry owners, so identity matching cannot change the result.
-    // Registry loading above still preserves unreadable-registry semantics.
+    // Canonical paths already name their owner. Only ambiguous ownership needs
+    // registry admission; fixed/shared locators also require it in the resolver above.
     const registeredOwners =
       pathOwners.length === 1
         ? []
         : [
             ...new Set(
-              registeredDatabases
+              readSessionStoreRegistryRows(options.registeredDatabases, options.env)
                 .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
                 .map((entry) => normalizeAgentId(entry.agentId)),
             ),
