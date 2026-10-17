@@ -16,7 +16,10 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { agentsListCommand } from "./agents.commands.list.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -58,11 +61,19 @@ function instrumentProvenanceWorkerRequests() {
   return { commands, restore };
 }
 
+function configureRoster(state: OpenClawTestState, ids: string[]) {
+  config = {
+    agents: {
+      ownership: "explicit",
+      entries: Object.fromEntries(ids.map((id) => [id, { workspace: path.join(state.root, id) }])),
+    },
+  };
+}
+
 it("does not create provenance storage for an empty JSON roster", async () => {
   await withOpenClawTestState(
     { layout: "state-only", label: "provenance-empty-roster" },
     async (state) => {
-      state.applyEnv();
       config = { agents: { ownership: "explicit", entries: {} } };
       recordAgentDatabaseAdmissions([], { env: state.env });
       const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
@@ -107,17 +118,7 @@ it("reads an absent provenance database without creating state or executing pare
 
 it("serves actual JSON and tree command output from worker provenance through reopen", async () => {
   await withOpenClawTestState({ layout: "state-only", label: "provenance-cli" }, async (state) => {
-    state.applyEnv();
-    config = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { workspace: path.join(state.root, "main") },
-          child: { workspace: path.join(state.root, "child") },
-          legacy: { workspace: path.join(state.root, "legacy") },
-        },
-      },
-    };
+    configureRoster(state, ["main", "child", "legacy"]);
     recordAgentDatabaseAdmissions([], { env: state.env });
     await recordAgentProvenance("Main", { createdVia: "operator" }, { env: state.env, nowMs: 10 });
     await recordAgentProvenance(
@@ -174,16 +175,8 @@ it("enriches a growing configured roster with bounded worker requests in configu
   await withOpenClawTestState(
     { layout: "state-only", label: "provenance-large-roster" },
     async (state) => {
-      state.applyEnv();
       const ids = Array.from({ length: 300 }, (_, index) => `worker-${299 - index}`);
-      config = {
-        agents: {
-          ownership: "explicit",
-          entries: Object.fromEntries(
-            ids.map((id) => [id, { workspace: path.join(state.root, id) }]),
-          ),
-        },
-      };
+      configureRoster(state, ids);
       recordAgentDatabaseAdmissions([], { env: state.env });
       for (const [index, id] of ids.entries()) {
         await recordAgentProvenance(

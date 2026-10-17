@@ -21,13 +21,10 @@ import { ensureOnboardingAgent } from "./onboard-agent.js";
 import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agent-roles-" });
+const specialists = ["researcher", "writer", "reviewer"];
 
-beforeAll(async () => {
-  await tempDirs.setup();
-});
-afterAll(async () => {
-  await tempDirs.cleanup();
-});
+beforeAll(() => tempDirs.setup());
+afterAll(() => tempDirs.cleanup());
 
 async function withState(run: (root: string, configPath: string) => Promise<void>): Promise<void> {
   const root = await tempDirs.make();
@@ -114,9 +111,7 @@ describe("role and team creation through persisted configuration", () => {
       expect(Object.keys(config.agents?.entries ?? {})).toEqual([
         "main",
         "coordinator",
-        "researcher",
-        "writer",
-        "reviewer",
+        ...specialists,
       ]);
       expect(config.agents?.entries?.main?.workspace).toBe(workspace);
       expect(config.bindings).toEqual(initial.bindings);
@@ -132,9 +127,7 @@ describe("role and team creation through persisted configuration", () => {
       expect(result).toMatchObject({ status: "created", coordinatorId: "main" });
       expect(Object.keys((await readConfig()).agents?.entries ?? {})).toEqual([
         "main",
-        "researcher",
-        "writer",
-        "reviewer",
+        ...specialists,
       ]);
     });
   });
@@ -188,9 +181,7 @@ describe("role and team creation through persisted configuration", () => {
         await fs.writeFile(configPath, JSON.stringify(initial));
         const before = await readConfig();
         const coordinatorId = hasAmbientOwner ? "docs-lead" : "coordinator";
-        const specialistIds = ["researcher", "writer", "reviewer"].map((id) =>
-          hasAmbientOwner ? `docs-${id}` : id,
-        );
+        const specialistIds = specialists.map((id) => (hasAmbientOwner ? `docs-${id}` : id));
         const workspaceRoot = path.join(root, hasAmbientOwner ? "team-workspaces" : "workspace");
         const { runtime, logs } = createCapturingTestRuntime();
         await agentsTeamCreateCommand(
@@ -214,13 +205,6 @@ describe("role and team creation through persisted configuration", () => {
             : {}),
         });
         const config = await readConfig();
-        expect(config.agents?.entries?.[coordinatorId]?.subagents).toEqual({
-          allowAgents: specialistIds,
-          delegationMode: "prefer",
-        });
-        for (const id of specialistIds) {
-          expect(config.agents?.entries?.[id]?.subagents).toEqual({ allowAgents: [] });
-        }
         expect(config.agents?.defaults).toEqual({
           ...before.agents?.defaults,
           systemAgent: hasAmbientOwner
@@ -230,8 +214,14 @@ describe("role and team creation through persisted configuration", () => {
         expect(config.tools).toEqual(before.tools);
         expect(config.agents?.entries?.ambient).toEqual(before.agents?.entries?.ambient);
         for (const id of [coordinatorId, ...specialistIds]) {
-          expect(config.agents?.entries?.[id]?.workspace).toBe(path.join(workspaceRoot, id));
-          expect(config.agents?.entries?.[id]).not.toHaveProperty("default");
+          const entry = config.agents?.entries?.[id];
+          expect(entry?.subagents).toEqual(
+            id === coordinatorId
+              ? { allowAgents: specialistIds, delegationMode: "prefer" }
+              : { allowAgents: [] },
+          );
+          expect(entry?.workspace).toBe(path.join(workspaceRoot, id));
+          expect(entry).not.toHaveProperty("default");
         }
       });
     },

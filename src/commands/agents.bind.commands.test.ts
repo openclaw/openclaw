@@ -48,6 +48,9 @@ vi.mock("../channels/plugins/bundled.js", () => ({
 }));
 
 let commands: Awaited<ReturnType<typeof loadFreshAgentsBindCommandModuleForTest>>;
+type UpdateOptions = Parameters<typeof commands.agentsUpdateBindingsCommand>[1];
+const update = (operation: "bind" | "unbind", options: UpdateOptions, output = runtime) =>
+  commands.agentsUpdateBindingsCommand(operation, options, output);
 const setConfig = (config: OpenClawConfig) =>
   readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot, config });
 const route = (channel: string, accountId?: string, agentId = "main") => ({
@@ -90,12 +93,12 @@ describe("agents bind/unbind commands", () => {
       },
     };
     setConfig(config);
-    await commands.agentsUpdateBindingsCommand("bind", { bind: ["telegram:work"] }, runtime);
+    await update("bind", { bind: ["telegram:work"] });
     const bound = { ...config, bindings: [route("telegram", "work", agentId)] };
     expect(writeConfigFileMock).toHaveBeenLastCalledWith(bound);
 
     setConfig(bound);
-    await commands.agentsUpdateBindingsCommand("unbind", { bind: ["telegram:work"] }, runtime);
+    await update("unbind", { bind: ["telegram:work"] });
     expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -107,11 +110,7 @@ describe("agents bind/unbind commands", () => {
     };
     setConfig(config);
     const output = jsonRuntime();
-    await commands.agentsUpdateBindingsCommand(
-      "bind",
-      { agent: "main", bind: ["telegram:work"], json: true },
-      output,
-    );
+    await update("bind", { agent: "main", bind: ["telegram:work"], json: true }, output);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(output.exit).toHaveBeenCalledWith(1);
     expect(output.writeJson).toHaveBeenLastCalledWith(
@@ -119,26 +118,16 @@ describe("agents bind/unbind commands", () => {
       2,
     );
 
-    await commands.agentsUpdateBindingsCommand(
-      "bind",
-      { agent: "ops", bind: ["telegram:WORK"] },
-      runtime,
-    );
+    await update("bind", { agent: "ops", bind: ["telegram:WORK"] });
     expect(writeConfigFileMock).not.toHaveBeenCalled();
-    await commands.agentsUpdateBindingsCommand(
-      "unbind",
-      { agent: "ops", bind: ["telegram:work"] },
-      runtime,
-    );
+    await update("unbind", { agent: "ops", bind: ["telegram:work"] });
     expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
   });
 
   it("binds a mixed batch using one manifest inventory per invocation", async () => {
-    await commands.agentsUpdateBindingsCommand(
-      "bind",
-      { bind: ["telegram", "whatsapp", "signal", "external-chat:work", "external-chat:home"] },
-      runtime,
-    );
+    await update("bind", {
+      bind: ["telegram", "whatsapp", "signal", "external-chat:work", "external-chat:home"],
+    });
     expect(writeConfigFileMock).toHaveBeenCalledExactlyOnceWith({
       bindings: [
         route("telegram"),
@@ -156,76 +145,65 @@ describe("agents bind/unbind commands", () => {
     });
     expect(runtime.exit).not.toHaveBeenCalled();
     pluginRegistryMocks.listPluginContributionIds.mockReturnValueOnce([]);
-    await expect(
-      commands.agentsUpdateBindingsCommand("bind", { bind: ["external-chat:next"] }, runtime),
-    ).rejects.toMatchObject({
+    await expect(update("bind", { bind: ["external-chat:next"] })).rejects.toMatchObject({
       message: expect.stringContaining('Unknown channel "external-chat"'),
     });
     expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    {
-      name: "strict-invalid agent",
-      command: "bind",
-      options: { agent: "агент✨", bind: ["telegram"], json: true },
-      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "unknown list agent",
-      command: "list",
-      options: { agent: "ghost", json: true },
-      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "empty bindings",
-      command: "bind",
-      options: { json: true },
-      message: "Provide at least one --bind <channel[:accountId]>.",
-    },
-    {
-      name: "malformed binding batch",
-      command: "bind",
-      options: {
-        bind: ["telegram:", "telegram:work:extra", "definitely-not-a-channel"],
-        json: true,
-      },
-      message: [
+    [
+      "strict-invalid agent",
+      "bind",
+      { agent: "агент✨", bind: ["telegram"] },
+      'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    ],
+    [
+      "unknown list agent",
+      "list",
+      { agent: "ghost" },
+      'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
+    ],
+    ["empty bindings", "bind", {}, "Provide at least one --bind <channel[:accountId]>."],
+    [
+      "malformed binding batch",
+      "bind",
+      { bind: ["telegram:", "telegram:work:extra", "definitely-not-a-channel"] },
+      [
         'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
         'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
         'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
       ].join("\n"),
+    ],
+    [
+      "incompatible unbind options",
+      "unbind",
+      { all: true, bind: ["telegram"] },
+      "Use either --all or --bind, not both.",
+    ],
+  ] satisfies Array<[string, "bind" | "list" | "unbind", UpdateOptions, string]>)(
+    "rejects %s before mutation",
+    async (_name, command, input, message) => {
+      const options = { ...input, json: true };
+      const execution =
+        command === "list"
+          ? commands.agentsBindingsCommand(options, runtime)
+          : update(command, options);
+      await expect(execution).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message,
+        humanOutput: message,
+        machineOutput: message,
+      });
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
     },
-    {
-      name: "incompatible unbind options",
-      command: "unbind",
-      options: { all: true, bind: ["telegram"], json: true },
-      message: "Use either --all or --bind, not both.",
-    },
-  ] satisfies Array<{
-    name: string;
-    command: "bind" | "list" | "unbind";
-    options: { agent?: string; bind?: string[]; json?: boolean; all?: boolean };
-    message: string;
-  }>)("rejects $name before mutation", async ({ command, options, message }) => {
-    const execution =
-      command === "list"
-        ? commands.agentsBindingsCommand(options, runtime)
-        : commands.agentsUpdateBindingsCommand(command, options, runtime);
-    await expect(execution).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message,
-      humanOutput: message,
-      machineOutput: message,
-    });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-  });
+  );
 
   it("unbinds all routes for one agent while preserving the others", async () => {
     setConfig({ ...conflictConfig, bindings: [route("matrix"), route("telegram", "work", "ops")] });
-    await commands.agentsUpdateBindingsCommand("unbind", { agent: "ops", all: true }, runtime);
+    await update("unbind", { agent: "ops", all: true });
     expect(writeConfigFileMock).toHaveBeenCalledExactlyOnceWith({
       ...conflictConfig,
       bindings: [route("matrix")],
@@ -235,20 +213,11 @@ describe("agents bind/unbind commands", () => {
 
   it("reports empty unbind-all as JSON without writes or text logs", async () => {
     const output = jsonRuntime();
-    await commands.agentsUpdateBindingsCommand(
-      "unbind",
-      { agent: "main", all: true, json: true },
-      output,
-    );
+    await update("unbind", { agent: "main", all: true, json: true }, output);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(output.log).not.toHaveBeenCalled();
     expect(output.writeJson).toHaveBeenCalledExactlyOnceWith(
-      {
-        agentId: "main",
-        removed: [],
-        missing: [],
-        conflicts: [],
-      },
+      { agentId: "main", removed: [], missing: [], conflicts: [] },
       2,
     );
     expect(output.exit).not.toHaveBeenCalled();
@@ -256,11 +225,7 @@ describe("agents bind/unbind commands", () => {
 
   it("reports human unbind ownership conflicts without writing", async () => {
     setConfig(conflictConfig);
-    await commands.agentsUpdateBindingsCommand(
-      "unbind",
-      { agent: "ops", bind: ["telegram:ops"] },
-      runtime,
-    );
+    await update("unbind", { agent: "ops", bind: ["telegram:ops"] });
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith("Bindings are owned by another agent:");
     expect(runtime.exit).toHaveBeenCalledWith(1);
