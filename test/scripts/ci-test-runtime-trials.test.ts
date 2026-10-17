@@ -57,21 +57,8 @@ describe("CI test runtime policies", () => {
   );
 
   it.each([
-    [
-      "full-agentic",
-      [
-        "src/gateway/session-utils.fs.display-position.test.ts",
-        "src/gateway/artifact-downloads.test.ts",
-        "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
-      ],
-    ],
-    [
-      "gateway-core",
-      [
-        "src/gateway/session-utils.fs.display-position.test.ts",
-        "src/gateway/artifact-downloads.test.ts",
-      ],
-    ],
+    ["full-agentic", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
+    ["gateway-core", []],
     ["gateway-methods", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
     ["gateway-client", []],
   ] as const)("preserves Gateway Node contracts for the %s inventory", async (name, files) => {
