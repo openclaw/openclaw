@@ -29,26 +29,22 @@ type Wake = Parameters<typeof requestHeartbeat>[0];
 const runSpy = vi.fn<RunOnce>();
 const runners: ReturnType<typeof startHeartbeatRunner>[] = [];
 const sessionKey = "agent:main:main";
-const execWake: Wake = { source: "exec-event", intent: "event", reason: "exec-event", sessionKey };
-const cronWake: Wake = {
-  source: "cron",
-  intent: "immediate",
-  reason: "cron:one-shot",
-  agentId: "main",
-};
-const backgroundWake: Wake = {
-  source: "background-task",
-  intent: "immediate",
-  reason: "background-task",
-  sessionKey,
-};
-const taskWake: Wake = {
-  source: "interval",
-  intent: "task",
+function makeWake(
+  source: NonNullable<Wake["source"]>,
+  intent: NonNullable<Wake["intent"]>,
+  overrides: Omit<Wake, "source" | "intent"> = {},
+): Wake {
+  return { source, intent, reason: source, ...overrides };
+}
+const manualWake = makeWake("manual", "manual");
+const execWake = makeWake("exec-event", "event", { sessionKey });
+const cronWake = makeWake("cron", "immediate", { reason: "cron:one-shot", agentId: "main" });
+const backgroundWake = makeWake("background-task", "immediate", { sessionKey });
+const taskWake = makeWake("interval", "task", {
   reason: "heartbeat-task:job-inbox",
   agentId: "main",
   tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-};
+});
 
 function config(
   every = "30m",
@@ -63,22 +59,23 @@ function start(cfg = config(), options: Omit<RunnerOptions, "cfg"> = {}) {
   return runner;
 }
 
-async function wake(request: Wake) {
+async function advance(ms: number, runs?: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  if (runs !== undefined) {
+    expect(runSpy).toHaveBeenCalledTimes(runs);
+  }
+}
+async function wake(request: Wake, runs?: number) {
   requestHeartbeat({ ...request, coalesceMs: 0 });
-  await vi.advanceTimersByTimeAsync(1);
+  await advance(1, runs);
 }
 
 function interval(agentId = "main", scheduledEveryMs = 30 * 60_000) {
-  return wake({
-    source: "interval",
-    intent: "scheduled",
-    reason: "interval",
-    agentId,
-    scheduledEveryMs,
-  });
+  return wake(makeWake("interval", "scheduled", { agentId, scheduledEveryMs }));
 }
 
 function expectRun(index: number, expected: Partial<Parameters<RunOnce>[0]>) {
+  expect(runSpy).toHaveBeenCalledTimes(index + 1);
   expect(runSpy).toHaveBeenNthCalledWith(index + 1, expect.objectContaining(expected));
 }
 
@@ -110,11 +107,11 @@ describe("startHeartbeatRunner", () => {
     const owner = new AbortController();
     owner.abort();
     start(config(), { abortSignal: owner.signal });
-    await wake({ source: "manual", intent: "manual", reason: "manual" });
+    await wake(manualWake);
     expect(runSpy).not.toHaveBeenCalled();
     const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
     const dispose = setHeartbeatWakeHandler(drain);
-    await vi.advanceTimersByTimeAsync(250);
+    await advance(250);
     expect(drain).toHaveBeenCalledOnce();
     dispose();
   });
@@ -129,44 +126,40 @@ describe("startHeartbeatRunner", () => {
         return { status: "ran", durationMs: 1 };
       });
       const runner = start();
-      await wake({ source: "manual", intent: "manual", reason: "manual", sessionKey });
+      await wake({ ...manualWake, sessionKey });
       expect(signal?.aborted).toBe(false);
       runner.stop();
-      await vi.advanceTimersByTimeAsync(0);
+      await advance(0);
       expect(signal?.aborted).toBe(true);
       pending.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await advance(0);
       const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
       const dispose = setHeartbeatWakeHandler(drain);
-      await vi.advanceTimersByTimeAsync(250);
+      await advance(250);
       expect(drain).not.toHaveBeenCalled();
       expect(runSpy).toHaveBeenCalledOnce();
       dispose();
     } finally {
       pending.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await advance(0);
     }
   });
 
   it("keeps persisted monitor cadence authoritative when its tick joins a task turn", async () => {
     start();
-    requestHeartbeat({
-      source: "interval",
-      intent: "scheduled",
-      reason: "interval",
-      agentId: "main",
-      scheduledEveryMs: 5 * 60_000,
-      coalesceMs: 100,
-    });
+    requestHeartbeat(
+      makeWake("interval", "scheduled", {
+        agentId: "main",
+        scheduledEveryMs: 5 * 60_000,
+        coalesceMs: 100,
+      }),
+    );
     requestHeartbeat({ ...taskWake, coalesceMs: 100 });
-    await vi.advanceTimersByTimeAsync(100);
-    expect(runSpy).toHaveBeenCalledOnce();
+    await advance(100, 1);
     expectRun(0, { intent: "task", tasks: taskWake.tasks, heartbeat: { every: "300000ms" } });
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
-    await wake({ ...execWake, agentId: "main", sessionKey: undefined });
-    expect(runSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    await advance(4 * 60_000);
+    await wake({ ...execWake, agentId: "main", sessionKey: undefined }, 1);
+    await advance(60_000, 2);
   });
 
   it("reads the latest runtime config for heartbeat wakes after no-op reload commits", async () => {
@@ -181,8 +174,7 @@ describe("startHeartbeatRunner", () => {
     setRuntimeConfigSnapshot(initialConfig, initialConfig);
     start(initialConfig, { readCurrentConfig: getRuntimeConfig });
     setRuntimeConfigSnapshot(nextConfig, nextConfig);
-    await wake({ source: "manual", intent: "manual", reason: "manual" });
-    expect(runSpy).toHaveBeenCalledOnce();
+    await wake(manualWake, 1);
     expectRun(0, { cfg: nextConfig, heartbeat: { every: "30m" } });
   });
 
@@ -195,19 +187,19 @@ describe("startHeartbeatRunner", () => {
       return { status: "ran", durationMs: 1 };
     });
     start(config("30m", { main: {}, ops: {} }));
-    await wake({ source: "manual", intent: "manual", reason: "manual" });
+    await wake(manualWake);
     expect(runSpy.mock.calls.map(([options]) => options.agentId)).toEqual(["main", "ops"]);
     pending.resolve();
-    await vi.advanceTimersByTimeAsync(0);
+    await advance(0);
   });
 
   it("keeps serving interval wakes after runOnce throws an unhandled error", async () => {
     runSpy.mockRejectedValueOnce(new Error("session compaction error"));
     start();
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await advance(30 * 60_000);
     await interval();
     expect(runSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await advance(30 * 60_000);
     await interval();
     expect(runSpy).toHaveBeenCalledTimes(2);
   });
@@ -217,7 +209,7 @@ describe("startHeartbeatRunner", () => {
     const oldRunner = start(config(), { runOnce: oldRun });
     start();
     oldRunner.stop();
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await advance(30 * 60_000);
     await interval();
     expect(runSpy).toHaveBeenCalledOnce();
     expect(oldRun).not.toHaveBeenCalled();
@@ -227,13 +219,11 @@ describe("startHeartbeatRunner", () => {
   it("retains event follow-ups after a disabled heartbeat until the spacing floor", async () => {
     runSpy.mockResolvedValue({ status: "skipped", reason: "disabled" });
     start(config("10m", { main: { heartbeat: { every: "10m" } } }));
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await advance(10 * 60_000);
     await interval("main", 10 * 60_000);
     expect(runSpy).toHaveBeenCalledOnce();
-    await wake({ ...execWake, agentId: "main", sessionKey: undefined });
-    expect(runSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    await wake({ ...execWake, agentId: "main", sessionKey: undefined }, 1);
+    await advance(30_000, 2);
   });
 
   it("does not delay the next cron tick after repeated requests-in-flight skips", async () => {
@@ -246,99 +236,81 @@ describe("startHeartbeatRunner", () => {
     });
     start();
     const intervalMs = 30 * 60_000;
-    await vi.advanceTimersByTimeAsync(intervalMs);
+    await advance(intervalMs);
     await interval();
     expect(runSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    expect(runSpy).toHaveBeenCalledTimes(6);
+    await advance(5 * 60_000, 6);
     expect(callTimes.filter((time) => time >= 2 * intervalMs)).toEqual([]);
-    await vi.advanceTimersByTimeAsync(2 * intervalMs - Date.now() + 1);
+    await advance(2 * intervalMs - Date.now() + 1);
     await interval();
     expect(callTimes.filter((time) => time >= 2 * intervalMs).length).toBeGreaterThan(0);
   });
 
-  it.each(["cron"] as const)(
-    "merges %s overrides with source-specific destination ownership",
-    async (source) => {
-      start(
-        config("30m", {
-          main: {},
-          ops: {
-            heartbeat: {
-              every: "15m",
-              prompt: "Ops prompt",
-              directPolicy: "block",
-              target: "discord:channel:ops",
-              to: "discord:dm:ops",
-              accountId: "ops-account",
-            },
+  it("merges cron overrides with source-specific destination ownership", async () => {
+    start(
+      config("30m", {
+        main: {},
+        ops: {
+          heartbeat: {
+            every: "15m",
+            prompt: "Ops prompt",
+            directPolicy: "block",
+            target: "discord:channel:ops",
+            to: "discord:dm:ops",
+            accountId: "ops-account",
           },
-        }),
-      );
-      await wake({
-        source,
-        intent: "event",
-        reason: `${source}:job-123`,
-        agentId: "ops",
-        sessionKey: "agent:ops:discord:channel:alerts",
-        heartbeat: { target: "last" },
-      });
-      expect(runSpy).toHaveBeenCalledOnce();
-      expectRun(0, {
-        agentId: "ops",
-        reason: `${source}:job-123`,
-        sessionKey: "agent:ops:discord:channel:alerts",
-        heartbeat: {
-          every: "15m",
-          prompt: "Ops prompt",
-          directPolicy: "block",
-          target: "last",
         },
-      });
-    },
-  );
+      }),
+    );
+    await wake({
+      source: "cron",
+      intent: "event",
+      reason: "cron:job-123",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      heartbeat: { target: "last" },
+    });
+    expect(runSpy).toHaveBeenCalledOnce();
+    expectRun(0, {
+      agentId: "ops",
+      reason: "cron:job-123",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      heartbeat: {
+        every: "15m",
+        prompt: "Ops prompt",
+        directPolicy: "block",
+        target: "last",
+      },
+    });
+  });
 
   it("does not bypass interval cooldown for repeated exec-event wakes", async () => {
     start();
-    await wake(execWake);
-    expect(runSpy).toHaveBeenCalledOnce();
+    await wake(execWake, 1);
     for (let i = 0; i < 4; i++) {
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advance(10_000);
       await wake(execWake);
     }
     expect(runSpy).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(runSpy).toHaveBeenCalledTimes(3);
+    await advance(20_000, 3);
   });
 
-  it.each<{
-    owner: string;
-    fromConversationTurn: boolean;
-    commandMs: number;
-    runs: number;
-    beside?: { text: string; contextKey?: string };
-  }>([
-    { owner: "heartbeat", fromConversationTurn: false, commandMs: 40_000, runs: 1 },
-    {
-      owner: "conversation beside a reminder",
-      fromConversationTurn: true,
-      commandMs: 40_000,
-      runs: 1,
-      beside: { text: "Reminder: water the plants" },
-    },
-    {
-      owner: "conversation after a heartbeat delivery",
-      fromConversationTurn: true,
-      commandMs: 40_000,
-      runs: 14,
-      beside: {
+  it.each<[string, boolean, number, { text: string; contextKey?: string }?]>([
+    ["heartbeat", false, 1, undefined],
+    ["conversation beside a reminder", true, 1, { text: "Reminder: water the plants" }],
+    [
+      "conversation after a heartbeat delivery",
+      true,
+      14,
+      {
         text: "A heartbeat delivered this message to this channel:\nAll clear",
         contextKey: "heartbeat-delivery:0:agent:main:main:heartbeat",
       },
-    },
+    ],
   ])(
-    "spaces a $owner command taking $commandMs ms started in every completion turn",
-    async ({ fromConversationTurn, commandMs, runs, beside }) => {
+    "spaces a %s command started in every completion turn",
+    async (_owner, fromConversationTurn, runs, beside) => {
+      const commandMs = 40_000;
       if (beside) {
         enqueueSystemEvent(beside.text, { sessionKey, contextKey: beside.contextKey });
       }
@@ -358,7 +330,7 @@ describe("startHeartbeatRunner", () => {
       });
       start();
       startCommand();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await advance(10 * 60_000);
 
       // Event turns keep the 30s spacing; only conversation completions skip the interval wait.
       expect(callTimes).toHaveLength(runs);
@@ -371,40 +343,33 @@ describe("startHeartbeatRunner", () => {
   it("holds a conversation's completion turn behind the flood guard", async () => {
     start();
     for (let i = 0; i < 5; i++) {
-      await wake({ source: "manual", intent: "manual", reason: "manual", sessionKey });
+      await wake({ ...manualWake, sessionKey });
     }
-    await vi.advanceTimersByTimeAsync(40_000);
+    await advance(40_000);
     enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
       sessionKey,
       fromConversationTurn: true,
     });
     await wake(execWake);
-    await vi.advanceTimersByTimeAsync(19_900);
-    expect(runSpy).toHaveBeenCalledTimes(5);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(runSpy).toHaveBeenCalledTimes(6);
+    await advance(19_900, 5);
+    await advance(200, 6);
   });
 
   it("retains an event that collides with a task until the spacing floor", async () => {
     start();
     requestHeartbeat({ ...taskWake, coalesceMs: 0 });
-    await wake({ ...execWake, agentId: "main", sessionKey: undefined });
-    expect(runSpy).toHaveBeenCalledOnce();
+    await wake({ ...execWake, agentId: "main", sessionKey: undefined }, 1);
     expectRun(0, { intent: "task", tasks: taskWake.tasks });
-    await vi.advanceTimersByTimeAsync(29_998);
-    expect(runSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    await advance(29_998, 1);
+    await advance(1, 2);
     expectRun(1, { intent: "event", reason: "exec-event", tasks: [] });
   });
 
   it("retryable preemption does not poison the next retry", async () => {
     runSpy.mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED });
     start();
-    await wake(execWake);
-    expect(runSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(60_500);
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    await wake(execWake, 1);
+    await advance(60_500, 2);
     expectRun(1, { reason: "exec-event", sessionKey });
   });
 });
@@ -418,8 +383,7 @@ describe("ambient owner resolution", () => {
         defaults: { systemAgent: { agentId: "ops" } },
       },
     });
-    await wake({ source: "manual", intent: "manual", reason: "manual" });
-    expect(runSpy).toHaveBeenCalledOnce();
+    await wake(manualWake, 1);
     expectRun(0, { agentId: "ops" });
   });
 
@@ -463,8 +427,7 @@ describe("targeted unscheduled wake dispatch", () => {
       agentId: "main",
       sessionKey,
     });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(runSpy).toHaveBeenCalledOnce();
+    await advance(1, 1);
     expectRun(0, {
       agentId: "main",
       source: "manual",
@@ -477,18 +440,11 @@ describe("targeted unscheduled wake dispatch", () => {
 
   it.each([
     cronWake,
-    { source: "hook", intent: "immediate", reason: "hook:job-123", agentId: "main" },
-    {
-      source: "notifications-event",
-      intent: "event",
-      reason: "notifications-event",
-      agentId: "main",
-      sessionKey,
-    },
+    makeWake("hook", "immediate", { reason: "hook:job-123", agentId: "main" }),
+    makeWake("notifications-event", "event", { agentId: "main", sessionKey }),
   ] satisfies Wake[])("runs one targeted $source wake with disabled cadence", async (request) => {
     start(config("0m", { main: {} }));
-    await wake(request);
-    expect(runSpy).toHaveBeenCalledOnce();
+    await wake(request, 1);
     expectRun(0, request);
   });
 
@@ -519,9 +475,9 @@ describe("targeted unscheduled wake dispatch", () => {
     expect(callTimes).toEqual([0, 1, 2, 3, 4]);
     runner.updateConfig(cfg);
     requestHeartbeat({ ...execWake, coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(60_000 - Date.now());
+    await advance(60_000 - Date.now());
     expect(callTimes).toHaveLength(5);
-    await vi.advanceTimersByTimeAsync(1);
+    await advance(1);
     expect(callTimes).toEqual([0, 1, 2, 3, 4, 60_001]);
   });
 
@@ -540,11 +496,11 @@ describe("targeted unscheduled wake dispatch", () => {
       expect(callTimes).toEqual([0]);
       runner.updateConfig(cfg);
       pending.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await advance(0);
       requestHeartbeat({ ...execWake, coalesceMs: 0 });
-      await vi.advanceTimersByTimeAsync(29_999 - Date.now());
+      await advance(29_999 - Date.now());
       expect(callTimes).toEqual([0]);
-      await vi.advanceTimersByTimeAsync(1);
+      await advance(1);
       expect(callTimes).toEqual([0, 30_000]);
     } finally {
       pending.resolve();
@@ -560,6 +516,8 @@ describe("targeted unscheduled wake dispatch", () => {
       calls.push({ agentId, at: Date.now() });
       return { status: "ran", durationMs: 0 };
     });
+    const expectCalls = (...expected: [string, number][]) =>
+      expect(calls).toEqual(expected.map(([agentId, at]) => ({ agentId, at })));
     const runner = start(cfg);
     await wake(execWake);
     runner.updateConfig({
@@ -572,20 +530,13 @@ describe("targeted unscheduled wake dispatch", () => {
     });
     runner.updateConfig(cfg);
     requestHeartbeat({ ...execWake, coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(29_999 - Date.now());
-    expect(calls).toEqual([{ agentId: "main", at: 0 }]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(calls).toEqual([
-      { agentId: "main", at: 0 },
-      { agentId: "main", at: 30_000 },
-    ]);
-    await wake({ source: "manual", intent: "manual", reason: "manual" });
-    expect(calls).toEqual([
-      { agentId: "main", at: 0 },
-      { agentId: "main", at: 30_000 },
-      { agentId: "ops", at: 30_000 },
-    ]);
-    await vi.advanceTimersByTimeAsync(120_000);
+    await advance(29_999 - Date.now());
+    expectCalls(["main", 0]);
+    await advance(1);
+    expectCalls(["main", 0], ["main", 30_000]);
+    await wake(manualWake);
+    expectCalls(["main", 0], ["main", 30_000], ["ops", 30_000]);
+    await advance(120_000);
     expect(calls).toHaveLength(3);
   });
 });
@@ -620,11 +571,9 @@ describe("heartbeat broadcast outcomes", () => {
     });
     expect(getLastHeartbeatEvent()).toBeNull();
     heartbeatWake.requestHeartbeat({ ...request, coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(29_998);
+    await advance(29_998);
     expect(runOnce).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(runOnce).toHaveBeenCalledTimes(2);
+    await advance(1, 2);
     expect(
       runOnce.mock.calls.map(([opts]) => ({ agentId: opts.agentId, tasks: opts.tasks })),
     ).toEqual(["main", "ops"].map((agentId) => ({ agentId, tasks: request.tasks })));
@@ -685,7 +634,7 @@ describe("heartbeat broadcast outcomes", () => {
       intent: "manual",
       coalesceMs: 0,
     });
-    await vi.advanceTimersByTimeAsync(0);
+    await advance(0);
     await expect(completion).resolves.toEqual(failure);
     expect(runOnce).toHaveBeenCalledTimes(2);
   });
@@ -717,10 +666,8 @@ describe("heartbeat broadcast outcomes", () => {
       agentId: "main",
     } as const;
     heartbeatWake.requestHeartbeat({ ...request, coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(runOnce).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(runOnce).toHaveBeenCalledTimes(2);
+    await advance(59_999, 1);
+    await advance(1, 2);
     expect(await run(request)).toMatchObject({ status: "skipped", reason: "not-due" });
   });
 });
