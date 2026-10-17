@@ -1,12 +1,7 @@
 // E2E: hook dispatch uses the shared cron budget without starving older cron work.
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  createOpenAiResponsesModelConfig,
-  startOpenAiResponsesModelServer,
-} from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -15,14 +10,34 @@ import {
 import { createDeferred } from "./helpers/promise.js";
 
 const TEST_TIMEOUT_MS = 180_000;
+const MODEL_REF = "hook-concurrency/hook-concurrency";
 const SHARED_BUDGET = 8;
 const FAIRNESS_CRON_MARKER = "capacity group fairness cron marker";
 const FAIRNESS_HOOK_OFFSET = 100;
 const FAIRNESS_LATE_HOOK_INDEX = FAIRNESS_HOOK_OFFSET + SHARED_BUDGET;
 
-type HookResponse = Awaited<ReturnType<typeof postRequest>>;
+type Deferred = {
+  promise: Promise<void>;
+  resolve: () => void;
+};
 
-type HeldModelServer = Awaited<ReturnType<typeof startHeldModelServer>>;
+type HookResponse = {
+  body: string;
+  status: number;
+};
+
+type HeldModelServer = {
+  active: () => number;
+  close: () => Promise<void>;
+  hold: () => void;
+  peak: () => number;
+  queueReply: (text: string) => void;
+  release: (index: number) => void;
+  releaseAll: () => void;
+  requestBody: (index: number) => string | undefined;
+  requestCount: () => number;
+  url: string;
+};
 
 const instances: OpenClawTestInstance[] = [];
 const modelServers: HeldModelServer[] = [];
@@ -37,16 +52,43 @@ describe("Gateway hook concurrency", () => {
     "returns bounded reply disposition from real stub-model hook turns",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const { instance, modelServer } = await startTestGateway("gateway-hook-completion");
+      const modelServer = await startHeldModelServer();
+      modelServers.push(modelServer);
+      const instance = await createOpenClawTestInstance({
+        name: "gateway-hook-completion",
+        config: createTestConfig(modelServer.url),
+        env: { OPENCLAW_SKIP_CRON: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      });
+      instances.push(instance);
+      await instance.startGateway();
+      await warmGatewayHook(instance, modelServer);
 
       const privateVisibleReply = "private visible hook completion";
       modelServer.queueReply(privateVisibleReply);
       const visible = await postObservedHook(instance, "visible");
-      expectCompletion(visible, "visible", privateVisibleReply);
+      expect(visible.status, visible.body).toBe(200);
+      expect(JSON.parse(visible.body)).toMatchObject({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition: "visible",
+        },
+      });
+      expect(visible.body).not.toContain(privateVisibleReply);
 
       modelServer.queueReply("NO_REPLY");
       const silent = await postObservedHook(instance, "silent");
-      expectCompletion(silent, "silent", "NO_REPLY");
+      expect(silent.status, silent.body).toBe(200);
+      expect(JSON.parse(silent.body)).toMatchObject({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition: "silent",
+        },
+      });
+      expect(silent.body).not.toContain("NO_REPLY");
     },
   );
 
@@ -54,7 +96,19 @@ describe("Gateway hook concurrency", () => {
     "bounds hooks and admits an older cron turn before a later hook",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const { instance, modelServer } = await startTestGateway("gateway-hook-concurrency");
+      const modelServer = await startHeldModelServer();
+      modelServers.push(modelServer);
+      const instance = await createOpenClawTestInstance({
+        name: "gateway-hook-concurrency",
+        config: createTestConfig(modelServer.url),
+        env: { OPENCLAW_SKIP_CRON: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      });
+      instances.push(instance);
+      await instance.startGateway();
+
+      // Pay the one-time plugin, session, and model-runtime preparation cost
+      // before measuring steady-state lane admission.
+      await warmGatewayHook(instance, modelServer);
       modelServer.hold();
 
       const responses: Array<HookResponse | undefined> = Array.from({
@@ -66,12 +120,17 @@ describe("Gateway hook concurrency", () => {
           return response;
         }),
       );
-      await waitFor(() =>
-        expect(responses.filter((response) => response?.status === 200)).toHaveLength(
-          SHARED_BUDGET,
-        ),
+      await vi.waitFor(
+        () =>
+          expect(responses.filter((response) => response?.status === 200)).toHaveLength(
+            SHARED_BUDGET,
+          ),
+        { interval: 20, timeout: 30_000 },
       );
-      await waitFor(() => expect(responses.every(Boolean)).toBe(true));
+      await vi.waitFor(() => expect(responses.every(Boolean)).toBe(true), {
+        interval: 20,
+        timeout: 30_000,
+      });
 
       expect(responses.filter((response) => response?.status === 200)).toHaveLength(SHARED_BUDGET);
       const timedOut = responses.find((response) => response?.status === 503);
@@ -81,29 +140,41 @@ describe("Gateway hook concurrency", () => {
         error: "hook agent run did not start before admission timeout",
         runId: expect.any(String),
       });
-      await waitFor(() => expect(modelServer.active(), instance.logs()).toBeGreaterThan(0));
+      await vi.waitFor(() => expect(modelServer.active(), instance.logs()).toBeGreaterThan(0), {
+        interval: 20,
+        timeout: 30_000,
+      });
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
       expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET + 1);
 
-      // Fresh work must cross the same admission fence after capacity is released.
+      // Completing the admitted work frees shared capacity. A fresh request
+      // must then cross the same real Gateway admission fence.
       const requestCountBeforeRelease = modelServer.requestCount();
       modelServer.releaseAll();
       await expect(Promise.all(requests)).resolves.toHaveLength(SHARED_BUDGET + 1);
       const afterRelease = await postHook(instance, SHARED_BUDGET + 1);
       expect(afterRelease.status, afterRelease.body).toBe(200);
-      await waitFor(() =>
-        expect(modelServer.requestCount()).toBeGreaterThan(requestCountBeforeRelease),
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBeGreaterThan(requestCountBeforeRelease),
+        { interval: 20, timeout: 30_000 },
       );
-      await waitFor(() => expect(modelServer.active()).toBe(0));
+      await vi.waitFor(() => expect(modelServer.active()).toBe(0), {
+        interval: 20,
+        timeout: 30_000,
+      });
 
-      // Releasing one saturated hook must admit the older cron sibling before the later hook.
+      // Saturate the real hook-dispatch lane again, then queue cron inner work
+      // before one later hook. Releasing one held provider request is the exact
+      // production completion edge that previously let the hook lane reclaim
+      // its own slot before the older cron sibling could compete for it.
       modelServer.hold();
       const fairnessRequestStart = modelServer.requestCount();
       const fairnessHooks = Array.from({ length: SHARED_BUDGET }, (_, offset) =>
         postHook(instance, FAIRNESS_HOOK_OFFSET + offset),
       );
-      await waitFor(() =>
-        expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET),
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET),
+        { interval: 20, timeout: 30_000 },
       );
       expect(modelServer.active(), instance.logs()).toBe(SHARED_BUDGET);
 
@@ -138,7 +209,9 @@ describe("Gateway hook concurrency", () => {
         runId: expect.any(String),
       });
 
-      // Let acknowledged outer cron work enqueue cron-nested before the competing hook.
+      // cron.run acknowledges after queuing the outer cron task. Give the real
+      // isolated runner time to cross preparation and enqueue cron-nested, then
+      // submit the competing hook. Both remain provider-blocked at this point.
       await delay(1_000);
       const lateHook = postHook(instance, FAIRNESS_LATE_HOOK_INDEX);
       await delay(1_000);
@@ -147,7 +220,10 @@ describe("Gateway hook concurrency", () => {
 
       modelServer.release(fairnessRequestStart);
       const cronProviderRequest = fairnessRequestStart + SHARED_BUDGET;
-      await waitFor(() => expect(modelServer.requestCount()).toBe(cronProviderRequest + 1));
+      await vi.waitFor(() => expect(modelServer.requestCount()).toBe(cronProviderRequest + 1), {
+        interval: 20,
+        timeout: 30_000,
+      });
       expect(modelServer.requestBody(cronProviderRequest)).toContain(FAIRNESS_CRON_MARKER);
       expect(modelServer.requestBody(cronProviderRequest)).not.toContain(
         `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`,
@@ -155,11 +231,24 @@ describe("Gateway hook concurrency", () => {
 
       modelServer.release(cronProviderRequest);
       const lateHookProviderRequest = cronProviderRequest + 1;
-      await waitFor(() => expect(modelServer.requestCount()).toBe(lateHookProviderRequest + 1));
+      await vi.waitFor(() => expect(modelServer.requestCount()).toBe(lateHookProviderRequest + 1), {
+        interval: 20,
+        timeout: 30_000,
+      });
       expect(modelServer.requestBody(lateHookProviderRequest)).toContain(
         `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`,
       );
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
+
+      console.info(
+        `[capacity-group-fairness-trace] ${JSON.stringify({
+          afterOneHookRelease: "older-cron",
+          afterCronRelease: "later-hook",
+          peakProviderConcurrency: modelServer.peak(),
+          queuedOrder: ["cron", "later-hook"],
+          saturatedProviderRequests: SHARED_BUDGET,
+        })}`,
+      );
 
       modelServer.releaseAll();
       await expect(Promise.all(fairnessHooks)).resolves.toSatisfy((values: HookResponse[]) =>
@@ -173,17 +262,44 @@ describe("Gateway hook concurrency", () => {
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
   return {
-    ...createOpenAiResponsesModelConfig({
-      baseUrl,
-      providerId: "hook-concurrency",
-      modelId: "hook-concurrency",
-      reasoning: false,
-      toolProfile: "minimal",
-    }),
+    plugins: { slots: { memory: "none" } },
     hooks: {
       enabled: true,
       allowRequestSessionKey: true,
       allowedSessionKeyPrefixes: ["hook:"],
+    },
+    agents: {
+      defaults: {
+        heartbeat: { every: "0m" },
+        model: { primary: MODEL_REF },
+        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
+        skipBootstrap: true,
+        skills: [],
+      },
+    },
+    tools: { profile: "minimal" },
+    models: {
+      mode: "replace",
+      providers: {
+        "hook-concurrency": {
+          baseUrl: `${baseUrl}/v1`,
+          apiKey: "test-token-placeholder",
+          api: "openai-responses",
+          request: { allowPrivateNetwork: true },
+          models: [
+            {
+              id: "hook-concurrency",
+              name: "hook-concurrency",
+              api: "openai-responses",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 4_096,
+            },
+          ],
+        },
+      },
     },
   };
 }
@@ -196,8 +312,14 @@ async function warmGatewayHook(
     const requestCountBefore = modelServer.requestCount();
     const response = await postHook(instance, -(attempt + 1));
     if (response.status === 200) {
-      await waitFor(() => expect(modelServer.requestCount()).toBeGreaterThan(requestCountBefore));
-      await waitFor(() => expect(modelServer.active()).toBe(0));
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBeGreaterThan(requestCountBefore),
+        { interval: 20, timeout: 30_000 },
+      );
+      await vi.waitFor(() => expect(modelServer.active()).toBe(0), {
+        interval: 20,
+        timeout: 30_000,
+      });
       return;
     }
     expect(response.status, response.body).toBe(503);
@@ -209,95 +331,85 @@ async function warmGatewayHook(
   throw new Error("Gateway hook warmup did not reach the model after three attempts");
 }
 
-function postHook(instance: OpenClawTestInstance, index: number): Promise<HookResponse> {
-  return postRequest(instance, "concurrency", index);
-}
-
-function postObservedHook(instance: OpenClawTestInstance, id: string): Promise<HookResponse> {
-  return postRequest(instance, "completion", id, true);
-}
-
-async function postRequest(
-  instance: OpenClawTestInstance,
-  kind: "concurrency" | "completion",
-  id: string | number,
-  waitForCompletion?: true,
-) {
+async function postHook(instance: OpenClawTestInstance, index: number): Promise<HookResponse> {
   const response = await fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${instance.hookToken}`,
       "Content-Type": "application/json",
-      "Idempotency-Key": `hook-${kind}-${id}`,
+      "Idempotency-Key": `hook-concurrency-${index}`,
     },
     body: JSON.stringify({
-      message: `hook ${kind} request ${id}`,
-      name: `Hook ${kind} ${id}`,
-      sessionKey: `hook:${kind}:${id}`,
+      message: `hook concurrency request ${index}`,
+      name: `Hook concurrency ${index}`,
+      sessionKey: `hook:concurrency:${index}`,
       sessionMode: "persistent",
       deliver: false,
-      ...(waitForCompletion ? { waitForCompletion } : {}),
     }),
   });
-  return { body: await response.text(), status: response.status };
+  return {
+    body: await response.text(),
+    status: response.status,
+  };
 }
 
-function waitFor(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 20, timeout: 30_000 });
-}
-
-function expectCompletion(response: HookResponse, disposition: string, privateText: string) {
-  expect(response.status, response.body).toBe(200);
-  expect(JSON.parse(response.body)).toMatchObject({
-    ok: true,
-    runId: expect.any(String),
-    completion: { status: "ok", replyDisposition: disposition },
+async function postObservedHook(instance: OpenClawTestInstance, id: string): Promise<HookResponse> {
+  const response = await fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${instance.hookToken}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": `hook-completion-${id}`,
+    },
+    body: JSON.stringify({
+      message: `hook completion request ${id}`,
+      name: `Hook completion ${id}`,
+      sessionKey: `hook:completion:${id}`,
+      sessionMode: "persistent",
+      deliver: false,
+      waitForCompletion: true,
+    }),
   });
-  expect(response.body).not.toContain(privateText);
+  return {
+    body: await response.text(),
+    status: response.status,
+  };
 }
 
-async function startTestGateway(name: string) {
-  const modelServer = await startHeldModelServer();
-  modelServers.push(modelServer);
-  const instance = await createOpenClawTestInstance({
-    name,
-    config: createTestConfig(modelServer.url),
-    env: { OPENCLAW_SKIP_CRON: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
-  });
-  instances.push(instance);
-  await instance.startGateway();
-  // Prepare the real runtime before steady-state admission measurements.
-  await warmGatewayHook(instance, modelServer);
-  return { instance, modelServer };
-}
-
-async function startHeldModelServer() {
-  const releases: ReturnType<typeof createDeferred>[] = [];
+async function startHeldModelServer(): Promise<HeldModelServer> {
+  const releases: Deferred[] = [];
   const requestBodies: string[] = [];
   const replyTexts = new Map<number, string>();
   let holdRequests = false;
   let active = 0;
   let peak = 0;
   let requestCount = 0;
-  const server = await startOpenAiResponsesModelServer({
-    modelId: "hook-concurrency",
-    bindError: "hook concurrency model server did not bind",
-    onRequest: (request, response) =>
-      handleModelRequest(request, response).catch((error: unknown) => {
-        if (!response.destroyed) {
-          throw error;
-        }
-      }),
+  const server = createServer((request, response) => {
+    void handleModelRequest(request, response).catch((error: unknown) => {
+      if (response.destroyed) {
+        return;
+      }
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: String(error) } }));
+    });
   });
 
   async function handleModelRequest(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    let requestBody = "";
-    for await (const chunk of request) {
-      requestBody += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "hook-concurrency", object: "model" }] }));
+      return;
     }
+    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+
+    const requestBody = await drainRequest(request);
     const index = requestCount;
     requestCount += 1;
     requestBodies[index] = requestBody;
@@ -311,15 +423,20 @@ async function startHeldModelServer() {
     try {
       await release.promise;
       if (!response.destroyed) {
-        writeOpenAiResponsesText(response, {
-          text: replyTexts.get(index) ?? `hook concurrency response ${index}`,
-          messageId: `hook-concurrency-message-${index}`,
-          responseId: `hook-concurrency-response-${index}`,
-        });
+        writeModelResponse(response, index, replyTexts.get(index));
       }
     } finally {
       active -= 1;
     }
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("hook concurrency model server did not bind");
   }
 
   const releaseAll = () => {
@@ -334,21 +451,32 @@ async function startHeldModelServer() {
       holdRequests = true;
     },
     peak: () => peak,
-    queueReply: (text: string) => {
+    queueReply: (text) => {
       replyTexts.set(requestCount, text);
     },
-    release: (index: number) => {
+    release: (index) => {
       releases[index]?.resolve();
     },
     releaseAll,
-    requestBody: (index: number) => requestBodies[index],
+    requestBody: (index) => requestBodies[index],
     requestCount: () => requestCount,
-    url: server.baseUrl,
+    url: `http://127.0.0.1:${address.port}`,
     close: async () => {
       releaseAll();
-      await server.close();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
+}
+
+async function drainRequest(request: IncomingMessage): Promise<string> {
+  let body = "";
+  for await (const chunk of request) {
+    body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+  }
+  return body;
 }
 
 async function waitForCronRun(
@@ -375,4 +503,19 @@ async function waitForCronRun(
     },
     { interval: 200, timeout: 30_000 },
   );
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function writeModelResponse(response: ServerResponse, sequence: number, replyText?: string): void {
+  const text = replyText ?? `hook concurrency response ${sequence}`;
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `hook-concurrency-message-${sequence}`,
+    responseId: `hook-concurrency-response-${sequence}`,
+  });
 }

@@ -196,6 +196,7 @@ it("retains SQL-free effect authority across unrelated writes and revokes pendin
       options,
     );
   const sql = observeMainThreadSql();
+  onTestFinished(() => sql.restore());
   await clearChunks(env, record.id);
   await update(env, record.id, {
     snapshotRef: "refs/openclaw/snapshots/synthetic",

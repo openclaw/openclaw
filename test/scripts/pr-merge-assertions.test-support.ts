@@ -11,7 +11,10 @@ type PriorCandidate = ReturnType<
   ReturnType<typeof createPriorCiCandidateFactory>["preExistingCandidate"]
 >;
 
-export function expectPriorCiRefusal(f: PriorCandidate, message: string | RegExp) {
+export function expectPriorCiRefusal(
+  f: Pick<PriorCandidate, "verifyPriorCi" | "path" | "state">,
+  message: string | RegExp,
+) {
   const result = f.verifyPriorCi(f.path);
   expect(result.status, result.output).not.toBe(0);
   expect(result.output).toMatch(message);
@@ -47,7 +50,7 @@ export function expectRecovery(f: Fixture, outcome: string, head = "", code = 0,
   return expectExit(f.run(auto, f.repo, "squash", outcome, head), code);
 }
 
-export function expectGraphqlSquash(f: Fixture, commitBody: string) {
+export function expectGraphqlSquash(f: Fixture, commitBody: string | null) {
   expect(f.state().graphqlMergePayloads).toEqual([
     { pullRequestId: "fixture-pr", expectedHeadOid: f.head, mergeMethod: "SQUASH", commitBody },
   ]);

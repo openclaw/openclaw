@@ -71,7 +71,7 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
   } satisfies NonNullable<UpdatesViewOverrides["update"]>;
 }
 
-function nativeSettings<T extends NativeDeviceSettingsCapability["snapshot"]>(snapshot: T) {
+function nativeSettings(snapshot: ReturnType<typeof createNativeDeviceSettingsSnapshot>) {
   return {
     snapshot,
     subscribe: () => () => undefined,

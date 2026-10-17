@@ -1,6 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { backup, DatabaseSync } from "node:sqlite";
+import { describe, expect, it } from "vitest";
 import { setSqliteBusyTimeout } from "../src/infra/sqlite-busy-timeout.js";
 import { withStateDatabaseSchemaMaintenance } from "../src/infra/state-database-maintenance.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../src/infra/update-run-driver.js";
@@ -19,71 +18,9 @@ import {
 } from "./helpers/openclaw-test-instance.js";
 
 const publicationGraceMs = 5 * 60_000;
-const instances: OpenClawTestInstance[] = [];
-const observers: DatabaseSync[] = [];
-afterEach(async () => {
-  for (const observer of observers.splice(0)) {
-    observer.close();
-  }
-  for (const instance of instances.splice(0)) {
-    await instance.cleanup();
-  }
-});
-function observe(databasePath: string) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  observers.push(db);
-  return db;
-}
-const abandoned = { status: "failed", phase: "finished", reason: "abandoned" };
-const deferredSchema = { published: 15, metadata: 15, content: OPENCLAW_STATE_SCHEMA_VERSION };
-
-async function cliJson<T = Record<string, unknown>>(
-  instance: OpenClawTestInstance,
-  args: string[],
-  code = 0,
-): Promise<T> {
-  const result = await instance.cli(args);
-  expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(code);
-  return JSON.parse(result.stdout);
-}
-
-function updateStatus(instance: OpenClawTestInstance) {
-  return cliJson(instance, ["update", "status", "--json", "--timeout", "1"]);
-}
-
-async function expectRepair(instance: OpenClawTestInstance, runId: string) {
-  expect(await cliJson(instance, ["update", "repair", "--json"])).toMatchObject({
-    status: "ok",
-    mode: "repair",
-    restart: false,
-    reconciledRuns: [runId],
-  });
-}
-
-function expectStep(
-  db: DatabaseSync,
-  runId: string,
-  step: string,
-  status: string,
-  detail?: string,
-) {
-  const row = db.prepare("SELECT steps_json FROM update_runs WHERE run_id = ?").get(runId);
-  expect(JSON.parse(String(row?.steps_json))).toContainEqual(
-    expect.objectContaining({ step, status, ...(detail ? { detail } : {}) }),
-  );
-}
-
-async function startGateway(instance: OpenClawTestInstance) {
-  await instance.startGateway();
-  return expectDefined(instance.child, "Gateway fixture started without an owned process.");
-}
-
-function driverIdentity() {
-  return expectDefined(readUpdateRunDriver(), "Test process identity is unavailable");
-}
 
 async function createPublicationInstance(name: string) {
-  const instance = await createOpenClawTestInstance({
+  return createOpenClawTestInstance({
     name,
     config: { update: { checkOnStart: false, auto: { enabled: false } } },
     env: {
@@ -98,8 +35,6 @@ async function createPublicationInstance(name: string) {
       OPENCLAW_SUPERVISOR_MODE: undefined,
     },
   });
-  instances.push(instance);
-  return instance;
 }
 
 function seedDeferredState(instance: OpenClawTestInstance, terminal: boolean) {
@@ -133,7 +68,7 @@ function seedDeferredState(instance: OpenClawTestInstance, terminal: boolean) {
 
 function seedInactiveUpdateRun(
   instance: OpenClawTestInstance,
-  input: { ageMs?: number; phase?: "requested" | "staging"; driver?: UpdateRunDriver } = {},
+  input: { ageMs: number; phase?: "requested" | "staging"; driver?: UpdateRunDriver },
 ) {
   const options = { env: instance.env };
   const { db, path: databasePath } = openOpenClawStateDatabase(options);
@@ -147,14 +82,18 @@ function seedInactiveUpdateRun(
       options,
     );
     const phase = input.phase ?? "requested";
-    const lastActivity = Date.now() - (input.ageMs ?? ABANDONED_UPDATE_RUN_MS + 60_000);
-    const step = { step: "requested", status: "in_progress", startedAtMs: lastActivity };
+    const lastActivity = Date.now() - input.ageMs;
     const steps =
       phase === "requested"
-        ? [step]
+        ? [{ step: "requested", status: "in_progress", startedAtMs: lastActivity }]
         : [
-            { ...step, status: "completed", endedAtMs: lastActivity },
-            { ...step, step: "staging" },
+            {
+              step: "requested",
+              status: "completed",
+              startedAtMs: lastActivity,
+              endedAtMs: lastActivity,
+            },
+            { step: "staging", status: "in_progress", startedAtMs: lastActivity },
           ];
     db.prepare(`UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?,
       phase = ?, steps_json = ? WHERE run_id = ?`).run(
@@ -181,7 +120,8 @@ async function expectGatewayStillServing(
   child: NonNullable<OpenClawTestInstance["child"]>,
 ) {
   expect(instance.child).toBe(child);
-  expect(child).toMatchObject({ exitCode: null, signalCode: null });
+  expect(child.exitCode).toBeNull();
+  expect(child.signalCode).toBeNull();
   for (const pathname of ["/healthz", "/readyz"]) {
     const response = await fetch(`http://127.0.0.1:${instance.port}${pathname}`, {
       signal: AbortSignal.timeout(3_000),
@@ -218,192 +158,298 @@ function expectGatewayOwnsState(instance: OpenClawTestInstance, databasePath: st
 describe("Gateway external shared-state ownership", () => {
   it("reconciles a dead update driver at boot and repairs its ledger without restarting", async () => {
     const instance = await createPublicationInstance("gateway-abandoned-update-driver");
-    const currentDriver = driverIdentity();
-    const { databasePath, runId } = seedInactiveUpdateRun(instance, {
-      // A live PID with a different start identity positively proves PID reuse.
-      driver: {
-        ...currentDriver,
-        startIdentity: currentDriver.startIdentity === "0" ? "1" : "0",
-      },
-    });
-    const database = observe(databasePath);
-    const child = await startGateway(instance);
-    await expect
-      .poll(() => readUpdateOutcome(database, runId), { timeout: 10_000, interval: 100 })
-      .toMatchObject({ status: "failed", phase: "finished", reason: "abandoned" });
-    expectStep(database, runId, "reconcile:abandoned", "failed", "inactive-driver-dead");
-    const status = await updateStatus(instance);
-    expect(status).toMatchObject({
-      lastRun: { runId, status: "failed", reason: "abandoned" },
-    });
-    expect(status).not.toHaveProperty("activeRun");
-    await expectRepair(instance, runId);
-    expectStep(database, runId, "reconcile:acknowledged", "completed");
-    expect(readUpdateOutcome(database, runId)).toMatchObject(abandoned);
-    await expectGatewayStillServing(instance, child);
-    expectGatewayOwnsState(instance, databasePath);
+    let observer: DatabaseSync | undefined;
+    try {
+      const currentDriver = readUpdateRunDriver();
+      if (!currentDriver) {
+        throw new Error("Test process identity is unavailable");
+      }
+      const { databasePath, runId } = seedInactiveUpdateRun(instance, {
+        ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
+        // A live PID with a different start identity positively proves PID reuse.
+        driver: {
+          ...currentDriver,
+          startIdentity: currentDriver.startIdentity === "0" ? "1" : "0",
+        },
+      });
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      observer = database;
+      await instance.startGateway();
+      const child = instance.child;
+      if (!child) {
+        throw new Error("Gateway fixture started without an owned process.");
+      }
+      await expect
+        .poll(() => readUpdateOutcome(database, runId), { timeout: 10_000, interval: 100 })
+        .toMatchObject({ status: "failed", phase: "finished", reason: "abandoned" });
+      const row = database
+        .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      expect(JSON.parse(String(row?.steps_json))).toContainEqual(
+        expect.objectContaining({
+          step: "reconcile:abandoned",
+          status: "failed",
+          detail: "inactive-driver-dead",
+        }),
+      );
+      const status = await instance.cli(["update", "status", "--json", "--timeout", "1"]);
+      expect(status.code, `${status.stderr}\n${status.stdout}`).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        lastRun: { runId, status: "failed", reason: "abandoned" },
+      });
+      expect(JSON.parse(status.stdout)).not.toHaveProperty("activeRun");
+      const repair = await instance.cli(["update", "repair", "--json"]);
+      expect(repair.code, `${repair.stderr}\n${repair.stdout}`).toBe(0);
+      expect(JSON.parse(repair.stdout)).toMatchObject({
+        status: "ok",
+        mode: "repair",
+        restart: false,
+        reconciledRuns: [runId],
+      });
+      const repaired = database
+        .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      expect(JSON.parse(String(repaired?.steps_json))).toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+      );
+      expect(readUpdateOutcome(database, runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
+      });
+      await expectGatewayStillServing(instance, child);
+      expectGatewayOwnsState(instance, databasePath);
+    } finally {
+      observer?.close();
+      await instance.cleanup();
+    }
   }, 120_000);
 
   it("preserves recent and live drivers and explicitly repairs an inactive identityless row", async () => {
     const instance = await createPublicationInstance("gateway-inactive-update-repair");
-    const driver = driverIdentity();
-    const inactive = seedInactiveUpdateRun(instance, { phase: "staging" });
-    const live = seedInactiveUpdateRun(instance, { driver });
-    const recent = seedInactiveUpdateRun(instance, { ageMs: 60_000 });
-    const observer = observe(inactive.databasePath);
-    const child = await startGateway(instance);
-    const refused = await instance.cli(["update", "repair", "--json"]);
-    expect(refused.code).not.toBe(0);
-    expect(JSON.parse(refused.stdout)).toMatchObject({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: expect.stringContaining(
-          `Update ${recent.runId} remains recorded as running (requested); driver PID and host not recorded, liveness: not observed;`,
-        ),
-      },
-    });
-    for (const run of [inactive, live, recent]) {
-      expect(readUpdateOutcome(observer, run.runId)).toMatchObject({
-        status: "running",
-        reason: null,
-        updated_at_ms: run.lastActivity,
+    let observer: DatabaseSync | undefined;
+    try {
+      const driver = readUpdateRunDriver();
+      if (!driver) {
+        throw new Error("Test process identity is unavailable");
+      }
+      const inactive = seedInactiveUpdateRun(instance, {
+        ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
+        phase: "staging",
       });
-    }
-    await expectGatewayStillServing(instance, child);
+      const live = seedInactiveUpdateRun(instance, {
+        ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
+        driver,
+      });
+      const recent = seedInactiveUpdateRun(instance, { ageMs: 60_000 });
+      observer = new DatabaseSync(inactive.databasePath, { readOnly: true });
+      await instance.startGateway();
+      const child = instance.child;
+      if (!child) {
+        throw new Error("Gateway fixture started without an owned process.");
+      }
+      const refused = await instance.cli(["update", "repair", "--json"]);
+      expect(refused.code).not.toBe(0);
+      expect(JSON.parse(refused.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining(
+            `Update ${recent.runId} remains recorded as running (requested); driver PID and host not recorded, liveness: not observed;`,
+          ),
+        },
+      });
+      for (const run of [inactive, live, recent]) {
+        expect(readUpdateOutcome(observer, run.runId)).toMatchObject({
+          status: "running",
+          reason: null,
+          updated_at_ms: run.lastActivity,
+        });
+      }
+      await expectGatewayStillServing(instance, child);
 
-    // These synthetic drivers complete their own work before operator repair.
-    for (const run of [live, recent]) {
-      finishUpdateRun(
-        run.runId,
-        { status: "skipped", reason: "fixture-complete" },
-        { env: instance.env },
-      );
+      // These synthetic drivers complete their own work before operator repair.
+      for (const run of [live, recent]) {
+        finishUpdateRun(
+          run.runId,
+          { status: "skipped", reason: "fixture-complete" },
+          { env: instance.env },
+        );
+      }
+      closeOpenClawStateDatabaseByPath(inactive.databasePath);
+      const repair = await instance.cli(["update", "repair", "--json"]);
+      expect(repair.code, `${repair.stderr}\n${repair.stdout}`).toBe(0);
+      expect(JSON.parse(repair.stdout)).toMatchObject({
+        status: "ok",
+        mode: "repair",
+        restart: false,
+        reconciledRuns: [inactive.runId],
+      });
+      expect(readUpdateOutcome(observer, inactive.runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
+      });
+      const status = await instance.cli(["update", "status", "--json", "--timeout", "1"]);
+      expect(status.code, `${status.stderr}\n${status.stdout}`).toBe(0);
+      expect(JSON.parse(status.stdout)).not.toHaveProperty("activeRun");
+      await expectGatewayStillServing(instance, child);
+      expectGatewayOwnsState(instance, inactive.databasePath);
+    } finally {
+      observer?.close();
+      await instance.cleanup();
     }
-    closeOpenClawStateDatabaseByPath(inactive.databasePath);
-    await expectRepair(instance, inactive.runId);
-    expect(readUpdateOutcome(observer, inactive.runId)).toMatchObject(abandoned);
-    expect(await updateStatus(instance)).not.toHaveProperty("activeRun");
-    await expectGatewayStillServing(instance, child);
-    expectGatewayOwnsState(instance, inactive.databasePath);
   }, 120_000);
 
   it.each(["repair", "update"] as const)(
     "explicit %s clears legacy requested-only history without restarting",
     async (action) => {
       const instance = await createPublicationInstance(`gateway-legacy-update-${action}`);
-
-      const inactive = seedInactiveUpdateRun(instance);
-      const observer = observe(inactive.databasePath);
-      const child = await startGateway(instance);
-      const before = await updateStatus(instance);
-      expect(before).toMatchObject({
-        activeRun: { runId: inactive.runId },
-        staleRun: { runId: inactive.runId },
-      });
-      expect(readUpdateOutcome(observer, inactive.runId)).toMatchObject({
-        status: "running",
-        updated_at_ms: inactive.lastActivity,
-      });
-      const result = await instance.cli(
-        action === "repair"
-          ? ["update", "repair", "--json"]
-          : ["update", "--yes", "--json", "--dry-run"],
-        { timeoutMs: 60_000 },
-      );
-      expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
-      if (action === "repair") {
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          status: "ok",
-          restart: false,
-          reconciledRuns: [inactive.runId],
+      let observer: DatabaseSync | undefined;
+      try {
+        const inactive = seedInactiveUpdateRun(instance, {
+          ageMs: ABANDONED_UPDATE_RUN_MS + 60_000,
         });
+        observer = new DatabaseSync(inactive.databasePath, { readOnly: true });
+        await instance.startGateway();
+        const child = instance.child;
+        if (!child) {
+          throw new Error("Gateway fixture started without an owned process.");
+        }
+        const before = await instance.cli(["update", "status", "--json", "--timeout", "1"]);
+        expect(before.code, before.stderr).toBe(0);
+        expect(JSON.parse(before.stdout)).toMatchObject({
+          activeRun: { runId: inactive.runId },
+          staleRun: { runId: inactive.runId },
+        });
+        expect(readUpdateOutcome(observer, inactive.runId)).toMatchObject({
+          status: "running",
+          updated_at_ms: inactive.lastActivity,
+        });
+        const result = await instance.cli(
+          action === "repair"
+            ? ["update", "repair", "--json"]
+            : ["update", "--yes", "--json", "--dry-run"],
+          { timeoutMs: 60_000 },
+        );
+        expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
+        if (action === "repair") {
+          expect(JSON.parse(result.stdout)).toMatchObject({
+            status: "ok",
+            restart: false,
+            reconciledRuns: [inactive.runId],
+          });
+        }
+        expect(readUpdateOutcome(observer, inactive.runId)).toMatchObject({
+          status: "failed",
+          phase: "finished",
+          reason: action === "repair" ? "abandoned" : "superseded",
+        });
+        const after = await instance.cli(["update", "status", "--json", "--timeout", "1"]);
+        expect(after.code, after.stderr).toBe(0);
+        expect(JSON.parse(after.stdout)).not.toHaveProperty("activeRun");
+        await expectGatewayStillServing(instance, child);
+        expectGatewayOwnsState(instance, inactive.databasePath);
+      } finally {
+        observer?.close();
+        await instance.cleanup();
       }
-      expect(readUpdateOutcome(observer, inactive.runId)).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        reason: action === "repair" ? "abandoned" : "superseded",
-      });
-      expect(await updateStatus(instance)).not.toHaveProperty("activeRun");
-      await expectGatewayStillServing(instance, child);
-      expectGatewayOwnsState(instance, inactive.databasePath);
     },
     120_000,
   );
 
   it("keeps CLI readers usable while the owning Gateway defers schema publication", async () => {
     const instance = await createPublicationInstance("gateway-deferred-schema-readers");
-    const { databasePath } = seedDeferredState(instance, true);
-    const observer = observe(databasePath);
-    await instance.startGateway();
-    expectGatewayOwnsState(instance, databasePath);
-    expect(readSchemaVersions(observer)).toEqual(deferredSchema);
-
-    for (const args of [
-      ["agents", "list", "--json"],
-      ["doctor", "--non-interactive", "--json"],
-      ["update", "--yes", "--json", "--dry-run"],
-    ]) {
-      const result = await instance.cli(args, { timeoutMs: 60_000 });
-      expect(result.code, `${args.join(" ")}\n${result.stderr}\n${result.stdout}`).toBe(0);
-      expect(() => JSON.parse(result.stdout)).not.toThrow();
-      expect(result.stderr).not.toMatch(
-        /schema migration pending|refused shared state schema mutation|another Gateway owns/u,
-      );
-      expect(readSchemaVersions(observer)).toEqual(deferredSchema);
+    let observer: DatabaseSync | undefined;
+    try {
+      const { databasePath } = seedDeferredState(instance, true);
+      observer = new DatabaseSync(databasePath, { readOnly: true });
+      await instance.startGateway();
       expectGatewayOwnsState(instance, databasePath);
+      const deferred = { published: 15, metadata: 15, content: OPENCLAW_STATE_SCHEMA_VERSION };
+      expect(readSchemaVersions(observer)).toEqual(deferred);
+
+      for (const args of [
+        ["agents", "list", "--json"],
+        ["doctor", "--non-interactive", "--json"],
+        ["update", "--yes", "--json", "--dry-run"],
+      ]) {
+        const result = await instance.cli(args, { timeoutMs: 60_000 });
+        expect(result.code, `${args.join(" ")}\n${result.stderr}\n${result.stdout}`).toBe(0);
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(result.stderr).not.toMatch(
+          /schema migration pending|refused shared state schema mutation|another Gateway owns/u,
+        );
+        expect(readSchemaVersions(observer)).toEqual(deferred);
+        expectGatewayOwnsState(instance, databasePath);
+      }
+    } finally {
+      observer?.close();
+      await instance.cleanup();
     }
   }, 240_000);
 
   it("publishes from the owning Gateway timer after a running update finishes and goes quiet", async () => {
     const instance = await createPublicationInstance("gateway-deferred-schema-timer");
-    const { databasePath, runId } = seedDeferredState(instance, false);
-    const database = observe(databasePath);
-    await instance.startGateway();
-    expectGatewayOwnsState(instance, databasePath);
-    expect(readSchemaVersions(database)).toEqual(deferredSchema);
-
-    const publishAfterMs = Date.now() + 10_000;
-    const finishedAtMs = publishAfterMs - publicationGraceMs;
-    const writer = new DatabaseSync(databasePath);
+    let observer: DatabaseSync | undefined;
     try {
-      setSqliteBusyTimeout(writer, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-      // Deliver an aged terminal fixture through a separate connection, like the old CLI.
-      writer
-        .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',
-          finished_at_ms = ?, updated_at_ms = ? WHERE run_id = ?`)
-        .run(finishedAtMs, finishedAtMs, runId);
-    } finally {
-      writer.close();
-    }
-
-    // Only bare SQLite reads follow: runner opens or CLI activity would conceal a broken timer.
-    let publishedBeforeDeadline = false;
-    await expect
-      .poll(
-        () => {
-          const versions = readSchemaVersions(database);
-          publishedBeforeDeadline ||=
-            Date.now() < publishAfterMs && (versions.published !== 15 || versions.metadata !== 15);
-          return versions;
-        },
-        { timeout: 20_000, interval: 100 },
-      )
-      .toEqual({
-        published: OPENCLAW_STATE_SCHEMA_VERSION,
-        metadata: OPENCLAW_STATE_SCHEMA_VERSION,
+      const { databasePath, runId } = seedDeferredState(instance, false);
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      observer = database;
+      await instance.startGateway();
+      expectGatewayOwnsState(instance, databasePath);
+      expect(readSchemaVersions(observer)).toEqual({
+        published: 15,
+        metadata: 15,
         content: OPENCLAW_STATE_SCHEMA_VERSION,
       });
-    expect(publishedBeforeDeadline).toBe(false);
-    expect(
-      database
-        .prepare("SELECT status, finished_at_ms, updated_at_ms FROM update_runs WHERE run_id = ?")
-        .get(runId),
-    ).toEqual({
-      status: "succeeded",
-      finished_at_ms: finishedAtMs,
-      updated_at_ms: finishedAtMs,
-    });
+
+      const publishAfterMs = Date.now() + 10_000;
+      const finishedAtMs = publishAfterMs - publicationGraceMs;
+      const writer = new DatabaseSync(databasePath);
+      try {
+        setSqliteBusyTimeout(writer, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+        // Deliver an aged terminal fixture through a separate connection, like the old CLI.
+        writer
+          .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',
+          finished_at_ms = ?, updated_at_ms = ? WHERE run_id = ?`)
+          .run(finishedAtMs, finishedAtMs, runId);
+      } finally {
+        writer.close();
+      }
+
+      // Only bare SQLite reads follow: runner opens or CLI activity would conceal a broken timer.
+      let publishedBeforeDeadline = false;
+      await expect
+        .poll(
+          () => {
+            const versions = readSchemaVersions(database);
+            publishedBeforeDeadline ||=
+              Date.now() < publishAfterMs &&
+              (versions.published !== 15 || versions.metadata !== 15);
+            return versions;
+          },
+          { timeout: 20_000, interval: 100 },
+        )
+        .toEqual({
+          published: OPENCLAW_STATE_SCHEMA_VERSION,
+          metadata: OPENCLAW_STATE_SCHEMA_VERSION,
+          content: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+      expect(publishedBeforeDeadline).toBe(false);
+      expect(
+        observer
+          .prepare("SELECT status, finished_at_ms, updated_at_ms FROM update_runs WHERE run_id = ?")
+          .get(runId),
+      ).toEqual({
+        status: "succeeded",
+        finished_at_ms: finishedAtMs,
+        updated_at_ms: finishedAtMs,
+      });
+    } finally {
+      observer?.close();
+      await instance.cleanup();
+    }
   }, 120_000);
 
   it("refuses unmarked startup and accepts the external supervisor marker", async () => {
@@ -412,35 +458,78 @@ describe("Gateway external shared-state ownership", () => {
       env: { OPENCLAW_SUPERVISOR_MODE: "external" },
       startTimeoutMs: 30_000,
     });
-    instances.push(instance);
-    const claimed = await cliJson<{ databasePath: string }>(instance, [
-      "database",
-      "ownership",
-      "claim",
-      "--manager",
-      "gateway-supervisor",
-      "--json",
-    ]);
-    expect(claimed).toMatchObject({
-      status: "external",
-      ownership: { managerId: "gateway-supervisor" },
-    });
-    const unreadable = await cliJson(
-      instance,
-      ["database", "preflight", `${instance.stateDir}/missing.sqlite`, "--json"],
-      1,
-    );
-    expect(unreadable).toMatchObject({
-      schema: "openclaw.state-schema-preflight.v1",
-      status: "indeterminate",
-    });
+    try {
+      const claim = await instance.cli([
+        "database",
+        "ownership",
+        "claim",
+        "--manager",
+        "gateway-supervisor",
+        "--json",
+      ]);
+      expect(claim.code, claim.stderr).toBe(0);
+      const claimed = JSON.parse(claim.stdout) as {
+        databasePath: string;
+        ownership: { managerId: string };
+        status: string;
+      };
+      expect(claimed).toMatchObject({
+        status: "external",
+        ownership: { managerId: "gateway-supervisor" },
+      });
+      const preflightPath = `${instance.stateDir}/owner-preflight.sqlite`;
+      const source = new DatabaseSync(claimed.databasePath, { readOnly: true });
+      try {
+        await backup(source, preflightPath);
+      } finally {
+        source.close();
+      }
+      const preflight = await instance.cli(["database", "preflight", preflightPath, "--json"]);
+      expect(preflight.code, `${preflight.stderr}\n${preflight.stdout}`).toBe(0);
+      expect(JSON.parse(preflight.stdout)).toMatchObject({
+        schema: "openclaw.state-schema-preflight.v1",
+        status: "exact",
+        requiresWrite: false,
+      });
+      const unreadable = await instance.cli([
+        "database",
+        "preflight",
+        `${instance.stateDir}/missing.sqlite`,
+        "--json",
+      ]);
+      expect(unreadable.code).toBe(1);
+      expect(JSON.parse(unreadable.stdout)).toMatchObject({
+        schema: "openclaw.state-schema-preflight.v1",
+        status: "indeterminate",
+      });
+      const status = await instance.cli(["database", "ownership", "status", "--json"]);
+      expect(status.code, status.stderr).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        status: "external",
+        ownership: { managerId: "gateway-supervisor" },
+      });
+      const conflictingClaim = await instance.cli([
+        "database",
+        "ownership",
+        "claim",
+        "--manager",
+        "replacement-manager",
+        "--json",
+      ]);
+      expect(conflictingClaim.code).toBe(1);
+      expect(JSON.parse(conflictingClaim.stdout)).toMatchObject({
+        error: expect.stringContaining("already claimed by external manager gateway-supervisor"),
+      });
 
-    delete instance.env.OPENCLAW_SUPERVISOR_MODE;
-    await expect(instance.startGateway()).rejects.toThrow(/gateway-supervisor/u);
-    expect(instance.logs()).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
+      delete instance.env.OPENCLAW_SUPERVISOR_MODE;
+      await expect(instance.startGateway()).rejects.toThrow(/gateway-supervisor/u);
+      expect(instance.logs()).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
 
-    instance.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    await instance.startGateway();
-    expect(instance.child).toBeDefined();
+      instance.env.OPENCLAW_SUPERVISOR_MODE = "external";
+      await instance.startGateway();
+      expect(instance.child).toBeDefined();
+    } finally {
+      await instance.cleanup();
+    }
   });
 });

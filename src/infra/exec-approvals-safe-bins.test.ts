@@ -67,7 +67,7 @@ describe("exec approvals safe bins", () => {
     ["allows boolean long flags", ["wc", "--words"], true],
   ] satisfies Array<[string, string[], boolean, { sed: SafeBinProfile }?]>)(
     "%s",
-    (_name, argv, expected, safeBinProfiles) => {
+    (_name, argv, expected, safeBinProfiles = undefined) => {
       const ok = evaluateSafeBinApproval({
         argv,
         safeBinProfiles,

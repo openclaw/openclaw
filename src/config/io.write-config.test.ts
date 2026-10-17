@@ -65,6 +65,7 @@ const prepareWrite = vi.hoisted(() =>
   vi.fn<typeof import("./backup-rotation.js").prepareConfigFileWrite>(),
 );
 
+// mock-isolation: config writes use a synthetic plugin inventory, not installed plugins.
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: loadRegistry,
 }));
@@ -2034,7 +2035,7 @@ for (const failure of ["warnings", "missing-raw", "concurrent", "env"] as const)
             failure === "concurrent"
               ? async () => {
                   await fs.writeFile(configPath, concurrentRaw, "utf8");
-                  fail();
+                  return fail();
                 }
               : fail,
         });

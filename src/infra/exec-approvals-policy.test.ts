@@ -331,7 +331,7 @@ describe("exec approvals policy helpers", () => {
       version: 1,
       defaults: { ask: "always" },
       agents: {
-        runner: { ask: agentAsk },
+        runner: { ask: "foo" },
       },
     } as unknown as ExecApprovalsFile;
     const summary = snapshot({

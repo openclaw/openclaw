@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { listNativeExecApprovalClientLabels } from "./exec-approval-surface.js";
 
+// mock-isolation: reply formatting uses fixed channel capabilities without loading plugins.
 vi.mock("./exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: vi.fn(
     ({ channel, accountId }: { channel?: string; accountId?: string }) =>

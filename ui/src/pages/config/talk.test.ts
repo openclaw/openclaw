@@ -92,6 +92,7 @@ type TalkMutationHarnessOptions = {
   model?: string | null;
   openAIProviderModel?: string;
   provider?: string | null;
+  transport?: string | null;
   transports?: TalkCatalogResult["transports"];
   voicesByModel?: Record<string, string[]>;
 };
@@ -181,7 +182,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
         ...(options.model === null
           ? {}
           : { model: options.model === undefined ? "gpt-realtime-2.1" : options.model }),
-        transport: "gateway-relay",
+        transport: options.transport === undefined ? "gateway-relay" : options.transport,
         consultRouting: options.consultRouting,
         providers: options.openAIProviderModel
           ? { openai: { model: options.openAIProviderModel } }

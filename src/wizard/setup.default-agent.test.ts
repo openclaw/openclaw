@@ -69,6 +69,7 @@ vi.mock("./setup.secret-input.js", () => ({
   resolveSetupSecretInputString: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: isolate wizard routing from gateway configuration prompts.
 vi.mock("./setup.gateway-config.js", () => ({
   configureGatewayForSetup: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({
     nextConfig,
@@ -76,6 +77,7 @@ vi.mock("./setup.gateway-config.js", () => ({
   }),
 }));
 
+// mock-isolation: default-agent routing must not import real memory data.
 vi.mock("./setup.memory-import.js", () => ({ runSetupMemoryImportStep: vi.fn() }));
 
 vi.mock("./setup.official-plugins.js", () => ({
@@ -86,8 +88,10 @@ vi.mock("./setup.app-recommendations.js", () => ({
   setupAppRecommendations: mocks.setupRecommendations,
 }));
 
+// mock-isolation: observe the selected agent without configuring installed plugins.
 vi.mock("./setup.plugin-config.js", () => ({ setupPluginConfig: mocks.setupPluginConfig }));
 
+// mock-isolation: observe finalization without starting services or writing live state.
 vi.mock("./setup.finalize.js", () => ({ finalizeSetupWizard: mocks.finalizeSetup }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({

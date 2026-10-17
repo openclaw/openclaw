@@ -75,7 +75,7 @@ it.each([
       ...providerConfig("example", {
         baseUrl: "https://fixture.invalid/v1",
         api: "openai-completions",
-        models: [{ id: "fixture", name: "Fixture" }],
+        models: [modelDefinition("fixture", { name: "Fixture" })],
       }),
       gateway: { mode: "local" },
       plugins: { slots: { memory: "none" } },

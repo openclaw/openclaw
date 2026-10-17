@@ -59,13 +59,13 @@ function secondaryCandidate(fault = "") {
   state.priorCi.jobs![2]!.steps = [monitor];
   const job = state.priorCi.jobs![3]!;
   job.name = "build-artifacts";
-  job.steps = [
+  const steps = (job.steps = [
     step(3, "Checkout", "success", "18:36", "18:45"),
     step(6, "Build dist", "cancelled", "19:01", "20:48"),
     step(12, producerName, "skipped", "20:48"),
     step(13, uploadName, "failure", "20:48", "20:49"),
     step(31, "Complete job", "success", "20:49"),
-  ];
+  ]);
   const log = join(f.root, "build-job.log");
   const line = (at: string, text: string, name = uploadName) =>
     `build-artifacts\t${name}\t${time(at)} ${text}`;
@@ -115,7 +115,7 @@ function secondaryCandidate(fault = "") {
   };
   const secondary = evidence.cancellation.secondaryFailures[0]!;
   applyFault(fault, {
-    "cleanup failure": () => (job.steps[4]!.conclusion = "failure"),
+    "cleanup failure": () => (steps[4]!.conclusion = "failure"),
     "test failure": () => {
       state.priorCi.jobs!.push({
         ...job,
@@ -125,11 +125,11 @@ function secondaryCandidate(fault = "") {
       });
       evidence.cancellation.jobIds.push(606);
     },
-    success: () => (job.steps[2]!.conclusion = "success"),
-    failure: () => (job.steps[2]!.conclusion = "failure"),
-    cancelled: () => (job.steps[2]!.conclusion = "cancelled"),
-    "missing producer": () => job.steps.splice(2, 1),
-    "earlier upload": () => (job.steps[3]!.started_at = "2026-09-28T07:20:35Z"),
+    success: () => (steps[2]!.conclusion = "success"),
+    failure: () => (steps[2]!.conclusion = "failure"),
+    cancelled: () => (steps[2]!.conclusion = "cancelled"),
+    "missing producer": () => steps.splice(2, 1),
+    "earlier upload": () => (steps[3]!.started_at = "2026-09-28T07:20:35Z"),
     "missing time": () => delete monitor.completed_at,
     "failed monitor": () => (monitor.conclusion = "failure"),
     "wrong step": () => (secondary.step = 12),

@@ -204,7 +204,9 @@ function expectRetained(fixture: Fixture, before?: string, locks?: number) {
 }
 function preBoot(fixture: Fixture) {
   fixture.touch(new Date("2000-01-01T00:00:00.000Z"));
-  injected.bootTimeNs = BigInt(Date.parse("2001-01-01T00:00:00.000Z")) * 1_000_000n;
+  const bootTimeNs = BigInt(Date.parse("2001-01-01T00:00:00.000Z")) * 1_000_000n;
+  injected.bootTimeNs = bootTimeNs;
+  return bootTimeNs;
 }
 function confirmationArgs(fixture: Fixture) {
   return [
@@ -428,7 +430,7 @@ posixIt("rejects receipt changes during awaited user inspection", async () => {
 
 posixIt("retains the pre-boot timestamp across confirmed recovery retries", async () => {
   const fixture = stage(true);
-  preBoot(fixture);
+  const bootTimeNs = preBoot(fixture);
   const originalTime = fixture.stat().mtimeNs;
   injected.witnessFailure = "fixture retained source not yet available";
   const first = await command(fixture, confirmationArgs(fixture));
@@ -437,7 +439,7 @@ posixIt("retains the pre-boot timestamp across confirmed recovery retries", asyn
     reason: injected.witnessFailure,
     operatorConfirmation: { receiptMtimeNs: String(originalTime) },
   });
-  expect(fixture.stat().mtimeNs).toBeGreaterThan(injected.bootTimeNs);
+  expect(fixture.stat().mtimeNs).toBeGreaterThan(bootTimeNs);
   injected.witnessFailure = "";
   await refused(fixture, ["recover", fixture.id], /unknown host/);
   const repeated = await command(fixture, confirmationArgs(fixture));
@@ -452,7 +454,7 @@ posixIt.each(["inspect", "recover"])(
   "refuses an unchanged receipt touched into the current boot during %s's user probe",
   async (operation) => {
     const fixture = stage(true);
-    preBoot(fixture);
+    const bootTimeNs = preBoot(fixture);
     const before = fixture.read();
     const originalDigest = receiptDigest(fixture);
     const args = inspectionArgs(fixture, operation);
@@ -464,7 +466,7 @@ posixIt.each(["inspect", "recover"])(
       eligible: false,
     });
     expect(receiptDigest(fixture)).toBe(originalDigest);
-    expect(fixture.stat().mtimeNs).toBeGreaterThan(injected.bootTimeNs);
+    expect(fixture.stat().mtimeNs).toBeGreaterThan(bootTimeNs);
     expectRetained(fixture, before, 0);
   },
 );
