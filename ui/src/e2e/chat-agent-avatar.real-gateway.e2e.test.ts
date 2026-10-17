@@ -71,7 +71,7 @@ function resolveGatewayRuntime() {
     throw new Error("BUN_BIN must resolve to a Bun executable");
   }
   return {
-    gatewayCommandPrefix: [runtime.execPath],
+    gatewayCommandPrefix: [runtime.execPath] satisfies [string],
     proof: { name: "bun", version: runtime.version },
   };
 }

@@ -301,7 +301,9 @@ it("releases resolved and pending routes that leave the active render", async ()
 it.each([401, 403])(
   "recovers from %s without waiting for rejected body cleanup",
   async (status) => {
-    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-avatar");
+    const createObjectURL = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:recovered-avatar");
     const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     // A saved token can go stale while the session password stays valid; without
     // ordered recovery the view keeps its fallback for the rest of the session.
