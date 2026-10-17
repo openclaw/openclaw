@@ -3,9 +3,10 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { text as readText } from "node:stream/consumers";
 import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
@@ -23,46 +24,29 @@ vi.unmock("node:child_process");
 const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
 
-// Mutable usage triggers native pre-sampling compaction on the next turn.
 async function startResponsesFixture() {
   const requests: JsonObject[] = [];
   const usage = { tokens: 10 };
-  const server = http.createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
+  const server = http.createServer(async (request, response) => {
+    if (request.method !== "POST" || request.url !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    const parsed: unknown = JSON.parse(await readText(request));
+    if (!isJsonObject(parsed)) {
+      response.writeHead(400).end();
+      return;
+    }
+    requests.push(parsed);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const emit = (type: string, data: JsonObject) =>
+      response.write(`event: ${type}\ndata: ${JSON.stringify({ type, response: data })}\n\n`);
+    emit("response.created", { id: "skill-response" });
+    emit("response.completed", {
+      id: "skill-response",
+      usage: { input_tokens: usage.tokens, output_tokens: 1, total_tokens: usage.tokens + 1 },
     });
-    request.on("end", () => {
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      const parsed: unknown = JSON.parse(body);
-      if (!isJsonObject(parsed)) {
-        response.writeHead(400).end();
-        return;
-      }
-      requests.push(parsed);
-      const events = [
-        { type: "response.created", response: { id: "skill-response" } },
-        {
-          type: "response.completed",
-          response: {
-            id: "skill-response",
-            usage: {
-              input_tokens: usage.tokens,
-              output_tokens: 1,
-              total_tokens: usage.tokens + 1,
-            },
-          },
-        },
-      ];
-      response.writeHead(200, { "Content-Type": "text/event-stream" });
-      response.end(
-        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
-      );
-    });
+    response.end();
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -84,11 +68,7 @@ async function startResponsesFixture() {
   };
 }
 
-async function createNativeFixture(
-  modelId: string,
-  contextWindow = 200_000,
-  onNotification?: (notification: CodexServerNotification) => void,
-) {
+async function createNativeFixture(modelId: string, contextWindow = 200_000) {
   const root = await fs.realpath(tempDir);
   const native = await createCodexNativeTestState(root);
   for (const [name, value] of Object.entries(native.env)) {
@@ -135,25 +115,10 @@ async function createNativeFixture(
       "[model_providers.skill-fixture]",
       'name="Synthetic skill provider"',
       `base_url="http://127.0.0.1:${fixture.port}/v1"`,
-      'wire_api="responses"',
-      "requires_openai_auth=false",
-      "supports_websockets=false",
       "request_max_retries=0",
       "stream_max_retries=0",
     ].join("\n"),
   );
-  const attemptOptions: Parameters<typeof runCodexAppServerAttempt>[1] = {
-    pluginConfig: {
-      appServer: {
-        command: native.command,
-        args: ["app-server"],
-        homeScope: "user",
-        sandbox: "read-only",
-        approvalPolicy: "never",
-      },
-    },
-    nativeHookRelay: { enabled: false },
-  };
   const createParams = (filename: string, sessionKey?: string) => {
     const params = createNativeRunParams(path.join(root, filename), native.cwd, sessionKey);
     params.modelId = modelId;
@@ -162,16 +127,35 @@ async function createNativeFixture(
     params.timeoutMs = 20_000;
     return params;
   };
+  const threadIds = new Set<string>();
   let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
-  const run = (params: ReturnType<typeof createParams>, options = attemptOptions) =>
+  const run = (params: ReturnType<typeof createParams>, url?: string) =>
     runCodexAppServerAttempt(params, {
-      ...options,
+      pluginConfig: {
+        appServer: {
+          sandbox: "read-only",
+          approvalPolicy: "never",
+          ...(url
+            ? { transport: "websocket", url }
+            : {
+                command: native.command,
+                args: ["app-server"],
+                homeScope: "user",
+              }),
+        },
+      },
+      nativeHookRelay: { enabled: false },
       clientFactory: async (clientOptions) => {
         if (!client) {
           client = await createIsolatedCodexAppServerClient(clientOptions);
-          if (onNotification) {
-            client.addNotificationHandler(onNotification);
-          }
+          client.addNotificationHandler((notification: CodexServerNotification) => {
+            if (notification.method === "turn/started" && isJsonObject(notification.params)) {
+              const threadId = notification.params.threadId;
+              if (typeof threadId === "string") {
+                threadIds.add(threadId);
+              }
+            }
+          });
         }
         return client;
       },
@@ -182,7 +166,7 @@ async function createNativeFixture(
     }
     await fixture.close();
   };
-  return { native, fixture, createParams, run, close };
+  return { native, fixture, createParams, run, threadIds, close, [Symbol.asyncDispose]: close };
 }
 
 function developerMessages(request: JsonObject | undefined) {
@@ -194,204 +178,168 @@ function developerMessages(request: JsonObject | undefined) {
 const developerMessageText = (request: JsonObject | undefined) =>
   JSON.stringify(developerMessages(request));
 
-describe("native Codex skill delivery", () => {
-  it("delivers the ordinary root catalog when model metadata owns collaboration instructions", async () => {
-    const { fixture, createParams, run, close } = await createNativeFixture("skill-carrier-model");
-    try {
-      const params = createParams("session.jsonl");
-      params.prompt = "What is the weather in Wilmington today?";
-      const otherSkills = Array.from(
-        { length: 40 },
-        (_, index) =>
-          `<skill><name>synthetic-${index}</name><description>${"Unrelated task capability. ".repeat(8)}</description><location>/synthetic/${index}/SKILL.md</location></skill>`,
-      ).join("");
-      params.skillsSnapshot = {
-        prompt: `<available_skills>${otherSkills}<skill><name>weather</name><description>Current weather and forecasts.</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
-        skills: [],
-      };
-      const result = await run(params);
-      expect(result.terminal).toEqual({ kind: "ok" });
-      expect(fixture.requests).toHaveLength(1);
-      const input = fixture.requests[0]?.input;
-      expect(Array.isArray(input)).toBe(true);
-      const developerText = developerMessageText(fixture.requests[0]);
-      expect(developerText).toContain("Synthetic model-owned Default policy.");
-      expect(developerText).toContain(params.skillsSnapshot.prompt);
-    } finally {
-      await close();
-    }
-  }, 45_000);
+it("delivers the ordinary root catalog when model metadata owns collaboration instructions", async () => {
+  await using native = await createNativeFixture("skill-carrier-model");
+  const { fixture, createParams, run } = native;
+  const params = createParams("session.jsonl");
+  params.prompt = "What is the weather in Wilmington today?";
+  const otherSkills = Array.from(
+    { length: 40 },
+    (_, index) =>
+      `<skill><name>synthetic-${index}</name><description>${"Unrelated task capability. ".repeat(8)}</description><location>/synthetic/${index}/SKILL.md</location></skill>`,
+  ).join("");
+  params.skillsSnapshot = {
+    prompt: `<available_skills>${otherSkills}<skill><name>weather</name><description>Current weather and forecasts.</description><location>/synthetic/weather/SKILL.md</location></skill></available_skills>`,
+    skills: [],
+  };
+  const result = await run(params);
+  expect(result.terminal).toEqual({ kind: "ok" });
+  expect(fixture.requests).toHaveLength(1);
+  expect(Array.isArray(fixture.requests[0]?.input)).toBe(true);
+  const developerText = developerMessageText(fixture.requests[0]);
+  expect(developerText).toContain("Synthetic model-owned Default policy.");
+  expect(developerText).toContain(params.skillsSnapshot.prompt);
+}, 45_000);
 
-  it("delivers and refreshes persona through an external WebSocket Harness", async ({ signal }) => {
-    const threadIds = new Set<string>();
-    const { native, fixture, createParams, run, close } = await createNativeFixture(
-      "persona-carrier-model",
-      200_000,
-      (notification) => {
-        if (notification.method === "turn/started" && isJsonObject(notification.params)) {
-          const threadId = notification.params.threadId;
-          if (typeof threadId === "string") {
-            threadIds.add(threadId);
-          }
+it("delivers and refreshes persona through an external WebSocket Harness", async ({ signal }) => {
+  const state = await createNativeFixture("persona-carrier-model");
+  const { native, fixture, createParams, run, threadIds } = state;
+  // External transport must not qualify for the stdio relay.
+  const harness = spawn(native.command, ["app-server", "--listen", "ws://127.0.0.1:0"], {
+    cwd: native.cwd,
+    env: native.env,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  try {
+    const listening = new Promise<string>((resolve, reject) => {
+      let stderr = "";
+      harness.once("error", reject);
+      harness.once("exit", (code) =>
+        reject(new Error(`Native WebSocket exited: ${code} ${stderr}`)),
+      );
+      harness.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+        const match = stderr.match(/listening on:\s*(ws:\/\/127\.0\.0\.1:\d+)/);
+        if (match?.[1]) {
+          resolve(match[1]);
         }
-      },
-    );
-    // External transport must not qualify for the stdio relay.
-    const harness = spawn(native.command, ["app-server", "--listen", "ws://127.0.0.1:0"], {
-      cwd: native.cwd,
-      env: native.env,
-      stdio: ["ignore", "ignore", "pipe"],
+      });
     });
-    try {
-      const listening = new Promise<string>((resolve, reject) => {
-        let stderr = "";
-        harness.once("error", reject);
-        harness.once("exit", (code) =>
-          reject(new Error(`Native WebSocket exited: ${code} ${stderr}`)),
-        );
-        harness.stderr.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString();
-          const match = stderr.match(/listening on:\s*(ws:\/\/127\.0\.0\.1:\d+)/);
-          if (match?.[1]) {
-            resolve(match[1]);
-          }
-        });
-      });
-      const url = await withinTest(listening, signal);
-      const soulPath = path.join(native.cwd, "SOUL.md");
-      const firstSoul = "SYNTHETIC_REMOTE_PERSONA_FIRST";
-      const editedSoul = "SYNTHETIC_REMOTE_PERSONA_EDITED";
-      const sharedUser = "SYNTHETIC_SHARED_USER";
-      const personalUser = "SYNTHETIC_PERSONAL_USER";
-      const personalPath = path.join(native.cwd, "users", "alice", "USER.md");
-      await fs.writeFile(path.join(native.cwd, "USER.md"), sharedUser);
-      registerInternalHook("agent:bootstrap", (event) => {
-        const context = event.context as {
-          bootstrapFiles: Array<{
-            name: string;
-            path: string;
-            content?: string;
-            missing: boolean;
-            personalUser?: true;
-          }>;
-        };
-        context.bootstrapFiles.push({
-          name: "USER.md",
-          path: personalPath,
-          content: personalUser,
-          missing: false,
-          personalUser: true,
-        });
-      });
-      for (const [index, soul] of [firstSoul, editedSoul, undefined].entries()) {
-        if (soul) {
-          await fs.writeFile(soulPath, soul);
-        } else {
-          await fs.unlink(soulPath);
-        }
-        const params = createParams("remote-persona.jsonl");
-        params.disableTools = false;
-        params.runId = `remote-persona-${index}`;
-        params.prompt = `Ordinary remote turn ${index}.`;
-        const result = await run(params, {
-          pluginConfig: {
-            appServer: {
-              transport: "websocket",
-              url,
-              sandbox: "read-only",
-              approvalPolicy: "never",
-            },
-          },
-          nativeHookRelay: { enabled: false },
-        });
-        expect(result.terminal).toEqual({ kind: "ok" });
-        // Native history/configuration can be inherited by full-history forks.
-        expect(JSON.stringify(fixture.requests)).not.toContain(personalUser);
-        expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
-          expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
-        );
-        const text = developerMessageText(fixture.requests.at(-1));
-        expect(text).toContain(sharedUser);
-        expect(text).toContain("Synthetic model-owned Default policy.");
-        if (soul) {
-          expect(text).toContain(soul);
-          if (index === 1) {
-            expect(text.lastIndexOf(editedSoul)).toBeGreaterThan(text.lastIndexOf(firstSoul));
-          }
-        } else {
-          // Historical turns retain old text; inspect the latest policy handoff.
-          const latestDeveloper = fixture.requests.at(-1)?.input;
-          expect(Array.isArray(latestDeveloper)).toBe(true);
-          const handoffs = developerMessages(fixture.requests.at(-1)).filter((item) =>
-            JSON.stringify(item).includes("complete current OpenClaw"),
-          );
-          expect(handoffs.length).toBeGreaterThan(0);
-          expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
-          expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
-        }
-      }
-      expect(threadIds.size).toBe(1);
-    } finally {
-      await close();
-      if (harness.exitCode === null && harness.signalCode === null) {
-        const closed = once(harness, "close");
-        harness.kill("SIGTERM");
-        await closed;
-      }
-    }
-  }, 90_000);
-
-  it("keeps a withdrawn catalog visible to the model after native compaction rebuilds the incognito thread", async () => {
-    const current = "refreshable thread instructions are empty";
-    // 5,000 tokens exceeds the 900-token native auto-compaction threshold.
-    const { fixture, createParams, run, close } = await createNativeFixture(
-      "skill-carrier-model",
-      1_000,
-    );
-    const sessionKey = "agent:main:dashboard:incognito-native-compaction-removal";
-    await seedRunSessionOwnerForTest("session-1", sessionKey);
-    try {
-      const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
-        const before = fixture.requests.length;
-        const params = createParams("incognito-compaction-session.jsonl", sessionKey);
-        // Tool restriction would replace the live incognito thread.
-        params.disableTools = false;
-        params.runId = runId;
-        params.prompt = prompt;
-        params.timeoutMs = 60_000;
-        params.skillsSnapshot = catalog ? { prompt: catalog, skills: [] } : undefined;
-        const result = await run(params);
-        expect(result.terminal).toEqual({ kind: "ok" });
-        return fixture.requests.slice(before);
+    const url = await withinTest(listening, signal);
+    const soulPath = path.join(native.cwd, "SOUL.md");
+    const firstSoul = "SYNTHETIC_REMOTE_PERSONA_FIRST";
+    const editedSoul = "SYNTHETIC_REMOTE_PERSONA_EDITED";
+    const sharedUser = "SYNTHETIC_SHARED_USER";
+    const personalUser = "SYNTHETIC_PERSONAL_USER";
+    const personalPath = path.join(native.cwd, "users", "alice", "USER.md");
+    await fs.writeFile(path.join(native.cwd, "USER.md"), sharedUser);
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as {
+        bootstrapFiles: Array<{
+          name: string;
+          path: string;
+          content?: string;
+          missing: boolean;
+          personalUser?: true;
+        }>;
       };
-
-      const [creationRequest] = await runTurn("run-1", NATIVE_FIRST_CATALOG, "first");
-      expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
-
-      fixture.usage.tokens = 5_000;
-      const [refreshRequest] = await runTurn("run-2", undefined, "second");
-      expect(developerMessageText(refreshRequest)).toContain(current);
-
-      fixture.usage.tokens = 10;
-      const compactionTurn = await runTurn("run-3", undefined, "third");
-      const summarizationIndex = compactionTurn.findIndex((request) =>
-        JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
+      context.bootstrapFiles.push({
+        name: "USER.md",
+        path: personalPath,
+        content: personalUser,
+        missing: false,
+        personalUser: true,
+      });
+    });
+    for (const [index, soul] of [firstSoul, editedSoul, undefined].entries()) {
+      if (soul) {
+        await fs.writeFile(soulPath, soul);
+      } else {
+        await fs.unlink(soulPath);
+      }
+      const params = createParams("remote-persona.jsonl");
+      params.disableTools = false;
+      params.runId = `remote-persona-${index}`;
+      params.prompt = `Ordinary remote turn ${index}.`;
+      const result = await run(params, url);
+      expect(result.terminal).toEqual({ kind: "ok" });
+      // Native history/configuration can be inherited by full-history forks.
+      expect(JSON.stringify(fixture.requests)).not.toContain(personalUser);
+      expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
+        expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
       );
-      expect(summarizationIndex).toBeGreaterThanOrEqual(0);
-      const continuationRequest = compactionTurn[summarizationIndex + 1];
-      expect(continuationRequest).toBeDefined();
-      // Compaction restores the immutable creation-time carrier, losing the refresh.
-      expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
-      expect(developerMessageText(continuationRequest)).not.toContain(current);
-
-      const [restoredRequest] = await runTurn("run-4", undefined, "fourth");
-      const restored = developerMessageText(restoredRequest);
-      expect(restored).toContain(current);
-      expect(restored.lastIndexOf(current)).toBeGreaterThan(
-        restored.lastIndexOf(NATIVE_FIRST_CATALOG),
-      );
-    } finally {
-      await close();
+      const text = developerMessageText(fixture.requests.at(-1));
+      expect(text).toContain(sharedUser);
+      expect(text).toContain("Synthetic model-owned Default policy.");
+      if (soul) {
+        expect(text).toContain(soul);
+        if (index === 1) {
+          expect(text.lastIndexOf(editedSoul)).toBeGreaterThan(text.lastIndexOf(firstSoul));
+        }
+      } else {
+        // Historical turns retain old text; inspect the latest policy handoff.
+        expect(Array.isArray(fixture.requests.at(-1)?.input)).toBe(true);
+        const handoffs = developerMessages(fixture.requests.at(-1)).filter((item) =>
+          JSON.stringify(item).includes("complete current OpenClaw"),
+        );
+        expect(handoffs.length).toBeGreaterThan(0);
+        expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
+        expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
+      }
     }
-  }, 180_000);
-});
+    expect(threadIds.size).toBe(1);
+  } finally {
+    await state.close();
+    if (harness.exitCode === null && harness.signalCode === null) {
+      const closed = once(harness, "close");
+      harness.kill("SIGTERM");
+      await closed;
+    }
+  }
+}, 90_000);
+
+it("keeps a withdrawn catalog visible to the model after native compaction rebuilds the incognito thread", async () => {
+  const current = "refreshable thread instructions are empty";
+  // 5,000 tokens exceeds the 900-token native auto-compaction threshold.
+  await using native = await createNativeFixture("skill-carrier-model", 1_000);
+  const { fixture, createParams, run } = native;
+  const sessionKey = "agent:main:dashboard:incognito-native-compaction-removal";
+  await seedRunSessionOwnerForTest("session-1", sessionKey);
+  const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
+    const before = fixture.requests.length;
+    const params = createParams("incognito-compaction-session.jsonl", sessionKey);
+    // Tool restriction would replace the live incognito thread.
+    params.disableTools = false;
+    params.runId = runId;
+    params.prompt = prompt;
+    params.timeoutMs = 60_000;
+    params.skillsSnapshot = catalog ? { prompt: catalog, skills: [] } : undefined;
+    const result = await run(params);
+    expect(result.terminal).toEqual({ kind: "ok" });
+    return fixture.requests.slice(before);
+  };
+
+  const [creationRequest] = await runTurn("run-1", NATIVE_FIRST_CATALOG, "first");
+  expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
+
+  fixture.usage.tokens = 5_000;
+  const [refreshRequest] = await runTurn("run-2", undefined, "second");
+  expect(developerMessageText(refreshRequest)).toContain(current);
+
+  fixture.usage.tokens = 10;
+  const compactionTurn = await runTurn("run-3", undefined, "third");
+  const summarizationIndex = compactionTurn.findIndex((request) =>
+    JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
+  );
+  expect(summarizationIndex).toBeGreaterThanOrEqual(0);
+  const continuationRequest = compactionTurn[summarizationIndex + 1];
+  expect(continuationRequest).toBeDefined();
+  // Compaction restores the immutable creation-time carrier, losing the refresh.
+  expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
+  expect(developerMessageText(continuationRequest)).not.toContain(current);
+
+  const [restoredRequest] = await runTurn("run-4", undefined, "fourth");
+  const restored = developerMessageText(restoredRequest);
+  expect(restored).toContain(current);
+  expect(restored.lastIndexOf(current)).toBeGreaterThan(restored.lastIndexOf(NATIVE_FIRST_CATALOG));
+}, 180_000);

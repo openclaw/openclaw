@@ -10,6 +10,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
+import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartParams, JsonObject } from "./protocol.js";
@@ -79,7 +80,7 @@ it("forks a sender-attributed turn through a database alias using exact submitte
   const alias = path.join(tempDir, "database-alias");
   await symlink(tempDir, alias, process.platform === "win32" ? "junction" : "dir");
   params.sessionTarget = { ...target, storePath: path.join(alias, "agent.sqlite") };
-  const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+  await bindProductionHarnessHostCapabilitiesForTest(params);
   const run = runCodexAppServerAttempt(params);
   try {
     await run.waitForTurnAccepted();
@@ -144,13 +145,9 @@ it("forks a sender-attributed turn through a database alias using exact submitte
       editorText: params.prompt,
     });
   } finally {
-    try {
-      // Settle the attempt even when admission rejects before notification handlers attach.
-      abortController.abort();
-      await run.catch(() => {});
-    } finally {
-      closeHost();
-    }
+    // The shared harness closes the host after this attempt settles, including admission failure.
+    abortController.abort();
+    await run.catch(() => {});
   }
 });
 it("delivers prepared document paths alongside native images without changing the canonical prompt", async () => {
@@ -234,17 +231,9 @@ it("drains bound command output without one macrotask per notification", async (
   const harness = createStartedThreadHarness();
   const params = createTestParams();
   const command = {
-    id: "cmd-burst",
-    type: "commandExecution",
-    command: "generate realistic output burst",
+    ...nativeCommandItem("cmd-burst", "completed", 20),
     cwd: params.workspaceDir,
-    processId: null,
-    source: "agent",
-    status: "completed",
-    commandActions: [],
     aggregatedOutput: null,
-    exitCode: 0,
-    durationMs: 20,
   };
   const run = runCodexAppServerAttempt(params);
   await harness.waitForMethod("turn/start");

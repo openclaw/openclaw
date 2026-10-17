@@ -71,7 +71,7 @@ function childNotifications(
       turnId,
       item: collabItem(tool, [threadId], { id, senderThreadId: sender, ...extra }),
     });
-  const spawn = async (threadId: string) => {
+  const spawn = async (threadId: string, turnId: string) => {
     await notify("thread/started", {
       thread: {
         id: threadId,
@@ -80,6 +80,7 @@ function childNotifications(
       },
     });
     await collab(`spawn-${threadId}`, "spawnAgent", threadId);
+    await turn(threadId, turnId);
   };
   const turn = (threadId: string, id: string, result?: string, itemId = `result-${id}`) =>
     notify(result === undefined ? "turn/started" : "turn/completed", {
@@ -120,7 +121,14 @@ async function admitHost(params: ReturnType<typeof createTestParams>, sessionId:
   assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
   params.hostCapabilities = host.hostCapabilities;
   params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
-  return host;
+  const close = () => {
+    try {
+      host.closeHost();
+    } finally {
+      host.closeAdmission();
+    }
+  };
+  return { ...host, close };
 }
 
 it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-receipt"] as const)(
@@ -141,6 +149,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
     let waitAfterAdmission: unknown;
     let claimedAfterStart: boolean | undefined;
     const harness = createStartedThreadHarness();
+    const isClaimed = () => isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
     const lifetime = new AbortController();
     const params = createTestParams();
     params.abortSignal = lifetime.signal;
@@ -154,16 +163,14 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       const relayId = extractRelayIdFromThreadRequest(
         harness.requests.find((request) => request.method === "thread/start")?.params,
       );
-      await spawn(childThreadId);
-      await turn(childThreadId, "turn-a");
+      await spawn(childThreadId, "turn-a");
       await turn(childThreadId, "turn-a", "A result");
       await collab("wait-a", "wait", childThreadId, {
         agentsStates: { [childThreadId]: { status: "completed", message: "A result" } },
       });
       await completion.settle();
       // A is complete and B is not admitted yet; a running sibling authorizes sessions_yield.
-      await spawn(waiterThreadId);
-      await turn(waiterThreadId, "waiter-turn");
+      await spawn(waiterThreadId, "waiter-turn");
       if (scenario === "wait-before-admission") {
         await turn(childThreadId, turnB);
         await collab(
@@ -192,7 +199,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       if (scenario === "yield-receipt") {
         // The native receipt queues input without starting another parent turn.
         await turn(childThreadId, turnB);
-        claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+        claimedAfterStart = isClaimed();
         await parentItem(
           {
             type: "agent_message",
@@ -212,13 +219,12 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, promptError: null });
       await nativeHookRelayUnregisterQueue.flush();
-      host.closeHost();
-      host.closeAdmission();
+      host.close();
       if (scenario !== "wait-before-admission" && scenario !== "yield-receipt") {
         await turn(childThreadId, turnB);
       }
       if (scenario !== "yield-receipt") {
-        claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+        claimedAfterStart = isClaimed();
       }
       if (accepted) {
         await turn(childThreadId, turnB, "B result");
@@ -243,16 +249,14 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       await turn(waiterThreadId, "waiter-turn", "Waiter result");
       await nativeHookRelayUnregisterQueue.flush();
       await completion.settle();
-      const followupDeliveries = delivery.mock.calls.filter(
-        ([call]) => call.childSessionKey === runB,
-      );
-      if (accepted) {
-        expect
-          .soft(followupDeliveries)
-          .toEqual([[expect.objectContaining({ childSessionKey: runB, result: "B result" })]]);
-      } else {
-        expect.soft(followupDeliveries).toHaveLength(0);
-      }
+      const followups = delivery.mock.calls.filter(([call]) => call.childSessionKey === runB);
+      expect
+        .soft(followups)
+        .toEqual(
+          accepted
+            ? [[expect.objectContaining({ childSessionKey: runB, result: "B result" })]]
+            : [],
+        );
       expect.soft(claimedAfterStart).toBe(accepted);
       if (scenario === "wait-before-admission") {
         expect.soft(waitAfterAdmission).toMatchObject({
@@ -260,7 +264,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
           wait: { kind: "children", dependencies: [{ runId: runB }], pendingCount: 1 },
         });
       }
-      expect.soft(isCodexAppServerLiveThreadClaimed(harness.client, childThreadId)).toBe(false);
+      expect.soft(isClaimed()).toBe(false);
       expect
         .soft(Boolean(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)))
         .toBe(false);
@@ -275,11 +279,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
         await nativeHookRelayUnregisterQueue.flush();
       } finally {
         completion.restore();
-        try {
-          host.closeHost();
-        } finally {
-          host.closeAdmission();
-        }
+        host.close();
       }
     }
   },
@@ -301,11 +301,7 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
   const child = childNotifications(harness, () => turns.at(-1)!);
   const childTurn = (threadId: string, result?: string) =>
     child.turn(threadId, `${threadId}-turn`, result, `${threadId}-result`);
-  const spawn = async (threadId: string) => {
-    await child.spawn(threadId);
-    await childTurn(threadId);
-  };
-  const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
+  const hosts: Array<Awaited<ReturnType<typeof admitHost>>> = [];
   const startTurn = async (runId: string) => {
     const params = createTestParams();
     params.runId = runId;
@@ -328,9 +324,9 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
 
   try {
     const first = await startTurn("run-1");
-    await spawn("child-settled");
+    await child.spawn("child-settled", "child-settled-turn");
     await childTurn("child-settled", "Settled result");
-    await spawn("child-running");
+    await child.spawn("child-running", "child-running-turn");
     expect(await yieldTurn()).toMatchObject({ status: "yielded" });
     await completeTurn(first);
     await vi.waitFor(() =>
@@ -358,8 +354,7 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
   } finally {
     harness.close();
     for (const host of hosts) {
-      host.closeHost();
-      host.closeAdmission();
+      host.close();
     }
   }
 });

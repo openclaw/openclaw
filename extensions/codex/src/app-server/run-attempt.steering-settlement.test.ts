@@ -4,13 +4,13 @@ import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-har
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   appendSessionTranscriptMessageByIdentity,
-  readSessionTranscriptEvents,
   withSessionTranscriptWriteLock,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
+import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
@@ -23,7 +23,10 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
-import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 
 setupRunAttemptTestHooks();
@@ -32,6 +35,7 @@ const prefixText = "Earlier completed answer.";
 const steerText = "Use this committed follow-up.";
 const codaText = "Completed the steered request.";
 const prefix = { id: "prefix", type: "agentMessage", phase: "final_answer", text: prefixText };
+const successfulTerminal = { aborted: false, timedOut: false, promptError: null };
 
 async function createFixture() {
   const params = createTestParams();
@@ -139,10 +143,7 @@ async function createFixture() {
       await Promise.allSettled([run, ...notifications, ...(lock ? [lock.writer] : [])]);
       closeHost();
     },
-    readMessages: async () =>
-      (await readSessionTranscriptEvents(target)).flatMap((event) =>
-        isJsonObject(event) && isJsonObject(event.message) ? [event.message] : [],
-      ),
+    readMessages: () => readTranscriptMessagesByIdentity(params),
     queue: () =>
       queueActiveRunMessageForTest(params.sessionId, steerText, {
         debounceMs: 0,
@@ -177,7 +178,7 @@ function holdTranscript(target: Parameters<typeof withSessionTranscriptWriteLock
   return { acquired: acquired.promise, release: release.resolve, writer };
 }
 
-function messageText({ content }: JsonObject): string {
+function messageText({ content }: Record<string, unknown>): string {
   return typeof content === "string"
     ? content
     : Array.isArray(content)
@@ -208,11 +209,7 @@ it("seals native steering when terminal receipt arrives behind its queued prefix
 
   expect(f.harness.requests.some((request) => request.method === "turn/steer")).toBe(false);
   expect(f.recorder.persistApproved).not.toHaveBeenCalled();
-  expect(readAttemptTerminal(result)).toMatchObject({
-    aborted: false,
-    timedOut: false,
-    promptError: null,
-  });
+  expect(readAttemptTerminal(result)).toMatchObject(successfulTerminal);
   const messages = await f.readMessages();
   expect(messages.filter((message) => messageText(message) === steerText)).toEqual([]);
   expect(messages.filter((message) => messageText(message) === prefixText)).toHaveLength(1);
@@ -252,17 +249,10 @@ it("keeps one steering prefix and source through degraded tainted native complet
   const mirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
   vi.useFakeTimers();
   void f.item({
-    id: "checkpoint-command",
-    type: "commandExecution",
+    ...nativeCommandItem("checkpoint-command", "completed", 1),
     command: "echo saved",
     cwd: f.params.workspaceDir,
-    commandActions: [],
-    processId: null,
-    source: "agent",
-    status: "completed",
     aggregatedOutput: "saved",
-    exitCode: 0,
-    durationMs: 1,
   });
   await vi.waitFor(() => expect(mirror).toHaveBeenCalledOnce(), fastWait);
   void f.item({
@@ -296,11 +286,7 @@ it("keeps one steering prefix and source through degraded tainted native complet
     },
   });
   expect(result.codexAppServerFailure).toBeUndefined();
-  expect(readAttemptTerminal(result)).toMatchObject({
-    aborted: false,
-    timedOut: false,
-    promptError: null,
-  });
+  expect(readAttemptTerminal(result)).toMatchObject(successfulTerminal);
   expect(f.onAttemptTimeout).not.toHaveBeenCalled();
   expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
   expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);

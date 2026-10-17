@@ -13,7 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
@@ -106,6 +106,12 @@ function pendingTool(name: string, text: string, details: Record<string, string>
 
 function fakeClock() {
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+}
+
+function observeDiagnostics() {
+  const events: DiagnosticEventPayload[] = [];
+  onTestFinished(onInternalDiagnosticEvent((event) => events.push(event)));
+  return events;
 }
 
 setupRunAttemptTestHooks();
@@ -333,7 +339,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
   });
 
   it("emits one eager audit lifecycle when runtime normalization clones a wrapped tool", async () => {
-    const events: DiagnosticEventPayload[] = [];
+    const events = observeDiagnostics();
     const isStart = (event: DiagnosticEventPayload) =>
       event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit";
     let hasStarted = false;
@@ -347,79 +353,66 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     tool.execute = execute;
 
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
-      if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
-        events.push(event);
-      }
-    });
-    try {
-      const runtimePlan = createCodexRuntimePlanFixture();
-      const attempt = await startTool(tool, {
-        runtimePlan: {
-          ...runtimePlan,
-          tools: {
-            ...runtimePlan.tools,
-            normalize: (tools) => tools.map((entry) => ({ ...entry })),
-          },
+    const runtimePlan = createCodexRuntimePlanFixture();
+    const attempt = await startTool(tool, {
+      runtimePlan: {
+        ...runtimePlan,
+        tools: {
+          ...runtimePlan.tools,
+          normalize: (tools) => tools.map((entry) => ({ ...entry })),
         },
-      });
-      const { harness, run } = attempt;
-      await harness.waitForMethod("turn/start");
-      expect(await callTool(harness, "echo", "call-echo-audit")).toMatchObject({ success: true });
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      await waitForDiagnosticEventsDrained();
-    } finally {
-      unsubscribeDiagnostics();
-    }
+      },
+    });
+    const { harness, run } = attempt;
+    await harness.waitForMethod("turn/start");
+    expect(await callTool(harness, "echo", "call-echo-audit")).toMatchObject({ success: true });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    await waitForDiagnosticEventsDrained();
 
     expect(execute).toHaveBeenCalledOnce();
     expect(hasStarted).toBe(true);
-    expect(events.map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
+    expect(
+      events
+        .filter((event) => "toolCallId" in event && event.toolCallId === "call-echo-audit")
+        .map((event) => event.type),
+    ).toEqual(["tool.execution.started", "tool.execution.completed"]);
   });
 
   it("emits normalized tool progress around app-server dynamic tool requests", async () => {
     const harness = createStartedThreadHarness();
     const onEvent = vi.fn<NonNullable<ReturnType<typeof createTestParams>["onAgentEvent"]>>();
     const onPhase = vi.fn();
-    const globals: AgentEventPayload[] = [],
-      diagnostics: DiagnosticEventPayload[] = [];
+    const globals: AgentEventPayload[] = [];
+    const diagnostics = observeDiagnostics();
     onAgentEvent((event) => globals.push(event));
-    const stop = onInternalDiagnosticEvent((event) => diagnostics.push(event));
     const identity = { name: "lookup", toolCallId: "call-1", commandBearing: true };
     const errorText = "Unknown OpenClaw tool: lookup";
-    try {
-      const params = createTestParams();
-      params.onAgentEvent = onEvent;
-      params.onExecutionPhase = onPhase;
+    const params = createTestParams();
+    params.onAgentEvent = onEvent;
+    params.onExecutionPhase = onPhase;
 
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("thread/start");
-      await vi.waitFor(() =>
-        expect(onPhase).toHaveBeenCalledWith(expect.objectContaining({ phase: "turn_accepted" })),
-      );
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+    await vi.waitFor(() =>
+      expect(onPhase).toHaveBeenCalledWith(expect.objectContaining({ phase: "turn_accepted" })),
+    );
 
-      expect(
-        await callTool(harness, "lookup", "call-1", {
-          action: "search",
-          command: "cat /private/operator-file",
-          token: "plain-secret-value-12345",
-          text: "hello",
-        }),
-      ).toMatchObject({
-        success: false,
-        contentItems: [{ type: "inputText", text: errorText }],
-      });
+    expect(
+      await callTool(harness, "lookup", "call-1", {
+        action: "search",
+        command: "cat /private/operator-file",
+        token: "plain-secret-value-12345",
+        text: "hello",
+      }),
+    ).toMatchObject({
+      success: false,
+      contentItems: [{ type: "inputText", text: errorText }],
+    });
 
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      await waitForDiagnosticEventsDrained();
-    } finally {
-      stop();
-    }
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    await waitForDiagnosticEventsDrained();
 
     const events = onEvent.mock.calls.map(([event]) => event);
     const toolEvent = (phase: string) =>

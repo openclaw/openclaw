@@ -67,7 +67,11 @@ function diagnosticParams(captureContent = false) {
   return params;
 }
 
-function attachReplyBackend(params: ReturnType<typeof createTestParams>) {
+function heldAttempt(overrides: Partial<ReturnType<typeof createTestParams>> = {}) {
+  const hooks = holdAgentEnd();
+  const onAttemptAbort = vi.fn();
+  const onAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
+  const params = Object.assign(createTestParams(), { onAttemptAbort, onAgentEvent }, overrides);
   let backend: ReplyBackend | undefined;
   const freezeAbort = vi.fn(),
     detachBackend = vi.fn();
@@ -78,19 +82,10 @@ function attachReplyBackend(params: ReturnType<typeof createTestParams>) {
     detachBackend,
     freezeAbort,
   } as unknown as NonNullable<typeof params.replyOperation>;
-  return { read: () => backend, freezeAbort, detachBackend };
-}
-
-function heldAttempt(overrides: Partial<ReturnType<typeof createTestParams>> = {}) {
-  const hooks = holdAgentEnd();
-  const onAttemptAbort = vi.fn();
-  const onAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
-  const params = Object.assign(createTestParams(), { onAttemptAbort, onAgentEvent }, overrides);
-  const backend = attachReplyBackend(params);
   const harness = createStartedThreadHarness();
   return {
     ...hooks,
-    backend,
+    backend: { read: () => backend, freezeAbort, detachBackend },
     harness,
     onAttemptAbort,
     onAgentEvent,
@@ -98,13 +93,15 @@ function heldAttempt(overrides: Partial<ReturnType<typeof createTestParams>> = {
   };
 }
 
-function captureDiagnostics() {
+function captureDiagnostics(publicOnly = false) {
   const events: DiagnosticEventPayload[] = [];
   const content = new Map<string, DiagnosticEventPrivateData>();
-  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-    events.push(event);
-    content.set(event.type, privateData);
-  });
+  const stop = publicOnly
+    ? onInternalDiagnosticEvent((event) => events.push(event))
+    : onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+        events.push(event);
+        content.set(event.type, privateData);
+      });
   onTestFinished(stop);
   return { events, content, find: (type: string) => events.find((event) => event.type === type) };
 }
@@ -237,33 +234,23 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   it("classifies codex model-call timeout diagnostics", async () => {
     // Diagnostic delivery drains through setImmediate after the deadline settles.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
-      if (event.type.startsWith("model.call.")) {
-        diagnosticEvents.push(event);
-      }
+    const { find } = captureDiagnostics(true);
+    createStartedThreadHarness();
+    const params = diagnosticParams();
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await run;
+    await waitForDiagnosticEventsDrained();
+
+    expect(readAttemptTerminal(result).timedOut).toBe(true);
+    expect(find("model.call.error")).toMatchObject({
+      failureKind: "timeout",
+      errorCategory: "timeout",
+      agentId: "main",
     });
-    try {
-      createStartedThreadHarness();
-      const params = diagnosticParams();
-      params.timeoutMs = 60_000;
-
-      const run = runCodexAppServerAttempt(params);
-      await run.waitForTurnAccepted();
-      await vi.advanceTimersByTimeAsync(60_000);
-      const result = await run;
-      await waitForDiagnosticEventsDrained();
-
-      const errorEvent = diagnosticEvents.find((event) => event.type === "model.call.error");
-      expect(readAttemptTerminal(result).timedOut).toBe(true);
-      expect(errorEvent).toMatchObject({
-        failureKind: "timeout",
-        errorCategory: "timeout",
-        agentId: "main",
-      });
-    } finally {
-      stopDiagnostics();
-    }
   });
 
   it("freezes native terminal success locally before agent_end", async () => {

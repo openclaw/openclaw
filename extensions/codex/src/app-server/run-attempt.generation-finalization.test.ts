@@ -15,8 +15,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it, vi } from "vitest";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   createParams,
   createTestParams,
@@ -129,11 +127,8 @@ it.each([true, false])(
       sessionFile,
       supervision
         ? {
-            ...existingBinding(workspaceDir),
-            historyCoveredThrough: new Date().toISOString(),
-            appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
-              resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
-            ),
+            threadId: "thread-existing",
+            cwd: workspaceDir,
             connectionScope: "supervision",
             supervisionSourceThreadId: "thread-source",
             model: "gpt-5.5",
