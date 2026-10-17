@@ -21,6 +21,7 @@ extension RootTabs {
         case chat
         case overview
         case activity
+        case systems
         case agents
         case workboard
         case skillWorkshop
@@ -45,6 +46,7 @@ extension RootTabs {
             case .chat: String(localized: "Chat")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
+            case .systems: String(localized: "Systems")
             case .agents: String(localized: "Agents")
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
@@ -74,6 +76,7 @@ extension RootTabs {
             case .chat: "bubble.left"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
+            case .systems: "server.rack"
             case .agents: "person.2"
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
@@ -94,6 +97,7 @@ extension RootTabs {
         var screen: SidebarScreen {
             switch self {
             case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .systems: .dashboard(DashboardRouteMap.systemsPagePath)
             case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
             case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
             case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
@@ -270,6 +274,7 @@ extension RootTabs {
         .cron,
         .sessions,
         .activity,
+        .systems,
         .skillWorkshop,
         .agents,
         .instances,
@@ -287,7 +292,7 @@ extension RootTabs {
     /// Echoes the web first-run Pages zone (Home, Usage, Automations, …):
     /// compact by default so sessions stay above the fold. The Sessions page is
     /// intentionally unpinned — the sessions section + "All Sessions…" own it.
-    static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
+    static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .systems, .usage, .cron]
 
     /// "" = never customized (defaults); "none" = user unpinned everything.
     /// Storage order is the user's pin order (web parity); unknown or
