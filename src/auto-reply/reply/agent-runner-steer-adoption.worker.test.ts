@@ -24,7 +24,7 @@ import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
-import * as replyToolAuthority from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import * as steeringDelivery from "./steering-delivery-preparation.js";
 
@@ -33,9 +33,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function prepareOperation(run: FollowupRun) {
+  const { sessionKey, sessionId } = run.run;
+  const operation = createTestReplyOperation({ sessionKey, sessionId });
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+  const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+  return { operation, fingerprint };
+}
+
 it("adopts active steering through prepared policy without caller-thread SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
     const key = "agent:main:active-worker-steering";
     const policyKey = "agent:main:active-worker-policy";
     const config: OpenClawConfig = {
@@ -59,11 +66,7 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       senderIsOwner: true,
       config,
     });
-    const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
-    await operation.bindToolAuthoritySnapshotAsync(
-      replyToolAuthority.prepareReplyToolAuthority(run),
-    );
-    const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+    const { operation, fingerprint } = await prepareOperation(run);
     const delivered: string[] = [];
     attachSteerBackend(operation, fingerprint, {
       cancel() {},
@@ -140,11 +143,7 @@ it.for(
         sessionKey: key,
         config: { session: { store: storePath }, agents: { entries: { main: {} } } },
       });
-      const operation = createTestReplyOperation({ sessionKey: key, sessionId });
-      await operation.bindToolAuthoritySnapshotAsync(
-        replyToolAuthority.prepareReplyToolAuthority(run),
-      );
-      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+      const { operation, fingerprint } = await prepareOperation(run);
       replyRunRegistry.bindSourceTurnId(operation, sourceTurnId);
       const native = createNativeSessionBindingAuthority(
         [
@@ -192,9 +191,7 @@ it.for(
       });
       const resultState: ReplyOperationRunState = {};
       const followupDelivered = createDeferred<FollowupRun>();
-      const followup = vi.fn(async (queued: FollowupRun) => {
-        followupDelivered.resolve(queued);
-      });
+      const followup = vi.fn(followupDelivered.resolve);
       const pendingFollowups: Promise<void>[] = [];
       const runFollowup = (queued: FollowupRun) => {
         const pending = (async () => {
@@ -226,10 +223,7 @@ it.for(
           storePath,
         }),
       );
-      const settlement = outcome.then(
-        () => {},
-        () => {},
-      );
+      const settlement = outcome.catch(() => {});
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -264,14 +258,14 @@ it.for(
         expect(followup).not.toHaveBeenCalled();
         const queue = getExistingFollowupQueue(key);
         const retained = new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])]);
-        if (change === "unrelated-tombstone") {
-          expect(delivered).toEqual([run.prompt]);
-          expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });
-          expect([...retained]).toEqual([]);
-        } else {
-          expect(delivered).toEqual([]);
-          expect(resultState.admission).toEqual({ status: "accepted", mode: "followup" });
-          expect([...retained]).toEqual([run]);
+        const steered = change === "unrelated-tombstone";
+        expect(delivered).toEqual(steered ? [run.prompt] : []);
+        expect(resultState.admission).toEqual({
+          status: "accepted",
+          mode: steered ? "steer" : "followup",
+        });
+        expect([...retained]).toEqual(steered ? [] : [run]);
+        if (!steered) {
           expect(run.steerPending).toBeUndefined();
           operation.complete();
           expect(await withinTest(followupDelivered.promise, signal)).toBe(run);

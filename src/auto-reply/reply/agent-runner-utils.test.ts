@@ -1,11 +1,17 @@
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+// Tests agent runner utility decisions for fallbacks, channels, and reasoning tags.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
-const hoisted = vi.hoisted(() => ({
-  resolveModelFallbackAvailabilityMock: vi.fn(),
-  getChannelPluginMock: vi.fn(),
-  isReasoningTagProviderMock: vi.fn(),
-}));
+const hoisted = vi.hoisted(() => {
+  const resolveModelFallbackAvailabilityMock = vi.fn();
+  const getChannelPluginMock = vi.fn();
+  const isReasoningTagProviderMock = vi.fn();
+  return {
+    resolveModelFallbackAvailabilityMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
+});
 
 vi.mock("../../agents/agent-scope.js", async () => ({
   modelFallbackOverrideFromAvailability: (
@@ -13,15 +19,16 @@ vi.mock("../../agents/agent-scope.js", async () => ({
       "../../agents/agent-scope.js",
     )
   ).modelFallbackOverrideFromAvailability,
-  resolveModelFallbackAvailability: hoisted.resolveModelFallbackAvailabilityMock,
+  resolveModelFallbackAvailability: (...args: unknown[]) =>
+    hoisted.resolveModelFallbackAvailabilityMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: hoisted.getChannelPluginMock,
+  getChannelPlugin: (...args: unknown[]) => hoisted.getChannelPluginMock(...args),
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
-  isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
+  isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
 const {
@@ -49,32 +56,31 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     sessionKey: "agent:test:session",
     sessionFile: "/tmp/session.json",
     workspaceDir: "/tmp/workspace",
+    skillsSnapshot: [],
+    ownerNumbers: ["+15550001"],
+    enforceFinalTag: false,
     thinkingCatalog: [
       { provider: "openai", id: "gpt-4.1-mini", input: ["text"] },
+      { provider: "minimax", id: "MiniMax-M2.7", input: ["text"] },
       { provider: "anthropic", id: "claude-sonnet-4-6", input: ["text"] },
     ],
     thinkLevel: "medium",
     verboseLevel: "off",
+    reasoningLevel: "none",
+    execOverrides: {},
+    bashElevated: false,
     timeoutMs: 60_000,
-    blockReplyBreak: "message_end",
     ...overrides,
-  };
+  } as unknown as FollowupRun["run"];
 }
-
-const embeddedDefaults = {
-  hasRepliedRef: undefined,
-  provider: "openai",
-  model: "gpt-4.1-mini",
-  runId: "run-1",
-};
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveModelFallbackAvailabilityMock
-      .mockReset()
-      .mockReturnValue({ kind: "none_configured" });
+    hoisted.resolveModelFallbackAvailabilityMock.mockReset();
+    hoisted.resolveModelFallbackAvailabilityMock.mockReturnValue({ kind: "none_configured" });
     hoisted.getChannelPluginMock.mockReset();
-    hoisted.isReasoningTagProviderMock.mockReset().mockReturnValue(false);
+    hoisted.isReasoningTagProviderMock.mockReset();
+    hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
   describe("message action turn capabilities", () => {
@@ -102,32 +108,32 @@ describe("agent-runner-utils", () => {
         isHeartbeat: false,
       };
     }
-    function mint(turn: ReturnType<typeof makeTurn>) {
-      const token = mintReplyMessageActionTurnCapability(turn, source.runId);
-      onTestFinished(() => revokeMessageActionTurnCapability(token));
-      return { ...source, token };
-    }
 
     it("mints host-only dashboard authority for the original admitted identity", () => {
       const turn = makeTurn();
       const now = Date.now();
-      const lookup = mint(turn);
+      const token = mintReplyMessageActionTurnCapability(turn, source.runId);
+      const lookup = { ...source, token };
       const clock = vi
         .spyOn(Date, "now")
         .mockReturnValue(now + turn.followupRun.run.timeoutMs + 60_001);
-      onTestFinished(() => clock.mockRestore());
-      const authority = resolveMessageActionTurnAuthorization(lookup);
-      expect(authority?.assertDashboardReadCurrent).toBeTypeOf("function");
-      expect(resolveCurrentPromptReaction(lookup)).toBeUndefined();
-      expect(authority).not.toHaveProperty("currentPromptReaction");
-      expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
-        "currentPromptReaction",
-      );
-      authority?.assertDashboardReadCurrent?.();
-      expect(turn.opts?.dashboardReadAdmission?.assertCurrent).toHaveBeenCalled();
-      expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
-        "assertDashboardReadCurrent",
-      );
+      try {
+        const authority = resolveMessageActionTurnAuthorization(lookup);
+        expect(authority?.assertDashboardReadCurrent).toBeTypeOf("function");
+        expect(resolveCurrentPromptReaction(lookup)).toBeUndefined();
+        expect(authority).not.toHaveProperty("currentPromptReaction");
+        expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
+          "currentPromptReaction",
+        );
+        authority?.assertDashboardReadCurrent?.();
+        expect(turn.opts?.dashboardReadAdmission?.assertCurrent).toHaveBeenCalled();
+        expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
+          "assertDashboardReadCurrent",
+        );
+      } finally {
+        clock.mockRestore();
+        revokeMessageActionTurnCapability(token);
+      }
     });
 
     it("rejects inherited dashboard options outside their admitted source", () => {
@@ -161,15 +167,19 @@ describe("agent-runner-utils", () => {
     it("keeps native Discord context when dashboard options are present", () => {
       const turn = makeTurn();
       turn.sessionCtx = { Provider: "discord", To: "channel:123", AccountId: "work" };
-      const lookup = mint(turn);
-      const authority = resolveMessageActionTurnAuthorization(lookup);
-      expect(authority).toMatchObject({
-        requesterAccountId: "work",
-        toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
-      });
-      expect(authority?.assertDashboardReadCurrent).toBeUndefined();
-      expect(resolveCurrentPromptReaction(lookup)).toBeUndefined();
-      expect(turn.opts?.dashboardReadAdmission?.assertCurrent).not.toHaveBeenCalled();
+      const token = mintReplyMessageActionTurnCapability(turn, source.runId);
+      try {
+        const authority = resolveMessageActionTurnAuthorization({ ...source, token });
+        expect(authority).toMatchObject({
+          requesterAccountId: "work",
+          toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+        });
+        expect(authority?.assertDashboardReadCurrent).toBeUndefined();
+        expect(resolveCurrentPromptReaction({ ...source, token })).toBeUndefined();
+        expect(turn.opts?.dashboardReadAdmission?.assertCurrent).not.toHaveBeenCalled();
+      } finally {
+        revokeMessageActionTurnCapability(token);
+      }
     });
   });
 
@@ -177,12 +187,15 @@ describe("agent-runner-utils", () => {
     const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
 
     const resolved = await buildEmbeddedRunExecutionParams({
-      ...embeddedDefaults,
       run,
       sessionCtx: {
         Provider: "telegram",
         ConversationToolPolicy: { deny: ["write"] },
       },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.conversationToolPolicy).toEqual({ deny: ["exec"] });
@@ -196,7 +209,6 @@ describe("agent-runner-utils", () => {
     });
 
     const resolved = await buildEmbeddedRunExecutionParams({
-      ...embeddedDefaults,
       run,
       sessionCtx: {
         Provider: "OpenAI",
@@ -210,29 +222,37 @@ describe("agent-runner-utils", () => {
         },
         MemberRoleIds: ["admin", " ", "operator"],
       },
+      hasRepliedRef: undefined,
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      runId: "run-1",
     });
 
-    expect(resolved).toMatchObject({
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-      sessionId: run.sessionId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
-      messageProvider: "openai",
-      chatType: "channel",
-      messageTo: "channel-1",
-      chatId: "native-chat-1",
-      memberRoleIds: ["admin", "operator"],
-      currentInboundAudio: false,
+    expect(resolved.authProfileId).toBeUndefined();
+    expect(resolved.authProfileIdSource).toBeUndefined();
+    expect(resolved.sessionId).toBe(run.sessionId);
+    expect(resolved.sessionKey).toBe(run.sessionKey);
+    expect(resolved.agentId).toBe(run.agentId);
+    expect(resolved.messageProvider).toBe("openai");
+    expect(resolved.chatType).toBe("channel");
+    expect(resolved.chatType).not.toBe(run.chatType);
+    expect(resolved.messageTo).toBe("channel-1");
+    expect(resolved.chatId).toBe("native-chat-1");
+    expect(resolved.memberRoleIds).toEqual(["admin", "operator"]);
+    expect(resolved.currentInboundAudio).toBe(false);
+    expect({
+      senderId: resolved.senderId,
+      channelContext: resolved.channelContext,
+      senderName: resolved.senderName,
+      senderUsername: resolved.senderUsername,
+      senderE164: resolved.senderE164,
+    }).toEqual({
       senderId: "sender-1",
       channelContext: run.channelContext,
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
     });
-    expect(resolved.chatType).not.toBe(run.chatType);
   });
 
   it("hydrates the queued route before resolving channel threading policy", async () => {
@@ -351,18 +371,21 @@ describe("agent-runner-utils", () => {
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
     const sessionCtx = {
       Provider: "discord",
-      To: "slash:1",
+      To: "slash:1177378744822943744",
       OriginatingChannel: "discord",
-      OriginatingTo: "channel:2",
+      OriginatingTo: "channel:123456789012345678",
       MessageSid: "msg-9",
     };
     setChannelSourceTurnId(sessionCtx, "channel-user:v1:source-9");
-    const context = buildThreadingToolContext({ sessionCtx, config: {}, hasRepliedRef: undefined });
-    expect(context).toMatchObject({
-      currentChannelId: "channel:2",
-      currentMessageId: "msg-9",
-      currentSourceTurnId: "channel-user:v1:source-9",
+    const context = buildThreadingToolContext({
+      sessionCtx,
+      config: {},
+      hasRepliedRef: undefined,
     });
+
+    expect(context.currentChannelId).toBe("channel:123456789012345678");
+    expect(context.currentMessageId).toBe("msg-9");
+    expect(context.currentSourceTurnId).toBe("channel-user:v1:source-9");
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {
@@ -379,13 +402,14 @@ describe("agent-runner-utils", () => {
         }),
       },
     });
+
     const context = buildThreadingToolContext({
       sessionCtx: {
         Provider: "webchat",
         OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:-100:topic:928",
+        OriginatingTo: "telegram:-1003841603622:topic:928",
         MessageThreadId: 928,
-        MessageSid: "restart-sentinel:turn",
+        MessageSid: "restart-sentinel:agent:main:telegram:agentTurn:123",
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "telegram",
@@ -395,10 +419,9 @@ describe("agent-runner-utils", () => {
       config: {},
       hasRepliedRef: undefined,
     });
-    expect(context).toMatchObject({
-      currentChannelId: "telegram:-100:topic:928",
-      currentThreadTs: "928",
-      currentMessageId: undefined,
-    });
+
+    expect(context.currentChannelId).toBe("telegram:-1003841603622:topic:928");
+    expect(context.currentThreadTs).toBe("928");
+    expect(context.currentMessageId).toBeUndefined();
   });
 });

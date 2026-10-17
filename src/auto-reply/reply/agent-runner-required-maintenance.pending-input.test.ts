@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { text as readBody } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
@@ -33,6 +34,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
@@ -55,8 +57,9 @@ const providerText = (content: unknown) =>
 
 function writeChunk(
   response: ServerResponse,
-  choice: { delta: object; finish_reason: string | null },
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
+  delta: object,
+  finish_reason: string | null = null,
+  promptTokens?: number,
 ) {
   response.write(
     `data: ${JSON.stringify({
@@ -64,16 +67,33 @@ function writeChunk(
       object: "chat.completion.chunk",
       created: 1,
       model: "test-model",
-      choices: [{ index: 0, ...choice }],
-      ...(usage ? { usage } : {}),
+      choices: [{ index: 0, delta, finish_reason }],
+      usage:
+        promptTokens === undefined
+          ? undefined
+          : {
+              prompt_tokens: promptTokens,
+              completion_tokens: 50,
+              total_tokens: promptTokens + 50,
+            },
     })}\n\n`,
   );
 }
 
-it.each(["one archive", "two archives"] as const)(
+it.each([
+  ["one archive", [[2_000, priorInputTokens]], 0],
+  [
+    "two archives",
+    [
+      [600, 10_000],
+      [1_400, priorInputTokens],
+    ],
+    1,
+  ],
+] as const)(
   "required maintenance keeps restart-safe admitted input current (%s)",
-  async (history) => {
-    await withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
+  (_history, priorTurns, expectedCompactions) =>
+    withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
       const runtimeContext = "Synthetic current runtime fact for the approved request.";
       const approved =
         "Approved current request: preserve ünicode 🦞 and exact newlines.\n" +
@@ -81,85 +101,71 @@ it.each(["one archive", "two archives"] as const)(
         "Keep the current request active.";
       let observeForeground: (() => void) | undefined;
       const foregroundRequests: ModelRequest[] = [];
-      const checkpointRequests: ModelRequest[] = [];
+      const checkpointTools: string[][] = [];
       const checkpointText = "# Durable checkpoint\nArchive policy preserved.\n";
-      let advertisedWrite = false;
-      const server = createServer((request, response) => {
-        let body = "";
-        request.setEncoding("utf8");
-        request.on("data", (chunk: string) => {
-          body += chunk;
-        });
-        request.on("end", () => {
-          const received = JSON.parse(body) as ModelRequest;
-          const lastUser = received.messages.findLast(
-            (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
-          );
-          const lastUserText = providerText(lastUser?.content);
-          const foreground = lastUserText.endsWith(approved);
-          const activeInstructions = [
-            lastUserText,
-            ...received.messages
-              .filter((message) => message.role === "system" || message.role === "developer")
-              .map((message) => providerText(message.content)),
-          ].join("\n");
-          // Runtime-only tasks carry instructions in the system message. A
-          // compactor can quote the same words but does not advertise write.
-          const checkpoint =
-            !foreground &&
-            activeInstructions.includes("Checkpoint durable notes.") &&
-            received.tools?.some((tool) => tool.function?.name === "write") === true;
-          if (checkpoint) {
-            checkpointRequests.push(received);
-          }
-          const writeCheckpoint = checkpoint && checkpointRequests.length === 1;
-          if (writeCheckpoint) {
-            advertisedWrite =
-              received.tools?.some((tool) => tool.function?.name === "write") === true;
-          }
-          if (foreground) {
-            foregroundRequests.push(received);
-            observeForeground?.();
-          }
-          const text = foreground
-            ? "FOREGROUND_READY"
-            : checkpoint
-              ? "NO_REPLY"
-              : "## Decisions\nKeep documentation clear.\n## Open TODOs\nRespond to the current user.\n## Constraints/Rules\nPreserve approved input.\n## Pending user asks\nContinue the current task.\n## Exact identifiers\narchive-marker";
-          response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-          writeChunk(response, {
-            delta: writeCheckpoint
-              ? {
-                  role: "assistant",
-                  tool_calls: [
-                    {
-                      index: 0,
-                      id: "checkpoint-write",
-                      type: "function",
-                      function: {
-                        name: "write",
-                        arguments: JSON.stringify({
-                          path: "memory/checkpoint.md",
-                          content: checkpointText,
-                        }),
-                      },
+      const server = createServer(async (request, response) => {
+        const received = JSON.parse(await readBody(request)) as ModelRequest;
+        const tools = received.tools?.flatMap((tool) => tool.function?.name ?? []) ?? [];
+        const lastUser = received.messages.findLast(
+          (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
+        );
+        const lastUserText = providerText(lastUser?.content);
+        const foreground = lastUserText.endsWith(approved);
+        const activeInstructions = [
+          lastUserText,
+          ...received.messages
+            .filter((message) => message.role === "system" || message.role === "developer")
+            .map((message) => providerText(message.content)),
+        ].join("\n");
+        // Runtime-only tasks carry instructions in the system message. A
+        // compactor can quote the same words but does not advertise write.
+        const checkpoint =
+          !foreground &&
+          activeInstructions.includes("Checkpoint durable notes.") &&
+          tools.includes("write");
+        if (checkpoint) {
+          checkpointTools.push(tools);
+        }
+        const writeCheckpoint = checkpoint && checkpointTools.length === 1;
+        if (foreground) {
+          foregroundRequests.push(received);
+          observeForeground?.();
+        }
+        const text = foreground
+          ? "FOREGROUND_READY"
+          : checkpoint
+            ? "NO_REPLY"
+            : "## Decisions\nKeep documentation clear.\n## Open TODOs\nRespond to the current user.\n## Constraints/Rules\nPreserve approved input.\n## Pending user asks\nContinue the current task.\n## Exact identifiers\narchive-marker";
+        response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+        writeChunk(
+          response,
+          writeCheckpoint
+            ? {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "checkpoint-write",
+                    type: "function",
+                    function: {
+                      name: "write",
+                      arguments: JSON.stringify({
+                        path: "memory/checkpoint.md",
+                        content: checkpointText,
+                      }),
                     },
-                  ],
-                }
-              : { role: "assistant", content: text },
-            finish_reason: null,
-          });
-          writeChunk(
-            response,
-            { delta: {}, finish_reason: writeCheckpoint ? "tool_calls" : "stop" },
-            {
-              prompt_tokens: foreground ? 18_000 : 22_000,
-              completion_tokens: 50,
-              total_tokens: foreground ? 18_050 : 22_050,
-            },
-          );
-          response.end("data: [DONE]\n\n");
-        });
+                  },
+                ],
+              }
+            : { role: "assistant", content: text },
+        );
+        writeChunk(
+          response,
+          {},
+          writeCheckpoint ? "tool_calls" : "stop",
+          foreground ? 18_000 : 22_000,
+        );
+        response.end("data: [DONE]\n\n");
       });
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -233,15 +239,6 @@ it.each(["one archive", "two archives"] as const)(
         };
         await replaceSessionEntry(scope, entry);
         const seed = SessionManager.open(scope, state.workspaceDir);
-        // One archive continues after a retention no-op; two archives leave
-        // a complete prefix for the earlier retention-only pass.
-        const priorTurns =
-          history === "one archive"
-            ? ([[2_000, priorInputTokens]] as const)
-            : ([
-                [600, 10_000],
-                [1_400, priorInputTokens],
-              ] as const);
         for (const [rows, inputTokens] of priorTurns) {
           seed.appendMessage({
             role: "user",
@@ -274,19 +271,15 @@ it.each(["one archive", "two archives"] as const)(
         const restartSafeAdmission = resolveRestartSafeChatAdmission({
           acpMeta: null,
           activeRunScopeKey: sessionKey,
-          agentId: "main",
+          ...scope,
           cfg,
           clientRunId: runId,
           context: { chatAbortControllers: new Map(), chatQueuedTurns: new Map() },
           entry,
           initialSessionEntry: entry,
-          lifecycleTimestamps: undefined,
           now: Date.now(),
           placement: undefined,
           request,
-          sessionId,
-          sessionKey,
-          storePath,
         });
         expect(restartSafeAdmission).toBeDefined();
         recorder = createUserTurnTranscriptRecorder({
@@ -329,7 +322,6 @@ it.each(["one archive", "two archives"] as const)(
         followupRun.currentInboundContext = { text: runtimeContext };
         followupRun.userTurnTranscriptRecorder = recorder;
         entry = loadSessionEntry(scope)!;
-        const sessionStore = { [sessionKey]: entry };
         installAgentRunnerMemoryFixture(() => ({
           softThresholdTokens: 4_000,
           reserveTokensFloor: 8_192,
@@ -348,43 +340,22 @@ it.each(["one archive", "two archives"] as const)(
               ),
           );
         };
-        const result = await runReplyAgent({
-          commandBody: approved,
-          transcriptCommandBody: approved,
-          followupRun,
-          queueKey: sessionKey,
-          resolvedQueue: { mode: "interrupt" },
-          shouldSteer: false,
-          shouldFollowup: false,
-          isActive: false,
-          opts: { runId },
-          typing: createTypingController({}),
-          sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },
-          sessionEntry: entry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          defaultModel: "test-model",
-          resolvedVerboseLevel: "off",
-          isNewSession: false,
-          blockStreamingEnabled: false,
-          resolvedBlockStreamingBreak: "message_end",
-          shouldInjectGroupIntro: false,
-          typingMode: "never",
-        });
-        expect(advertisedWrite).toBe(true);
-        expect(checkpointRequests).toHaveLength(2);
-        expect(
-          checkpointRequests.flatMap(
-            (checkpointRequest) =>
-              checkpointRequest.tools?.map((tool) => tool.function?.name) ?? [],
-          ),
-        ).not.toContain("read");
+        const result = await runReplyAgent(
+          createReplyParams(followupRun, {
+            opts: { runId },
+            typing: createTypingController({}),
+            sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },
+            sessionEntry: entry,
+            sessionStore: { [sessionKey]: entry },
+            storePath,
+          }),
+        );
+        expect(checkpointTools).toHaveLength(2);
+        expect(checkpointTools.flat()).not.toContain("read");
         expect(await readFile(path.join(state.workspaceDir, "memory/checkpoint.md"), "utf8")).toBe(
           checkpointText,
         );
         expect(loadSessionEntry(scope)?.memoryFlush?.kind).toBe("succeeded");
-        const expectedCompactions = history === "one archive" ? 0 : 1;
         expect(loadSessionEntry(scope)?.compactionCount ?? 0).toBe(expectedCompactions);
         const events = (await loadTranscriptEvents(scope)).map(asOptionalRecord);
         expect(events.filter((event) => event?.type === "compaction")).toHaveLength(
@@ -409,7 +380,7 @@ it.each(["one archive", "two archives"] as const)(
         expect(foregroundContexts[0]!.slice(-3)).toMatchObject([
           {
             role: "user",
-            content: "Earlier archive context.\n".repeat(history === "one archive" ? 2_000 : 1_400),
+            content: "Earlier archive context.\n".repeat(priorTurns.at(-1)![0]),
           },
           { role: "assistant", content: [{ type: "text", text: "ACK" }] },
           { role: "user", content: approved, idempotencyKey: `${runId}:user` },
@@ -433,7 +404,6 @@ it.each(["one archive", "two archives"] as const)(
         server.closeAllConnections();
         await promisify(server.close.bind(server))();
       }
-    });
-  },
+    }),
   60_000,
 );

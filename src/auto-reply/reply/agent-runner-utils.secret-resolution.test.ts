@@ -1,22 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-const hoisted = vi.hoisted(() => ({
-  resolveCommandSecretRefsViaGatewayMock: vi.fn(),
-  getScopedChannelsCommandSecretTargetsMock: vi.fn(),
+const { resolveSecrets, scopedTargets } = vi.hoisted(() => ({
+  resolveSecrets: vi.fn(),
+  scopedTargets: vi.fn(),
 }));
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
-    hoisted.resolveCommandSecretRefsViaGatewayMock(...args),
+  resolveCommandSecretRefsViaGateway: resolveSecrets,
 }));
 
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries.*.apiKey"]),
   getAgentRuntimeOptionalCommandSecretPaths: () =>
     new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
-  getScopedChannelsCommandSecretTargets: (...args: unknown[]) =>
-    hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
+  getScopedChannelsCommandSecretTargets: scopedTargets,
 }));
 
 const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
@@ -32,7 +30,7 @@ const secretResult = (resolvedConfig: OpenClawConfig) => ({
 });
 const sourceConfig: OpenClawConfig = {};
 function expectScope(config: OpenClawConfig, accountId?: string) {
-  expect(hoisted.getScopedChannelsCommandSecretTargetsMock).toHaveBeenCalledWith({
+  expect(scopedTargets).toHaveBeenCalledWith({
     config,
     channel: "discord",
     accountId,
@@ -42,10 +40,8 @@ function expectScope(config: OpenClawConfig, accountId?: string) {
 describe("resolveQueuedReplyExecutionConfig channel scope", () => {
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
-    hoisted.resolveCommandSecretRefsViaGatewayMock
-      .mockReset()
-      .mockImplementation(async ({ config }) => secretResult(config));
-    hoisted.getScopedChannelsCommandSecretTargetsMock.mockReset().mockReturnValue({
+    resolveSecrets.mockReset().mockImplementation(async ({ config }) => secretResult(config));
+    scopedTargets.mockReset().mockReturnValue({
       targetIds: new Set(["channels.discord.token"]),
       allowedPaths: new Set(["channels.discord.token", "channels.discord.accounts.work.token"]),
     });
@@ -58,7 +54,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
   it("resolves base runtime targets, then active channel/account targets from originating context", async () => {
     const baseResolved: OpenClawConfig = { tools: { profile: "coding" } };
     const scopedResolved: OpenClawConfig = { tools: { profile: "full" } };
-    hoisted.resolveCommandSecretRefsViaGatewayMock
+    resolveSecrets
       .mockResolvedValueOnce(secretResult(baseResolved))
       .mockResolvedValueOnce(secretResult(scopedResolved));
 
@@ -70,26 +66,22 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     });
 
     expect(resolved).toBe(scopedResolved);
-    expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
-    expect(hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0]).toEqual({
+    expect(resolveSecrets).toHaveBeenCalledTimes(2);
+    expect(resolveSecrets.mock.calls[0]?.[0]).toEqual({
       config: sourceConfig,
       commandName: "reply",
       targetIds: new Set(["skills.entries.*.apiKey"]),
       optionalActivePaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
     });
-    expect(hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0].config).toBe(
-      sourceConfig,
-    );
+    expect(resolveSecrets.mock.calls[0]?.[0].config).toBe(sourceConfig);
     expectScope(baseResolved, "work");
-    expect(hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[1]?.[0]).toEqual({
+    expect(resolveSecrets.mock.calls[1]?.[0]).toEqual({
       config: baseResolved,
       commandName: "reply",
       targetIds: new Set(["channels.discord.token"]),
       allowedPaths: new Set(["channels.discord.token", "channels.discord.accounts.work.token"]),
     });
-    expect(hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[1]?.[0].config).toBe(
-      baseResolved,
-    );
+    expect(resolveSecrets.mock.calls[1]?.[0].config).toBe(baseResolved);
   });
 
   it("falls back to messageProvider and agentAccountId when originating values are missing", async () => {
@@ -105,14 +97,14 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     const resolved = await resolveQueuedReplyExecutionConfig(sourceConfig);
 
     expect(resolved).toBe(sourceConfig);
-    expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.getScopedChannelsCommandSecretTargetsMock).not.toHaveBeenCalled();
+    expect(resolveSecrets).toHaveBeenCalledTimes(1);
+    expect(scopedTargets).not.toHaveBeenCalled();
   });
 
   it("prefers the runtime snapshot as the base config for secret resolution", async () => {
     const runtimeConfig: OpenClawConfig = { tools: { profile: "coding" } };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    hoisted.getScopedChannelsCommandSecretTargetsMock.mockReturnValue({
+    scopedTargets.mockReturnValue({
       targetIds: new Set<string>(),
     });
 
@@ -120,7 +112,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       messageProvider: "discord",
     });
 
-    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0];
+    const baseCall = resolveSecrets.mock.calls[0]?.[0];
     expect(baseCall.config).toBe(runtimeConfig);
     expect(baseCall.commandName).toBe("reply");
     expectScope(runtimeConfig);

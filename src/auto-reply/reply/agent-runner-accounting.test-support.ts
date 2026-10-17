@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll } from "vitest";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { createAgentAccountingPersistenceFixture } from "./agent-runner-result-accounting.persistence.test-support.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
-export function useAccountingDatabase(prefix: string) {
+export function useAccountingFixture(prefix: string) {
   const database = { root: "", storePath: "" };
   beforeAll(() => {
     // openclaw-temp-dir: allow suite database root drains before removal
@@ -19,5 +21,20 @@ export function useAccountingDatabase(prefix: string) {
     await closeOpenClawAgentDatabasesAsync(database.root);
     fs.rmSync(database.root, { recursive: true, force: true });
   });
-  return database;
+  const operations: ReplyOperation[] = [];
+  let sequence = 0;
+  afterEach(() => {
+    for (const operation of operations.splice(0)) {
+      operation.complete();
+    }
+  });
+  return {
+    database,
+    createFixture: () =>
+      createAgentAccountingPersistenceFixture({
+        ...database,
+        fixtureId: ++sequence,
+        registerOperation: (operation) => operations.push(operation),
+      }),
+  };
 }

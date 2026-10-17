@@ -3,32 +3,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
-import { useAccountingDatabase } from "./agent-runner-accounting.test-support.js";
-import {
-  agentAccountingPersistenceDiagnostic as primary,
-  createAgentAccountingPersistenceFixture,
-} from "./agent-runner-result-accounting.persistence.test-support.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { useAccountingFixture } from "./agent-runner-accounting.test-support.js";
+import { agentAccountingPersistenceDiagnostic as primary } from "./agent-runner-result-accounting.persistence.test-support.js";
 
-const database = useAccountingDatabase("openclaw-restoration-");
-let sequence = 0;
-const operations: ReplyOperation[] = [];
+const { database, createFixture } = useAccountingFixture("openclaw-restoration-");
 const fallback = { provider: "fallback-fixture", model: "available" };
-afterEach(() => {
-  vi.restoreAllMocks();
-  for (const operation of operations.splice(0)) {
-    operation.complete();
-  }
-});
+afterEach(() => vi.restoreAllMocks());
 
 async function fixture(lane: "ordinary" | "followup" = "ordinary") {
-  const { root, storePath } = database;
-  const f = await createAgentAccountingPersistenceFixture({
-    root,
-    storePath,
-    fixtureId: ++sequence,
-    registerOperation: (operation) => operations.push(operation),
-  });
+  const f = await createFixture();
   f.context.execution.resolved = fallback;
   f.context.execution.fallback.attempts = [
     { provider: primary.provider, model: primary.model, reason: "rate_limit", error: "rate limit" },
@@ -45,7 +28,7 @@ async function fixture(lane: "ordinary" | "followup" = "ordinary") {
     (
       await loadTranscriptEvents({
         agentId: "main",
-        storePath,
+        storePath: database.storePath,
         sessionKey: f.context.sessionKey!,
         sessionId,
       })
@@ -85,6 +68,7 @@ it.each(["failed", "aborted", "error", "error payload", "exhausted", "synthetic"
   async (outcome) => {
     const f = await fixture();
     const execution = f.context.execution;
+    const successful = structuredClone(execution);
     if (outcome === "failed") {
       f.context.execution = {
         ...execution,
@@ -109,16 +93,8 @@ it.each(["failed", "aborted", "error", "error payload", "exhausted", "synthetic"
     expect(await f.notices()).toEqual([]);
     expect(f.read()?.fallbackNotice).toEqual(f.activeNotice);
 
-    f.context.execution = {
-      ...execution,
-      status: "ok",
-      terminalFailurePayload: undefined,
-      postCompactionModelFailure: undefined,
-    };
-    delete execution.result.meta.aborted;
-    delete execution.result.meta.error;
-    execution.result.payloads = [{ text: "recovered" }];
-    execution.fallback.exhausted = false;
+    f.context.execution = successful;
+    successful.result.payloads = [{ text: "recovered" }];
     delete f.context.followupRun.run.inputProvenance;
     await f.account("ordinary", primary);
     expect(await f.notices()).toHaveLength(1);
