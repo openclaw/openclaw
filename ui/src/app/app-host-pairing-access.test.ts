@@ -41,6 +41,37 @@ import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
 type PairingSidebar = AppSidebarElement;
 
 type PairingAuth = { role: string; scopes?: string[] };
+const admin: PairingAuth = { role: "operator", scopes: ["operator.admin"] };
+
+function outboxes(sessionKey: string, total: number, draft: boolean) {
+  return {
+    total,
+    sessions: total
+      ? [{ agentId: "main", sessionKey, hasComposerDraft: draft, outboxAttentionCount: total }]
+      : [],
+    attentionCountForSession: () => total,
+    hasSessionDraft: () => draft,
+  };
+}
+
+function deferredRenderer<Renderer>(shell: object, property: string) {
+  const loading = createDeferred<Renderer>();
+  const retrying = createDeferred<Renderer>();
+  const load = vi.fn(() => retrying.promise).mockImplementationOnce(() => loading.promise);
+  Object.defineProperty(shell, property, { value: createLazyRenderer(load) });
+  return { loading, retrying, load };
+}
+
+function stubIntersectionObserver() {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+}
 
 setupSidebarTest();
 
@@ -257,22 +288,10 @@ describe("application shell pairing access", () => {
       const sessionKey = "agent:main:queued";
       const { shell, context, renderSidebar, container, overlaySnapshot, refresh } =
         createPairingShell({
-          auth: { role: "operator", scopes: ["operator.admin"] },
+          auth: admin,
           sessionKeys: [sessionKey],
         });
-      let storedOutboxes = {
-        total: 1,
-        sessions: [
-          {
-            agentId: "main",
-            sessionKey,
-            hasComposerDraft: true,
-            outboxAttentionCount: 1,
-          },
-        ],
-        attentionCountForSession: () => 1,
-        hasSessionDraft: () => true,
-      };
+      let storedOutboxes = outboxes(sessionKey, 1, true);
       if (withOutboxes) {
         shell.outboxStoreRuntime = {
           read: () => storedOutboxes,
@@ -334,19 +353,7 @@ describe("application shell pairing access", () => {
       );
       expect(sidebar.storedOutboxes?.hasSessionDraft(sessionKey) ?? false).toBe(withOutboxes);
       if (withOutboxes) {
-        storedOutboxes = {
-          total: 2,
-          sessions: [
-            {
-              agentId: "main",
-              sessionKey,
-              hasComposerDraft: false,
-              outboxAttentionCount: 2,
-            },
-          ],
-          attentionCountForSession: () => 2,
-          hasSessionDraft: () => false,
-        };
+        storedOutboxes = outboxes(sessionKey, 2, false);
         await refresh();
         await settleLitElements([sidebar, topbar]);
         await waitForSolid(() =>
@@ -360,9 +367,7 @@ describe("application shell pairing access", () => {
   );
 
   it("keeps resident navigation actions bound to current context and permission", async () => {
-    const { shell, renderSidebar, openDevicePairSetup } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    });
+    const { shell, renderSidebar, openDevicePairSetup } = createPairingShell({ auth: admin });
     const sidebar = await renderSidebar();
     const {
       onPairMobile,
@@ -371,9 +376,7 @@ describe("application shell pairing access", () => {
       onUpdateSidebarEntries,
       watchUpdateProgress,
     } = sidebar;
-    const replacement = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    });
+    const replacement = createPairingShell({ auth: admin });
     replacement.snapshot.hello = {
       ...replacement.snapshot.hello,
       features: { methods: ["sessions.create"], events: [] },
@@ -418,12 +421,7 @@ describe("application shell pairing access", () => {
     let publish: (() => void) | undefined;
     const shell = createShellOwner();
     shell.outboxStoreRuntime = {
-      read: () => ({
-        total: 0,
-        sessions: [],
-        attentionCountForSession: () => 0,
-        hasSessionDraft: () => false,
-      }),
+      read: () => outboxes("", 0, false),
       subscribe: (listener) => {
         publish = listener;
         return () => {
@@ -469,7 +467,7 @@ describe("application shell pairing access", () => {
     },
     {
       name: "admin becoming pairing-only",
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: admin,
       nextAuth: { role: "operator", scopes: ["operator.pairing"] },
       canPair: true,
     },
@@ -487,17 +485,11 @@ describe("application shell pairing access", () => {
 
   it.each([false, true])("keeps the lazy pairing dialog visible (failed: %s)", async (failed) => {
     const { shell, renderSidebar, container } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: admin,
       setupCode: "pair-mobile-secret",
     });
     type Renderer = NonNullable<ReturnType<typeof shell.devicePairSetup.renderer>>;
-    const loading = createDeferred<Renderer>();
-    const retrying = createDeferred<Renderer>();
-    const loadRenderer = vi
-      .fn(() => retrying.promise)
-      .mockImplementationOnce(() => loading.promise);
-    const loader = createLazyRenderer(loadRenderer);
-    Object.defineProperty(shell, "devicePairSetup", { value: loader });
+    const { loading, load: loadRenderer } = deferredRenderer<Renderer>(shell, "devicePairSetup");
     await renderSidebar();
     if (failed) {
       loading.reject(new Error("Pairing chunk unavailable"));
@@ -524,13 +516,11 @@ describe("application shell pairing access", () => {
   it.each([false, true])("keeps lazy settings navigation visible (failed: %s)", async (failed) => {
     const { shell, container, refresh } = createPairingShell({ auth: { role: "operator" } });
     type Renderer = NonNullable<ReturnType<typeof shell.settingsSidebar.renderer>>;
-    const loading = createDeferred<Renderer>();
-    const retrying = createDeferred<Renderer>();
-    const importRenderer = vi
-      .fn(() => retrying.promise)
-      .mockImplementationOnce(() => loading.promise);
-    const settingsSidebar = createLazyRenderer(importRenderer);
-    Object.defineProperty(shell, "settingsSidebar", { value: settingsSidebar });
+    const {
+      loading,
+      retrying,
+      load: importRenderer,
+    } = deferredRenderer<Renderer>(shell, "settingsSidebar");
     shell.routeState = {
       routeId: "profile",
       location: { pathname: "/settings/profile", search: "", hash: "" },
@@ -577,21 +567,14 @@ describe("application shell pairing access", () => {
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
+    stubIntersectionObserver();
     const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
     const execCommand = vi.fn(() => false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     const schedule = vi.spyOn(window, "setTimeout");
     const { container, renderPairingDialog } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: admin,
       setupCode: "pair-mobile-secret",
     });
     document.body.append(container);
@@ -621,7 +604,7 @@ describe("application shell pairing access", () => {
   it("expires a node setup link from the pairing clock", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
     const { container, renderSidebar, refresh } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: admin,
       setupCode: "pair-node-secret",
       access: "node",
       expiresAtMs: 5_000,
@@ -644,14 +627,7 @@ describe("application shell pairing access", () => {
   });
 
   it("publishes layout traits from an already-loaded native route on shell mount", async () => {
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
+    stubIntersectionObserver();
     const { shell, context, container, refresh } = createPairingShell({ auth: null });
     const router = shell.runtime!.router;
     const definition = router.getRoute("activity")!;
