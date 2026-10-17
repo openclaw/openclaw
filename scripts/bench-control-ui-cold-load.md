@@ -43,11 +43,9 @@ Online measurements.
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
 
-The warm visit flushes the transcript through its owner, which trims v8 snapshots to
-80 messages. Before each measured reload, the bench restores that visit's IndexedDB,
-local storage and session storage after unloading the app, preserving the HTTP cache.
-`snapshotSave` records versions, bytes and sidebar shape;
-missing snapshots or the wrong saved sidebar view fail setup.
+Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
+(after unloading the app), local storage and session storage; the HTTP cache stays warm.
+`snapshotSave` records versions, message count and sidebar view; mismatches fail setup.
 
 `--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
 `ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,
@@ -59,8 +57,7 @@ then collect separate traced runs for the storyboard and attribution.
 
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
-exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted
-row count and UTF-8 bytes for the initial save through the live cache owner.
+exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted row count.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels
@@ -182,7 +179,3 @@ missed. The largest source-attributed native getter is `scrollHeight` from
 `ui/src/components/scroll-state-observer.ts:19` (107–199 ms sampled self time).
 The Online attempt returned to Sessions after reload and is excluded from these
 numbers; the fixture E2E opens Online explicitly to verify all 120 people.
-
-Session queries apply canonical ordering, filtering, pagination, owner-first prefixes
-and bounded row enrichment. Cron loads three compact pages (50/50/20). Each run's
-`rpcs` contains per-method requests and bytes; use `--cpu-profile` for restore attribution.

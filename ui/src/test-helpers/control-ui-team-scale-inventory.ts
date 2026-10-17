@@ -24,8 +24,6 @@ export function createTeamScaleSessionInventory({
     systemSessions: number;
   };
 }) {
-  // The selected agent owns a full 300-row roster; extra agent identities model
-  // the switcher without silently reducing the selected agent's page pressure.
   const sessions: TeamScaleSession[] = Array.from({ length: counts.sessions }, (_, index) => {
     const pinned = index >= counts.sessions - counts.pinned;
     const owner = people[index % counts.owners]!;

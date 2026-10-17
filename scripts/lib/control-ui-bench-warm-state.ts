@@ -23,13 +23,17 @@ export async function persistColdLoadWarmState(input: {
     ? Reflect.get(pane, "chatMessagesBySession")
     : undefined;
   const entry = cache && [...cache].find(([key]) => key.endsWith(`\u0000${input.sessionKey}`));
-  if (!store || !entry) throw new Error("Warm reload requires the active transcript cache owner");
+  if (!store || !entry) {
+    throw new Error("Warm reload requires the active transcript cache owner");
+  }
   store.write(entry[0], { ...entry[1].snapshot });
   await store.flush();
   const result = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.addEventListener("success", () => resolve(request.result));
+      request.addEventListener("error", () =>
+        reject(request.error ?? new Error("Snapshot request failed")),
+      );
     });
   const database = await result(indexedDB.open("openclaw-chat-snapshots"));
   try {
@@ -49,20 +53,16 @@ export async function persistColdLoadWarmState(input: {
         "Warm reload requires the selected transcript and sidebar view persisted in IndexedDB",
       );
     }
-    const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
     return {
       storage: {
         records: { snapshots, sidebarSnapshots: sidebars, snapshotMetadata: metadata },
         local: Object.entries(localStorage),
         session: Object.entries(sessionStorage),
       },
-      bytes: bytes(record),
       messages: record.snapshot.messages.length,
       databaseVersion: database.version,
       projectionVersion: record.projectionVersion,
-      sidebarBytes: bytes(sidebar),
       sidebarView: sidebar.model.navigationView,
-      sidebarSessions: sidebar.model.sessions.length,
       sidebarPeople: sidebar.model.onlineUsers.length,
     };
   } finally {
@@ -82,9 +82,9 @@ export async function restoreColdLoadWarmState(
   await page.unroute(resetUrl);
   await page.evaluate("globalThis.__name = (fn) => fn");
   await page.evaluate(
-    async ({ storage, url }) => {
+    async ({ storage: saved, url: deepLink }) => {
       const databases: Record<string, Record<string, unknown[]>> = {
-        "openclaw-chat-snapshots": storage.records,
+        "openclaw-chat-snapshots": saved.records,
       };
       if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
         databases["openclaw-control-ui"] = { composerDrafts: [] };
@@ -92,19 +92,25 @@ export async function restoreColdLoadWarmState(
       for (const [name, records] of Object.entries(databases)) {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open(name);
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
+          request.addEventListener("success", () => resolve(request.result));
+          request.addEventListener("error", () =>
+            reject(request.error ?? new Error("Snapshot request failed")),
+          );
         });
         try {
           const transaction = database.transaction(Object.keys(records), "readwrite");
           const complete = new Promise<void>((resolve, reject) => {
-            transaction.oncomplete = () => resolve();
-            transaction.onabort = () => reject(transaction.error);
+            transaction.addEventListener("complete", () => resolve());
+            transaction.addEventListener("abort", () =>
+              reject(transaction.error ?? new Error("Snapshot write aborted")),
+            );
           });
-          for (const [name, rows] of Object.entries(records)) {
-            const store = transaction.objectStore(name);
+          for (const [storeName, rows] of Object.entries(records)) {
+            const store = transaction.objectStore(storeName);
             store.clear();
-            for (const row of rows) store.put(row);
+            for (const row of rows) {
+              store.put(row);
+            }
           }
           await complete;
         } finally {
@@ -112,13 +118,15 @@ export async function restoreColdLoadWarmState(
         }
       }
       for (const [target, entries] of [
-        [localStorage, storage.local],
-        [sessionStorage, storage.session],
+        [localStorage, saved.local],
+        [sessionStorage, saved.session],
       ] as const) {
         target.clear();
-        for (const [key, value] of entries) target.setItem(key, value);
+        for (const [key, value] of entries) {
+          target.setItem(key, value);
+        }
       }
-      history.replaceState(null, "", url);
+      history.replaceState(null, "", deepLink);
     },
     { storage, url },
   );
