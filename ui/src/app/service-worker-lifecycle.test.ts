@@ -1,11 +1,25 @@
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const serviceWorkerPath = path.join(here, "../../public/sw.js");
+const workerSource = fs.readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
+function loadWorker<Event>(
+  self: Record<string, unknown>,
+  globals: Record<string, unknown> = {},
+  source = workerSource,
+) {
+  const listeners = new Map<string, (event: Event) => void>();
+  new vm.Script(source, { filename: "ui/public/sw.js" }).runInNewContext({
+    URL,
+    ...globals,
+    self: {
+      ...self,
+      addEventListener: (type: string, listener: (event: Event) => void) =>
+        listeners.set(type, listener),
+    },
+  });
+  return listeners;
+}
 
 describe("Control UI service worker cache versioning", () => {
   it("announces only to legacy root/chat clients without reloading older settings tabs", async () => {
@@ -20,34 +34,32 @@ describe("Control UI service worker cache versioning", () => {
       client("https://control.example/openclaw-other/chat"),
       client("https://other.example/openclaw/chat/main/session"),
     ];
-    const listeners = new Map<string, (event: ActivateEventStub) => void>();
     const cacheDelete = vi.fn(async () => true);
     const clients = {
       claim: vi.fn(async () => undefined),
       matchAll: vi.fn(async () => [...included, ...excluded]),
     };
-    new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8")).runInNewContext({
-      URL,
-      caches: {
-        delete: cacheDelete,
-        match: async (_url: string, { cacheName }: { cacheName: string }) =>
-          cacheName.startsWith("openclaw-control-") ? {} : undefined,
-        keys: async () => [
-          "openclaw-control-oldest",
-          "openclaw-control-older",
-          "openclaw-control-previous",
-          "openclaw-control-new-build",
-          "other-cache",
-        ],
-      },
-      self: {
-        addEventListener: (type: string, listener: (event: ActivateEventStub) => void) =>
-          listeners.set(type, listener),
+    const listeners = loadWorker<ActivateEventStub>(
+      {
         clients,
         location: { href: "https://control.example/openclaw/sw.js?v=new-build" },
         registration: { scope: "https://control.example/openclaw/" },
       },
-    });
+      {
+        caches: {
+          delete: cacheDelete,
+          match: async (_url: string, { cacheName }: { cacheName: string }) =>
+            cacheName.startsWith("openclaw-control-") ? {} : undefined,
+          keys: async () => [
+            "openclaw-control-oldest",
+            "openclaw-control-older",
+            "openclaw-control-previous",
+            "openclaw-control-new-build",
+            "other-cache",
+          ],
+        },
+      },
+    );
     let activation: Promise<unknown> | undefined;
     listeners.get("activate")?.({
       waitUntil: (pending) => {
@@ -74,25 +86,19 @@ describe("Control UI service worker cache versioning", () => {
   });
 
   it("answers a resumed document from embedded build identity, not the registering URL", () => {
-    const listeners = new Map<string, (event: { data: unknown; ports: unknown[] }) => void>();
     const reply = vi.fn();
-    const source = fs
-      .readFileSync(serviceWorkerPath, "utf8")
-      .replace(
-        'const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";',
-        'const EMBEDDED_CACHE_VERSION = "new-build";',
-      );
-    new vm.Script(source).runInNewContext({
-      URL,
-      self: {
-        addEventListener: (
-          type: string,
-          listener: (event: { data: unknown; ports: unknown[] }) => void,
-        ) => listeners.set(type, listener),
+    const source = workerSource.replace(
+      'const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";',
+      'const EMBEDDED_CACHE_VERSION = "new-build";',
+    );
+    const listeners = loadWorker<{ data: unknown; ports: unknown[] }>(
+      {
         location: { href: "https://control.example/sw.js?v=old-build" },
         registration: { scope: "https://control.example/" },
       },
-    });
+      {},
+      source,
+    );
     listeners.get("message")?.({
       data: { type: "sw-version-probe" },
       ports: [{ postMessage: reply }],
@@ -102,9 +108,9 @@ describe("Control UI service worker cache versioning", () => {
 });
 
 describe("Control UI service worker notification scope", () => {
-  const rootScope = "https://control.example/";
-  const nestedScope = "https://control.example/openclaw/";
-  const nestedScopeWithoutSlash = "https://control.example/openclaw";
+  const root = "https://control.example/";
+  const nested = root + "openclaw/";
+  const slashless = root + "openclaw";
 
   function scenario(
     name: string,
@@ -126,29 +132,44 @@ describe("Control UI service worker notification scope", () => {
   const currentQuery = "?session=42#current-session";
   const latestRoute = "chat?session=42#latest";
   const currentRoute = "chat?session=42";
-  const settings = `${nestedScope}settings`;
-  const latest = `${nestedScope}${latestRoute}`;
-  const current = `${nestedScope}${currentRoute}`;
-  const stale = `${nestedScope}chat?session=7`;
+  const settings = `${nested}settings`;
+  const latest = `${nested}${latestRoute}`;
+  const current = `${nested}${currentRoute}`;
+  const stale = `${nested}chat?session=7`;
   const sibling = "https://control.example/openclaw-other/chat";
   const approval = "approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example";
+  const preserved: Array<[string, string, string, boolean?]> = [
+    ["root", root, root + currentQuery],
+    ["nested child", nested, nested + "chat" + currentQuery],
+    ["slashless", slashless, slashless + currentQuery],
+    ["slashless child", slashless, nested + "chat" + currentQuery],
+    ["legacy root", root, root + currentQuery, true],
+    ["legacy slashless", slashless, nested + "chat" + currentQuery, true],
+  ];
+  const rejected: Array<[string, string, string[], string?]> = [
+    ["cross-origin window", nested, ["https://outside.example/openclaw/"]],
+    ["sibling-prefix window", nested, ["https://control.example/openclaw-other/"]],
+    ["sibling target", nested, [sibling], "/openclaw-other/chat"],
+    ["slashless sibling target", slashless, [sibling], "/openclaw-other/chat"],
+    ["ancestor traversal", slashless, [root], "../"],
+  ];
   const scenarios: NotificationClickScenario[] = [
-    scenario("preserves root query-state", rootScope, [rootScope + currentQuery]),
-    scenario("preserves nested child query-state", nestedScope, [
-      nestedScope + "chat" + currentQuery,
-    ]),
-    scenario("preserves slashless query-state", nestedScopeWithoutSlash, [
-      nestedScopeWithoutSlash + currentQuery,
-    ]),
-    scenario("preserves slashless child query-state", nestedScopeWithoutSlash, [
-      nestedScope + "chat" + currentQuery,
-    ]),
-    scenario("prefers nested scope over root", nestedScope, [rootScope, nestedScope], {
+    ...preserved.map(([name, scope, url, legacy]) =>
+      scenario(`preserves ${name} query-state`, scope, [url], { legacy }),
+    ),
+    ...rejected.map(([name, scope, urls, target]) =>
+      scenario(`rejects ${name}`, scope, urls, {
+        target: target ?? null,
+        focusedClientIndex: -1,
+        openedUrl: scope,
+      }),
+    ),
+    scenario("prefers nested scope over root", nested, [root, nested], {
       focusedClientIndex: 1,
     }),
-    scenario("opens approval with Gateway handoff", nestedScope, [], {
+    scenario("opens approval with Gateway handoff", nested, [], {
       target: approval,
-      openedUrl: nestedScope + approval,
+      openedUrl: nested + approval,
     }),
     ...[
       { name: "exact target over unrelated tab", urls: [settings, latest] },
@@ -156,76 +177,37 @@ describe("Control UI service worker notification scope", () => {
       { name: "matching query over unrelated tab", urls: [settings, current] },
       { name: "matching path over unrelated tab", urls: [settings, stale] },
     ].map(({ name, urls }) =>
-      scenario(name, nestedScope, urls, {
+      scenario(name, nested, urls, {
         target: latestRoute,
         focusedClientIndex: 1,
         navigatedUrl: latest,
       }),
     ),
-    scenario("opens relative target beneath slashless scope", nestedScopeWithoutSlash, [], {
+    scenario("opens relative target beneath slashless scope", slashless, [], {
       target: latestRoute,
       openedUrl: latest,
     }),
-    scenario(
-      "navigates past stale SPA fragments",
-      nestedScope,
-      [nestedScope + "chat" + currentQuery],
-      {
-        target: currentRoute,
-        navigatedUrl: current,
-      },
-    ),
-    scenario("opens exact empty slashless scope", nestedScopeWithoutSlash, []),
-    scenario("excludes cross-origin window", nestedScope, ["https://outside.example/openclaw/"], {
-      focusedClientIndex: -1,
-      openedUrl: nestedScope,
+    scenario("navigates past stale SPA fragments", nested, [nested + "chat" + currentQuery], {
+      target: currentRoute,
+      navigatedUrl: current,
     }),
-    scenario("rejects cross-origin target", nestedScope, [], {
+    scenario("opens exact empty slashless scope", slashless, []),
+    scenario("rejects cross-origin target", nested, [], {
       target: "https://outside.example/openclaw/chat",
     }),
-    ...[nestedScope, nestedScopeWithoutSlash].map((scope) =>
-      scenario(`rejects sibling target under ${scope}`, scope, [sibling], {
-        target: "/openclaw-other/chat",
-        focusedClientIndex: -1,
-        openedUrl: scope,
-      }),
-    ),
-    scenario("rejects ancestor traversal", nestedScopeWithoutSlash, [rootScope], {
-      target: "../",
-      focusedClientIndex: -1,
-      openedUrl: nestedScopeWithoutSlash,
-    }),
-    scenario(
-      "excludes sibling-prefix window",
-      nestedScope,
-      ["https://control.example/openclaw-other/"],
-      {
-        focusedClientIndex: -1,
-        openedUrl: nestedScope,
-      },
-    ),
-    scenario("rejects malformed target", nestedScope, [], { target: "https://[invalid" }),
-    scenario("preserves legacy root query-state", rootScope, [rootScope + currentQuery], {
-      legacy: true,
-    }),
-    scenario(
-      "preserves legacy slashless query-state",
-      nestedScopeWithoutSlash,
-      [nestedScope + "chat" + currentQuery],
-      { legacy: true },
-    ),
-    scenario("navigates legacy exact target", nestedScope, [stale], {
+    scenario("rejects malformed target", nested, [], { target: "https://[invalid" }),
+    scenario("navigates legacy exact target", nested, [stale], {
       legacy: true,
       target: currentRoute,
       navigatedUrl: current,
     }),
-    scenario("prefers legacy matching tab", nestedScope, [settings, current], {
+    scenario("prefers legacy matching tab", nested, [settings, current], {
       legacy: true,
       target: currentRoute,
       focusedClientIndex: 1,
       navigatedUrl: current,
     }),
-    scenario("opens target after legacy navigation rejection", nestedScope, [stale], {
+    scenario("opens target after legacy navigation rejection", nested, [stale], {
       legacy: true,
       rejectNavigation: true,
       target: latestRoute,
@@ -288,7 +270,7 @@ describe("Control UI service worker notification scope", () => {
   );
 
   it("preserves a quiet shared tag for approval terminal replacements", async () => {
-    const worker = createNotificationServiceWorker(nestedScope, []);
+    const worker = createNotificationServiceWorker(nested, []);
     const tag = "openclaw-approval-exec:replacement";
 
     const requested = await worker.dispatchPush({
@@ -359,7 +341,6 @@ function createNotificationServiceWorker(
   clientUrls: string[],
   options: { rejectNavigation?: boolean } = {},
 ) {
-  const listeners = new Map<string, (event: ServiceWorkerNotificationEventStub) => void>();
   const windowClients = clientUrls.map((url) => {
     const focus = vi.fn(async () => undefined);
     return {
@@ -381,19 +362,8 @@ function createNotificationServiceWorker(
     async (_title: string, _options: ServiceWorkerNotificationOptions) => undefined,
   );
   const scopeUrl = new URL(scope);
-  new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8"), {
-    filename: "ui/public/sw.js",
-  }).runInNewContext({
-    URL,
-    caches: {},
-    fetch: vi.fn(),
-    self: {
-      addEventListener(
-        type: string,
-        listener: (event: ServiceWorkerNotificationEventStub) => void,
-      ) {
-        listeners.set(type, listener);
-      },
+  const listeners = loadWorker<ServiceWorkerNotificationEventStub>(
+    {
       clients,
       location: {
         href: new URL("sw.js?v=notification-scope", scopeUrl).href,
@@ -402,7 +372,8 @@ function createNotificationServiceWorker(
       registration: { scope, showNotification },
       skipWaiting: vi.fn(),
     },
-  });
+    { caches: {}, fetch: vi.fn() },
+  );
   async function dispatch(
     type: string,
     event: Omit<ServiceWorkerNotificationEventStub, "waitUntil">,

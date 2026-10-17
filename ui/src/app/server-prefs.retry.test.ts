@@ -28,27 +28,6 @@ const hooks = { profileId, canWrite: true };
 const expectedEntries = { "ui.background": null };
 const readPending = () => JSON.parse(localStorage.getItem(pendingKey)!);
 
-function conflictedBatch(onCommit = vi.fn(), entries = {}) {
-  const started = createDeferred();
-  const refresh = createDeferred();
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.prefs.set") {
-      return { status: "conflict" };
-    }
-    if (method === "users.prefs.get") {
-      started.resolve();
-      await refresh.promise;
-      return { status: "ok", entries };
-    }
-    return { ok: true };
-  });
-  const writer = createWriter(request, true);
-  const prefs = { background: none, locale: "de" };
-  patchSettings(prefs);
-  pushServerUiPrefs(writer, prefs, { ...hooks, afterCommit: onCommit });
-  return { writer, request, started: started.promise, refresh };
-}
-
 beforeEach(async () => {
   vi.stubGlobal("localStorage", createStorageMock());
   await initializeServerPrefsProfile(scope, profileId);
@@ -70,33 +49,47 @@ async function failBackgroundWrite() {
   return { request, writer };
 }
 
-it("retries an unchanged None after transient failure using the original writer and commit hook", async () => {
-  let fail = true;
-  const request = vi.fn(async () => {
-    if (fail) {
-      throw new Error("Connection lost");
+it.each([
+  ["unchanged None after transient failure", none, new Error("Connection lost")],
+  [
+    "deletion after rejection",
+    null,
+    new GatewayRequestError({ code: "INVALID_REQUEST", message: "Try again" }),
+  ],
+] as const)(
+  "retries %s with the original writer and commit hook",
+  async (_name, background, error) => {
+    let fail = true;
+    const request = vi.fn(async () => {
+      if (fail) {
+        throw error;
+      }
+      return { status: "ok" };
+    });
+    const writer = createWriter(request);
+    const afterCommit = vi.fn();
+    if (background) {
+      patchSettings({ background });
     }
-    return { status: "ok" };
-  });
-  const writer = createWriter(request);
-  const afterCommit = vi.fn();
-  patchSettings({ background: none });
-  pushServerUiPrefs(writer, { background: none }, { ...hooks, afterCommit });
-  await waitForFast(() => expect(status()).toBe("error"));
-  const before = loadSettings();
-  expect(changedServerUiPrefs(before, patchSettings({ background: none }))).toBeNull();
-  fail = false;
-  expect(retry()).toBe(true);
-  expect(status()).toBe("pending");
-  await waitForFast(() => expect(status()).toBe("saved"));
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries,
-  });
-  expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
-  expect(retry()).toBe(false);
-});
+    pushServerUiPrefs(writer, { background }, { ...hooks, afterCommit });
+    await waitForFast(() => expect(status()).toBe("error"));
+    if (background) {
+      const before = loadSettings();
+      expect(changedServerUiPrefs(before, patchSettings({ background }))).toBeNull();
+    }
+    fail = false;
+    expect(retry()).toBe(true);
+    expect(status()).toBe("pending");
+    await waitForFast(() => expect(status()).toBe("saved"));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
+      entries: { "ui.background": background },
+      expectedEntries,
+    });
+    expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
+    expect(retry()).toBe(false);
+  },
+);
 
 it("refuses another Gateway, anonymous target, switched identity, or disconnected writer", async () => {
   const { request, writer } = await failBackgroundWrite();
@@ -138,61 +131,8 @@ it("requires current write authority before retrying retained local intent", asy
   expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
 });
 
-it("retries an explicit deletion after rejected failure without creating a default override", async () => {
-  let fail = true;
-  const request = vi.fn(async () => {
-    if (fail) {
-      throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Try again" });
-    }
-    return { status: "ok" };
-  });
-  const writer = createWriter(request);
-  pushServerUiPrefs(writer, { background: null }, hooks);
-  await waitForFast(() => expect(status()).toBe("error"));
-  fail = false;
-  expect(retry()).toBe(true);
-  await waitForFast(() => expect(status()).toBe("saved"));
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": null },
-    expectedEntries,
-  });
-});
-
-it("continues config preferences after a background CAS conflict through push", async () => {
-  vi.useFakeTimers();
-  const changedElsewhere = selectBackgroundSource({ kind: "theme" });
-  const afterCommit = vi.fn();
-  const { request, started, refresh } = conflictedBatch(afterCommit, {
-    "ui.background": changedElsewhere,
-  });
-  await started;
-  expect(readPending()).toEqual({ locale: "de" });
-  refresh.resolve();
-  await vi.runAllTimersAsync();
-
-  expect(request).toHaveBeenCalledWith("config.patch", {
-    raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
-    note: "control-ui prefs sync",
-  });
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "users.prefs.set",
-    "users.prefs.get",
-    "config.patch",
-  ]);
-  expect(localStorage.getItem(pendingKey)).toBeNull();
-  expect(afterCommit.mock.calls).toEqual([
-    [{ needsRefresh: false, retainedLocal: true }],
-    [{ needsRefresh: false }],
-  ]);
-  expect(status()).toBe("error");
-  expect(loadSettings().background).toEqual(none);
-  expect(resolveServerUiPrefWriteStatus("locale", scope, profileId).status).toBe("saved");
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
-});
-
-it.each(["writer", "identity", "disconnect", "commit-hook"] as const)(
-  "does not continue a conflicted mixed batch after %s retirement",
+it.each(["none", "writer", "identity", "disconnect", "commit-hook"] as const)(
+  "settles a conflicted mixed batch with %s retirement",
   async (retirement) => {
     vi.useFakeTimers();
     const retireIdentity = () =>
@@ -202,8 +142,27 @@ it.each(["writer", "identity", "disconnect", "commit-hook"] as const)(
         retireIdentity();
       }
     });
-    const { writer, request, started, refresh } = conflictedBatch(afterCommit);
-    await started;
+    const entries =
+      retirement === "none" ? { "ui.background": selectBackgroundSource({ kind: "theme" }) } : {};
+    const started = createDeferred();
+    const refresh = createDeferred();
+    const request = vi.fn(async (method: string) => {
+      if (method === "users.prefs.set") {
+        return { status: "conflict" };
+      }
+      if (method === "users.prefs.get") {
+        started.resolve();
+        await refresh.promise;
+        return { status: "ok", entries };
+      }
+      return { ok: true };
+    });
+    const writer = createWriter(request, true);
+    const prefs = { background: none, locale: "de" };
+    patchSettings(prefs);
+    pushServerUiPrefs(writer, prefs, { ...hooks, afterCommit });
+    await started.promise;
+    expect(readPending()).toEqual({ locale: "de" });
     if (retirement === "writer") {
       flushServerUiPrefs(createServerPrefsWriter(vi.fn(), "ws://replacement"), {
         profileId: "another-viewer",
@@ -217,12 +176,28 @@ it.each(["writer", "identity", "disconnect", "commit-hook"] as const)(
     refresh.resolve();
     await vi.runAllTimersAsync();
 
+    if (retirement === "none") {
+      expect(request).toHaveBeenCalledWith("config.patch", {
+        raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
+        note: "control-ui prefs sync",
+      });
+      expect(localStorage.getItem(pendingKey)).toBeNull();
+      expect(afterCommit.mock.calls).toEqual([
+        [{ needsRefresh: false, retainedLocal: true }],
+        [{ needsRefresh: false }],
+      ]);
+      expect(status()).toBe("error");
+      expect(loadSettings().background).toEqual(none);
+      expect(resolveServerUiPrefWriteStatus("locale", scope, profileId).status).toBe("saved");
+    } else {
+      expect(readPending()).toEqual({ locale: "de" });
+      expect(afterCommit).toHaveBeenCalledTimes(retirement === "commit-hook" ? 1 : 0);
+    }
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "users.prefs.set",
       "users.prefs.get",
+      ...(retirement === "none" ? ["config.patch"] : []),
     ]);
-    expect(readPending()).toEqual({ locale: "de" });
-    expect(afterCommit).toHaveBeenCalledTimes(retirement === "commit-hook" ? 1 : 0);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
   },

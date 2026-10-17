@@ -1,13 +1,9 @@
 import { createHash, webcrypto } from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const serviceWorkerPath = path.join(here, "../../public/sw.js");
 const failedRequest = { type: "openclaw-http-request-failed" };
 const stalledFetch = (_request: CacheRequest, options?: RequestInit) =>
   new Promise<Response>((_resolve, reject) => {
@@ -27,6 +23,19 @@ const bootAsset = (assetPath: string) => ({
   path: assetPath,
   integrity: "sha256-" + createHash("sha256").update("build asset").digest("base64"),
 });
+function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[] } }>) {
+  for (const mock of mocks) {
+    expect(mock.mock.calls).toEqual([]);
+  }
+}
+const withFakeTimers = async (run: () => Promise<void>) => {
+  vi.useFakeTimers();
+  try {
+    await run();
+  } finally {
+    vi.useRealTimers();
+  }
+};
 
 describe("Control UI service worker HTTP recovery", () => {
   it("never stores or replays private, unversioned, or no-store HTTP reads", async () => {
@@ -80,8 +89,7 @@ describe("Control UI service worker HTTP recovery", () => {
       } else {
         expect(await fresh?.text()).toBe("fresh private response");
       }
-      expect(worker.cacheMatch).not.toHaveBeenCalled();
-      expect(worker.cachePut).not.toHaveBeenCalled();
+      expectNoCalls(worker.cacheMatch, worker.cachePut);
       worker.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
       expect((await worker.dispatch(request))?.type).toBe("error");
       expect(worker.cacheMatch).not.toHaveBeenCalled();
@@ -197,9 +205,7 @@ describe("Control UI service worker HTTP recovery", () => {
     for (const request of requests) {
       expect(await worker.dispatch(request)).toBeUndefined();
     }
-    expect(worker.fetch).not.toHaveBeenCalled();
-    expect(worker.cacheMatch).not.toHaveBeenCalled();
-    expect(worker.getClient).not.toHaveBeenCalled();
+    expectNoCalls(worker.fetch, worker.cacheMatch, worker.getClient);
   });
 
   it.each([
@@ -213,15 +219,13 @@ describe("Control UI service worker HTTP recovery", () => {
     worker.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
     expect((await worker.dispatch({ clientId: options.clientId }))?.type).toBe("error");
-    expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
-    expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+    expectNoCalls(...worker.windowClients.map((client) => client.postMessage));
   });
 });
 
 describe("Control UI offline app shell", () => {
-  it("bounds stalled preparation, preserves completed assets, and resumes on a later probe", async () => {
-    vi.useFakeTimers();
-    try {
+  it("bounds stalled preparation, preserves completed assets, and resumes on a later probe", () =>
+    withFakeTimers(async () => {
       const worker = createFetchServiceWorker();
       worker.fetch
         .mockImplementationOnce(stalledFetch)
@@ -243,10 +247,7 @@ describe("Control UI offline app shell", () => {
       expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
       expect(worker.fetch).toHaveBeenCalledTimes(3);
       expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
   it("finishes a partial install on coalesced online probes without redownloading completed assets", async () => {
     const worker = createFetchServiceWorker();
     const shellUrl = worker.scope + "__offline_shell__";
@@ -303,9 +304,7 @@ describe("Control UI offline app shell", () => {
     const worker = createFetchServiceWorker(undefined, { online: false });
     await worker.install();
     await worker.probe();
-    expect(worker.fetch).not.toHaveBeenCalled();
-    expect(worker.cacheMatch).not.toHaveBeenCalled();
-    expect(worker.cachePut).not.toHaveBeenCalled();
+    expectNoCalls(worker.fetch, worker.cacheMatch, worker.cachePut);
     expect(worker.skipWaiting).toHaveBeenCalledOnce();
     worker.setOnline(true);
     worker.fetch.mockImplementation(async () => new Response("build asset"));
@@ -460,9 +459,8 @@ describe("Control UI offline app shell", () => {
     expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
   });
 
-  it("uses the cached shell when an online navigation stalls until the deadline", async () => {
-    vi.useFakeTimers();
-    try {
+  it("uses the cached shell when an online navigation stalls until the deadline", () =>
+    withFakeTimers(async () => {
       const worker = createFetchServiceWorker();
       worker.cache.set(worker.scope + "__offline_shell__", new Response("shell"));
       worker.fetch.mockImplementation(stalledFetch);
@@ -474,10 +472,7 @@ describe("Control UI offline app shell", () => {
       expect(await (await pending)?.text()).toBe("shell");
       expect(worker.fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
 
   it.each<ResponseInit>([
     { status: 401 },
@@ -591,7 +586,7 @@ function createFetchServiceWorker(
   ] as const;
   const getClient = vi.fn(async (id: string) => windowClients.find((client) => client.id === id));
   const source = fs
-    .readFileSync(serviceWorkerPath, "utf8")
+    .readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8")
     .replace(
       "const OFFLINE_BOOT = null;",
       () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBootFixture)};`,
