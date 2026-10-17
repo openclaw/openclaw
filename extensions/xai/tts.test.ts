@@ -49,6 +49,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
   return { FakeWebSocket: MockWebSocket };
 });
 
+// mock-isolation: Drive WebSocket lifecycle synchronously without opening network connections.
 vi.mock("./ws-runtime.js", () => ({ WebSocket: FakeWebSocket }));
 
 function mockFetch(response: Response) {

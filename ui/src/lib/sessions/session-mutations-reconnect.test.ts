@@ -27,7 +27,7 @@ function createMutationHarness(handlers: Record<string, RpcHandler>) {
   const { request, sessions } = harness;
   return {
     ...harness,
-    expectPreviousConnection() {
+    expectPreviousConnection: () => {
       expect(sessions.state.error).toContain("completed on the previous connection");
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.list").length,

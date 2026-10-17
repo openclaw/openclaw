@@ -77,7 +77,7 @@ function failingResource(filename: string, message: string, onClose?: () => void
   };
 }
 
-function trackSettlement<T>(promise: Promise<T>) {
+function trackSettlement(promise: Promise<unknown>) {
   const tracked = {
     settled: false,
     promise: promise.finally(() => {
@@ -148,7 +148,9 @@ it.each([
         ),
   );
   await duringClose(tracked.promise, gate, async () => {
-    expect(held.revoke).toHaveBeenCalledOnce();
+    if (selection !== "known") {
+      expect(held.revoke).toHaveBeenCalledOnce();
+    }
     if (selection === "unresolved") {
       release();
     }

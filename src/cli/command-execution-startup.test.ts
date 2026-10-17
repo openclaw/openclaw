@@ -22,6 +22,7 @@ const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+// mock-isolation: Observe startup ordering without emitting a real terminal banner.
 vi.mock("./banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
 
 vi.mock("../logging/console.js", async (importOriginal) => {
@@ -29,6 +30,7 @@ vi.mock("../logging/console.js", async (importOriginal) => {
   return { ...actual, routeLogsToStderr: routeLogsToStderrMock };
 });
 
+// mock-isolation: Control startup admission without loading operator configuration.
 vi.mock("./program/config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 
 vi.mock("./plugin-registry-loader.js", () => ({

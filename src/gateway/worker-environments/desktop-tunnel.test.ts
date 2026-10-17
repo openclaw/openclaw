@@ -608,7 +608,16 @@ describe("worker desktop tunnels", () => {
         await new Promise<SpawnResult>((_resolve, reject) => {
           const signal = options.signal!;
           signals.push(signal);
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("launcher aborted", { cause: signal.reason }),
+              ),
+            { once: true },
+          );
         }),
     );
     const manager = setup(fake).manager;

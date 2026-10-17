@@ -333,7 +333,7 @@ describe("xai stream wrappers", () => {
     expect(payload.input).toEqual([toolOutput("Read image"), imageMessage(1, image)]);
   });
 
-  it.each([{ text: ["", ""], output: "(see attached image)" }])(
+  it.each([{ text: ["", ""] as const, output: "(see attached image)" }])(
     "preserves interleaved text and image references for $output",
     ({ text, output }) => {
       const firstImage = {

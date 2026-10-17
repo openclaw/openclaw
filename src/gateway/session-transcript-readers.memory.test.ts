@@ -58,8 +58,12 @@ async function readIds(result: Promise<readonly unknown[] | { messages: readonly
 
 type ReadScope = Parameters<typeof readSummary>[0];
 const usage = (scope: ReadScope) => readSummary(scope, { kind: "usage" });
-const artifacts = (scope: ReadScope, sessionKey = scope.sessionKey) =>
-  readArtifacts(scope, { kind: "list", sessionKey });
+const artifacts = (scope: ReadScope, sessionKey = scope.sessionKey) => {
+  if (!sessionKey) {
+    throw new Error("Expected a session key for artifact reads");
+  }
+  return readArtifacts(scope, { kind: "list", sessionKey });
+};
 
 async function expectEmptyOverview(scope: ReadScope, sessionKey = scope.sessionKey) {
   expect([await usage(scope), await artifacts(scope, sessionKey)]).toEqual([

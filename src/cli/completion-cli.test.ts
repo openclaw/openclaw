@@ -45,7 +45,7 @@ function runZsh(script: string, options: { timeout?: number; env?: NodeJS.Proces
   return spawnSync("zsh", ["-fc", script], { encoding: "utf8", ...options });
 }
 
-function runZshScript(script: string, timeout?: number) {
+function runZshScript(script: string, timeout?: number): string | undefined {
   const result = runZsh(script, { timeout });
   if (result.error) {
     if ("code" in result.error && result.error.code === "ENOENT") {

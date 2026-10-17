@@ -97,7 +97,7 @@ function catalogModel(
 
 function installConfig(cfg: OpenClawConfig) {
   setRuntimeConfigSnapshot(cfg);
-  onTestFinished(resetConfigRuntimeState);
+  onTestFinished(() => resetConfigRuntimeState());
 }
 
 function listSessions(

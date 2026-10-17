@@ -47,18 +47,22 @@ vi.mock("./output-file.runtime.js", async () => {
   return { ...actual, publishOutputFileAtomically: publish };
 });
 
+// mock-isolation: Generate completions from the bounded fixture command registry.
 vi.mock("./program/command-registry-core.js", () => ({
   getCoreCliCompletionGroups: coreGroups,
 }));
 
+// mock-isolation: Supply fixture program context without bootstrapping a real CLI session.
 vi.mock("./program/program-context.js", () => ({
   getProgramContext: programContext,
 }));
 
+// mock-isolation: Keep completion fixtures independent of the installed subcommand registry.
 vi.mock("./program/register.subclis.js", () => ({
   getSubCliCompletionGroups: subcliGroups,
 }));
 
+// mock-isolation: Register only fixture plugins without reading operator plugin state.
 vi.mock("../plugins/cli.js", () => ({
   registerPluginCliCommandsFromValidatedConfig: registerPlugins,
 }));

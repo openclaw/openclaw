@@ -1,3 +1,4 @@
+import type { ExecApprovalRequestPayload } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
@@ -29,10 +30,9 @@ function buildConfig(
 }
 
 const availability = slackApprovalCapability.nativeRuntimeAsync!.availability;
-type HandleParams = Parameters<typeof availability.shouldHandle>[0];
 function shouldHandle(
   cfg: OpenClawConfig,
-  request: HandleParams["request"]["request"],
+  request: ExecApprovalRequestPayload,
   accountId?: string,
 ) {
   return availability.shouldHandle({

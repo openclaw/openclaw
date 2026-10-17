@@ -2,7 +2,16 @@ import { X509Certificate } from "node:crypto";
 import http, { type RequestListener } from "node:http";
 import https from "node:https";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { GatewayClient } from "../gateway/client.js";
@@ -39,6 +48,7 @@ const tlsServer = https.createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CER
 let origin: string;
 let tlsOrigin: string;
 let jpeg: Buffer;
+let requestSpy: MockInstance<GatewayClient["request"]>;
 const client = (connection: Partial<ConstructorParameters<typeof GatewayChatClient>[0]> = {}) =>
   new GatewayChatClient({ url: origin, ...connection });
 const load = (
@@ -48,7 +58,7 @@ const load = (
 ) => client(connection).loadImage({ ...request(source), ...options });
 const requestUrl = (index = 0) => new URL(requests[index]!.url!, "http://localhost");
 const expectRpc = (method: string, params: object) =>
-  expect(GatewayClient.prototype.request).toHaveBeenCalledExactlyOnceWith(method, params, {
+  expect(requestSpy).toHaveBeenCalledExactlyOnceWith(method, params, {
     signal: expect.any(AbortSignal),
   });
 
@@ -74,7 +84,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requests.length = 0;
-  vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({ runtimeConfig: {} });
+  requestSpy = vi
+    .spyOn(GatewayClient.prototype, "request")
+    .mockResolvedValue({ runtimeConfig: {} });
   handler = (_req, res) => {
     res.writeHead(200, { "content-type": "image/jpeg" });
     res.end(jpeg);
@@ -118,7 +130,7 @@ it("loads inbound images from the connected subpath, authenticates, and emits a 
 });
 
 it("resolves a disabled Control UI media mount through the WebSocket path", async () => {
-  vi.mocked(GatewayClient.prototype.request).mockResolvedValue({
+  requestSpy.mockResolvedValue({
     runtimeConfig: { gateway: { controlUi: { enabled: false, basePath: "console/" } } },
   });
   const url = origin.replace("/gateway", "/console");
@@ -129,7 +141,7 @@ it("resolves a disabled Control UI media mount through the WebSocket path", asyn
 });
 
 it("resolves generated images through the selected session and uses only the ticket for HTTP", async () => {
-  vi.mocked(GatewayClient.prototype.request).mockResolvedValue({
+  requestSpy.mockResolvedValue({
     artifact,
     url: `${managedSource}?mediaTicket=synthetic-ticket`,
   });
@@ -171,7 +183,7 @@ it.each([
   ],
 ] as const)("rejects %s without an HTTP request", async (_, source, url) => {
   if (url) {
-    vi.mocked(GatewayClient.prototype.request).mockResolvedValue({ artifact, url });
+    requestSpy.mockResolvedValue({ artifact, url });
   }
   await expect(load(source)).rejects.toThrow(url ? "unavailable" : undefined);
   expect(requests).toHaveLength(0);

@@ -37,7 +37,7 @@ const connect = async (opts: Parameters<typeof GatewayChatClient.connect>[0]) =>
   (await GatewayChatClient.connect(opts)).connection;
 const expectConnection = async (
   opts: Parameters<typeof GatewayChatClient.connect>[0],
-  expected: Partial<GatewayChatClient["connection"]>,
+  expected: Partial<InstanceType<typeof GatewayChatClient>["connection"]>,
 ) => expect(await connect(opts)).toMatchObject(expected);
 
 function setGateway(gateway: OpenClawConfig["gateway"]) {
@@ -141,10 +141,9 @@ it("requires explicit auth and drops the configured TLS pin for a mismatched tar
   await expect(connect(opts)).rejects.toThrow(
     /pass --token or --password once to request pairing/i,
   );
-  await expectConnection(
-    { ...opts, token: "explicit-token" },
-    { token: "explicit-token", tlsFingerprint: undefined },
-  );
+  const connection = await connect({ ...opts, token: "explicit-token" });
+  expect(connection.token).toBe("explicit-token");
+  expect(connection.tlsFingerprint).toBeUndefined();
 });
 
 it("keeps the TLS pin on an auth-free local Gateway", async () => {

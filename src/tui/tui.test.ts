@@ -301,7 +301,9 @@ describe("TUI shutdown safety", () => {
       });
     const tasks = {
       stopClient: vi.fn(),
-      stopTui: record("tui"),
+      stopTui: vi.fn<Shutdown["stopTui"]>(() => {
+        calls.push("tui");
+      }),
       disposeStatus: vi.fn(),
       requestFinish: record("finish"),
       onError: vi.fn<(error: unknown) => void>(),

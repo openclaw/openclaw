@@ -53,6 +53,7 @@ function webProvider(
   };
 }
 
+// mock-isolation: Use the bounded fixture registry instead of discovering real secret targets.
 vi.mock("../secrets/target-registry.js", () => ({
   listSecretTargetRegistryEntries: vi.fn(() =>
     REGISTRY_IDS.map((id) => ({
@@ -95,6 +96,7 @@ vi.mock("../secrets/target-registry.js", () => ({
   }),
 }));
 
+// mock-isolation: Resolve fixture credentials without loading provider plugins or operator state.
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
   resolvePluginWebFetchProviders: vi.fn((params: { config?: Record<string, unknown> }) => [
     {
@@ -117,6 +119,7 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
   ]),
 }));
 
+// mock-isolation: Resolve fixture credentials without loading provider plugins or operator state.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: vi.fn(() => [
     {

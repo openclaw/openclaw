@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   capture: vi.fn<(options: { path?: string; env?: NodeJS.ProcessEnv }) => unknown>(),
   read: vi.fn<() => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>>(),
 }));
+// mock-isolation: Exercise snapshot admission with controlled receipts, not a live worker context.
 vi.mock("./openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
     mocks.capture(options);

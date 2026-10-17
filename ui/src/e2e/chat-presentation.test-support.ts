@@ -18,9 +18,9 @@ export const polledStyle = (target: Locator, name: keyof CSSStyleDeclaration) =>
   expect.poll(() => target.evaluate((node, key) => getComputedStyle(node)[key], name));
 export async function layoutBox(target: Locator) {
   const box = await target.boundingBox();
-  expect(box, `Layout box for ${target}`).not.toBeNull();
+  expect(box, `Layout box for ${String(target)}`).not.toBeNull();
   if (!box) {
-    throw new Error(`Missing layout box for ${target}`);
+    throw new Error(`Missing layout box for ${String(target)}`);
   }
   return box;
 }

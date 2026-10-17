@@ -44,7 +44,12 @@ async function captureRealtimeOutcome(
   wss.on("connection", (ws) => {
     const replay = () => events.forEach((event) => ws.send(JSON.stringify(event)));
     ws.on("message", (message) => {
-      const clientEvent = JSON.parse(message.toString()) as Record<string, unknown>;
+      const bytes = Buffer.isBuffer(message)
+        ? message
+        : Array.isArray(message)
+          ? Buffer.concat(message)
+          : Buffer.from(message);
+      const clientEvent = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
       options.onClientEvent?.(clientEvent);
       if (clientEvent.type === "response.create" && options.queuedUserMessage) {
         if (options.completeQueuedResponse) {

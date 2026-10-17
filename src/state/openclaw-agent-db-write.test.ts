@@ -70,7 +70,7 @@ describe("agent database write admission", () => {
       successor,
       aliased: { ...options, path: path.join(alias, path.basename(options.path)) },
       other: { ...options, path: path.join(successor, path.basename(options.path)) },
-      retarget() {
+      retarget: () => {
         fs.unlinkSync(alias);
         fs.symlinkSync(successor, alias, linkType);
       },
@@ -81,7 +81,7 @@ describe("agent database write admission", () => {
     "preserves FIFO and rejects stale worker reservation through a %s alias",
     async (target) => {
       const { successor, aliased, retarget } = aliasFixture();
-      const capture = databasePathIdentity.readDatabasePathIdentitySync;
+      const capture = databasePathIdentity.readDatabasePathIdentitySync.bind(databasePathIdentity);
       const identity =
         target === "retargeted"
           ? vi

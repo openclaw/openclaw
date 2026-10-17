@@ -255,10 +255,10 @@ suite.define(() => {
       );
       const deleteSessions = (sessionKeys: string[]) =>
         application.evaluate(
-          (app, targets) =>
+          async (app, targets) =>
             targets.length === 1
-              ? app.sessions.delete(targets[0]!, { agentId: "main" })
-              : app.sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" }))),
+              ? await app.sessions.delete(targets[0]!, { agentId: "main" })
+              : await app.sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" }))),
           sessionKeys,
         );
       await expect(deleteSessions([retired[0]!])).resolves.toMatchObject({ deleted: true });

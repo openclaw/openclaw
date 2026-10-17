@@ -19,7 +19,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-const rejectWith = (error: unknown) => () => Promise.reject(error);
+const rejectWith = (error: Error) => () => Promise.reject(error);
 
 it("waitForever keeps the event loop alive with a ref'd interval and pending promise", () => {
   const unref = vi.fn();
