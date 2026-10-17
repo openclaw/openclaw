@@ -5,7 +5,7 @@ import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.l
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 
 export function updateMessage(
@@ -91,7 +91,7 @@ export function createMessageUpdateContext(
     ),
   } as unknown as EmbeddedAgentSubscribeContext;
   ctx.state = {
-    ...createEmbeddedAgentSubscribeState(ctx.params),
+    ...new EmbeddedAgentSubscribeState(ctx.params),
     shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
     ...params.state,
   };
@@ -130,7 +130,7 @@ export function createMessageEndContext(
     blockChunker: new EmbeddedBlockChunker(),
   } as unknown as EmbeddedAgentSubscribeContext;
   ctx.state = {
-    ...createEmbeddedAgentSubscribeState(ctx.params),
+    ...new EmbeddedAgentSubscribeState(ctx.params),
     blockReplyBreak: "message_end",
     ...params.state,
   };
