@@ -97,7 +97,10 @@ weather” still start tasks while idle. Genuine new tasks retain the native
 delegation replacement behavior.
 
 These calls disable provider-generated delegation acknowledgments at creation.
-OpenClaw sends one neutral receipt when it launches a real task; status and
+OpenClaw asks the voice model for one brief, naturally worded launch acknowledgment
+in the caller's language. Wording should fit the request and avoid repeating recent
+acknowledgments; variation is not guaranteed. It must remain provisional, without
+claiming acceptance or completion, guessing an answer, or promising one. Status and
 cancellation requests wait for the host result instead, without waiting for final
 speech transcription. A full control queue produces a spoken refusal; retry after
 the pending controls finish. A task receipt is not confirmation that a model or
