@@ -30,20 +30,30 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { QuestionManager } from "./question-manager.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
-const state = vi.hoisted(() => ({ root: "", current: true, uploads: true, apps: true }));
+const { state, assertCurrent, loadSession } = vi.hoisted(() => {
+  const fixtureState = { root: "", current: true, uploads: true, apps: true };
+  return {
+    state: fixtureState,
+    assertCurrent: () => {
+      if (!fixtureState.current) {
+        throw new Error("revoked");
+      }
+    },
+    loadSession: (params: { sessionKey: string; agentId?: string }, cfg: OpenClawConfig) => ({
+      canonicalKey: params.sessionKey,
+      agentId: params.agentId ?? "main",
+      storePath: fixtureState.root,
+      cfg,
+      entry: { sessionId: "session-1", updatedAt: 0 },
+    }),
+  };
+});
 vi.mock("./operator-role-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./operator-role-policy.js")>()),
   resolveGatewayOperatorRoleActor: () => undefined,
 }));
 vi.mock("./server-methods/session-scoped-read.js", () => ({
-  retainSessionScopedRead: () => ({
-    assertCurrent: () => {
-      if (!state.current) {
-        throw new Error("revoked");
-      }
-    },
-    release() {},
-  }),
+  retainSessionScopedRead: () => ({ assertCurrent, release() {} }),
 }));
 vi.mock("./question-session-access.js", () => ({
   prepareQuestionAuthorization: () => ({ target: {}, authorize: () => null }),
@@ -64,26 +74,10 @@ vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
     params: { sessionKey: string; agentId?: string },
     cfg: OpenClawConfig,
     consume: (
-      loaded: {
-        canonicalKey: string;
-        agentId: string;
-        storePath: string;
-        cfg: OpenClawConfig;
-        entry: { sessionId: string; updatedAt: number };
-      },
+      loaded: ReturnType<typeof loadSession>,
       assertCurrent: () => void,
     ) => Promise<unknown>,
-  ) =>
-    consume(
-      {
-        canonicalKey: params.sessionKey,
-        agentId: params.agentId ?? "main",
-        storePath: state.root,
-        cfg,
-        entry: { sessionId: "session-1", updatedAt: 0 },
-      },
-      () => {},
-    ),
+  ) => consume(loadSession(params, cfg), () => {}),
 }));
 vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
@@ -112,13 +106,9 @@ import { mcpAppHandlers } from "./server-methods/mcp-app.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:form";
+const session = { sessionKey, agentId: "main" };
 const cleanups: Array<() => void> = [];
 let manager: QuestionManager;
-const assertCurrent = () => {
-  if (!state.current) {
-    throw new Error("revoked");
-  }
-};
 beforeEach(() => {
   state.root = dirs.make("mcp-form-");
   state.current = true;
@@ -174,8 +164,7 @@ function pendingQuestion(
 ) {
   return manager.request({
     id,
-    sessionKey,
-    agentId: "main",
+    ...session,
     timeoutMs: 120000,
     questions: buildAgentQuestionRequestQuestions(questions),
   });
@@ -186,8 +175,7 @@ function upload(name = "part.stl", extra: Record<string, unknown> = {}) {
 function workspaceUploads() {
   return createMcpAppWorkspaceUploadProvider({
     workspaceDir: state.root,
-    agentId: "main",
-    sessionKey,
+    ...session,
     assertCurrent,
   });
 }
@@ -223,9 +211,6 @@ async function fixture(
     callTool,
     markUsed() {},
     getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {},
       tools: [
         {
           serverName: "origin",
@@ -265,8 +250,7 @@ async function fixture(
   const origin = {
     runtime,
     serverName: "origin",
-    sessionKey,
-    agentId: "main",
+    ...session,
     requesterId: params.requesterId === null ? undefined : (params.requesterId ?? "alice"),
     assertCurrent,
   };
@@ -298,8 +282,7 @@ async function fixture(
       ? { dispose() {} }
       : registerPendingAgentQuestion({
           questionId: requestId,
-          sessionKey,
-          agentId: "main",
+          ...session,
           questions,
         });
   cleanups.push(claim.dispose);
@@ -307,8 +290,7 @@ async function fixture(
     pendingQuestion(questions, requestId);
   }
   const base = {
-    sessionKey,
-    agentId: "main",
+    ...session,
     viewId: form.context.viewId,
     requestId,
     questionId: questions[0]!.id,

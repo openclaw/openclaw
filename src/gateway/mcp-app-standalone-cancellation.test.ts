@@ -219,11 +219,7 @@ describe("MCP App standalone request cancellation", () => {
       expect(requestView.activeRequests).toBe(0);
     } finally {
       authorize.resolve(true);
-      await pending.finally(() => {
-        process.off("unhandledRejection", onUnhandled);
-        mocks.peekSessionMcpRuntime.mockReturnValue(runtime);
-        mocks.getMcpAppViewLease.mockReturnValue(view);
-      });
+      await pending.finally(() => process.off("unhandledRejection", onUnhandled));
     }
   });
 });

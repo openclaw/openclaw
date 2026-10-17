@@ -7,7 +7,6 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 const mocks = vi.hoisted(() => ({
   native: vi.fn(),
   direct: vi.fn(),
-  release: vi.fn(),
   prepare: vi.fn(),
   dispose: vi.fn(),
   source: vi.fn(),
@@ -15,20 +14,18 @@ const mocks = vi.hoisted(() => ({
   registered: vi.fn(),
   assert: vi.fn(),
   selection: vi.fn(),
-  model: vi.fn(),
   retain: vi.fn(),
   releaseAccess: vi.fn(),
   catalog: vi.fn(),
   project: vi.fn(),
   metadata: vi.fn(),
-  requiresApproval: vi.fn(),
   approval: vi.fn(),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   acquireSessionMcpRuntime: mocks.direct,
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
-  releaseSessionMcpRuntime: mocks.release,
+  releaseSessionMcpRuntime: vi.fn(),
 }));
 // mock-isolation: Exercise App approval routing without materializing plugin runtimes.
 vi.mock("../agents/agent-bundle-mcp-materialize.js", () => ({
@@ -49,18 +46,6 @@ vi.mock("../agents/sandbox/runtime-status.js", () => ({
 vi.mock("../agents/harness/session-preparation.js", () => ({
   prepareAgentHarnessSessionRuntime: mocks.prepare,
 }));
-// mock-isolation: Each case chooses the approval requirement independently of provider configuration.
-vi.mock("../agents/mcp-codex-tool-approval.js", () => ({
-  requiresMcpCodexToolApproval: mocks.requiresApproval,
-  resolveProjectedMcpCodexToolApprovalMode: () => undefined,
-}));
-vi.mock("../agents/mcp-tool-filter.js", () => ({
-  isMcpToolAllowed: () => true,
-  normalizeMcpToolFilter: () => undefined,
-}));
-vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
-  getGatewayPluginMetadataSnapshot: () => undefined,
-}));
 // mock-isolation: The fixture catalog supplies its own projected tool identity.
 vi.mock("../plugins/tool-metadata.js", () => ({ getPluginToolMeta: mocks.metadata }));
 vi.mock("./mcp-app-host-files.js", () => ({ resolveMcpAppRequesterId: () => "alice" }));
@@ -75,8 +60,7 @@ vi.mock("./session-row-projection-access.js", () => ({
 }));
 // mock-isolation: App admission uses fixture model selection without native session ownership reads.
 vi.mock("./session-utils-model-selection.js", () => ({
-  resolveSessionSelectedModelRef: mocks.model,
-  resolveSessionSelectedModelRefAsync: async (...args: unknown[]) => mocks.model(...args),
+  resolveSessionSelectedModelRefAsync: async () => ({ provider: "openai", model: "model" }),
 }));
 const config = { mcp: { apps: { enabled: true } } };
 let entry: { sessionId: string } & Partial<SessionEntry>;
@@ -101,9 +85,7 @@ beforeEach(() => {
     release: mocks.releaseAccess,
   }));
   mocks.releaseAccess.mockImplementation(() => accessController.abort(new Error("released")));
-  mocks.model.mockReturnValue({ provider: "openai", model: "model" });
   mocks.project.mockReturnValue([]);
-  mocks.requiresApproval.mockReturnValue(false);
   mocks.catalog.mockResolvedValue({ version: 1, generatedAt: 1, servers: {}, tools: [] });
   mocks.selection.mockReturnValue("codex");
   mocks.registered.mockReturnValue({
@@ -144,7 +126,6 @@ describe("cold App request admission", () => {
     });
     mocks.project.mockReturnValue([{ name: "demo_show" }]);
     mocks.metadata.mockReturnValue({ mcp: { operation: "tool", ...tool } });
-    mocks.requiresApproval.mockReturnValue(true);
     const active = await prepareMcpAppExtensionRuntime(options());
     accessController = new AbortController();
     const view = active.retainViewAuthority([tool]);

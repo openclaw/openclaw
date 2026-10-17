@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   fetchMcpAppView: vi.fn(),
-  getMcpAppViewLease: vi.fn(),
   acquireSessionMcpRuntime: vi.fn(),
   releaseLease: vi.fn(),
   loadSessionEntry: vi.fn(),
@@ -22,7 +21,7 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
 }));
 vi.mock("../agents/mcp-ui-resource.js", () => ({
   fetchMcpAppView: mocks.fetchMcpAppView,
-  getMcpAppViewLease: mocks.getMcpAppViewLease,
+  getMcpAppViewLease: () => view,
 }));
 vi.mock("./session-transcript-readers.js", () => ({
   readSessionTranscriptSummaryAsync: async (
@@ -64,7 +63,6 @@ beforeEach(() => {
   mocks.fetchMcpAppView.mockImplementation(async (params: { viewId?: string }) => ({
     viewId: params.viewId ?? "mcp-app-fresh",
   }));
-  mocks.getMcpAppViewLease.mockReturnValue(view);
 });
 
 async function restoreFromMessages(messages: unknown[]) {

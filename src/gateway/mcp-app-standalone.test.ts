@@ -56,28 +56,20 @@ describe("MCP App standalone host", () => {
 
   it("negotiates fullscreen and publishes display-mode changes through the serialized host", async () => {
     const host = await createSerializedHost();
-    host.emit({
-      jsonrpc: "2.0",
-      id: "fullscreen",
-      method: "ui/request-display-mode",
-      params: { mode: "fullscreen" },
-    });
-    expect(host.frame.style.height).toBe("900px");
-    expectMessage(
-      host,
-      expect.objectContaining({
-        method: "ui/notifications/host-context-changed",
-        params: { displayMode: "fullscreen" },
-      }),
-    );
-    expectReply(host, "fullscreen", { mode: "fullscreen" });
-    host.emit({
-      jsonrpc: "2.0",
-      id: "pip",
-      method: "ui/request-display-mode",
-      params: { mode: "pip" },
-    });
-    expectReply(host, "pip", { mode: "fullscreen" });
+    for (const mode of ["fullscreen", "pip"]) {
+      host.emit({ jsonrpc: "2.0", id: mode, method: "ui/request-display-mode", params: { mode } });
+      if (mode === "fullscreen") {
+        expect(host.frame.style.height).toBe("900px");
+        expectMessage(
+          host,
+          expect.objectContaining({
+            method: "ui/notifications/host-context-changed",
+            params: { displayMode: "fullscreen" },
+          }),
+        );
+      }
+      expectReply(host, mode, { mode: "fullscreen" });
+    }
   });
 
   it("mints an opaque reusable ticket and rejects tampering and expiry at HTTP admission", async () => {

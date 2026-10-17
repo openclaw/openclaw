@@ -80,6 +80,8 @@ import { mcpAppHandlers } from "./server-methods/mcp-app.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:test";
+const session = { sessionKey, agentId: "main" };
+const fileTarget = { ...session, path: "part.stl" };
 const tool = { serverName: "demo", toolName: "edit", uiResourceUri: "ui://demo/editor" };
 const filePath = () => path.join(state.root, "part.stl");
 const fileContents = (encoding?: "utf8") => readFile(filePath(), encoding);
@@ -89,7 +91,6 @@ let allowed: boolean;
 let connection: AbortController;
 const publish = vi.fn();
 let runtime: SessionMcpRuntime;
-const disposers: Array<() => void> = [];
 function options(params: Record<string, unknown>, profileId = "alice") {
   return {
     params,
@@ -138,17 +139,6 @@ function expectUpdate() {
     new Set(["alice"]),
   );
 }
-function trackView() {
-  const view = getMcpAppViewLease(viewId, runtime)!;
-  disposers.push(() => {
-    clearTimeout(view.expiryTimer);
-    for (const dispose of view.disposeCallbacks ?? []) {
-      dispose();
-    }
-  });
-  return view;
-}
-
 async function launchFileView() {
   runtime.callTool = async () => ({ content: [] });
   const assertCurrent = () => {
@@ -159,8 +149,7 @@ async function launchFileView() {
   state.prepare.mockImplementation(async (request) => ({
     options: request,
     runtime,
-    agentId: "main",
-    sessionKey,
+    ...session,
     requesterId: "alice",
     catalog: {
       tools: [
@@ -189,7 +178,7 @@ async function launchFileView() {
   });
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   viewId = respond.mock.calls[0]![1].viewId;
-  const view = trackView();
+  const view = getMcpAppViewLease(viewId, runtime)!;
   uri = view.hostFile!.resourceUri;
   expect(view.toolInput).toEqual({ file: { name: "part.stl", resourceUri: uri } });
 }
@@ -212,11 +201,7 @@ beforeEach(async () => {
       ],
     }),
   } as unknown as SessionMcpRuntime;
-  const hostFile = await prepareMcpAppHostFile(options({}), {
-    sessionKey,
-    agentId: "main",
-    path: "part.stl",
-  });
+  const hostFile = await prepareMcpAppHostFile(options({}), fileTarget);
   uri = hostFile.resourceUri;
   const descriptor = await fetchMcpAppView({
     runtime,
@@ -230,12 +215,8 @@ beforeEach(async () => {
     hostFile,
   });
   viewId = descriptor!.viewId;
-  trackView();
 });
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
   viewTesting.clearViewStore();
   memorySessionActorOwners.reset();
   vi.unstubAllEnvs();
@@ -274,7 +255,7 @@ describe("registered MCP App host-file routes", () => {
         () =>
           prepareMcpAppHostFile(
             { ...options({}), signal: opening.signal },
-            { sessionKey: memoryKey, agentId: "main", path: "part.stl" },
+            { ...fileTarget, sessionKey: memoryKey },
           ),
       );
       runtime.sessionKey = memoryKey;

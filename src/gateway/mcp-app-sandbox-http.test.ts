@@ -7,8 +7,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
 import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
@@ -25,6 +23,11 @@ const javascript = (body: string) => ({
   contentType: "application/javascript",
 });
 
+const representationHeaders = (response: Response) =>
+  Object.fromEntries(
+    [...response.headers].filter(([name]) => !["date", "connection", "keep-alive"].includes(name)),
+  );
+
 async function getAndHead(url: string | URL) {
   const get = await fetch(url);
   const head = await fetch(url, { method: "HEAD" });
@@ -32,69 +35,41 @@ async function getAndHead(url: string | URL) {
   expect(head.status).toBe(get.status);
   expect(await head.text()).toBe("");
   expect(get.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
-  for (const header of [
-    "content-type",
-    "content-length",
-    "cache-control",
-    "content-security-policy",
-    "permissions-policy",
-    "cross-origin-resource-policy",
-    "origin-agent-cluster",
-    "referrer-policy",
-    "x-content-type-options",
-  ]) {
-    expect(head.headers.get(header), header).toBe(get.headers.get(header));
-  }
+  expect(representationHeaders(head)).toEqual(representationHeaders(get));
   return { get, body };
 }
 
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
-  const { res, end, setHeader } = makeMockHttpResponse();
+  const { res, end } = makeMockHttpResponse();
   const server = createSandboxHostHttpServer();
   server.emit("request", { url, method } as IncomingMessage, res);
   server.removeAllListeners();
-  return { res, end, setHeader };
+  return { res, end };
 }
 
-async function withSandboxHost(
-  run: (origin: string) => Promise<void>,
-  registry?: PluginRegistry,
-): Promise<void> {
-  const server = createSandboxHostHttpServer(undefined, registry && (() => registry));
+async function withSandboxHost(run: (origin: string) => Promise<void>, registry?: PluginRegistry) {
+  await using server = createSandboxHostHttpServer(undefined, registry && (() => registry));
   const listening = once(server, "listening");
   server.listen(0, "127.0.0.1");
   await listening;
   const address = server.address() as AddressInfo;
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  await run(`http://127.0.0.1:${address.port}`);
 }
 
 function publicResourceRegistry(
   readPublicResource: PluginBoardWidgetContentKind["resources"]["readPublicResource"],
 ) {
   const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "renderer",
-    source: "fixture",
-    origin: "bundled",
-    enabled: true,
-    configSchema: false,
-  });
-  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
-    kind: "diagram",
-    label: "Diagram",
-    resources: {
-      surface: "renderer",
-      paths: [RESOURCE_PATH],
-      readPublicResource,
+  registry.boardWidgetContentKinds.set("diagram", {
+    pluginId: "renderer",
+    pluginKind: "renderer:diagram",
+    definition: {
+      kind: "diagram",
+      label: "Diagram",
+      resources: { surface: "renderer", paths: [RESOURCE_PATH], readPublicResource },
+      validateSource() {},
+      composeDocument: () => "",
     },
-    validateSource() {},
-    composeDocument: () => "",
   });
   return registry;
 }
@@ -134,18 +109,18 @@ describe("MCP App sandbox HTTP origin", () => {
     const originalPath = buildMcpAppSandboxPath(mutablePolicy);
     mutablePolicy.connectDomains[0] = "https://replacement.example";
     const paths = [
-      buildMcpAppSandboxPath(),
-      buildMcpAppSandboxPath({
+      undefined,
+      {
         connectDomains: ["https://api.example.com"],
         resourceDomains: ["https://cdn.example.com"],
-      }),
-      buildMcpAppSandboxPath({ blockDescendantFrames: true }),
-      buildMcpAppSandboxPath({ mediaDomains: ["https://media.example"] }),
-      buildMcpAppSandboxPath({ frameDomains: ["https://frames.example"] }),
-      buildMcpAppSandboxPath({ baseUriDomains: ["https://base.example"] }),
-      originalPath,
-      buildMcpAppSandboxPath(mutablePolicy),
-    ] as const;
+      },
+      { blockDescendantFrames: true },
+      { mediaDomains: ["https://media.example"] },
+      { frameDomains: ["https://frames.example"] },
+      { baseUriDomains: ["https://base.example"] },
+      mutablePolicy,
+    ].map(buildMcpAppSandboxPath);
+    paths.push(originalPath);
     await withSandboxHost(async (origin) => {
       const versions = new Set<string>();
       for (const path of paths) {
@@ -171,14 +146,15 @@ describe("MCP App sandbox HTTP origin", () => {
           );
           expect(body).not.toContain("allow-popups");
         }
-        url.searchParams.set("v", "stale-version");
-        const stale = await fetch(url);
-        expect(stale.headers.get("cache-control")).toBe("no-store");
-        expect(await stale.text()).toBe(body);
-        url.searchParams.delete("v");
-        const unversioned = await fetch(url);
-        expect(unversioned.headers.get("cache-control")).toBe("no-store");
-        expect(await unversioned.text()).toBe(body);
+        for (const invalidateVersion of [
+          () => url.searchParams.set("v", "stale-version"),
+          () => url.searchParams.delete("v"),
+        ]) {
+          invalidateVersion();
+          const uncached = await fetch(url);
+          expect(uncached.headers.get("cache-control")).toBe("no-store");
+          expect(await uncached.text()).toBe(body);
+        }
       }
       expect(versions.size).toBe(paths.length);
 
@@ -194,7 +170,6 @@ describe("MCP App sandbox HTTP origin", () => {
 
   it("serves only explicitly public registered assets without Gateway credentials", async () => {
     const read = vi.fn(async () => javascript("window.rendererReady=true"));
-    const registry = publicResourceRegistry(read);
     await withSandboxHost(async (origin) => {
       const url = `${origin}${RESOURCE_PATH}`;
       const { get, body } = await getAndHead(url);
@@ -211,14 +186,13 @@ describe("MCP App sandbox HTTP origin", () => {
         expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
       }
       expect(read).toHaveBeenCalledTimes(2);
-    }, registry);
+    }, publicResourceRegistry(read));
   });
 
   it("does not expose registered assets without the public-reader opt-in", async () => {
-    const registry = publicResourceRegistry(undefined);
     await withSandboxHost(async (origin) => {
       expect((await fetch(`${origin}${RESOURCE_PATH}`)).status).toBe(404);
-    }, registry);
+    }, publicResourceRegistry(undefined));
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
@@ -228,16 +202,16 @@ describe("MCP App sandbox HTTP origin", () => {
 
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
-    expect(request(`${SANDBOX_HOST_PATH}?csp=not-json`).res.statusCode).toBe(400);
-    const jsonButNotCsp = Buffer.from("null", "utf8").toString("base64url");
-    expect(request(`${SANDBOX_HOST_PATH}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
-    expect(request(`${SANDBOX_HOST_PATH}?csp=`).res.statusCode).toBe(400);
+    const encode = (policy: unknown) => Buffer.from(JSON.stringify(policy)).toString("base64url");
+    for (const policy of [
+      "not-json",
+      encode(null),
+      "",
+      encode({ connectDomains: ["https://api.\nexample.com"] }),
+    ]) {
+      expect(request(`${SANDBOX_HOST_PATH}?csp=${policy}`).res.statusCode).toBe(400);
+    }
     expect(request("http://[", "GET").res.statusCode).toBe(400);
-    const unsafeHeaderPolicy = Buffer.from(
-      JSON.stringify({ connectDomains: ["https://api.\nexample.com"] }),
-      "utf8",
-    ).toString("base64url");
-    expect(request(`${SANDBOX_HOST_PATH}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(400);
   });
 
   it("keeps GET and HEAD representation metadata aligned for a missing path", async () => {

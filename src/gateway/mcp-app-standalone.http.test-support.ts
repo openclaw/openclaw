@@ -119,7 +119,7 @@ async function request(params: {
   beforeBody?: () => void;
   socket?: EventEmitter;
 }) {
-  const { res, end, setHeader } = makeMockHttpResponse();
+  const { res, end } = makeMockHttpResponse();
   Object.assign(res, { socket: null });
   const serialized = params.body === undefined ? undefined : JSON.stringify(params.body);
   async function* body() {
@@ -142,7 +142,7 @@ async function request(params: {
     gatewayPort: 18_789,
     sandboxPort: 18_790,
   });
-  return { handled, res, end, setHeader };
+  return { handled, res, end };
 }
 
 export async function startStandaloneHttp(
@@ -231,7 +231,6 @@ export {
   createMcpAppStandaloneTicket,
   createSerializedHost,
   executeMcpAppOperation,
-  handleMcpAppStandaloneHttpRequest,
   issueTicket,
   mocks,
   nowMs,
