@@ -824,7 +824,7 @@ describe("startup recovery admission", () => {
   });
 
   it("bounds exhausted-target reads and continues after one target fails", async ({ signal }) => {
-    const targets = [];
+    const targets: Awaited<ReturnType<typeof makeMainSessionFixture>>[] = [];
     for (const name of ["first", "second"]) {
       targets.push(
         await makeMainSessionFixture({
