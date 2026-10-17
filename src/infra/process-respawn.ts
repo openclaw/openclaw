@@ -62,7 +62,7 @@ export function resolveGatewayRestartDecision(): GatewayRestartDecision {
   return { mode: "disabled", reason: "unmanaged", detail };
 }
 
-export const CHILD_RUNTIME_RESTART_REASON = "gateway.runtime-unavailable";
+const CHILD_RUNTIME_RESTART_REASON = "gateway.runtime-unavailable";
 
 /** Bind automatic recovery to the existing process lifecycle, never a worker pool. */
 export function registerGatewayRuntimeRecovery(params: {
