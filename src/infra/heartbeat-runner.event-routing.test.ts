@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -9,6 +8,7 @@ import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   createLastTargetConfig,
   formatQueuedEvents,
+  type HeartbeatRoutingFixture,
   withRouting,
 } from "./heartbeat-runner.event-routing.test-support.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "./heartbeat-runner.js";
@@ -68,6 +68,49 @@ const seedDriftedSession = (storePath: string, sessionKey: string) =>
     lastThreadId: 2175,
   });
 
+const seedIsolated = (storePath: string, key: string, baseKey: string, sessionId: string) =>
+  seedSessionStore(storePath, key, { sessionId, heartbeatIsolatedBaseSessionKey: baseKey });
+const withSharedRouting = (
+  scenario: (fixture: HeartbeatRoutingFixture & { sessionKey: string }) => Promise<void>,
+  sessionKey = sharedSessionKey,
+) =>
+  withRouting(async (fixture) => {
+    await seedDriftedSession(fixture.storePath, sessionKey);
+    await scenario({ ...fixture, sessionKey });
+  }, false);
+const queueExec = (sessionKey: string, name: string, route: EventRoute, output = "ready") =>
+  queueEvent(
+    sessionKey,
+    `Exec completed (${name}, code 0)${output ? ` :: ${output}` : ""}`,
+    "exec:fixture-source",
+    route,
+  );
+type RunnerOptions = Parameters<typeof startHeartbeatRunner>[0];
+async function withFollowup(
+  cfg: RunnerOptions["cfg"],
+  run: NonNullable<RunnerOptions["runOnce"]>,
+  scenario: (followup: Promise<Awaited<ReturnType<typeof runHeartbeatOnce>>>) => Promise<void>,
+  select: (opts: Parameters<typeof run>[0], count: number) => boolean = (_, count) => count === 2,
+) {
+  const followup = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
+  let count = 0;
+  const runner = startHeartbeatRunner({
+    cfg,
+    runOnce: (opts) => {
+      const result = run(opts);
+      if (select(opts, ++count)) {
+        followup.resolve(result);
+      }
+      return result;
+    },
+  });
+  try {
+    await scenario(followup.promise);
+  } finally {
+    runner.stop();
+  }
+}
+
 const expectTelegramSend = (
   sendTelegram: ReturnType<typeof vi.fn>,
   to: string,
@@ -107,78 +150,65 @@ it.each([
   { name: "base route", eventThreadId: undefined, baseThreadId: 42, legacy: false },
   { name: "same-queue event", eventThreadId: 42, baseThreadId: 42, legacy: false },
   { name: "legacy moved base route", eventThreadId: 42, baseThreadId: 88, legacy: true },
-])(
-  "delivers isolated exec completion using its $name",
-  async ({ eventThreadId, baseThreadId, legacy }) => {
-    await withRouting(async ({ storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
-      const queueKey = legacy ? `${isolatedKey}:heartbeat` : isolatedKey;
-      const target = (topic: number) => `telegram:-100155462274:topic:${topic}`;
-      await writeTelegramSessionStore(storePath, baseKey, {
-        sessionId: "base-conversation",
-        lastTo: target(baseThreadId),
-        lastThreadId: baseThreadId,
-        chatType: "group",
-        groupId: `-100155462274:topic:${baseThreadId}`,
-        subject: "Operations",
-        groupActivation: "always",
-      });
-      await seedSessionStore(storePath, queueKey, {
-        sessionId: "previous-isolated-run",
-        heartbeatIsolatedBaseSessionKey: baseKey,
-      });
-      const completion = "Exec completed (background-report, code 0) :: report is ready";
-      queueEvent(
-        queueKey,
-        completion,
-        "exec:fixture-source",
-        eventThreadId === undefined
-          ? undefined
-          : { channel: "telegram", to: target(eventThreadId), threadId: eventThreadId },
-      );
-      replySpy.mockResolvedValue({ text: "The report is ready." });
-
-      const result = await run({ sessionKey: queueKey, reason: "exec-event" });
-
-      expect(result.status).toBe("ran");
-      expectTelegramSend(sendTelegram, target(42), "The report is ready.", 42);
-      expect(getFirstReplyContext(replySpy)).toMatchObject({
-        SessionKey: isolatedKey,
-        InternalTurnSource: "exec",
-        InputProvenance: { kind: "internal_system", sourceTool: "exec" },
-        MessageThreadId: 42,
-        OriginatingChannel: "telegram",
-        OriginatingTo: target(42),
-        ChatType: "group",
-      });
-      const options = mockCallAt(replySpy, 0, "isolated completion")[1] as InternalGetReplyOptions;
-      expect(options.replyConversation).toMatchObject({
-        fields: { Provider: "telegram", Surface: "telegram", ChatType: "group" },
-      });
-      const conversation = options.replyConversation;
-      expect([conversation?.fields.GroupSubject, conversation?.activation]).toEqual(
-        baseThreadId === 42 ? ["Operations", "always"] : [undefined, undefined],
-      );
-      expect(peekSystemEvents(isolatedKey)).toEqual([]);
-      expect(peekSystemEvents(queueKey)).toEqual([]);
-      const rows = readSessionStoreForTest(storePath);
-      if (legacy) {
-        expect(rows[queueKey]).toBeUndefined();
-      }
-      expect(rows[baseKey]?.sessionId).toBe("base-conversation");
-      const isolated = rows[isolatedKey];
-      expect([isolated?.heartbeatIsolatedBaseSessionKey, isolated?.groupActivation]).toEqual([
-        baseKey,
-        undefined,
-      ]);
-      expect(isolated?.sessionId).not.toBe("previous-isolated-run");
+])("delivers isolated exec completion using its $name", ({ eventThreadId, baseThreadId, legacy }) =>
+  withRouting(async ({ storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
+    const queueKey = legacy ? `${isolatedKey}:heartbeat` : isolatedKey;
+    const target = (topic: number) => `telegram:-100155462274:topic:${topic}`;
+    await writeTelegramSessionStore(storePath, baseKey, {
+      sessionId: "base-conversation",
+      lastTo: target(baseThreadId),
+      lastThreadId: baseThreadId,
+      chatType: "group",
+      groupId: `-100155462274:topic:${baseThreadId}`,
+      subject: "Operations",
+      groupActivation: "always",
     });
-  },
+    await seedIsolated(storePath, queueKey, baseKey, "previous-isolated-run");
+    queueExec(
+      queueKey,
+      "background-report",
+      eventThreadId === undefined
+        ? undefined
+        : { channel: "telegram", to: target(eventThreadId), threadId: eventThreadId },
+      "report is ready",
+    );
+    replySpy.mockResolvedValue({ text: "The report is ready." });
+
+    expect((await run({ sessionKey: queueKey, reason: "exec-event" })).status).toBe("ran");
+    expectTelegramSend(sendTelegram, target(42), "The report is ready.", 42);
+    expect(getFirstReplyContext(replySpy)).toMatchObject({
+      SessionKey: isolatedKey,
+      InternalTurnSource: "exec",
+      InputProvenance: { kind: "internal_system", sourceTool: "exec" },
+      MessageThreadId: 42,
+      OriginatingChannel: "telegram",
+      OriginatingTo: target(42),
+      ChatType: "group",
+    });
+    const conversation = replySpy.mock.calls[0]?.[1]?.replyConversation;
+    expect(conversation).toMatchObject({
+      fields: { Provider: "telegram", Surface: "telegram", ChatType: "group" },
+    });
+    expect([conversation?.fields.GroupSubject, conversation?.activation]).toEqual(
+      baseThreadId === 42 ? ["Operations", "always"] : [undefined, undefined],
+    );
+    expect([peekSystemEvents(isolatedKey), peekSystemEvents(queueKey)]).toEqual([[], []]);
+    const rows = readSessionStoreForTest(storePath);
+    if (legacy) {
+      expect(rows[queueKey]).toBeUndefined();
+    }
+    expect(rows[baseKey]?.sessionId).toBe("base-conversation");
+    const isolated = rows[isolatedKey];
+    expect([isolated?.heartbeatIsolatedBaseSessionKey, isolated?.groupActivation]).toEqual([
+      baseKey,
+      undefined,
+    ]);
+    expect(isolated?.sessionId).not.toBe("previous-isolated-run");
+  }),
 );
 
-it("retains a legacy queue's explicit base until its mixed cron follow-up completes", async ({
-  signal,
-}) => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+it("keeps the legacy base binding through its cron follow-up", ({ signal }) =>
+  withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
     const baseKey = "agent:ops:alerts:heartbeat";
     const isolatedKey = `${baseKey}:heartbeat`;
     const queueKey = `${isolatedKey}:heartbeat`;
@@ -188,32 +218,20 @@ it("retains a legacy queue's explicit base until its mixed cron follow-up comple
       tmpDir,
       storePath: storeTemplate,
       isolatedSession: true,
+      heartbeat: { every: "0m", session: "alerts:heartbeat" },
     });
     cfg.agents!.entries = { ops: {} };
-    cfg.agents!.defaults!.heartbeat = {
-      every: "0m",
-      isolatedSession: true,
-      session: "alerts:heartbeat",
-      target: "last",
-    };
     await writeTelegramSessionStore(storePath, baseKey, { sessionId: "base-conversation" });
-    await seedSessionStore(storePath, queueKey, {
-      sessionId: "old-isolated",
-      heartbeatIsolatedBaseSessionKey: baseKey,
-    });
+    await seedIsolated(storePath, queueKey, baseKey, "old-isolated");
     const readEntry = (sessionKey: string) =>
       loadExactSessionEntryReadOnly({ storePath, agentId: "ops", sessionKey })?.entry;
-    expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
-    queueEvent(queueKey, "Exec completed (legacy, code 0) :: ready", "exec:fixture-1", {
+    const route = (threadId: number) => ({
       channel: "telegram",
       to: "-100155462274",
-      threadId: 47,
+      threadId,
     });
-    queueEvent(queueKey, "Reminder: Legacy queue work", "cron:legacy", {
-      channel: "telegram",
-      to: "-100155462274",
-      threadId: 99,
-    });
+    queueExec(queueKey, "legacy", route(47));
+    queueEvent(queueKey, "Reminder: Legacy queue work", "cron:legacy", route(99));
     queueEvent(baseKey, "Unrelated base event");
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "delivered" });
     let bindingAtExec: string | undefined;
@@ -225,45 +243,37 @@ it("retains a legacy queue's explicit base until its mixed cron follow-up comple
         text: ctx.InternalTurnSource === "exec" ? "Command completed" : "Reminder handled",
       };
     });
-    const followup = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
-    const runner = startHeartbeatRunner({
+    await withFollowup(
       cfg,
-      runOnce: (opts) => {
-        const run = runHeartbeatOnce({
+      (opts) =>
+        runHeartbeatOnce({
           ...opts,
           cfg,
           deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
+        }),
+      async (followup) => {
+        await execWake(queueKey, "ops");
+        expect(bindingAtExec).toBe(baseKey);
+        // The exec wake settles before its separately scheduled route follow-up.
+        await expect(racePromiseWithAbortSignal(followup, signal)).resolves.toMatchObject({
+          status: "ran",
         });
-        if (opts.source !== "exec-event") {
-          followup.resolve(run);
-        }
-        return run;
+        expect(replySpy).toHaveBeenCalledTimes(2);
+        expect(
+          replySpy.mock.calls.map(([ctx]) => [ctx.AgentId, ctx.SessionKey, ctx.InternalTurnSource]),
+        ).toEqual([
+          ["ops", isolatedKey, "exec"],
+          ["ops", isolatedKey, "cron"],
+        ]);
+        expect(peekSystemEvents(queueKey)).toEqual([]);
+        expect(peekSystemEvents(baseKey)).toEqual(["Unrelated base event"]);
+        expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
+        expect(readEntry(queueKey)).toBeUndefined();
+        expect(readEntry(isolatedKey)?.heartbeatIsolatedBaseSessionKey).toBe(baseKey);
       },
-    });
-    try {
-      await execWake(queueKey, "ops");
-      expect(bindingAtExec).toBe(baseKey);
-      // The exec wake settles before its separately scheduled route follow-up.
-      await expect(racePromiseWithAbortSignal(followup.promise, signal)).resolves.toMatchObject({
-        status: "ran",
-      });
-      expect(replySpy).toHaveBeenCalledTimes(2);
-      expect(
-        replySpy.mock.calls.map(([ctx]) => [ctx.AgentId, ctx.SessionKey, ctx.InternalTurnSource]),
-      ).toEqual([
-        ["ops", isolatedKey, "exec"],
-        ["ops", isolatedKey, "cron"],
-      ]);
-      expect(peekSystemEvents(queueKey)).toEqual([]);
-      expect(peekSystemEvents(baseKey)).toEqual(["Unrelated base event"]);
-      expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
-      expect(readEntry(queueKey)).toBeUndefined();
-      expect(readEntry(isolatedKey)?.heartbeatIsolatedBaseSessionKey).toBe(baseKey);
-    } finally {
-      runner.stop();
-    }
-  });
-});
+      (opts) => opts.source !== "exec-event",
+    );
+  }));
 
 it.each([
   { name: "legacy isolated", queue: "legacy", dedicated: "none", busy: false },
@@ -272,144 +282,120 @@ it.each([
   { name: "excluded base exec same-route", queue: "base", dedicated: "exec", busy: false },
   { name: "legacy exec and cron", queue: "legacy", dedicated: "exec", busy: false },
   { name: "busy legacy", queue: "legacy", dedicated: "none", busy: true },
-])("preserves generic wake queue ownership for $name", async ({ queue, dedicated, busy }) => {
-  await withRouting(
-    async ({ cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
-      const queueKey = queue === "legacy" ? `${isolatedKey}:heartbeat` : baseKey;
-      await writeTelegramSessionStore(storePath, baseKey, { sessionId: "base-conversation" });
-      if (queueKey !== baseKey) {
-        await seedSessionStore(storePath, queueKey, {
-          sessionId: "previous-isolated-run",
-          heartbeatIsolatedBaseSessionKey: baseKey,
-        });
-      }
-      const generic = "Gateway restart ok: queued notification";
-      const completion = "Exec completed (queue-report, code 0) :: report is ready";
-      const reminder = "Reminder: review the scheduled report";
-      const route =
-        queue === "base" ? { channel: "telegram", to: "-100999999999", threadId: 42 } : undefined;
-      if (dedicated === "exec") {
-        queueEvent(queueKey, completion, "exec:fixture-source", route);
-        queueEvent(queueKey, reminder, "cron:queue-report");
-      }
-      queueEvent(queueKey, generic, undefined, route);
-      const queuedBefore = peekSystemEvents(queueKey);
-      let queuedAtReply: string[] | undefined;
-      let formatted: string | undefined;
-      let legacyRowRemovedAtReply = false;
-      replySpy.mockImplementation(async (ctx, options) => {
-        queuedAtReply = peekSystemEvents(queueKey);
-        legacyRowRemovedAtReply = readSessionStoreForTest(storePath)[queueKey] === undefined;
-        formatted = await formatQueuedEvents(cfg, ctx, options);
-        return { text: queue === "base" ? "Restart complete" : "HEARTBEAT_OK" };
-      });
+])("preserves generic wake queue ownership for $name", ({ queue, dedicated, busy }) =>
+  withRouting(async ({ cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
+    const queueKey = queue === "legacy" ? `${isolatedKey}:heartbeat` : baseKey;
+    await writeTelegramSessionStore(storePath, baseKey, { sessionId: "base-conversation" });
+    if (queueKey !== baseKey) {
+      await seedIsolated(storePath, queueKey, baseKey, "previous-isolated-run");
+    }
+    const generic = "Gateway restart ok: queued notification";
+    const completion = "Exec completed (queue-report, code 0) :: report is ready";
+    const reminder = "Reminder: review the scheduled report";
+    const route =
+      queue === "base" ? { channel: "telegram", to: "-100999999999", threadId: 42 } : undefined;
+    if (dedicated === "exec") {
+      queueEvent(queueKey, completion, "exec:fixture-source", route);
+      queueEvent(queueKey, reminder, "cron:queue-report");
+    }
+    queueEvent(queueKey, generic, undefined, route);
+    const queuedBefore = peekSystemEvents(queueKey);
+    let queuedAtReply: string[] | undefined;
+    let formatted: string | undefined;
+    let legacyRowRemovedAtReply = false;
+    replySpy.mockImplementation(async (ctx, options) => {
+      queuedAtReply = peekSystemEvents(queueKey);
+      legacyRowRemovedAtReply = readSessionStoreForTest(storePath)[queueKey] === undefined;
+      formatted = await formatQueuedEvents(cfg, ctx, options);
+      return { text: queue === "base" ? "Restart complete" : "HEARTBEAT_OK" };
+    });
 
-      const result = await run({
-        sessionKey: queueKey,
-        source: "hook",
-        intent: "immediate",
-        reason: "hook:wake",
-        deps: {
-          getQueueSize: () => (busy ? 1 : 0),
-        },
-      });
-      if (busy) {
-        expect(result).toMatchObject({ status: "skipped", reason: "requests-in-flight" });
-        expect(replySpy).not.toHaveBeenCalled();
-        expect(peekSystemEvents(queueKey)).toEqual(queuedBefore);
-        expect(readSessionStoreForTest(storePath)[queueKey]).toBeDefined();
-        return;
-      }
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(queuedAtReply).toEqual(queuedBefore);
-      const context = getFirstReplyContext(replySpy);
-      expect(context).toMatchObject({
-        SessionKey: queue === "shared" ? baseKey : isolatedKey,
-        InternalTurnSource: dedicated === "none" ? "heartbeat" : dedicated,
-      });
-      expect(context.InputProvenance).toEqual({
-        kind: "internal_system",
-        sourceTool: dedicated === "none" ? "hook" : dedicated,
-      });
-      if (queue === "legacy") {
-        expect(legacyRowRemovedAtReply).toBe(dedicated !== "exec");
-      }
-      if (queue === "base") {
-        expectTelegramSend(
-          sendTelegram,
-          dedicated === "exec" ? "-100999999999" : "-100155462274",
-          "Restart complete",
-          dedicated === "exec" ? 42 : undefined,
-        );
-        expect(formatted ?? "").not.toContain(generic);
-        expect(peekSystemEvents(queueKey)).toEqual(
-          dedicated === "exec" ? [reminder, generic] : queuedBefore,
-        );
-      } else {
-        expect(formatted).toContain(generic);
-        expect(formatted).not.toContain(completion);
-        expect(formatted).not.toContain(reminder);
-        expect(peekSystemEvents(queueKey)).toEqual(dedicated === "exec" ? [reminder] : []);
-      }
-      if (dedicated !== "none") {
-        expect(context.Body).toContain(completion);
-        expect(context.Body).not.toContain(generic);
-      }
-      expect(readSessionStoreForTest(storePath)[baseKey]?.sessionId).toBe("base-conversation");
-    },
-    queue !== "shared",
-  );
-});
-
-it("delivers an isolated group completion after its base conversation moves to a blocked direct chat", async () => {
-  await withRouting(
-    async ({ cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
-      cfg.agents!.defaults!.heartbeat!.directPolicy = "block";
-      await writeTelegramSessionStore(storePath, baseKey, {
-        sessionId: "moved-direct-conversation",
-        lastTo: "user:operator",
-        chatType: "direct",
-      });
-      await seedSessionStore(storePath, isolatedKey, {
-        sessionId: "original-group-run",
-        heartbeatIsolatedBaseSessionKey: baseKey,
-      });
-      const completion = "Exec completed (group-report, code 0) :: group report is ready";
-      queueEvent(isolatedKey, completion, "exec:fixture-source", {
-        channel: "telegram",
-        to: "group:ops",
-      });
-      replySpy.mockResolvedValue({ text: "Group report ready." });
-      const result = await run({ sessionKey: isolatedKey, reason: "exec-event" });
-      expect(result.status).toBe("ran");
-      expectTelegramSend(sendTelegram, "group:ops", "Group report ready.");
-      expect(getFirstReplyContext(replySpy)).toMatchObject({
-        SessionKey: isolatedKey,
-        OriginatingTo: "group:ops",
-        ChatType: "group",
-      });
-      expect(peekSystemEvents(isolatedKey)).toEqual([]);
-      expect(readSessionStoreForTest(storePath)[baseKey]?.sessionId).toBe(
-        "moved-direct-conversation",
+    const result = await run({
+      sessionKey: queueKey,
+      source: "hook",
+      intent: "immediate",
+      reason: "hook:wake",
+      deps: { getQueueSize: () => (busy ? 1 : 0) },
+    });
+    if (busy) {
+      expect(result).toMatchObject({ status: "skipped", reason: "requests-in-flight" });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(peekSystemEvents(queueKey)).toEqual(queuedBefore);
+      expect(readSessionStoreForTest(storePath)[queueKey]).toBeDefined();
+      return;
+    }
+    expect(result.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(queuedAtReply).toEqual(queuedBefore);
+    const context = getFirstReplyContext(replySpy);
+    expect(context).toMatchObject({
+      SessionKey: queue === "shared" ? baseKey : isolatedKey,
+      InternalTurnSource: dedicated === "none" ? "heartbeat" : dedicated,
+    });
+    expect(context.InputProvenance).toEqual({
+      kind: "internal_system",
+      sourceTool: dedicated === "none" ? "hook" : dedicated,
+    });
+    if (queue === "legacy") {
+      expect(legacyRowRemovedAtReply).toBe(dedicated !== "exec");
+    }
+    if (queue === "base") {
+      expectTelegramSend(
+        sendTelegram,
+        dedicated === "exec" ? "-100999999999" : "-100155462274",
+        "Restart complete",
+        dedicated === "exec" ? 42 : undefined,
       );
-    },
-  );
-});
+      expect(formatted ?? "").not.toContain(generic);
+      expect(peekSystemEvents(queueKey)).toEqual(
+        dedicated === "exec" ? [reminder, generic] : queuedBefore,
+      );
+    } else {
+      expect(formatted).toContain(generic);
+      expect(formatted).not.toContain(completion);
+      expect(formatted).not.toContain(reminder);
+      expect(peekSystemEvents(queueKey)).toEqual(dedicated === "exec" ? [reminder] : []);
+    }
+    if (dedicated !== "none") {
+      expect(context.Body).toContain(completion);
+      expect(context.Body).not.toContain(generic);
+    }
+    expect(readSessionStoreForTest(storePath)[baseKey]?.sessionId).toBe("base-conversation");
+  }, queue !== "shared"),
+);
 
-it("keeps the exec route when a cron wake sees both queued payloads", async () => {
-  await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
+it("delivers isolated group completion after the base moves to a blocked DM", () =>
+  withRouting(async ({ cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
+    cfg.agents!.defaults!.heartbeat!.directPolicy = "block";
+    await writeTelegramSessionStore(storePath, baseKey, {
+      sessionId: "moved-direct-conversation",
+      lastTo: "user:operator",
+      chatType: "direct",
+    });
+    await seedIsolated(storePath, isolatedKey, baseKey, "original-group-run");
+    queueExec(isolatedKey, "group", { channel: "telegram", to: "group:ops" });
+    replySpy.mockResolvedValue({ text: "Group report ready." });
+    expect((await run({ sessionKey: isolatedKey, reason: "exec-event" })).status).toBe("ran");
+    expectTelegramSend(sendTelegram, "group:ops", "Group report ready.");
+    expect(getFirstReplyContext(replySpy)).toMatchObject({
+      SessionKey: isolatedKey,
+      OriginatingTo: "group:ops",
+      ChatType: "group",
+    });
+    expect(peekSystemEvents(isolatedKey)).toEqual([]);
+    expect(readSessionStoreForTest(storePath)[baseKey]?.sessionId).toBe(
+      "moved-direct-conversation",
+    );
+  }));
+
+it("keeps the exec route when a cron wake sees both queued payloads", () =>
+  withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
     const sessionKey = topicSessionKey;
     await writeTelegramSessionStore(storePath, sessionKey, {
-      lastTo: "telegram:-1003774691294:topic:99",
+      lastTo: topicRoute(99).to,
       lastThreadId: 99,
     });
-    queueEvent(
-      sessionKey,
-      "Exec completed (mixed-run, code 0) :: ready",
-      "exec:fixture-2",
-      topicRoute(47),
-    );
+    queueExec(sessionKey, "mixed-run", topicRoute(47));
     queueEvent(sessionKey, "Reminder: mixed cron follow-up", "cron:mixed-run", topicRoute(99));
     replySpy.mockResolvedValue({ text: "Command completed." });
 
@@ -419,47 +405,31 @@ it("keeps the exec route when a cron wake sees both queued payloads", async () =
       intent: "immediate",
       reason: "cron:mixed-run",
     });
-
     expect(result.status).toBe("ran");
     expect(getFirstReplyContext(replySpy).InternalTurnSource).toBe("exec");
     expectTelegramSend(sendTelegram, topicRoute(47).to, "Command completed.", 47);
     expect(peekSystemEvents(sessionKey)).toEqual(["Reminder: mixed cron follow-up"]);
-  }, false);
-});
+  }, false));
 
 it.each([
   { name: "metadata-only", output: "", reply: "HEARTBEAT_OK" },
-  {
-    name: "output-bearing",
-    output: "review-worker spawn finished",
-    reply: "The review-worker spawn finished successfully.",
-  },
-])("routes $name shared-session exec completion after topic drift", async ({ output, reply }) => {
-  await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
-    const sessionKey = topicSessionKey;
-    await seedDriftedSession(storePath, sessionKey);
-
+  { name: "output-bearing", output: "ready", reply: "Done." },
+])("routes $name exec completion after topic drift", ({ output, reply }) =>
+  withSharedRouting(async ({ sessionKey, replySpy, sendTelegram, run }) => {
     let projectedSystemEvents: string[] = [];
     replySpy.mockImplementation(async (_ctx, options) => {
       projectedSystemEvents =
         getReplySystemEventContext(options)?.events?.map((event) => event.text) ?? [];
       return { text: reply };
     });
-    queueEvent(
-      sessionKey,
-      `Exec completed (review-run, code 0)${output ? ` :: ${output}` : ""}`,
-      "exec:fixture-3",
-      topicRoute(47, "work"),
-    );
+    queueExec(sessionKey, "review-run", topicRoute(47, "work"), output);
     queueEvent(sessionKey, "Node connected", undefined, {
       channel: "telegram",
       to: "123456789",
       accountId: "personal",
     });
 
-    const result = await run({ sessionKey, reason: "exec-event" });
-
-    expect(result.status).toBe("ran");
+    expect((await run({ sessionKey, reason: "exec-event" })).status).toBe("ran");
     if (output) {
       expectTelegramSend(sendTelegram, topicRoute(47).to, reply, 47, "work");
     } else {
@@ -470,40 +440,20 @@ it.each([
     }
     expect(projectedSystemEvents).not.toContain("Node connected");
     expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
-  }, false);
-});
+  }, topicSessionKey),
+);
 
-it("automatically drains queued exec completions on their own routes", async ({ signal }) => {
-  await withRouting(async ({ cfg, storePath, replySpy, sendTelegram, run }) => {
-    const sessionKey = sharedSessionKey;
-    await seedDriftedSession(storePath, sessionKey);
+it("automatically drains queued exec completions on their own routes", ({ signal }) =>
+  withSharedRouting(async ({ cfg, sessionKey, replySpy, sendTelegram, run }) => {
     const enqueueCompletion = (name: string, accountId: string, threadId: number) =>
-      queueEvent(
-        sessionKey,
-        `Exec completed (${name}, code 0) :: ${name} is ready`,
-        "exec:fixture-4",
-        topicRoute(threadId, accountId),
-      );
+      queueExec(sessionKey, name, topicRoute(threadId, accountId), `${name} is ready`);
     enqueueCompletion("work-report", "work", 47);
     enqueueCompletion("personal-report", "personal", 99);
     replySpy.mockResolvedValue({ text: "Done." });
 
-    const followup = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
-    let runCount = 0;
-    const runner = startHeartbeatRunner({
-      cfg,
-      runOnce: (opts) => {
-        const result = run(opts);
-        runCount += 1;
-        if (runCount === 2) {
-          followup.resolve(result);
-        }
-        return result;
-      },
-    });
-    try {
+    await withFollowup(cfg, run, async (followup) => {
       await execWake(sessionKey);
-      await expect(racePromiseWithAbortSignal(followup.promise, signal)).resolves.toMatchObject({
+      await expect(racePromiseWithAbortSignal(followup, signal)).resolves.toMatchObject({
         status: "ran",
       });
       expect(replySpy).toHaveBeenCalledTimes(2);
@@ -511,58 +461,35 @@ it("automatically drains queued exec completions on their own routes", async ({ 
       expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("personal-report is ready");
       expect(replySpy.mock.calls[1]?.[0].Body).toContain("personal-report is ready");
       expect(sendTelegram).toHaveBeenCalledTimes(2);
-      expect(mockCallAt(sendTelegram, 0, "work Telegram send")).toMatchObject([
-        "telegram:-1003774691294:topic:47",
-        "Done.",
-        { messageThreadId: 47, accountId: "work" },
-      ]);
-      expect(mockCallAt(sendTelegram, 1, "personal Telegram send")).toMatchObject([
-        "telegram:-1003774691294:topic:99",
-        "Done.",
-        { messageThreadId: 99, accountId: "personal" },
+      expect(sendTelegram.mock.calls).toMatchObject([
+        [topicRoute(47).to, "Done.", { messageThreadId: 47, accountId: "work" }],
+        [topicRoute(99).to, "Done.", { messageThreadId: 99, accountId: "personal" }],
       ]);
       expect(peekSystemEvents(sessionKey)).toEqual([]);
-    } finally {
-      runner.stop();
-    }
-  }, false);
-});
+    });
+  }));
 
-it("does not let a deferred exec route retarget scheduled work", async () => {
-  await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
-    const sessionKey = sharedSessionKey;
-    await seedDriftedSession(storePath, sessionKey);
-    queueEvent(
-      sessionKey,
-      "Exec completed (work-report, code 0) :: report is ready",
-      "exec:fixture-5",
-      topicRoute(47, "work"),
-    );
-    replySpy.mockResolvedValue({ text: "Scheduled maintenance completed." });
+it("does not let a deferred exec route retarget scheduled work", () =>
+  withSharedRouting(async ({ sessionKey, replySpy, sendTelegram, run }) => {
+    queueExec(sessionKey, "work-report", topicRoute(47, "work"), "report is ready");
+    replySpy.mockResolvedValue({ text: "Scheduled result" });
 
     const result = await run({
       sessionKey,
       source: "cron",
       intent: "task",
-      reason: "cron:scheduled-maintenance",
-      tasks: [
-        {
-          jobId: "scheduled-maintenance",
-          name: "Scheduled maintenance",
-          prompt: "Run the scheduled maintenance check.",
-        },
-      ],
+      reason: "cron:job",
+      tasks: [{ jobId: "job", name: "Maintenance", prompt: "Run maintenance" }],
     });
     expect(result.status).toBe("ran");
     expectTelegramSend(
       sendTelegram,
       topicRoute(2175).to,
-      "Scheduled maintenance completed.",
+      "Scheduled result",
       undefined,
       "personal",
     );
     expect(peekSystemEvents(sessionKey)).toEqual([
       "Exec completed (work-report, code 0) :: report is ready",
     ]);
-  }, false);
-});
+  }));

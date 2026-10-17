@@ -25,10 +25,15 @@ import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js
 
 type RunnerOptions = Parameters<typeof startHeartbeatRunner>[0];
 type RunOnce = NonNullable<RunnerOptions["runOnce"]>;
+type RunResult = Awaited<ReturnType<RunOnce>>;
 type Wake = Parameters<typeof requestHeartbeat>[0];
 const runSpy = vi.fn<RunOnce>();
 const runners: ReturnType<typeof startHeartbeatRunner>[] = [];
 const sessionKey = "agent:main:main";
+const ran = { status: "ran", durationMs: 1 } as const;
+const instant = { ...ran, durationMs: 0 };
+const disabled = { status: "skipped", reason: "disabled" } as const;
+const completionText = "Exec completed (abcd1234, code 0) :: done";
 function makeWake(
   source: NonNullable<Wake["source"]>,
   intent: NonNullable<Wake["intent"]>,
@@ -79,11 +84,38 @@ function expectRun(index: number, expected: Partial<Parameters<RunOnce>[0]>) {
   expect(runSpy).toHaveBeenNthCalledWith(index + 1, expect.objectContaining(expected));
 }
 
+function recordTimes(effect: (count: number) => ReturnType<RunOnce> = async () => instant) {
+  const times: number[] = [];
+  runSpy.mockImplementation(() => {
+    times.push(Date.now());
+    return effect(times.length);
+  });
+  return times;
+}
+
+function runtimeConfig(visibleReplies: "automatic" | "message_tool"): OpenClawConfig {
+  return { ...config(), messages: { visibleReplies } };
+}
+
+async function tick(runs: number, ms = 30 * 60_000) {
+  await advance(ms);
+  await interval("main", ms);
+  expect(runSpy).toHaveBeenCalledTimes(runs);
+}
+
+async function expectDrained(calls: number) {
+  const drain = vi.fn().mockResolvedValue(disabled);
+  const dispose = setHeartbeatWakeHandler(drain);
+  await advance(250);
+  expect(drain).toHaveBeenCalledTimes(calls);
+  dispose();
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
   resetHeartbeatEventsForTest();
-  runSpy.mockReset().mockResolvedValue({ status: "ran", durationMs: 1 });
+  runSpy.mockReset().mockResolvedValue(ran);
 });
 
 afterEach(async () => {
@@ -91,7 +123,7 @@ afterEach(async () => {
     runner.stop();
   }
   // Disposed runners retain queued work for their successor; drain it between tests.
-  const dispose = setHeartbeatWakeHandler(async () => ({ status: "skipped", reason: "disabled" }));
+  const dispose = setHeartbeatWakeHandler(async () => disabled);
   await vi.runAllTimersAsync();
   dispose();
   setHeartbeatsEnabled(true);
@@ -109,11 +141,7 @@ describe("startHeartbeatRunner", () => {
     start(config(), { abortSignal: owner.signal });
     await wake(manualWake);
     expect(runSpy).not.toHaveBeenCalled();
-    const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(drain);
-    await advance(250);
-    expect(drain).toHaveBeenCalledOnce();
-    dispose();
+    await expectDrained(1);
   });
 
   it("aborts an active wake when the runner stops", async () => {
@@ -123,7 +151,7 @@ describe("startHeartbeatRunner", () => {
       runSpy.mockImplementation(async () => {
         signal = getHeartbeatWakeAbortSignal();
         await pending.promise;
-        return { status: "ran", durationMs: 1 };
+        return ran;
       });
       const runner = start();
       await wake({ ...manualWake, sessionKey });
@@ -133,12 +161,8 @@ describe("startHeartbeatRunner", () => {
       expect(signal?.aborted).toBe(true);
       pending.resolve();
       await advance(0);
-      const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-      const dispose = setHeartbeatWakeHandler(drain);
-      await advance(250);
-      expect(drain).not.toHaveBeenCalled();
+      await expectDrained(0);
       expect(runSpy).toHaveBeenCalledOnce();
-      dispose();
     } finally {
       pending.resolve();
       await advance(0);
@@ -163,14 +187,8 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("reads the latest runtime config for heartbeat wakes after no-op reload commits", async () => {
-    const initialConfig: OpenClawConfig = {
-      ...config(),
-      messages: { visibleReplies: "automatic" },
-    };
-    const nextConfig: OpenClawConfig = {
-      ...config(),
-      messages: { visibleReplies: "message_tool" },
-    };
+    const initialConfig = runtimeConfig("automatic");
+    const nextConfig = runtimeConfig("message_tool");
     setRuntimeConfigSnapshot(initialConfig, initialConfig);
     start(initialConfig, { readCurrentConfig: getRuntimeConfig });
     setRuntimeConfigSnapshot(nextConfig, nextConfig);
@@ -184,7 +202,7 @@ describe("startHeartbeatRunner", () => {
       if (agentId === "main") {
         await pending.promise;
       }
-      return { status: "ran", durationMs: 1 };
+      return ran;
     });
     start(config("30m", { main: {}, ops: {} }));
     await wake(manualWake);
@@ -196,49 +214,35 @@ describe("startHeartbeatRunner", () => {
   it("keeps serving interval wakes after runOnce throws an unhandled error", async () => {
     runSpy.mockRejectedValueOnce(new Error("session compaction error"));
     start();
-    await advance(30 * 60_000);
-    await interval();
-    expect(runSpy).toHaveBeenCalledOnce();
-    await advance(30 * 60_000);
-    await interval();
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    await tick(1);
+    await tick(2);
   });
 
   it("cleanup is idempotent and does not clear a newer runner's handler", async () => {
-    const oldRun = vi.fn<RunOnce>().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const oldRun = vi.fn<RunOnce>().mockResolvedValue(ran);
     const oldRunner = start(config(), { runOnce: oldRun });
     start();
     oldRunner.stop();
-    await advance(30 * 60_000);
-    await interval();
-    expect(runSpy).toHaveBeenCalledOnce();
+    await tick(1);
     expect(oldRun).not.toHaveBeenCalled();
     oldRunner.stop();
   });
 
   it("retains event follow-ups after a disabled heartbeat until the spacing floor", async () => {
-    runSpy.mockResolvedValue({ status: "skipped", reason: "disabled" });
+    runSpy.mockResolvedValue(disabled);
     start(config("10m", { main: { heartbeat: { every: "10m" } } }));
-    await advance(10 * 60_000);
-    await interval("main", 10 * 60_000);
-    expect(runSpy).toHaveBeenCalledOnce();
+    await tick(1, 10 * 60_000);
     await wake({ ...execWake, agentId: "main", sessionKey: undefined }, 1);
     await advance(30_000, 2);
   });
 
   it("does not delay the next cron tick after repeated requests-in-flight skips", async () => {
-    const callTimes: number[] = [];
-    runSpy.mockImplementation(async () => {
-      callTimes.push(Date.now());
-      return callTimes.length <= 5
-        ? { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT }
-        : { status: "ran", durationMs: 1 };
-    });
+    const callTimes = recordTimes(async (count) =>
+      count <= 5 ? { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } : ran,
+    );
     start();
     const intervalMs = 30 * 60_000;
-    await advance(intervalMs);
-    await interval();
-    expect(runSpy).toHaveBeenCalledOnce();
+    await tick(1);
     await advance(5 * 60_000, 6);
     expect(callTimes.filter((time) => time >= 2 * intervalMs)).toEqual([]);
     await advance(2 * intervalMs - Date.now() + 1);
@@ -247,14 +251,13 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("merges cron overrides with source-specific destination ownership", async () => {
+    const heartbeat = { every: "15m", prompt: "Ops prompt", directPolicy: "block" } as const;
     start(
       config("30m", {
         main: {},
         ops: {
           heartbeat: {
-            every: "15m",
-            prompt: "Ops prompt",
-            directPolicy: "block",
+            ...heartbeat,
             target: "discord:channel:ops",
             to: "discord:dm:ops",
             accountId: "ops-account",
@@ -262,26 +265,16 @@ describe("startHeartbeatRunner", () => {
         },
       }),
     );
-    await wake({
+    const request = {
       source: "cron",
       intent: "event",
       reason: "cron:job-123",
       agentId: "ops",
       sessionKey: "agent:ops:discord:channel:alerts",
       heartbeat: { target: "last" },
-    });
-    expect(runSpy).toHaveBeenCalledOnce();
-    expectRun(0, {
-      agentId: "ops",
-      reason: "cron:job-123",
-      sessionKey: "agent:ops:discord:channel:alerts",
-      heartbeat: {
-        every: "15m",
-        prompt: "Ops prompt",
-        directPolicy: "block",
-        target: "last",
-      },
-    });
+    } as const;
+    await wake(request);
+    expectRun(0, { ...request, heartbeat: { ...heartbeat, target: "last" } });
   });
 
   it("does not bypass interval cooldown for repeated exec-event wakes", async () => {
@@ -316,17 +309,15 @@ describe("startHeartbeatRunner", () => {
       }
       const startCommand = () =>
         setTimeout(() => {
-          enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+          enqueueSystemEvent(completionText, {
             sessionKey,
             fromConversationTurn,
           });
           requestHeartbeat({ ...execWake, coalesceMs: 0 });
         }, commandMs);
-      const callTimes: number[] = [];
-      runSpy.mockImplementation(async () => {
-        callTimes.push(Date.now());
+      const callTimes = recordTimes(async () => {
         startCommand();
-        return { status: "ran", durationMs: 0 };
+        return instant;
       });
       start();
       startCommand();
@@ -346,7 +337,7 @@ describe("startHeartbeatRunner", () => {
       await wake({ ...manualWake, sessionKey });
     }
     await advance(40_000);
-    enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+    enqueueSystemEvent(completionText, {
       sessionKey,
       fromConversationTurn: true,
     });
@@ -372,9 +363,6 @@ describe("startHeartbeatRunner", () => {
     await advance(60_500, 2);
     expectRun(1, { reason: "exec-event", sessionKey });
   });
-});
-
-describe("ambient owner resolution", () => {
   it("starts explicit multi-agent heartbeats under the configured system owner", async () => {
     start({
       agents: {
@@ -399,9 +387,6 @@ describe("ambient owner resolution", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("agents.defaults.heartbeat.agentId");
     expect(warn.mock.calls[0]?.[0]).toContain("agents.defaults.systemAgent.agentId");
   });
-});
-
-describe("targeted unscheduled wake dispatch", () => {
   it("runs a targeted manual next-heartbeat wake when recurring heartbeats are disabled", async () => {
     start(config("0m", { main: {} }));
     const enqueueEvent = vi.fn();
@@ -463,11 +448,7 @@ describe("targeted unscheduled wake dispatch", () => {
 
   it("retains the shared flood limit through reload with disabled cadence", async () => {
     const cfg = config("0m", { main: {} });
-    const callTimes: number[] = [];
-    runSpy.mockImplementation(async () => {
-      callTimes.push(Date.now());
-      return { status: "ran", durationMs: 0 };
-    });
+    const callTimes = recordTimes();
     const runner = start(cfg);
     for (let i = 0; i < 5; i++) {
       await wake(backgroundWake);
@@ -484,11 +465,9 @@ describe("targeted unscheduled wake dispatch", () => {
   it("preserves an in-flight start across a reload with disabled cadence", async () => {
     const cfg = config("0m", { main: {} });
     const pending = createDeferred();
-    const callTimes: number[] = [];
-    runSpy.mockImplementation(async () => {
-      callTimes.push(Date.now());
+    const callTimes = recordTimes(async () => {
       await pending.promise;
-      return { status: "ran", durationMs: 0 };
+      return instant;
     });
     const runner = start(cfg);
     try {
@@ -511,20 +490,19 @@ describe("targeted unscheduled wake dispatch", () => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {}, ops: { heartbeat: { every: "1m" } } } },
     };
-    const calls: { agentId: string | undefined; at: number }[] = [];
+    const calls: [string | undefined, number][] = [];
     runSpy.mockImplementation(async ({ agentId }) => {
-      calls.push({ agentId, at: Date.now() });
-      return { status: "ran", durationMs: 0 };
+      calls.push([agentId, Date.now()]);
+      return instant;
     });
-    const expectCalls = (...expected: [string, number][]) =>
-      expect(calls).toEqual(expected.map(([agentId, at]) => ({ agentId, at })));
+    const expectCalls = (...expected: [string, number][]) => expect(calls).toEqual(expected);
     const runner = start(cfg);
     await wake(execWake);
     runner.updateConfig({
       agents: {
         entries: {
+          ...cfg.agents?.entries,
           main: { heartbeat: { every: "1m" } },
-          ops: { heartbeat: { every: "1m" } },
         },
       },
     });
@@ -539,9 +517,6 @@ describe("targeted unscheduled wake dispatch", () => {
     await advance(120_000);
     expect(calls).toHaveLength(3);
   });
-});
-
-describe("heartbeat broadcast outcomes", () => {
   function startRunner() {
     const register = vi.spyOn(heartbeatWake, "setHeartbeatWakeHandler");
     start(config("30m", { main: {}, ops: {} }));
@@ -557,12 +532,7 @@ describe("heartbeat broadcast outcomes", () => {
     await run({ source: "manual", intent: "manual" });
     runOnce.mockClear();
     vi.setSystemTime(1);
-    const request = {
-      source: "cron",
-      intent: "task",
-      reason: "heartbeat-task:inbox",
-      tasks: [{ jobId: "inbox", name: "Inbox", prompt: "Check inbox" }],
-    } as const;
+    const request = { ...taskWake, source: "cron", agentId: undefined } as const;
 
     expect.soft(await run(request)).toEqual({
       status: "skipped",
@@ -614,21 +584,23 @@ describe("heartbeat broadcast outcomes", () => {
     });
   });
 
-  it("preserves the first terminal skip when no agent can retry", async () => {
+  it.each([
+    [{ status: "skipped", reason: "quiet-hours" }, disabled],
+    [
+      { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
+      { status: "failed", reason: "agent-tool-failure" },
+    ],
+  ] satisfies [RunResult, RunResult][])("preserves first %j beside %j", async (first, second) => {
     const { run, runOnce } = startRunner();
-    const result = { status: "skipped", reason: "quiet-hours" } as const;
-    runOnce
-      .mockResolvedValueOnce(result)
-      .mockResolvedValue({ status: "skipped", reason: "disabled" });
-    expect(await run({ source: "cron", intent: "task" })).toEqual(result);
+    runOnce.mockResolvedValueOnce(first).mockResolvedValue(second);
+    expect(await run({ source: "cron", intent: "task" })).toEqual(first);
+    expect(runOnce).toHaveBeenCalledTimes(2);
   });
 
   it("reports failure even after a sibling successfully ran", async () => {
     const { runOnce } = startRunner();
     const failure = { status: "failed", reason: "agent-tool-failure" } as const;
-    runOnce.mockImplementation(async ({ agentId }) =>
-      agentId === "ops" ? failure : { status: "ran", durationMs: 1 },
-    );
+    runOnce.mockImplementation(async ({ agentId }) => (agentId === "ops" ? failure : ran));
     const completion = heartbeatWake.requestHeartbeatAndWait({
       source: "manual",
       intent: "manual",
@@ -636,19 +608,6 @@ describe("heartbeat broadcast outcomes", () => {
     });
     await advance(0);
     await expect(completion).resolves.toEqual(failure);
-    expect(runOnce).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves a busy retry beside a sibling failure", async () => {
-    const { run, runOnce } = startRunner();
-    const busy = {
-      status: "skipped",
-      reason: heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-    } as const;
-    runOnce
-      .mockResolvedValueOnce(busy)
-      .mockResolvedValue({ status: "failed", reason: "agent-tool-failure" });
-    expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
     expect(runOnce).toHaveBeenCalledTimes(2);
   });
 

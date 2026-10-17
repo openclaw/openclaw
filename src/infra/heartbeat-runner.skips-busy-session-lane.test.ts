@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import * as embeddedRuns from "../agents/embedded-agent-runner/runs.js";
 import {
@@ -6,7 +7,6 @@ import {
 } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { runReplyAgent } from "../auto-reply/reply/agent-runner-run.js";
 import * as replyFixtures from "../auto-reply/reply/agent-runner.test-fixtures.js";
-import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import * as replyRuns from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
@@ -59,6 +59,7 @@ beforeEach(() => {
   replyRunRegistryTesting.resetReplyRunRegistry();
 });
 
+type RunResult = Awaited<ReturnType<typeof runHeartbeatOnce>>;
 type RunOverrides = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps">;
 type SessionSeed = Partial<Parameters<typeof seedMainSessionStore>[2]>;
 function createCase({ storePath, replySpy }: { storePath: string; replySpy: HeartbeatReplySpy }) {
@@ -81,9 +82,12 @@ function createCase({ storePath, replySpy }: { storePath: string; replySpy: Hear
     storePath,
     replySpy,
     seed,
-    expectBusy: (result: Awaited<ReturnType<typeof runHeartbeatOnce>>, reason?: string) =>
-      expectBusy(result, replySpy, reason),
-    expectRan: (result: Awaited<ReturnType<typeof runHeartbeatOnce>>) => {
+    expectBusy: (result: RunResult, reason = heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT) => {
+      expect(result).toEqual({ status: "skipped", reason });
+      expect(getLastHeartbeatEvent()).toMatchObject({ ...result, durationMs: expect.any(Number) });
+      expect(replySpy).not.toHaveBeenCalled();
+    },
+    expectRan: (result: RunResult) => {
       expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
     },
@@ -115,15 +119,13 @@ const it = test.extend<{ hb: ReturnType<typeof createCase> }>({
     }
   },
 });
-function expectBusy(
-  result: Awaited<ReturnType<typeof runHeartbeatOnce>>,
-  replySpy: HeartbeatReplySpy,
-  reason: string = heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-) {
-  expect(result).toEqual({ status: "skipped", reason });
-  expect(getLastHeartbeatEvent()).toMatchObject({ ...result, durationMs: expect.any(Number) });
-  expect(replySpy).not.toHaveBeenCalled();
+function admittedReply(options: Parameters<HeartbeatReplySpy>[1]) {
+  return {
+    operation: expectDefined(options?.replyOperation, "admitted heartbeat operation"),
+    runState: expectDefined(resolveReplyOperationRunState(options), "heartbeat run state"),
+  };
 }
+
 function recoveryDelivery(
   runId = "restart-recovery-run",
   lifecycleGeneration = getAgentEventLifecycleGeneration(),
@@ -206,7 +208,7 @@ it.for([
 ])("handles scheduled scratch before busy queues: $reason", async ({ content, reason }, { hb }) => {
   await hb.seed();
   await seedHeartbeatScratchForTest({ content });
-  expectBusy(
+  hb.expectBusy(
     await hb.run(
       {
         source: "interval",
@@ -214,11 +216,8 @@ it.for([
         reason: "interval",
         scheduledEveryMs: 30 * 60_000,
       },
-      {
-        getQueueSize: (lane) => (lane === CommandLane.Main ? 2 : 0),
-      },
+      { getQueueSize: (lane) => (lane === CommandLane.Main ? 2 : 0) },
     ),
-    hb.replySpy,
     reason,
   );
 });
@@ -247,9 +246,8 @@ it.for([false, true])(
 
 it("returns cron-in-progress when cron lanes have queued work", async ({ hb }) => {
   await hb.seed();
-  expectBusy(
+  hb.expectBusy(
     await hb.run({}, { getQueueSize: (lane) => Number(lane === CommandLane.Cron) }),
-    hb.replySpy,
     heartbeatWake.HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   );
 });
@@ -308,12 +306,8 @@ it("defers while a reply owns the drained session", async ({ hb }) => {
 it("suppresses a finalizing heartbeat superseded by a visible turn", async ({ hb }) => {
   const sessionKey = await hb.seed();
   let preempt: ReturnType<typeof vi.fn<() => boolean>> | undefined;
-  hb.replySpy.mockImplementationOnce(async (_ctx, options: InternalGetReplyOptions | undefined) => {
-    const operation = options?.replyOperation;
-    const runState = resolveReplyOperationRunState(options);
-    if (!operation || !runState) {
-      throw new Error("Expected admitted heartbeat operation");
-    }
+  hb.replySpy.mockImplementationOnce(async (_ctx, options) => {
+    const { operation, runState } = admittedReply(options);
     const sessionId = operation.sessionId;
     preempt = vi.fn(() => operation.supersede());
     const handle = {
@@ -340,11 +334,8 @@ it("retains exec work after losing late admission", async ({ hb }) => {
   const sessionKey = await hb.seed();
   const text = "Exec completed (late-run, code 0) :: result";
   enqueueSystemEvent(text, { sessionKey, contextKey: "exec:late-run" });
-  hb.replySpy.mockImplementationOnce(async (ctx, options: InternalGetReplyOptions | undefined) => {
-    const operation = options?.replyOperation;
-    if (!operation) {
-      throw new Error("Expected admitted heartbeat operation");
-    }
+  hb.replySpy.mockImplementationOnce(async (ctx, options) => {
+    const { operation } = admittedReply(options);
     const handle = createEmbeddedRunHandle();
     embeddedRuns.setActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
     try {
@@ -406,13 +397,10 @@ it("retains exec work after losing late admission", async ({ hb }) => {
 it("ignores a replacement run after an admitted empty reply", async ({ hb }) => {
   const sessionKey = await hb.seed();
   let operation: ReturnType<typeof replyRuns.createReplyOperation> | undefined;
-  hb.replySpy.mockImplementation(async (_ctx, options: InternalGetReplyOptions | undefined) => {
-    const runState = resolveReplyOperationRunState(options);
-    if (!runState || !options?.replyOperation) {
-      throw new Error("Expected heartbeat reply operation state");
-    }
+  hb.replySpy.mockImplementation(async (_ctx, options) => {
+    const { operation: admitted, runState } = admittedReply(options);
     runState.admission = { status: "owned" };
-    options.replyOperation.complete();
+    admitted.complete();
     await replyRuns.waitForReplyRunSuccessorAdmission(sessionKey, null);
     operation = replyRuns.createReplyOperation({
       sessionKey,

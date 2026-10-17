@@ -20,12 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  captureExecRequestOwners,
-  withExecRequestOwners,
-  withExecRequestTurn,
-  type ExecRequestOwner,
-} from "./exec-request-context.js";
+import * as request from "./exec-request-context.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -33,28 +28,44 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import * as deferredDelivery from "./outbound/deferred-delivery-admission.js";
 import { loadPendingDeliveries } from "./outbound/delivery-queue.test-helpers.js";
-import {
-  enqueueSystemEvent,
-  enqueueSystemEventEntry,
-  peekDeliverableSystemEventEntries,
-  peekSystemEventEntries,
-  peekSystemEvents,
-  resetSystemEventsForTest,
-} from "./system-events.js";
+import * as events from "./system-events.js";
+
+type Owner = request.ExecRequestOwner;
 
 let state: OpenClawTestState | undefined;
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
   resetCronActiveJobs();
-  resetSystemEventsForTest();
+  events.resetSystemEventsForTest();
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
   await state?.cleanup();
   state = undefined;
-  resetSystemEventsForTest();
+  events.resetSystemEventsForTest();
 });
+
+function createGate() {
+  const entered = createDeferred(),
+    release = createDeferred();
+  return {
+    release: release.resolve,
+    async pause() {
+      entered.resolve();
+      await release.promise;
+    },
+    async during<T>(pending: Promise<T>, signal: AbortSignal, check: () => Promise<void>) {
+      try {
+        await withinTest(awaitGateBeforeSettlement(entered.promise, pending, "entry gate"), signal);
+        await check();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+      }
+    },
+  };
+}
 
 async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
   state = await createOpenClawTestState({
@@ -109,12 +120,12 @@ async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
       undefined,
       cfg,
     );
-  const enqueue = (text: string, owners?: readonly ExecRequestOwner[]) =>
+  const enqueue = (text: string, owners?: readonly Owner[]) =>
     expectDefined(
-      enqueueSystemEventEntry(text, withExecRequestOwners({ sessionKey }, owners)),
+      events.enqueueSystemEventEntry(text, request.withExecRequestOwners({ sessionKey }, owners)),
       "event occurrence",
     );
-  const ownerFor = async (runId: string, extra: Partial<ExecRequestOwner["identity"]> = {}) => {
+  const ownerFor = async (runId: string, extra: Partial<Owner["identity"]> = {}) => {
     const identity = {
       runId,
       sessionKey,
@@ -123,23 +134,26 @@ async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
       ownerConnId: "original-connection",
       ...extra,
     };
-    const owner = await withExecRequestTurn({ identity }, async () =>
-      expectDefined(captureExecRequestOwners(identity)?.[0], "command request owner"),
+    const owner = await request.withExecRequestTurn({ identity }, async () =>
+      expectDefined(request.captureExecRequestOwners(identity)?.[0], "command request owner"),
     );
     return { identity, owner };
   };
   const readSession = () => sessionAccessor.loadSessionEntry({ storePath, sessionKey });
-  const expectQueued = (events: ReturnType<typeof peekSystemEventEntries>, deliverable = false) =>
-    expect(
-      eventIds(
-        (deliverable ? peekDeliverableSystemEventEntries : peekSystemEventEntries)(sessionKey),
-      ),
-    ).toEqual(eventIds(events));
+  const expectQueued = (
+    expected: ReturnType<typeof events.peekSystemEventEntries>,
+    deliverable = false,
+  ) => {
+    const peek = deliverable
+      ? events.peekDeliverableSystemEventEntries
+      : events.peekSystemEventEntries;
+    expect(eventIds(peek(sessionKey))).toEqual(eventIds(expected));
+  };
   return { cfg, sessionKey, run, humanReply, enqueue, ownerFor, readSession, expectQueued };
 }
 
-function eventIds(events: ReturnType<typeof peekSystemEventEntries>) {
-  return events.map((event) => event.id);
+function eventIds(entries: ReturnType<typeof events.peekSystemEventEntries>) {
+  return entries.map((event) => event.id);
 }
 function completedTurn(sessionId: string, text = "Handled internally") {
   return {
@@ -156,11 +170,8 @@ const mockAgent = () =>
     .mockImplementation(async (params) => completedTurn(params.sessionId));
 const agentInput = (spy: ReturnType<typeof mockAgent>, index = 0) =>
   expectDefined(spy.mock.calls[index]?.[0], `agent input ${index}`);
-const captureOwners = ({
-  runId,
-  sessionId,
-}: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0]) =>
-  captureExecRequestOwners({ runId, sessionId });
+const captureOwners = (input: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0]) =>
+  request.captureExecRequestOwners({ runId: input.runId, sessionId: input.sessionId });
 
 it("delivers a creation notice once through a cron wake", async () => {
   const { cfg, sessionKey, run: runSource } = await createHeartbeatScenario();
@@ -176,7 +187,7 @@ it("delivers a creation notice once through a cron wake", async () => {
       createdActor: { type: "human", source: "profile", id: "profile-alice" },
     },
   });
-  enqueueSystemEvent("Reminder: check the work queue", {
+  events.enqueueSystemEvent("Reminder: check the work queue", {
     sessionKey,
     contextKey: "cron:queue-check",
   });
@@ -193,7 +204,7 @@ it("delivers a creation notice once through a cron wake", async () => {
   );
   expect(input.prompt).toContain("The reminder content is:\n\nReminder: check the work queue");
   expect(input.prompt).not.toContain(title);
-  expect(peekSystemEvents(sessionKey)).toEqual([]);
+  expect(events.peekSystemEvents(sessionKey)).toEqual([]);
 
   expect((await run()).status).toBe("ran");
   expect(runAgent).toHaveBeenCalledTimes(2);
@@ -213,16 +224,12 @@ it.for(["stopped", "failed"] as const)(
     });
     const completionText = "Exec completed (owned-command, code 0) :: ORIGINAL_COMMAND_RESULT";
     const completion = enqueue(completionText, [owner]);
-    const peers = ["First unrelated notification", "Second unrelated notification"].map((text) =>
-      enqueue(text),
-    );
-    const entered = createDeferred();
-    const release = createDeferred();
-    let selectedOwners: readonly ExecRequestOwner[] | undefined;
+    const peers = ["First notification", "Second notification"].map((text) => enqueue(text));
+    const gate = createGate();
+    let selectedOwners: readonly Owner[] | undefined;
     const runAgent = mockAgent().mockImplementation(async (params) => {
       selectedOwners = captureOwners(params);
-      entered.resolve();
-      await release.promise;
+      await gate.pause();
       if (outcome === "failed") {
         throw new Error("fixture model failure");
       }
@@ -230,13 +237,8 @@ it.for(["stopped", "failed"] as const)(
       return completedTurn(params.sessionId);
     });
     const pending = run("exec-event");
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, pending, "model entry"),
-        test.signal,
-      );
+    await gate.during(pending, test.signal, async () => {
       expect(selectedOwners).toEqual([owner]);
-      expect(selectedOwners?.[0]?.identity).toEqual(identity);
       const input = agentInput(runAgent);
       const currentTarget = { sessionKey, sessionId: input.sessionId, agentId: "main" };
       const capture = (accept: (candidate: typeof owner.identity) => boolean) =>
@@ -244,8 +246,7 @@ it.for(["stopped", "failed"] as const)(
       const byConnection = (connId: string) =>
         capture((candidate) => canRequesterAbortChatRun(candidate, { connId, isAdmin: false }));
       const foreign = byConnection("foreign-connection");
-      expect(foreign.owners).toEqual([]);
-      expect(foreign.cancel()).toBe(false);
+      expect([foreign.owners, foreign.cancel()]).toEqual([[], false]);
       expect(capture((candidate) => candidate.controlUiVisible !== false).owners).toEqual([]);
       expect(capture((candidate) => candidate.turnKind !== "btw").owners).toEqual([]);
       expect(byConnection(identity.ownerConnId).owners).toEqual([owner]);
@@ -259,17 +260,16 @@ it.for(["stopped", "failed"] as const)(
         expect(cancellation.cancel()).toBe(true);
         await cancellation.settle();
       }
-      release.resolve();
+      gate.release();
       const result = await pending;
       expectQueued(outcome === "stopped" ? [...peers, late] : [completion, late]);
       if (outcome === "failed") {
-        expect(result.status).toBe("failed");
-        expect(owner.signal.aborted).toBe(false);
+        expect([result.status, owner.signal.aborted]).toEqual(["failed", false]);
         return;
       }
       expect(result).toEqual({ status: "skipped", reason: "preempted" });
       expect(owner.signal.aborted).toBe(true);
-      let nextOwners: readonly ExecRequestOwner[] | undefined;
+      let nextOwners: readonly Owner[] | undefined;
       runAgent.mockImplementation(async (params) => {
         nextOwners = captureOwners(params);
         return completedTurn(params.sessionId);
@@ -279,20 +279,16 @@ it.for(["stopped", "failed"] as const)(
       const replies = Array.isArray(nextReply) ? nextReply : nextReply ? [nextReply] : [];
       expect(replies.map((reply) => reply.text)).toContain("Handled internally");
       expect(runAgent).toHaveBeenCalledTimes(2);
-      expect(nextOwners).toHaveLength(1);
+      expect(nextOwners).toMatchObject([{ signal: { aborted: false } }]);
       expect(nextOwners).not.toContain(owner);
-      expect(nextOwners?.[0]?.signal.aborted).toBe(false);
       const next = agentInput(runAgent, 1);
       expect(next.prompt).toContain(nextBody);
       expect(next.prompt).not.toContain(completionText);
       for (const peer of [...peers, late]) {
         expect(next.currentInboundContext?.text).toContain(peer.text);
       }
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-    }
+      expect(events.peekSystemEventEntries(sessionKey)).toEqual([]);
+    });
   },
 );
 
@@ -301,40 +297,29 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
   async (outcome, test) => {
     const { sessionKey, run, humanReply, enqueue, ownerFor, readSession, expectQueued } =
       await createHeartbeatScenario("telegram");
-    const { identity, owner } = await ownerFor("generic-delivery-request", {
-      ownerConnId: "generic-delivery-owner",
-    });
-    const completion = enqueue("Exec completed (generic-delivery, code 0) :: COMMAND_RESULT", [
-      owner,
-    ]);
+    const { identity, owner } = await ownerFor("generic-delivery");
+    const completion = enqueue("Exec completed (delivery, code 0) :: COMMAND_RESULT", [owner]);
     const generic = enqueue("Admitted notification with its own delivery custody");
-    const runAgent = mockAgent().mockImplementation(async (params) =>
-      completedTurn(params.sessionId, "The command and its admitted notification were handled."),
-    );
-    const entered = createDeferred();
-    const release = createDeferred();
-    const received: string[] = [];
-    const telegram = vi.fn(async (_to: string, text: string) => {
-      received.push(text);
-      return { messageId: "generic-delivery", chatId: "-100155462274" };
-    });
+    const runAgent = mockAgent();
+    const gate = createGate();
+    const telegram = vi.fn(async (_to: string, _text: string) => ({
+      messageId: "generic-delivery",
+      chatId: "-100155462274",
+    }));
     if (outcome === "confirmed") {
       const patch = sessionAccessor.patchSessionEntryCore;
       let gated = false;
       vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementation(async (...args) => {
         const result = await patch(...args);
-        if (received.length === 1 && !gated) {
+        if (telegram.mock.calls.length === 1 && !gated) {
           gated = true;
-          entered.resolve();
-          await release.promise;
+          await gate.pause();
         }
         return result;
       });
     } else if (outcome === "recovery-owned") {
-      telegram.mockImplementationOnce(async (_to: string, text: string) => {
-        received.push(text);
-        entered.resolve();
-        await release.promise;
+      telegram.mockImplementationOnce(async () => {
+        await gate.pause();
         throw new Error("Synthetic response lost after platform dispatch");
       });
     } else {
@@ -343,19 +328,14 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
         async (...args) => {
           const resolveAdmission = await prepare(...args);
           expect(args[0]).toMatchObject({ channel: "telegram", phase: "live" });
-          entered.resolve();
-          await release.promise;
-          // Return the real function: its native currentness check observes Stop.
+          await gate.pause();
+          // The native admission function still observes Stop.
           return resolveAdmission;
         },
       );
     }
     const pending = run("exec-event", telegram);
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, pending, "delivery gate"),
-        test.signal,
-      );
+    await gate.during(pending, test.signal, async () => {
       const first = agentInput(runAgent);
       expect(first.currentInboundContext?.text).toContain(generic.text);
       const noSend = outcome === "deferred admission abort";
@@ -381,10 +361,9 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
       const cancellation = captureExecRequestCancellation(identity);
       expect(cancellation.cancel()).toBe(true);
       await cancellation.settle();
-      release.resolve();
+      gate.release();
       expect(await pending).toMatchObject({ status: "skipped" });
       expect(telegram).toHaveBeenCalledTimes(noSend ? 0 : 1);
-      expect(received).toHaveLength(noSend ? 0 : 1);
       expectQueued(noSend ? [generic, late] : [late]);
       expectQueued(noSend ? [generic, late] : [late], true);
       const recovery = await loadPendingDeliveries();
@@ -407,12 +386,8 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
       expect(next.prompt).toContain(nextBody);
       expect((next.currentInboundContext?.text ?? "").includes(generic.text)).toBe(noSend);
       expect(next.currentInboundContext?.text).toContain(late.text);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      expect(events.peekSystemEventEntries(sessionKey)).toEqual([]);
       expect(telegram).toHaveBeenCalledTimes(noSend ? 0 : 1);
-      expect(received).toHaveLength(noSend ? 0 : 1);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-    }
+    });
   },
 );
