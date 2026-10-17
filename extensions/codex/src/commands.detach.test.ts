@@ -639,9 +639,15 @@ describe("Codex diagnostics confirmation", () => {
           }),
         ]);
         if (change === "replacement") {
-          await writeTestBinding(identity, { ...binding, threadId: "replacement-thread" });
+          await expect(bindingStore.resetSessionGeneration(identity)).resolves.toBe("applied");
+          await expect(
+            bindingStore.mutate(identity, {
+              kind: "set",
+              binding: supervisedTestBinding("replacement-thread"),
+            }),
+          ).resolves.toBe(true);
         } else if (change === "deletion") {
-          await bindingStore.mutate(identity, { kind: "clear" });
+          await expect(bindingStore.retireSessionGeneration(identity)).resolves.toBe("applied");
         }
         resume.resolve();
         const result = await pending;
@@ -710,6 +716,14 @@ describe("Codex diagnostics confirmation", () => {
       ownerCurrent = false;
       return { ok: true, value: { threadId: "thread-session-1" } };
     });
+    f.deps.safeCodexControlRequest = async (_pluginConfig, _method, _params, options) => {
+      try {
+        options?.assertCurrent?.();
+        return await f.upload();
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    };
     const result = await f.run("diagnostics");
     expect(f.upload).toHaveBeenCalledOnce();
     expect(result.text).toContain("Codex diagnostics sent to OpenAI servers:");
