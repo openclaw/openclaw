@@ -201,7 +201,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     let observedSignal: AbortSignal | undefined;
 
-    const upload = publishArtifactFiles({
+    const pendingUpload = publishArtifactFiles({
       artifactRoot: "mantis/discord/pr-1/run-1",
       fetchImpl: (_url, init) => {
         observedSignal = init.signal;
@@ -223,7 +223,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       timeoutMs: 5,
     });
 
-    await expect(upload).rejects.toMatchObject({
+    await expect(pendingUpload).rejects.toMatchObject({
       cause: { name: "TimeoutError" },
       message: "Timed out uploading Mantis artifact baseline.png after 5ms.",
     });
