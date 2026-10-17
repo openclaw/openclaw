@@ -1,8 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -14,7 +12,7 @@ import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-r
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
@@ -25,9 +23,9 @@ function createController(
   options: Partial<LaneParams> & { initialQueuedLifecycleGeneration?: string },
 ) {
   const { initialQueuedLifecycleGeneration, ...overrides } = options;
-  let lifecycleGeneration = options.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+  const lifecycleGeneration = options.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   const runId = options.runId ?? "run-1";
-  let params: LaneParams = {
+  const params: LaneParams = {
     admittedRunContext: createTestAdmittedRunContext(runId),
     agentId: "main",
     sessionId: "session-1",
@@ -41,48 +39,25 @@ function createController(
     enqueue: options.enqueue ?? (async (task) => await task()),
     ...overrides,
   };
-  setRuntimeConfigSnapshot(params.config ?? {});
-  const controller = createEmbeddedRunLaneController({
-    getLifecycleGeneration: () => lifecycleGeneration,
-    getParams: () => params,
+  return createLaneControllerFixture(params, {
+    lifecycleGeneration,
     globalLane: "global-lane",
     initialQueuedLifecycleGeneration: initialQueuedLifecycleGeneration ?? lifecycleGeneration,
     sessionLane: "session:agent:main:session-1",
-    setLifecycleGeneration: (next) => {
-      lifecycleGeneration = next;
-    },
-    setParams: (next) => {
-      params = next;
-    },
   });
-  return {
-    controller,
-    getLifecycleGeneration: () => lifecycleGeneration,
-  };
 }
 
 function createQueuedController(options: Parameters<typeof createController>[0]) {
-  let release: (() => void) | undefined;
+  const gate = createDeferred();
   const state = createController({
     ...options,
-    enqueue: async <T>(task: () => Promise<T>) =>
-      await new Promise<T>((resolve, reject) => {
-        release = () => {
-          void task().then(resolve, reject);
-        };
-      }),
+    enqueue: async (task) => {
+      await gate.promise;
+      return await task();
+    },
   });
   const run = state.controller.enqueueGlobal(async () => completedResult);
-  return {
-    ...state,
-    run,
-    release: () => {
-      if (!release) {
-        throw new Error("Expected queued task release callback");
-      }
-      release();
-    },
-  };
+  return { ...state, run, release: gate.resolve };
 }
 
 async function expectStaleRun(run: Promise<EmbeddedAgentRunResult>, runId: string) {
@@ -138,20 +113,14 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       sessionKey: undefined,
     });
     const events: Array<{ agentId?: string; sessionKey?: string }> = [];
-    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
-
-    try {
-      await controller.enqueueGlobal(async () => {
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "owned progress" } });
-        return completedResult;
-      });
-
-      expect(getAgentRunContext(runId)).toMatchObject({ agentId: "research" });
-      expect(getAgentRunContext(runId)?.sessionKey).toBeUndefined();
-      expect(events).toMatchObject([{ agentId: "research", sessionKey: undefined }]);
-    } finally {
-      unsubscribe();
-    }
+    onTestFinished(onAgentRuntimeEvent((event) => events.push(event)));
+    await controller.enqueueGlobal(async () => {
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "owned progress" } });
+      return completedResult;
+    });
+    expect(getAgentRunContext(runId)).toMatchObject({ agentId: "research" });
+    expect(getAgentRunContext(runId)?.sessionKey).toBeUndefined();
+    expect(events).toMatchObject([{ agentId: "research", sessionKey: undefined }]);
   });
 
   it("rebinds inter-session user work that was queued before lifecycle rotation", async () => {
@@ -203,23 +172,21 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       runId: "stale-descendant",
     });
 
-    await expectStaleRun(
-      controller.enqueueGlobal(async () => completedResult),
-      "stale-descendant",
-    );
+    const run = controller.enqueueGlobal(async () => completedResult);
+    await expectStaleRun(run, "stale-descendant");
   });
 
   it("does not replace a newer same-id run context", async () => {
     const staleGeneration = getAgentEventLifecycleGeneration();
     const currentGeneration = rotateAgentEventLifecycleGeneration();
-    claimAgentRunContext("shared-run", {
+    const newerContext = {
       sessionKey: "new-session-key",
       sessionId: "new-session",
       lifecycleGeneration: currentGeneration,
-    });
+    };
+    claimAgentRunContext("shared-run", { ...newerContext });
     const { controller } = createController({
       lifecycleGeneration: staleGeneration,
-      initialQueuedLifecycleGeneration: staleGeneration,
       trigger: "user",
       runId: "shared-run",
     });
@@ -227,10 +194,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     await expect(controller.enqueueGlobal(async () => completedResult)).rejects.toMatchObject({
       name: "AbortError",
     });
-    expect(getAgentRunContext("shared-run")).toMatchObject({
-      sessionKey: "new-session-key",
-      sessionId: "new-session",
-      lifecycleGeneration: currentGeneration,
-    });
+    expect(getAgentRunContext("shared-run")).toMatchObject(newerContext);
   });
 });

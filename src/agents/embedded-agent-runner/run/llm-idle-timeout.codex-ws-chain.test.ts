@@ -7,11 +7,11 @@ import {
   resetOpenAICodexWebSocketStateForTest,
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import type { Model } from "../../../llm/types.js";
 // Installs the same transport host as the runtime.
 import "../../../llm/stream.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   clearEmbeddedSessionForkSnapshot,
@@ -38,18 +38,15 @@ function createJwt(payload: Record<string, unknown>): string {
 
 const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
 
-const model = {
+const model = makeProviderModelFixture({
   id: "test-codex-model",
-  name: "test-codex-model",
   api: "openai-chatgpt-responses",
   provider: "openai",
   baseUrl: "https://chatgpt.com/backend-api/codex",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 372_000,
   maxTokens: 16_000,
-} as unknown as Model;
+});
 
 const context = {
   systemPrompt: "You are a test.",
@@ -109,18 +106,22 @@ function completedFrame(id: string): Frame {
   };
 }
 
-function buildRunnerChain(params: {
-  runId: string;
-  sessionId: string;
-  runSignal: AbortSignal;
-  onIdleTimeout: (error: Error) => void;
-}): { streamFn: StreamFn; idleTimeoutMs: number; firstEventTimeoutMs: number; strategy: string } {
+function startWatchdog(label: string) {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("", { status: 500 })),
+  );
+  const onIdleTimeout = vi.fn();
+  const runAbort = new AbortController();
+  const runId = `run-${label}`;
+  const sessionId = `session-${label}`;
   const cfg = { agents: { defaults: { timeoutSeconds: 3600 } } };
   const { streamFn: base, strategy } = resolveEmbeddedAgentStream({
     llmRuntime,
     currentStreamFn: undefined,
-    sessionId: params.sessionId,
-    signal: params.runSignal,
+    sessionId,
+    signal: runAbort.signal,
     model: model as never,
     resolvedApiKey: apiKey,
     authProfileId: "openai:default",
@@ -141,29 +142,29 @@ function buildRunnerChain(params: {
   };
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: "user" });
   const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs(timeoutOptions);
-  streamFn = streamWithIdleTimeout(streamFn, idleTimeoutMs, params.onIdleTimeout, {
-    runId: params.runId,
+  streamFn = streamWithIdleTimeout(streamFn, idleTimeoutMs, onIdleTimeout, {
+    runId,
   });
   const beforeFirstEvent = streamFn;
   streamFn = (m, c, options) =>
     beforeFirstEvent(m, c, {
       ...options,
       firstEventTimeoutMs,
-      onFirstEventTimeout: params.onIdleTimeout,
+      onFirstEventTimeout: onIdleTimeout,
     } as typeof options);
   let seq = 0;
   streamFn = wrapStreamFnWithDiagnosticModelCallEvents(streamFn, {
-    runId: params.runId,
-    sessionId: params.sessionId,
+    runId,
+    sessionId,
     provider: model.provider,
     model: model.id,
     api: model.api,
     transport: "auto",
     requestTimeoutMs: idleTimeoutMs,
     trace: createDiagnosticTraceContext(),
-    nextCallId: () => `${params.runId}:model:${(seq += 1)}`,
+    nextCallId: () => `${runId}:model:${(seq += 1)}`,
   });
-  return { streamFn, idleTimeoutMs, firstEventTimeoutMs, strategy };
+  return { streamFn, idleTimeoutMs, firstEventTimeoutMs, strategy, onIdleTimeout, runAbort };
 }
 
 async function consumeLikeAgentCore(
@@ -219,26 +220,6 @@ function runFork(
   question: string,
 ) {
   return runEmbeddedSessionFork({ ...identity, model, apiKey, question, assertCurrent: () => {} });
-}
-
-function startWatchdog(label: string) {
-  vi.useFakeTimers();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response("", { status: 500 })),
-  );
-  const onIdleTimeout = vi.fn();
-  const runAbort = new AbortController();
-  return {
-    ...buildRunnerChain({
-      runId: `run-${label}`,
-      sessionId: `session-${label}`,
-      runSignal: runAbort.signal,
-      onIdleTimeout,
-    }),
-    runAbort,
-    onIdleTimeout,
-  };
 }
 
 function parkConsumer(streamFn: StreamFn, signal: AbortSignal) {
@@ -342,9 +323,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
       "stop",
     );
-    expect(ControlledWebSocket.instances).toHaveLength(2);
-    expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(2);
-    expect(ControlledWebSocket.instances[1]?.sent).toHaveLength(1);
+    expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
     expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
     expect(requests[1]).not.toHaveProperty("previous_response_id");
     expect(requests[1]).toMatchObject({
@@ -395,9 +374,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       "stop",
     );
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(ControlledWebSocket.instances).toHaveLength(2);
-    expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(2);
-    expect(ControlledWebSocket.instances[1]?.sent).toHaveLength(1);
+    expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
     expect(JSON.parse(ControlledWebSocket.instances[0]?.sent[1] ?? "{}")).toMatchObject({
       previous_response_id: "resp_parent_1",
       input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
@@ -426,17 +403,13 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
   });
 
   it("C: cached session socket reused from a previous call, then one frame and a stall, is aborted at the idle timeout", async () => {
-    let call = 0;
     ControlledWebSocket.onSend = (socket) => {
-      call += 1;
-      const current = call;
+      const call = socket.sent.length;
       queueMicrotask(() => {
-        if (current === 1) {
-          socket.deliver({ type: "response.created", response: { id: "resp_1" } });
+        socket.deliver({ type: "response.created", response: { id: `resp_${call}` } });
+        if (call === 1) {
           socket.deliver(completedFrame("resp_1"));
-          return;
         }
-        socket.deliver({ type: "response.created", response: { id: "resp_2" } });
       });
     };
     const { streamFn, onIdleTimeout, runAbort } = startWatchdog("C");
@@ -454,42 +427,41 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     );
   });
 
-  it("D: consumer parked in emit() after start is still policed by the idle watchdog", async () => {
-    deliverOnSend("resp_d");
-    const { streamFn, onIdleTimeout, runAbort } = startWatchdog("D");
-    const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
-    await vi.advanceTimersByTimeAsync(10);
-    await entered;
-    await expectIdleDeadline(onIdleTimeout);
-    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
-    expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
-    release();
-    await vi.advanceTimersByTimeAsync(10);
-    const { result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout|aborted/,
-    );
-  });
-
-  it("F: frames arriving while the consumer is parked keep the watchdog alive", async () => {
-    deliverOnSend("resp_f");
-    const { streamFn, onIdleTimeout, runAbort } = startWatchdog("F");
-    const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
-    await vi.advanceTimersByTimeAsync(10);
-    await entered;
-    const socket = ControlledWebSocket.instances[0];
-    const progress = setInterval(() => {
-      socket?.deliver({ type: "response.in_progress", response: { id: "resp_f" } });
-    }, 60_000);
-    await vi.advanceTimersByTimeAsync(300_000);
-    clearInterval(progress);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    socket?.deliver(completedFrame("resp_f"));
-    release();
-    await vi.advanceTimersByTimeAsync(10);
-    const { result, thrown } = await consumed;
-    expect(thrown).toBeUndefined();
-    expect(result?.stopReason).toBe("stop");
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-  });
+  it.each(["silent", "progress"] as const)(
+    "polices a parked consumer while its provider is %s",
+    async (mode) => {
+      const id = mode === "silent" ? "resp_d" : "resp_f";
+      deliverOnSend(id);
+      const { streamFn, onIdleTimeout, runAbort } = startWatchdog(mode);
+      const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
+      await vi.advanceTimersByTimeAsync(10);
+      await entered;
+      const socket = ControlledWebSocket.instances[0];
+      if (mode === "silent") {
+        await expectIdleDeadline(onIdleTimeout);
+        expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
+        expect(socket?.closeCalls.length).toBeGreaterThan(0);
+      } else {
+        const progress = setInterval(() => {
+          socket?.deliver({ type: "response.in_progress", response: { id } });
+        }, 60_000);
+        await vi.advanceTimersByTimeAsync(300_000);
+        clearInterval(progress);
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+        socket?.deliver(completedFrame(id));
+      }
+      release();
+      await vi.advanceTimersByTimeAsync(10);
+      const { result, thrown } = await consumed;
+      if (mode === "silent") {
+        expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
+          /idle timeout|aborted/,
+        );
+      } else {
+        expect(thrown).toBeUndefined();
+        expect(result?.stopReason).toBe("stop");
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

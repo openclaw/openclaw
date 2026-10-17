@@ -26,7 +26,6 @@ import {
 } from "../../../shared/tool-activity-heartbeat.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
@@ -58,9 +57,7 @@ function expectText(next: Promise<IteratorResult<unknown>>, delta: string) {
 describe("streamWithIdleTimeout", () => {
   const TEST_RUN = "test-run";
 
-  afterEach(() => {
-    clearToolActivityRun(TEST_RUN);
-  });
+  afterEach(() => clearToolActivityRun(TEST_RUN));
 
   it("throws when a promise stream never resolves", async () => {
     let streamSignal: AbortSignal | undefined;
@@ -77,8 +74,7 @@ describe("streamWithIdleTimeout", () => {
     const stream = expect(wrapped(model, context)).rejects.toThrow(/LLM idle timeout/);
     await vi.advanceTimersByTimeAsync(50);
     await stream;
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    expect(streamSignal?.aborted).toBe(true);
+    expect([onIdleTimeout.mock.calls.length, streamSignal?.aborted]).toEqual([1, true]);
   });
 
   it("clears setup state when baseFn throws synchronously", async () => {
@@ -258,47 +254,46 @@ describe("streamWithIdleTimeout", () => {
     await iterator.return?.();
   });
 
-  it("gives full idle budget to subsequent chunks after consuming the pre-stream tool timestamp", async () => {
-    const baseFn: StreamFn = vi.fn((_model, _context, _options) => {
-      const stream = createAssistantMessageEventStream();
-      pushTextAfter(stream, 10, "first");
-      pushTextAfter(stream, 55, "second");
-      return stream;
-    });
-    const wrapped = streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN });
-    notifyToolActivity(TEST_RUN);
-    vi.advanceTimersByTime(20);
-    const stream = wrapped(model, context) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
-    const first = iterator.next();
-    await vi.advanceTimersByTimeAsync(10);
-    await expectText(first, "first");
-    const second = iterator.next();
-    await vi.advanceTimersByTimeAsync(45);
-    await expectText(second, "second");
-    await iterator.return?.();
-  });
-
-  it("preserves full idle budget for mid-stream LLM activity resets after pre-stream tool consumption", async () => {
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
-      requestSignal = options?.signal;
-      const stream = createAssistantMessageEventStream();
-      pushTextAfter(stream, 80, "late");
-      return stream;
-    });
-    const wrapped = streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN });
-    notifyToolActivity(TEST_RUN);
-    vi.advanceTimersByTime(20);
-    const stream = wrapped(model, context) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
-    const next = iterator.next();
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 20);
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
-    await vi.advanceTimersByTimeAsync(80);
-    await expectText(next, "late");
-    await iterator.return?.();
-  });
+  it.each([
+    {
+      name: "subsequent chunks",
+      chunks: [
+        [10, "first"],
+        [55, "second"],
+      ] as const,
+      activity: [],
+    },
+    { name: "mid-stream LLM activity", chunks: [[80, "late"]] as const, activity: [20, 40] },
+  ])(
+    "preserves full idle budget for $name after pre-stream tool consumption",
+    async ({ chunks, activity }) => {
+      let requestSignal: AbortSignal | undefined;
+      const baseFn: StreamFn = (_model, _context, options) => {
+        requestSignal = options?.signal;
+        const stream = createAssistantMessageEventStream();
+        for (const [delay, delta] of chunks) {
+          pushTextAfter(stream, delay, delta);
+        }
+        return stream;
+      };
+      const wrapped = streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN });
+      notifyToolActivity(TEST_RUN);
+      vi.advanceTimersByTime(20);
+      const stream = await wrapped(model, context);
+      const iterator = stream[Symbol.asyncIterator]();
+      for (const delay of activity) {
+        setTimeout(() => notifyLlmRequestActivity(requestSignal), delay);
+      }
+      let elapsed = 0;
+      for (const [delay, delta] of chunks) {
+        const next = iterator.next();
+        await vi.advanceTimersByTimeAsync(delay - elapsed);
+        await expectText(next, delta);
+        elapsed = delay;
+      }
+      await iterator.return?.();
+    },
+  );
 });
 
 function createNeverYieldingStream(): AsyncIterable<unknown> {
@@ -309,117 +304,95 @@ function createNeverYieldingStream(): AsyncIterable<unknown> {
   };
 }
 
-describe("streamWithIdleTimeout caller cancellation", () => {
-  it("preempts a provider iterator that ignores abort", async () => {
-    const callerAbortController = new AbortController();
-    const callerReason = new Error("caller cancelled");
-    const baseFn = vi.fn().mockReturnValue(createNeverYieldingStream());
-    const onIdleTimeout = vi.fn();
-    const iterator = (
-      streamWithIdleTimeout(baseFn, 50, onIdleTimeout)(model, context, {
-        signal: callerAbortController.signal,
-      }) as AsyncIterable<unknown>
-    )[Symbol.asyncIterator]();
-    const outcome = iterator.next().catch((error: unknown) => error);
-    callerAbortController.abort(callerReason);
-    await expect(outcome).resolves.toMatchObject({
-      name: "AbortError",
-      message: callerReason.message,
-      cause: callerReason,
-    });
-    await vi.advanceTimersByTimeAsync(50);
-    const providerSignal = (baseFn.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined)
-      ?.signal;
-    expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
+it.each([
+  ["iteration", false],
+  ["creation", false],
+  ["creation", true],
+] as const)("preempts provider %s (already aborted: %s)", async (phase, alreadyAborted) => {
+  const caller = new AbortController();
+  const reason = new Error("caller cancelled");
+  if (alreadyAborted) {
+    caller.abort(reason);
+  }
+  const baseFn = vi.fn((_model, _context, options?: { signal?: AbortSignal }) => {
+    if (phase === "iteration") {
+      return createNeverYieldingStream();
+    }
+    return options?.signal?.aborted
+      ? Promise.reject(new Error("provider rejected cancelled setup"))
+      : new Promise<AssistantMessageEventStream>(() => {});
   });
-
-  it.each([false, true])(
-    "preempts provider stream creation (already aborted: %s)",
-    async (alreadyAborted) => {
-      const callerAbortController = new AbortController();
-      const callerReason = new Error("caller cancelled");
-      if (alreadyAborted) {
-        callerAbortController.abort(callerReason);
-      }
-      const baseFnMock = vi.fn(
-        (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) =>
-          options?.signal?.aborted
-            ? Promise.reject(new Error("provider rejected cancelled setup"))
-            : new Promise<AssistantMessageEventStream>(() => {}),
-      );
-      const baseFn = baseFnMock as unknown as Parameters<typeof streamWithIdleTimeout>[0];
-      const onIdleTimeout = vi.fn();
-      const pending = streamWithIdleTimeout(baseFn, 50, onIdleTimeout)(model, context, {
-        signal: callerAbortController.signal,
-      });
-      callerAbortController.abort(callerReason);
-      await expect(pending).rejects.toMatchObject({
-        name: "AbortError",
-        message: callerReason.message,
-        cause: callerReason,
-      });
-      await vi.advanceTimersByTimeAsync(50);
-      const providerSignal = (
-        baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
-      )?.signal;
-      expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
-    },
-  );
+  const onIdleTimeout = vi.fn();
+  const opening = streamWithIdleTimeout(baseFn as StreamFn, 50, onIdleTimeout)(model, context, {
+    signal: caller.signal,
+  });
+  const pending =
+    phase === "iteration"
+      ? (opening as AsyncIterable<unknown>)[Symbol.asyncIterator]().next()
+      : opening;
+  caller.abort(reason);
+  await expect(pending).rejects.toMatchObject({
+    name: "AbortError",
+    message: reason.message,
+    cause: reason,
+  });
+  await vi.advanceTimersByTimeAsync(50);
+  expect([baseFn.mock.calls[0]?.[2]?.signal?.reason, onIdleTimeout.mock.calls.length]).toEqual([
+    reason,
+    0,
+  ]);
 });
 
-describe("streamWithIdleTimeout parked consumer", () => {
-  it("preserves argument fragments when the producer completes while the consumer is parked", async () => {
-    const source = createAssistantMessageEventStream();
-    const message: AssistantMessage = makeAgentAssistantMessage({
-      content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
-      api: "openai-chatgpt-responses",
-      model: "test",
-      usage: createZeroUsageFixture(),
-      stopReason: "toolUse",
-      timestamp: 1,
-    });
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      requestSignal = options?.signal;
-      return source;
-    };
-    const onIdleTimeout = vi.fn();
-    // Production order: argument repair stays inside the watchdog.
-    const wrapped = streamWithIdleTimeout(
-      wrapStreamFnRepairMalformedToolCallArguments(baseFn),
-      50,
-      onIdleTimeout,
-    );
-    const stream = await wrapped(model, context, {});
-    const iterator = stream[Symbol.asyncIterator]();
-    source.push({
-      type: "toolcall_delta",
-      contentIndex: 0,
-      delta: '.functions.read:0 {"path":"',
-      partial: message,
-    });
-    await expect(iterator.next()).resolves.toMatchObject({ value: { type: "toolcall_delta" } });
-    source.push({ type: "toolcall_delta", contentIndex: 0, delta: 'safe.txt"}', partial: message });
-    source.push({
-      type: "toolcall_end",
-      contentIndex: 0,
-      toolCall: { type: "toolCall", id: "call_read", name: "read", arguments: {} },
-      partial: message,
-    });
-    source.push({ type: "done", reason: "toolUse", message });
-    source.end();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(false);
-    await expect(iterator.next()).resolves.toMatchObject({ value: { type: "toolcall_delta" } });
-    await expect(iterator.next()).resolves.toMatchObject({
-      value: { type: "toolcall_end", toolCall: { arguments: { path: "safe.txt" } } },
-    });
-    await expect(iterator.next()).resolves.toMatchObject({ value: { type: "done" } });
-    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
-    await expect(stream.result()).resolves.toMatchObject({
-      content: [{ arguments: { path: "safe.txt" } }],
-    });
+it("preserves argument fragments when the producer completes while the consumer is parked", async () => {
+  const source = createAssistantMessageEventStream();
+  const message: AssistantMessage = makeAgentAssistantMessage({
+    content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+    api: "openai-chatgpt-responses",
+    model: "test",
+    stopReason: "toolUse",
+    timestamp: 1,
+  });
+  let requestSignal: AbortSignal | undefined;
+  const baseFn: StreamFn = (_model, _context, options) => {
+    requestSignal = options?.signal;
+    return source;
+  };
+  const onIdleTimeout = vi.fn();
+  // Production order: argument repair stays inside the watchdog.
+  const wrapped = streamWithIdleTimeout(
+    wrapStreamFnRepairMalformedToolCallArguments(baseFn),
+    50,
+    onIdleTimeout,
+  );
+  const stream = await wrapped(model, context, {});
+  const iterator = stream[Symbol.asyncIterator]();
+  source.push({
+    type: "toolcall_delta",
+    contentIndex: 0,
+    delta: '.functions.read:0 {"path":"',
+    partial: message,
+  });
+  await expect(iterator.next()).resolves.toMatchObject({ value: { type: "toolcall_delta" } });
+  source.push({ type: "toolcall_delta", contentIndex: 0, delta: 'safe.txt"}', partial: message });
+  source.push({
+    type: "toolcall_end",
+    contentIndex: 0,
+    toolCall: { type: "toolCall", id: "call_read", name: "read", arguments: {} },
+    partial: message,
+  });
+  source.push({ type: "done", reason: "toolUse", message });
+  source.end();
+  await vi.advanceTimersByTimeAsync(500);
+  expect(onIdleTimeout).not.toHaveBeenCalled();
+  expect(requestSignal?.aborted).toBe(false);
+  await expect(iterator.next()).resolves.toMatchObject({ value: { type: "toolcall_delta" } });
+  await expect(iterator.next()).resolves.toMatchObject({
+    value: { type: "toolcall_end", toolCall: { arguments: { path: "safe.txt" } } },
+  });
+  await expect(iterator.next()).resolves.toMatchObject({ value: { type: "done" } });
+  await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  await expect(stream.result()).resolves.toMatchObject({
+    content: [{ arguments: { path: "safe.txt" } }],
   });
 
   it("does not abort a completed structural stream while the consumer is parked", async () => {
