@@ -138,12 +138,14 @@ describe("discordMessageActions", () => {
       expectedDiscordActions(["react", "reactions", "emoji-list"]),
     );
     expect(workDiscovery?.actions).toEqual(expectedDiscordActions(["poll"]));
-    expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
-      actions: ["send"],
-      properties: {
-        components: { description: expect.stringContaining("Discord Components V2") },
-      },
-    });
+    for (const discovery of [defaultDiscovery, workDiscovery]) {
+      expect(schemaForAction(discovery, "send")).toMatchObject({
+        actions: ["send"],
+        properties: {
+          components: { description: expect.stringContaining("Discord Components V2") },
+        },
+      });
+    }
     expect(schemaForAction(workDiscovery, "react")).toMatchObject({
       actions: expect.arrayContaining(["react", "reactions"]),
       properties: {
@@ -151,16 +153,14 @@ describe("discordMessageActions", () => {
       },
     });
     expect(schemaForAction(workDiscovery, "send")).toMatchObject({
-      actions: ["send"],
       visibility: "all-configured",
-      properties: {
-        components: { description: expect.stringContaining("Discord Components V2") },
-      },
     });
   });
 
-  it.each(["sticker-upload"])("keeps %s on local execution mode", (action) => {
-    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe("local");
+  it("keeps sticker-upload on local execution mode", () => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: "sticker-upload" })).toBe(
+      "local",
+    );
   });
 
   it("extracts send targets for message and thread reply actions", () => {
@@ -241,39 +241,28 @@ describe("discordMessageActions", () => {
   });
 
   it("prepares inbound event delivery metadata for durable core sends", async () => {
-    const prepared = await prepareSend(
-      {},
-      { text: "hello" },
-      {
-        sessionKey: "agent:main:discord:channel:c1",
-        inboundEventKind: "room_event",
-      },
-    );
+    const delivery = {
+      sessionKey: "agent:main:discord:channel:c1",
+      inboundEventKind: "room_event" as const,
+    };
+    const prepared = await prepareSend({}, { text: "hello" }, delivery);
 
     expect(prepared).toEqual({
       text: "hello",
       channelData: {
         discord: {
-          __openclawInboundEventDelivery: {
-            sessionKey: "agent:main:discord:channel:c1",
-            inboundEventKind: "room_event",
-          },
+          __openclawInboundEventDelivery: delivery,
         },
       },
     });
   });
 
   it("keeps non-serializable Discord component sends on the legacy action path", async () => {
-    const prepared = await prepareSend({ components: () => [] });
-
-    expect(prepared).toBeNull();
+    expect(await prepareSend({ components: () => [] })).toBeNull();
   });
 
   it("delegates action handling to the Discord action handler", async () => {
     const cfg = discordCfg({ token: "Bot token-main" });
-    const toolContext: ChannelMessageActionContext["toolContext"] = {
-      currentChannelProvider: "discord",
-    };
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const mediaAccess: NonNullable<ChannelMessageActionContext["mediaAccess"]> = {
       localRoots: ["/tmp/media"],
@@ -294,7 +283,7 @@ describe("discordMessageActions", () => {
       requesterAccountId: "ops",
       requesterSenderId: "user-1",
       senderIsOwner: true,
-      toolContext,
+      toolContext: { currentChannelProvider: "discord" },
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,

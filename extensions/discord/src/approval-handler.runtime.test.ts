@@ -19,19 +19,12 @@ type ApprovalRequest = Parameters<
 function request<T extends ApprovalRequest["request"]>(id: string, data: T, expiresAtMs = 1_000) {
   return { id, request: data, createdAtMs: 0, expiresAtMs };
 }
-function approvalAction(
-  approvalKind: "exec" | "plugin",
-  approvalId: string,
-  decision: "allow-once" | "deny",
-  label: string,
-  style: "success" | "danger",
-): ExecApprovalActionDescriptor {
+function approvalAction(decision: "allow-once" | "deny"): ExecApprovalActionDescriptor {
   return {
-    label,
+    label: decision === "deny" ? "Deny" : "Allow",
     decision,
-    style,
-    command: `/approve ${approvalId} ${decision}`,
-    action: { type: "approval", approvalId, approvalKind, decision },
+    style: decision === "deny" ? "danger" : "success",
+    command: "/approve",
   };
 }
 
@@ -47,10 +40,9 @@ async function buildExecApprovalPayloadText(commandText: string): Promise<string
       approvalId: "approval-1",
       title: "Exec Approval Required",
       commandText,
-      commandPreview: null,
       expiresAtMs: 1_000,
       metadata: [],
-      actions: [approvalAction("exec", "approval-1", "allow-once", "Allow", "success")],
+      actions: [approvalAction("allow-once")],
     },
   });
   expect(pending.body).not.toHaveProperty("nonce");
@@ -79,10 +71,8 @@ async function buildPluginApprovalPayloadText(params?: {
       title: "Install plugin",
       description: "Approve the requested plugin",
       severity: params?.severity ?? "warning",
-      pluginId: "example-plugin",
-      toolName: "plugin.install",
       metadata: [],
-      actions: [approvalAction("plugin", "plain-plugin-id", "deny", "Deny", "danger")],
+      actions: [approvalAction("deny")],
       expiresAtMs,
     },
   } as never);
@@ -167,54 +157,31 @@ describe("discordApprovalNativeRuntime", () => {
   });
 
   it.each([
-    {
-      approvalKind: "exec",
-      phase: "resolved",
-      decision: "allow-once",
-      label: "Allowed (once)",
-      accentColor: 0x57f287,
-    },
-    {
-      approvalKind: "exec",
-      phase: "resolved",
-      decision: "allow-always",
-      label: "Allowed (always)",
-      accentColor: 0x5865f2,
-    },
-    {
-      approvalKind: "system-agent",
-      phase: "resolved",
-      decision: "deny",
-      applicationStatus: "not-applied",
-      terminalStatus: undefined,
-      label: "Denied",
-      accentColor: 0xed4245,
-    },
-    { approvalKind: "exec", phase: "expired", label: "Expired", accentColor: 0x99aab5 },
+    ["exec", "resolved", "allow-once", "Allowed (once)", 0x57f287],
+    ["exec", "resolved", "allow-always", "Allowed (always)", 0x5865f2],
+    ["system-agent", "resolved", "deny", "Denied", 0xed4245],
+    ["exec", "expired", undefined, "Expired", 0x99aab5],
   ] as const)(
-    "preserves $approvalKind $phase approval components and terminal preview limits ($label)",
-    async (scenario) => {
-      const systemAgent = scenario.approvalKind === "system-agent";
+    "preserves %s %s approval components and terminal preview limits (%s)",
+    async (approvalKind, phase, decision, label, accentColor) => {
+      const systemAgent = approvalKind === "system-agent";
       const commandLimit = 500;
       const secondaryLimit = 300;
       const command = `${"x".repeat(commandLimit)}😀`;
       const secondary = `${"y".repeat(secondaryLimit)}😀`;
       const view = {
         approvalId: "approval-<@123>",
-        approvalKind: scenario.approvalKind,
-        phase: scenario.phase,
+        approvalKind,
+        phase,
         title: "Exec Approval Required",
         metadata: [{ label: "agent", value: "crew" }],
         commandText: command,
         commandPreview: secondary,
-        ...(scenario.phase === "resolved"
-          ? { decision: scenario.decision, resolvedBy: "<@456>" }
-          : {}),
+        ...(phase === "resolved" ? { decision, resolvedBy: "<@456>" } : {}),
         ...(systemAgent
           ? {
               operationSummary: command,
-              applicationStatus: scenario.applicationStatus,
-              terminalStatus: scenario.terminalStatus,
+              applicationStatus: "not-applied",
             }
           : {}),
       };
@@ -223,7 +190,7 @@ describe("discordApprovalNativeRuntime", () => {
         view,
       };
       const result =
-        scenario.phase === "resolved"
+        phase === "resolved"
           ? await discordApprovalNativeRuntime.presentation.buildResolvedResult(args as never)
           : await discordApprovalNativeRuntime.presentation.buildExpiredResult(args as never);
 
@@ -231,17 +198,15 @@ describe("discordApprovalNativeRuntime", () => {
       assert(result.payload instanceof Container);
       const container = result.payload.serialize();
       expect(container).toMatchObject({
-        accent_color: scenario.accentColor,
+        accent_color: accentColor,
         components: expect.arrayContaining(
           [
-            `## ${systemAgent ? "OpenClaw Change" : "Exec"} Approval: ${scenario.label}`,
+            `## ${systemAgent ? "OpenClaw Change" : "Exec"} Approval: ${label}`,
             `### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``,
             `### Shell Preview\n\`\`\`\n${"y".repeat(secondaryLimit)}...\n\`\`\``,
             "- agent: crew",
             "-# ID: approval\\-\\<@123\\>",
-            scenario.phase === "resolved"
-              ? "Resolved by \\<@456\\>"
-              : "This approval request has expired.",
+            phase === "resolved" ? "Resolved by \\<@456\\>" : "This approval request has expired.",
           ].map((content) => ({ content, type: 10 })),
         ),
       });

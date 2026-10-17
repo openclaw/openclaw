@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
 import http from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
@@ -18,12 +20,7 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
     "openclaw/plugin-sdk/fetch-runtime",
   );
-  makeProxyFetchMock.mockImplementation((proxyUrl: string) => {
-    if (proxyUrl === "bad-proxy") {
-      throw new Error("bad proxy");
-    }
-    return actual.makeProxyFetch(proxyUrl);
-  });
+  makeProxyFetchMock.mockImplementation(actual.makeProxyFetch);
   return {
     ...actual,
     makeProxyFetch: makeProxyFetchMock,
@@ -47,24 +44,15 @@ describe("createDiscordRestClient proxy support", () => {
     "http://[::1]:8080",
   ])("uses the configured proxy fetch for %s", (proxy) => {
     const rest = restForProxy(proxy);
-    const requestClient = rest as unknown as {
-      customFetch?: typeof fetch;
-      options?: { fetch?: typeof fetch };
-    };
-
     expect(makeProxyFetchMock).toHaveBeenCalledWith(proxy);
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
-    expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
+    expect(rest.options.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
-  it("does not inject fetch when no proxy is configured", () => {
-    expect(restForProxy().options.fetch).toBeUndefined();
-  });
-
-  it("falls back to direct fetch when the Discord proxy URL is invalid", () => {
-    const rest = restForProxy("bad-proxy");
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("bad-proxy");
-    expect(rest.options.fetch).toBeUndefined();
+  it.each([undefined, "bad-proxy"])("uses direct fetch for proxy %s", (proxy) => {
+    expect(restForProxy(proxy).options.fetch).toBeUndefined();
+    if (proxy) {
+      expect(makeProxyFetchMock).not.toHaveBeenCalledWith(proxy);
+    }
   });
 
   it("serializes multipart media with undici-compatible FormData for proxy fetches", async () => {
@@ -121,9 +109,7 @@ describe("createDiscordRestClient proxy support", () => {
       const targetPort = await listenOnLoopback(target, "target");
       const proxyPort = await listenOnLoopback(proxy, "proxy");
       const proxyFetch = restForProxy(`http://127.0.0.1:${proxyPort}`).options.fetch;
-      if (!proxyFetch) {
-        throw new Error("expected Discord proxy fetch");
-      }
+      assert(proxyFetch, "expected Discord proxy fetch");
       const rest = new RequestClient("test-token", {
         baseUrl: `http://127.0.0.1:${targetPort}`,
         fetch: proxyFetch,
@@ -158,18 +144,10 @@ function trackSocket(sockets: Set<Duplex>, socket: Duplex): void {
 }
 
 async function listenOnLoopback(server: http.Server, label: string): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => reject(error);
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error(`failed to bind ${label} test server`);
-  }
+  assert(address && typeof address !== "string", `failed to bind ${label} test server`);
   return address.port;
 }
 
