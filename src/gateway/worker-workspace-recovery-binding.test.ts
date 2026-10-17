@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -114,11 +115,15 @@ function manifest(content?: string) {
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
 }
 
-async function stageResult(stagedResultRef: string, base: ReturnType<typeof manifest>) {
-  const current = manifest("recoverable worker output\n");
+const base = manifest();
+const workerOutput = "recoverable worker output\n";
+const noop = async () => {};
+
+async function stageResult(stagedResultRef: string) {
+  const current = manifest(workerOutput);
   const stagingRoot = path.join(support.testState.root, "worker-result");
   await fs.mkdir(stagingRoot);
-  await fs.writeFile(path.join(stagingRoot, "result.txt"), "recoverable worker output\n");
+  await fs.writeFile(path.join(stagingRoot, "result.txt"), workerOutput);
   await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
     root: boundary.worktreePath,
     stagingRoot,
@@ -130,14 +135,9 @@ async function stageResult(stagedResultRef: string, base: ReturnType<typeof mani
   });
 }
 
-async function applyRecoveryResult(
-  request: WorkerWorkspaceReconcileRequest,
-  base: ReturnType<typeof manifest>,
-) {
-  if (request.source.kind !== "local" || !request.source.stagedResult) {
-    throw new Error("Expected staged local recovery");
-  }
-  await stageResult(request.source.stagedResult.ref, base);
+async function applyRecoveryResult(request: WorkerWorkspaceReconcileRequest) {
+  assert(request.source.kind === "local" && request.source.stagedResult);
+  await stageResult(request.source.stagedResult.ref);
   await request.source.stagedResult.record(request.source.stagedResult.ref);
   await applyStagedWorkerWorkspaceResult({
     root: boundary.worktreePath,
@@ -238,7 +238,7 @@ async function createRecoveryFixture(workspacePath: string) {
   });
   const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
   const tunnelManager = createWorkerTunnelManager();
-  const destroy = vi.fn(async () => {});
+  const destroy = vi.fn(noop);
   const environments = support.createService(support.createProvider({ destroy }), {
     tunnelManager,
     placementStore: createWorkerSessionPlacementGate(placements),
@@ -269,13 +269,10 @@ async function createRecoveryFixture(workspacePath: string) {
     runId: "recovery-binding-run",
     owner: { kind: "local", environmentId, ownerEpoch: attached.ownerEpoch },
   });
-  const base = manifest();
   await placements.updateWorkspaceBaseManifest({ claim, manifestRef: base.ref });
   await placements.markWorkspaceResultPending(claim);
   await placements.handoffWorkspaceResultRecovery(claim);
-  const onReconcile = vi.fn<(request: WorkerWorkspaceReconcileRequest) => Promise<void>>(
-    async () => {},
-  );
+  const onReconcile = vi.fn<(request: WorkerWorkspaceReconcileRequest) => Promise<void>>(noop);
   const handle: WorkerWorkspaceTunnelHandle = {
     environmentId,
     ownerEpoch: attached.ownerEpoch,
@@ -285,23 +282,21 @@ async function createRecoveryFixture(workspacePath: string) {
     syncWorkspace: async () => {
       throw new Error("Unexpected workspace sync");
     },
-    quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+    quiesceWorkspace: async () => ({ assertActive: noop, resume: noop }),
     reconcileWorkspace: async (request) => {
       await onReconcile(request);
-      if (request.source.kind !== "local") {
-        throw new Error("Expected local workspace recovery");
-      }
+      assert(request.source.kind === "local");
       await request.source.journal.commit(base.ref);
       return {
         manifestRef: base.ref,
         changed: false,
-        verifyStable: async () => {},
-        verifyLocalStable: async () => {},
-        publishStagedResult: async () => {},
-        discardPreparedStagedResult: async () => {},
+        verifyStable: noop,
+        verifyLocalStable: noop,
+        publishStagedResult: noop,
+        discardPreparedStagedResult: noop,
       };
     },
-    stop: async () => {},
+    stop: noop,
   };
   vi.spyOn(tunnelManager, "start").mockResolvedValue(handle);
   const runtime = createGatewayWorkerPlacementRuntime({
@@ -311,22 +306,11 @@ async function createRecoveryFixture(workspacePath: string) {
     environments,
     getCommittedRuntimeConfig: getRuntimeConfig,
     gatewayNamespace: "recovery-binding-test",
-    cancelSessionWork: async () => {},
+    cancelSessionWork: noop,
     revokeSessionAuthority: () => {},
     warn: vi.fn(),
   });
-  return { a, b, configB, runtime, placements, environments, destroy, claim, onReconcile, base };
-}
-
-async function replaceRecoveryClaim({ placements, claim }: RecoveryFixture) {
-  await placements.clearLocalTurnClaimsAfterRestartAsync();
-  await placements.claimTurn({
-    ...REQUEST,
-    claimId: "replacement-claim",
-    runId: "replacement-run",
-    owner: claim.owner,
-  });
-  expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+  return { a, b, configB, runtime, placements, environments, destroy, claim, onReconcile };
 }
 
 async function readAppliedJournal(placements: RecoveryFixture["placements"]) {
@@ -370,9 +354,7 @@ it.each(["lifecycleRevision", "activeWriterRunId"] as const)(
     await withRecovery(async ({ a, runtime, placements, onReconcile }) => {
       const before = await loadTranscriptEvents(a);
       onReconcile.mockImplementation(async (request) => {
-        if (request.source.kind !== "local" || !request.source.assertCurrent) {
-          throw new Error("Expected a guarded local recovery");
-        }
+        assert(request.source.kind === "local" && request.source.assertCurrent);
         await upsertSessionEntryCore(a, { [field]: "successor" });
         request.source.assertCurrent();
       });
@@ -391,118 +373,105 @@ it.each(["lifecycleRevision", "activeWriterRunId"] as const)(
   },
 );
 
-it("rejects a queued recovery report after durable claim replacement and keeps its recovery debt", async () => {
-  await withRecovery(async (fixture) => {
-    const { a, runtime, placements, onReconcile, base, destroy } = fixture;
-    const held = createDeferredCore();
-    const release = createDeferredCore();
-    const queued = createDeferredCore();
-    let blocker: Promise<void> | undefined;
-    onReconcile.mockImplementation(async (request) => {
-      await applyRecoveryResult(request, base);
-      blocker = runExclusiveSqliteSessionWrite(
-        { agentId: REQUEST.agentId, path: a.storePath },
-        async () => {
-          held.resolve();
-          await release.promise;
-        },
-        "session.transcript.batch",
-      );
-      await held.promise;
-      boundary.onReportQueued = () => queued.resolve();
-      throw new Error("Remote verification failed after the result was retained");
-    });
-    const recovering = runtime.dispatchService.reconcile("startup");
-    try {
-      await Promise.race([
-        queued.promise,
-        recovering.then(() => {
-          throw new Error("Recovery finished without queueing its transcript report");
-        }),
-      ]);
-      boundary.onReportQueued = undefined;
-      const pending = await placements.listPendingWorkspaceResultsAsync();
-      expect(pending).toHaveLength(1);
-      const { owner, journal } = await readAppliedJournal(placements);
-      // Model a replacement owner after restart while this process waits on its writer.
-      await replaceRecoveryClaim(fixture);
-      release.resolve();
-      await recovering;
-
-      expect(await readCustomEvents(a, WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE)).toEqual([]);
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
-      expect(await placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
-      await readRef(pending[0]!.stagedResultRef!);
-      expect(await fs.readFile(path.join(boundary.worktreePath, "result.txt"), "utf8")).toBe(
-        "recoverable worker output\n",
-      );
-      expect(destroy).not.toHaveBeenCalled();
-    } finally {
-      boundary.onReportQueued = undefined;
-      release.resolve();
-      await blocker;
-      await recovering;
-    }
-  });
-});
-
-it("preserves a superseded conflict ref when its recovery claim changes behind the Git writer", async () => {
-  await withRecovery(async (fixture) => {
-    const { a, runtime, placements, onReconcile, base, destroy } = fixture;
-    const priorRef = "refs/openclaw/worker-results/previous-0";
-    await stageResult(priorRef, base);
-    const beforeRef = await readRef(priorRef);
-    const beforeTranscript = await loadTranscriptEvents(a);
-    const held = createDeferredCore();
-    const release = createDeferredCore();
-    const requested = createDeferredCore();
-    let blocker: Promise<void> | undefined;
-    onReconcile.mockImplementation(async () => {
-      blocker = enqueueGitRefMutation(boundary.worktreePath, ".git", async () => {
+it.each(["SQL recovery report", "Git conflict retirement"] as const)(
+  "retains recovery debt when its claim changes behind the %s writer",
+  async (scenario) => {
+    await withRecovery(async (fixture) => {
+      const { a, runtime, placements, onReconcile, destroy, claim } = fixture;
+      const report = scenario === "SQL recovery report";
+      const hook = report ? "onReportQueued" : "onRefMutationRequested";
+      const priorRef = "refs/openclaw/worker-results/previous-0";
+      if (!report) {
+        await stageResult(priorRef);
+      }
+      const beforeRef = report ? undefined : await readRef(priorRef);
+      const beforeTranscript = report ? undefined : await loadTranscriptEvents(a);
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const queued = createDeferredCore();
+      const wait = async () => {
         held.resolve();
         await release.promise;
+      };
+      let blocker: Promise<void> | undefined;
+      onReconcile.mockImplementation(async (request) => {
+        if (report) {
+          await applyRecoveryResult(request);
+        }
+        blocker = report
+          ? runExclusiveSqliteSessionWrite(
+              { agentId: REQUEST.agentId, path: a.storePath },
+              wait,
+              "session.transcript.batch",
+            )
+          : enqueueGitRefMutation(boundary.worktreePath, ".git", wait);
+        await held.promise;
+        boundary[hook] = () => queued.resolve();
+        if (report) {
+          throw new Error("Remote verification failed after the result was retained");
+        }
       });
-      await held.promise;
-      boundary.onRefMutationRequested = () => requested.resolve();
-    });
-    const recovering = runtime.dispatchService.reconcile("startup");
-    try {
-      await Promise.race([
-        requested.promise,
-        recovering.then(() => {
-          throw new Error("Recovery finished without requesting conflict ref retirement");
-        }),
-      ]);
-      boundary.onRefMutationRequested = undefined;
-      const pending = await placements.listPendingWorkspaceResultsAsync();
-      expect(pending).toHaveLength(1);
-      expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
-      await replaceRecoveryClaim(fixture);
-      release.resolve();
-      await recovering;
+      const recovering = runtime.dispatchService.reconcile("startup");
+      try {
+        await Promise.race([
+          queued.promise,
+          recovering.then(() => {
+            throw new Error(`Recovery finished without queueing ${scenario}`);
+          }),
+        ]);
+        boundary[hook] = undefined;
+        const pending = await placements.listPendingWorkspaceResultsAsync();
+        expect(pending).toHaveLength(1);
+        const applied = report ? await readAppliedJournal(placements) : undefined;
+        if (!report) {
+          expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
+        }
+        // Replace the durable owner while this process waits on the real writer.
+        await placements.clearLocalTurnClaimsAfterRestartAsync();
+        await placements.claimTurn({
+          ...REQUEST,
+          claimId: "replacement-claim",
+          runId: "replacement-run",
+          owner: claim.owner,
+        });
+        expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+        release.resolve();
+        await recovering;
 
-      expect(await readRef(priorRef)).toBe(beforeRef);
-      expect(await loadTranscriptEvents(a)).toEqual(beforeTranscript);
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
-      expect(placements.get(REQUEST.sessionId)?.turnClaim?.claimId).toBe("replacement-claim");
-      expect(destroy).not.toHaveBeenCalled();
-    } finally {
-      boundary.onRefMutationRequested = undefined;
-      release.resolve();
-      await blocker;
-      await recovering;
-    }
-  });
-});
+        if (applied) {
+          expect(await readCustomEvents(a, WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE)).toEqual([]);
+          expect(await placements.loadWorkspaceReconciliation(applied.owner)).toEqual(
+            applied.journal,
+          );
+          await readRef(pending[0]!.stagedResultRef!);
+          expect(await fs.readFile(path.join(boundary.worktreePath, "result.txt"), "utf8")).toBe(
+            workerOutput,
+          );
+        } else {
+          expect(await readRef(priorRef)).toBe(beforeRef);
+          expect(await loadTranscriptEvents(a)).toEqual(beforeTranscript);
+          expect(placements.get(REQUEST.sessionId)?.turnClaim?.claimId).toBe("replacement-claim");
+        }
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
+        expect(destroy).not.toHaveBeenCalled();
+      } finally {
+        boundary[hook] = undefined;
+        release.resolve();
+        await blocker;
+        await recovering;
+      }
+    });
+  },
+);
 
 it("keeps the result in custody when its captured source disappears instead of reporting into a replacement store", async () => {
   await withRecovery(async (fixture) => {
-    const { a, b, configB, runtime, placements, onReconcile, base, destroy } = fixture;
+    const { a, b, configB, runtime, placements, onReconcile, destroy } = fixture;
     const beforeB = await loadTranscriptEvents(b);
     const retired = `${a.storePath}.retired`;
     let sourceMoved = false;
     onReconcile.mockImplementation(async (request) => {
-      await applyRecoveryResult(request, base);
+      await applyRecoveryResult(request);
       await fs.rename(a.storePath, retired);
       sourceMoved = true;
       setRuntimeConfigSnapshot(configB, configB);

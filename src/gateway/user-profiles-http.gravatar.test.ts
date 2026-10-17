@@ -3,7 +3,7 @@ import { createServer, request, type ClientRequest, type ServerResponse } from "
 import { buffer } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
@@ -52,9 +52,7 @@ beforeAll(async () => {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback HTTP listener");
-  }
+  assert(address && typeof address !== "string", "expected loopback HTTP listener");
   origin = `http://127.0.0.1:${address.port}`;
 });
 
@@ -63,9 +61,7 @@ afterAll(() => server[Symbol.asyncDispose]());
 beforeEach(() => {
   fetchImpl.mockReset();
   vi.stubGlobal("fetch", fetchImpl);
-  profileFixture
-    .mockReset()
-    .mockImplementation((id: string) => ({ id, emails: [`${id}@example.test`] }));
+  profileFixture.mockReset();
   authorizeControlUiReadRequestOrReply
     .mockReset()
     .mockImplementation(({ res }: { res: ServerResponse }) =>
@@ -103,9 +99,14 @@ function startRequest(profileId: string) {
   return { client, pathname, result: result.promise };
 }
 
-it.each(["deadline", "disconnect"] as const)(
-  "keeps a fresh HTTP waiter alive after the older waiter's %s",
+it.each(["deadline", "disconnect", "authorization-disconnect"] as const)(
+  "isolates HTTP waiter cancellation after %s",
   async (cause) => {
+    const duringAuthorization = cause === "authorization-disconnect";
+    const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
+    if (duringAuthorization) {
+      authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
+    }
     const totalDeadlines: AbortController[] = [];
     if (cause === "deadline") {
       const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
@@ -131,59 +132,54 @@ it.each(["deadline", "disconnect"] as const)(
       fetchImpl.mockResolvedValueOnce(new Response(null, { status: 404 }));
     }
     fetchImpl.mockImplementation((_input, init) =>
-      racePromiseWithAbortSignal(shared.promise, init?.signal ?? undefined),
+      duringAuthorization
+        ? Promise.resolve(imageResponse())
+        : racePromiseWithAbortSignal(shared.promise, init?.signal ?? undefined),
     );
     const expectedFetches = cause === "deadline" ? 2 : 1;
     const older = startRequest(`${cause}-older`);
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches));
-    const fresh = startRequest(`${cause}-fresh`);
-    if (cause === "deadline") {
-      await vi.waitFor(() => expect(totalDeadlines).toHaveLength(2));
-      expectDefined(totalDeadlines[0], "older deadline").abort();
-      expect((await older.result).statusCode).toBe(502);
-    } else {
-      await vi.waitFor(() => expect(handled.has(fresh.pathname)).toBe(true));
-      const first = expectDefined(handled.get(older.pathname), "first HTTP waiter");
-      const end = vi.spyOn(first.response, "end");
-      const writeHead = vi.spyOn(first.response, "writeHead");
-      let settled = false;
-      void first.promise.then(() => {
-        settled = true;
-      });
-      const closed = once(first.response, "close");
-      older.client.destroy();
-      await closed;
-      await setImmediate();
-      expect(settled).toBe(true);
-      expect(writeHead).not.toHaveBeenCalled();
-      expect(end).not.toHaveBeenCalled();
+    let fresh: ReturnType<typeof startRequest> | undefined;
+    try {
+      if (duringAuthorization) {
+        await vi.waitFor(() => expect(handled.has(older.pathname)).toBe(true));
+      } else {
+        await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches));
+        fresh = startRequest(`${cause}-fresh`);
+      }
+      if (cause === "deadline") {
+        await vi.waitFor(() => expect(totalDeadlines).toHaveLength(2));
+        expectDefined(totalDeadlines[0], "older deadline").abort();
+        expect((await older.result).statusCode).toBe(502);
+      } else {
+        if (fresh) {
+          await vi.waitFor(() => expect(handled.has(fresh.pathname)).toBe(true));
+        }
+        const first = expectDefined(handled.get(older.pathname), "first HTTP waiter");
+        const end = vi.spyOn(first.response, "end");
+        const writeHead = vi.spyOn(first.response, "writeHead");
+        const settled = vi.fn();
+        void first.promise.then(settled, () => {});
+        const closed = once(first.response, "close");
+        older.client.destroy();
+        await closed;
+        if (duringAuthorization) {
+          authorized.resolve(bindHttpResponseAuthority({}, first.response, () => true));
+          await expect(first.promise).rejects.toThrow("HTTP request authority expired");
+          expect(fetchImpl).not.toHaveBeenCalled();
+        } else {
+          await setImmediate();
+          expect(settled).toHaveBeenCalledOnce();
+        }
+        expect(writeHead).not.toHaveBeenCalled();
+        expect(end).not.toHaveBeenCalled();
+      }
+      if (fresh) {
+        shared.resolve(imageResponse());
+        expect(await fresh.result).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
+        expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches);
+      }
+    } finally {
+      authorized.resolve(null);
     }
-    shared.resolve(imageResponse());
-    expect(await fresh.result).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
-    expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches);
   },
 );
-
-it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
-  const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
-  authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
-  fetchImpl.mockResolvedValue(imageResponse());
-  const disconnected = startRequest("disconnected-before-lookup");
-  try {
-    await vi.waitFor(() => expect(handled.has(disconnected.pathname)).toBe(true));
-    const first = expectDefined(handled.get(disconnected.pathname), "held authorization");
-    const writeHead = vi.spyOn(first.response, "writeHead");
-    const end = vi.spyOn(first.response, "end");
-    const closed = once(first.response, "close");
-    disconnected.client.destroy();
-    await closed;
-    authorized.resolve(bindHttpResponseAuthority({}, first.response, () => true));
-    await expect(first.promise).rejects.toThrow("HTTP request authority expired");
-
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(writeHead).not.toHaveBeenCalled();
-    expect(end).not.toHaveBeenCalled();
-  } finally {
-    authorized.resolve(null);
-  }
-});
