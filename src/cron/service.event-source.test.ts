@@ -31,6 +31,46 @@ import type { CronJob, CronJobCreate } from "./types.js";
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-event-source-" });
 
 const services: CronService[] = [];
+const pendingResult = (reason: "paused" | "busy" | "stopped") => ({ kind: "pending", reason });
+const eventQueue = (job: CronJob, channelId = "mcp-events") =>
+  createChannelIngressQueue<CronEventInput>({ channelId, accountId: job.id });
+
+function eventInput(
+  job: CronJob,
+  eventId: string,
+  payload: unknown = { text: "original event" },
+): CronEventInput {
+  if (!job.state.sourceIdentity) {
+    throw new Error("missing event source identity");
+  }
+  return {
+    jobId: job.id,
+    sourceIdentity: job.state.sourceIdentity,
+    eventId,
+    receivedAtMs: Date.now(),
+    payload,
+  };
+}
+
+async function claimEvent(
+  queue: ReturnType<typeof createChannelIngressQueue<CronEventInput>>,
+  event: CronEventInput,
+) {
+  await queue.enqueue(event.eventId, event, { laneKey: event.jobId });
+  const claimed = await queue.claim(event.eventId);
+  if (!claimed) {
+    throw new Error("event was not claimed");
+  }
+  const { jobId: _jobId, ...input } = event;
+  return {
+    event,
+    options: {
+      ...input,
+      claim: { queueName: claimed.queueName, id: claimed.id, token: claimed.claim.token },
+      commitGuard: () => {},
+    },
+  };
+}
 
 async function fixture(overrides: Partial<CronServiceDeps> = {}) {
   const { storePath } = await makeStorePath();
@@ -64,60 +104,27 @@ async function fixture(overrides: Partial<CronServiceDeps> = {}) {
     payload: { kind: "agentTurn", message: "Summarize the received change.", toolsAllow: ["read"] },
   };
   const job = await cron.add(input);
-  const queue = createChannelIngressQueue<CronEventInput>({
-    channelId: "mcp-events",
-    accountId: job.id,
-    now: () => Date.now(),
-  });
-  async function claim(
-    eventId: string,
-    target: CronJob = job,
-    payload: unknown = { text: "original event" },
-  ) {
-    const sourceIdentity = target.state.sourceIdentity;
-    if (!sourceIdentity) {
-      throw new Error("missing source generation");
-    }
-    const event: CronEventInput = {
-      jobId: target.id,
-      sourceIdentity,
-      eventId,
-      receivedAtMs: Date.now(),
-      payload,
-    };
-    await queue.enqueue(eventId, event, { laneKey: job.id });
-    const claimed = await queue.claim(eventId);
-    if (!claimed) {
-      throw new Error("event was not claimed");
-    }
-    return {
-      event,
-      options: {
-        sourceIdentity,
-        eventId,
-        receivedAtMs: event.receivedAtMs,
-        payload: event.payload,
-        claim: { queueName: claimed.queueName, id: claimed.id, token: claimed.claim.token },
-        commitGuard: () => {},
-      },
-    };
-  }
-  return { cron, state, job, input, queue, claim, storePath, runIsolatedAgentJob };
-}
-
-type EventFixture = Awaited<ReturnType<typeof fixture>>;
-function runEvent(f: EventFixture, options: CronEventRunOptions) {
-  return f.cron.runEvent(f.job.id, options);
-}
-async function finishEvent(f: EventFixture, options: CronEventRunOptions) {
-  await waitForEventRun(f.cron, await runEvent(f, options));
+  const queue = eventQueue(job);
+  const run = (options: CronEventRunOptions) => cron.runEvent(job.id, options);
+  return {
+    cron,
+    state,
+    job,
+    input,
+    queue,
+    storePath,
+    runIsolatedAgentJob,
+    run,
+    claim: (eventId: string, payload?: unknown) =>
+      claimEvent(queue, eventInput(job, eventId, payload)),
+    finish: async (options: CronEventRunOptions) => waitForEventRun(cron, await run(options)),
+  };
 }
 
 async function waitForEventRun(
   cron: CronService,
   result: Awaited<ReturnType<CronService["runEvent"]>>,
 ) {
-  expect(result.kind).toBe("transferred");
   if (result.kind !== "transferred") {
     throw new Error("expected an admitted event run");
   }
@@ -170,8 +177,8 @@ describe("event automation durable admission", () => {
     });
     try {
       const payload = { text: "original event" };
-      const first = await f.claim("first", f.job, payload);
-      const run = runEvent(f, first.options);
+      const first = await f.claim("first", payload);
+      const run = f.run(first.options);
       payload.text = "caller mutation must not enter the turn";
       const receipt = await run;
       expect(receipt.kind).toBe("transferred");
@@ -195,17 +202,14 @@ describe("event automation durable admission", () => {
         },
       });
       const second = await f.claim("second");
-      expect(await runEvent(f, second.options)).toEqual({
-        kind: "pending",
-        reason: "busy",
-      });
+      expect(await f.run(second.options)).toEqual(pendingResult("busy"));
       expect(await f.queue.listClaims()).toMatchObject([{ attempts: 0 }]);
       finish.resolve();
       await waitForEventRun(f.cron, receipt);
-      expect(await runEvent(f, { ...first.options, payload: { text: "original event" } })).toEqual({
+      expect(await f.run({ ...first.options, payload: { text: "original event" } })).toEqual({
         kind: "invalidated",
       });
-      await finishEvent(f, second.options);
+      await f.finish(second.options);
       expect(calls).toHaveLength(2);
       const persisted = (await loadCronStore(f.storePath)).jobs[0];
       expect(persisted?.state.nextRunAtMs).toBeUndefined();
@@ -235,7 +239,6 @@ describe("event automation durable admission", () => {
     expect(getCronRunQueueRequests(f.state, { includePendingEvents: true })).toMatchObject([
       { receiptId: requested[0]!.runReceipt.receiptId, event: { input: event } },
     ]);
-    // Exercise the native scheduler composition, not just its host projection.
     const scheduled = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
       type: "cron.schedulerTick",
       input: {
@@ -263,13 +266,13 @@ describe("event automation durable admission", () => {
     const body = JSON.stringify({ data: "x".repeat(262_133) });
     expect(Buffer.byteLength(body, "utf8")).toBe(262_144);
     const payload = { bindingId: "adapter-binding", event: JSON.parse(body) };
-    const { options } = await f.claim("max-wire-event", f.job, payload);
-    await finishEvent(f, options);
+    const { options } = await f.claim("max-wire-event", payload);
+    await f.finish(options);
     expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-    await expect(runEvent(f, { ...options, payload: "x".repeat(1_048_576) })).rejects.toThrow(
+    await expect(f.run({ ...options, payload: "x".repeat(1_048_576) })).rejects.toThrow(
       "oversized automation event",
     );
-    await expect(runEvent(f, { ...options, eventId: "x".repeat(65_536) })).rejects.toThrow(
+    await expect(f.run({ ...options, eventId: "x".repeat(65_536) })).rejects.toThrow(
       "oversized automation event",
     );
     expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
@@ -306,7 +309,7 @@ describe("event automation durable admission", () => {
             });
           onTestFinished(() => delayed.mockRestore());
         }
-        eventRun = runEvent(f, options);
+        eventRun = f.run(options);
         const outcome = eventRun.then(
           (result) => ({ result }),
           (error: unknown) => ({ error }),
@@ -355,26 +358,17 @@ describe("event automation durable admission", () => {
     expect(await f.cron.readEventSources("another-plugin")).toEqual([]);
     f.cron.pauseScheduling();
     expect((await f.cron.readEventSources("mcp-events"))[0]?.enabled).toBe(true);
-    expect(await runEvent(f, options)).toEqual({
-      kind: "pending",
-      reason: "paused",
-    });
+    expect(await f.run(options)).toEqual(pendingResult("paused"));
     f.cron.resumeScheduling();
     cronConfig.triggers.enabled = false;
-    expect(await runEvent(f, options)).toEqual({
-      kind: "pending",
-      reason: "paused",
-    });
+    expect(await f.run(options)).toEqual(pendingResult("paused"));
     await expect(f.cron.add({ ...f.input, name: "blocked source" })).rejects.toThrow(
       "cron.triggers.enabled: false",
     );
     cronConfig.triggers.enabled = true;
     f.cron.stop();
     await f.cron.waitForIdle();
-    expect(await runEvent(f, options)).toEqual({
-      kind: "pending",
-      reason: "stopped",
-    });
+    expect(await f.run(options)).toEqual(pendingResult("stopped"));
     expect(await f.queue.listClaims()).toMatchObject([{ attempts: 0 }]);
     await f.cron.start();
     const equivalent = await f.cron.update(f.job.id, {
@@ -387,7 +381,7 @@ describe("event automation durable admission", () => {
     expect(equivalent.state.sourceIdentity).toBe(f.job.state.sourceIdentity);
     await f.cron.update(f.job.id, { enabled: false });
     await f.cron.update(f.job.id, { enabled: true });
-    expect(await runEvent(f, options)).toEqual({ kind: "invalidated" });
+    expect(await f.run(options)).toEqual({ kind: "invalidated" });
     const before = await f.cron.readJob(f.job.id);
     await f.cron.update(f.job.id, {
       schedule: { kind: "event", source: "mcp-events", options: { server: "B" } },
@@ -423,7 +417,7 @@ describe("event automation durable admission", () => {
       }
       try {
         await expect(
-          runEvent(f, {
+          f.run({
             ...options,
             commitGuard() {
               if (revoke) {
@@ -438,7 +432,7 @@ describe("event automation durable admission", () => {
         expect(job?.state.queuedAtMs).toBeUndefined();
         expect(job?.state.runningAtMs).toBeUndefined();
         restore();
-        await finishEvent(f, options);
+        await f.finish(options);
         expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
       } finally {
         restore();
@@ -450,33 +444,14 @@ describe("event automation durable admission", () => {
     const f = await fixture();
     const sibling = await f.cron.add({ ...f.input, name: "valid sibling source" });
     const jobs = [f.job, sibling];
-    const queues = [
-      f.queue,
-      createChannelIngressQueue<CronEventInput>({
-        channelId: "mcp-events",
-        accountId: sibling.id,
-      }),
-    ];
-    const events = jobs.map((job, index): CronEventInput => {
-      if (!job.state.sourceIdentity) {
-        throw new Error("missing event source identity");
-      }
-      return {
-        jobId: job.id,
-        sourceIdentity: job.state.sourceIdentity,
-        eventId: "source-" + index,
-        receivedAtMs: Date.now(),
-        payload: { index },
-      };
-    });
+    const queues = [f.queue, eventQueue(sibling)];
+    const events = jobs.map((job, index) => eventInput(job, "source-" + index, { index }));
     const ready = createDeferredCore();
     const begin = createDeferredCore();
     const revoked = new Error("source A revoked");
     let entered = 0;
     let sourceARevoked = false;
     const transferred: Array<Awaited<ReturnType<CronService["runEvent"]>>> = [];
-    // Match a source adapter's non-retryable revocation policy, using the real
-    // ingress drain and Cron request/activation owners rather than mocked runs.
     const drains = queues.map((queue, index) =>
       createChannelIngressDrain({
         queue,
@@ -546,26 +521,19 @@ describe("event automation durable admission", () => {
     const f = await fixture();
 
     const { event, options } = await f.claim("guarded-event");
-    expect(await runEvent(f, { ...options, payload: { instructions: "changed" } })).toEqual({
+    expect(await f.run({ ...options, payload: { instructions: "changed" } })).toEqual({
       kind: "invalidated",
     });
-    const foreign = createChannelIngressQueue<CronEventInput>({
-      channelId: "another-plugin",
-      accountId: f.job.id,
-    });
-    await foreign.enqueue("guarded-event", event);
-    const claim = await foreign.claim("guarded-event");
-    if (!claim) {
-      throw new Error("missing foreign claim");
-    }
+    const foreign = eventQueue(f.job, "another-plugin");
+    const { options: foreignOptions } = await claimEvent(foreign, event);
     expect(
-      await runEvent(f, {
+      await f.run({
         ...options,
-        claim: { queueName: claim.queueName, id: claim.id, token: claim.claim.token },
+        claim: foreignOptions.claim,
       }),
     ).toEqual({ kind: "invalidated" });
     await expect(
-      runEvent(f, {
+      f.run({
         ...options,
         commitGuard() {
           if (f.cron.getJob(f.job.id)?.state.queuedAtMs !== undefined) {
@@ -576,7 +544,7 @@ describe("event automation durable admission", () => {
     ).rejects.toThrow("source revoked after reservation");
     expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
     expect((await f.queue.listClaims())[0]?.payload).toEqual(event);
-    await finishEvent(f, options);
+    await f.finish(options);
     expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 
@@ -598,7 +566,7 @@ describe("event automation durable admission", () => {
     let pending: ReturnType<CronService["runEvent"]> | undefined;
     try {
       const { options } = await f.claim("replaced-claim");
-      pending = runEvent(f, options);
+      pending = f.run(options);
       await awaitGateBeforeSettlement(
         reserved.promise,
         pending,
@@ -625,7 +593,7 @@ describe("event automation durable admission", () => {
         },
       ]);
       expect((await f.cron.readJob(f.job.id))?.state.queuedAtMs).toBeUndefined();
-      await finishEvent(f, {
+      await f.finish({
         ...options,
         claim: { ...options.claim, token: successor.claim.token },
       });
