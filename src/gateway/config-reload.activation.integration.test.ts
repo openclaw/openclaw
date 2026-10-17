@@ -12,11 +12,7 @@ import {
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
-import {
-  readConfigFileSnapshot,
-  registerConfigWriteListener,
-  transformConfigFileWithRetry,
-} from "../config/config.js";
+import { readConfigFileSnapshot, transformConfigFileWithRetry } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   createRuntimeConfigWriteApplication,
@@ -31,12 +27,12 @@ import {
   commitSetupInferenceActivation,
   type SetupInferenceConfigTarget,
 } from "../system-agent/setup-inference-transition.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
+import { ownedConfigReloadOptions } from "./config-reload.test-support.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 
 let state: OpenClawTestState;
@@ -132,26 +128,8 @@ it("the real reloader restores the working connection after failed credential ac
   };
   let promotionObserved = false;
   const reloader = startGatewayConfigReloader({
-    scheduler: createTestGatewayScheduler("fake-timers"),
-    initialConfig: initial.config,
-    initialCompareConfig: initial.sourceConfig,
-    initialSnapshotRawHash: initial.hash ?? null,
-    initialAuthoredConfig: initial.parsed,
-    initialSnapshotValid: initial.valid,
-    initialSnapshotIssues: initial.issues,
-    testDebounceMs: 0,
+    ...(await ownedConfigReloadOptions(initial, state.configPath)),
     readSnapshot: () => readConfigFileSnapshot(),
-    watchPath: state.configPath,
-    readPluginInstallRecords: async () => ({}),
-    initialPluginInstallRecords: {},
-    subscribeToWrites: (listener) =>
-      registerConfigWriteListener(listener, {
-        ownsRuntimeActivationFor: state.configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-        }),
-      }),
     prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
       if (
         resolveAgentModelPrimaryValue(sourceConfig.agents?.defaults?.model) ===

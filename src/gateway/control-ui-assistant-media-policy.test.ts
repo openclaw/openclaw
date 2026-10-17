@@ -22,7 +22,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -68,6 +68,7 @@ let temp: string;
 let project: string;
 let cfg: OpenClawConfig;
 let entry: InternalSessionEntry;
+let restoreEnv = () => {};
 const sessionKey = "agent:main:dashboard:media";
 const readScopes = ["operator.read"];
 const viewerRole = { sessions: { others: "view" }, agents: "*", scopes: readScopes } as const;
@@ -123,11 +124,13 @@ function onOpen(
 }
 
 beforeEach(async () => {
+  restoreEnv = captureEnv(["OPENCLAW_STATE_DIR"]).restore;
   state.placements.mockReset().mockReturnValue(new Map());
   state.placementsAsync
     .mockReset()
     .mockImplementation(async (sessionIds: readonly string[]) => state.placements(sessionIds));
   temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "assistant-image-policy-")));
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(temp, "state"));
   project = path.join(temp, "project");
   await fs.mkdir(project);
   cfg = {
@@ -158,9 +161,13 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  await closeStateDatabaseForTest();
-  await fs.rm(temp, { recursive: true, force: true });
-  vi.restoreAllMocks();
+  try {
+    await closeStateDatabaseForTest();
+    await fs.rm(temp, { recursive: true, force: true });
+  } finally {
+    vi.restoreAllMocks();
+    restoreEnv();
+  }
 });
 
 async function request(
@@ -441,21 +448,19 @@ it("does not accept GET consent or move an allowed image ticket to another sessi
 
 it("keeps Gateway-owned inbound images available in a repository session", async () => {
   entry.repositoryWorkspaceId = "remote-workspace";
-  await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "state") }, async () => {
-    const id = "remote-session-upload.png";
-    const source = `media://inbound/${id}`;
-    const file = path.join(resolveStateDir(), "media", "inbound", id);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, PNG);
-    const metadata = await request(source);
-    expect(metadata.payload).toMatchObject({ available: true });
-    const served = await request(source, {
-      ticket: String(metadata.payload!.mediaTicket),
-      bytes: true,
-    });
-    expect(served.res.statusCode).toBe(200);
-    expect(served.bytes).toEqual(PNG);
+  const id = "remote-session-upload.png";
+  const source = `media://inbound/${id}`;
+  const file = path.join(resolveStateDir(), "media", "inbound", id);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, PNG);
+  const metadata = await request(source);
+  expect(metadata.payload).toMatchObject({ available: true });
+  const served = await request(source, {
+    ticket: String(metadata.payload!.mediaTicket),
+    bytes: true,
   });
+  expect(served.res.statusCode).toBe(200);
+  expect(served.bytes).toEqual(PNG);
 });
 it("keeps merged-profile media tickets bound to the canonical person's current plugin access", async () => {
   const pluginId = "media-reader-access";
@@ -470,21 +475,19 @@ it("keeps merged-profile media tickets bound to the canonical person's current p
   const previous = captureActivePluginRegistrySnapshot();
   stageActivePluginRegistry(registry, null, "default");
   try {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-      const canonical = ensureProfileForEmail("media-canonical@example.test");
-      const profile = await namedReader("media-alias@example.test", {
-        viewer: { ...viewerRole, accessPolicyPlugin: pluginId },
-      });
-      const source = await image("shared.png");
-      const metadata = await request(source);
-      expect(metadata.payload).toMatchObject({ available: true });
-      const ticket = String(metadata.payload!.mediaTicket);
-      mergeProfiles(profile.id, canonical.id);
-      expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
-      expect(authorize.mock.calls.at(-1)?.[0].profile.profileId).toBe(canonical.id);
-      grant.abort();
-      expect((await request(source, { ticket, bytes: true })).res.statusCode).toBe(404);
+    const canonical = ensureProfileForEmail("media-canonical@example.test");
+    const profile = await namedReader("media-alias@example.test", {
+      viewer: { ...viewerRole, accessPolicyPlugin: pluginId },
     });
+    const source = await image("shared.png");
+    const metadata = await request(source);
+    expect(metadata.payload).toMatchObject({ available: true });
+    const ticket = String(metadata.payload!.mediaTicket);
+    mergeProfiles(profile.id, canonical.id);
+    expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
+    expect(authorize.mock.calls.at(-1)?.[0].profile.profileId).toBe(canonical.id);
+    grant.abort();
+    expect((await request(source, { ticket, bytes: true })).res.statusCode).toBe(404);
   } finally {
     rollbackStagedPluginRegistry(previous);
   }
@@ -493,27 +496,25 @@ it("keeps merged-profile media tickets bound to the canonical person's current p
 it.each(["role assignment", "role definition"] as const)(
   "revalidates a named reader's saved media ticket after %s withdrawal",
   async (change) => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-      const profile = await namedReader("media-reader@example.test", {
-        viewer: viewerRole,
-        denied: { ...viewerRole, sessions: { others: "none" } },
-      });
-      const source = await image("shared.png");
-      const metadata = await request(source);
-      expect(metadata.payload).toMatchObject({ available: true });
-      const ticket = String(metadata.payload!.mediaTicket);
-      if (change === "role assignment") {
-        setUserProfileRole(profile.id, "denied");
-        invalidateOperatorRolePolicy(profile.id);
-      } else {
-        cfg.gateway!.roles!.definitions.viewer = { ...viewerRole, sessions: { others: "none" } };
-      }
-      await fs.rename(source, `${source}.old`);
-      await fs.writeFile(source, PNG);
-      const denied = await request(source, { ticket, bytes: true });
-      expect(denied.res.statusCode).toBe(404);
-      expect(denied.bytes).not.toEqual(PNG);
+    const profile = await namedReader("media-reader@example.test", {
+      viewer: viewerRole,
+      denied: { ...viewerRole, sessions: { others: "none" } },
     });
+    const source = await image("shared.png");
+    const metadata = await request(source);
+    expect(metadata.payload).toMatchObject({ available: true });
+    const ticket = String(metadata.payload!.mediaTicket);
+    if (change === "role assignment") {
+      setUserProfileRole(profile.id, "denied");
+      invalidateOperatorRolePolicy(profile.id);
+    } else {
+      cfg.gateway!.roles!.definitions.viewer = { ...viewerRole, sessions: { others: "none" } };
+    }
+    await fs.rename(source, `${source}.old`);
+    await fs.writeFile(source, PNG);
+    const denied = await request(source, { ticket, bytes: true });
+    expect(denied.res.statusCode).toBe(404);
+    expect(denied.bytes).not.toEqual(PNG);
   },
 );
 
@@ -524,75 +525,38 @@ it.each(
 )(
   "revalidates $authority reader access after asynchronous $operation file preparation",
   async ({ operation, authority }) => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-      let current = true;
-      await namedReader("yielding-media-reader@example.test", undefined, () => current);
-      const source = await image("shared.png");
-      const ticket = String((await request(source)).payload!.mediaTicket);
-      const openSpy = onOpen(source, () => {
-        if (authority === "session") {
-          entry.visibility = "draft";
-        } else {
-          current = false;
-        }
-      });
-      try {
-        const denied = await request(source, {
-          ...(authority === "session" ? { ticket } : {}),
-          bytes: operation === "bytes",
-        });
-        expect(denied.res.statusCode).toBe(404);
-        expect(denied.bytes).not.toEqual(PNG);
-      } finally {
-        openSpy.mockRestore();
+    let current = true;
+    await namedReader("yielding-media-reader@example.test", undefined, () => current);
+    const source = await image("shared.png");
+    const ticket = String((await request(source)).payload!.mediaTicket);
+    const openSpy = onOpen(source, () => {
+      if (authority === "session") {
+        entry.visibility = "draft";
+      } else {
+        current = false;
       }
     });
+    try {
+      const denied = await request(source, {
+        ...(authority === "session" ? { ticket } : {}),
+        bytes: operation === "bytes",
+      });
+      expect(denied.res.statusCode).toBe(404);
+      expect(denied.bytes).not.toEqual(PNG);
+    } finally {
+      openSpy.mockRestore();
+    }
   },
 );
 
-it.each(["metadata", "bytes"] as const)(
-  "withdraws Gateway-local media after cloud dispatch during %s preparation",
-  async (operation) => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "placement-state") }, async () => {
-      const placements = await placementStore();
-      entry.permissionMode = "full";
-      const source = await image("gateway-only.png", temp);
-      const ticket = String((await request(source)).payload!.mediaTicket);
-      let dispatched = false;
-      let preparedFile: Awaited<ReturnType<typeof fs.open>> | undefined;
-      const openSpy = onOpen(source, async (file) => {
-        if (!dispatched) {
-          preparedFile = file;
-          dispatched = true;
-          // Dispatch admission already withdraws Gateway-local access; activation needs an
-          // attached environment and must not turn this file-open hook into a false 404.
-          await placements.startDispatch({
-            sessionId: entry.sessionId,
-            sessionKey,
-            agentId: "main",
-            executionMode: "worker-turn",
-          });
-        }
-      });
-      try {
-        const denied = await request(source, { ticket, bytes: operation === "bytes" });
-        expect(dispatched).toBe(true);
-        expect(placements.get(entry.sessionId)?.state).toBe("requested");
-        expect(preparedFile?.fd).toBe(-1);
-        expect(entry.execNode).toBeUndefined();
-        expect(denied.res.statusCode).toBe(404);
-        expect(denied.bytes).not.toEqual(PNG);
-      } finally {
-        openSpy.mockRestore();
-        await preparedFile?.close();
-      }
-    });
-  },
-);
-
-it("withdraws Gateway-local media after placement database replacement during byte preparation", async () => {
-  await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "placement-state") }, async () => {
-    await placementStore();
+it.each([
+  ["dispatch", "metadata"],
+  ["dispatch", "bytes"],
+  ["database replacement", "bytes"],
+] as const)(
+  "withdraws Gateway-local media after %s during %s preparation",
+  async (change, operation) => {
+    const placements = await placementStore();
     entry.permissionMode = "full";
     const source = await image("gateway-only.png", temp);
     const metadata = await request(source);
@@ -600,32 +564,48 @@ it("withdraws Gateway-local media after placement database replacement during by
     expect(metadata.payload?.mediaTicket).toEqual(expect.any(String));
     const ticket = String(metadata.payload!.mediaTicket);
     const databasePath = resolveOpenClawStateSqlitePath();
-    const original = await fs.stat(databasePath);
-    let replaced = false;
-    let replacementError: unknown;
+    const originalInode =
+      change === "database replacement" ? (await fs.stat(databasePath)).ino : undefined;
+    let changed = false;
+    let changeError: unknown;
     let preparedFile: Awaited<ReturnType<typeof fs.open>> | undefined;
     const openSpy = onOpen(source, async (file) => {
-      if (!preparedFile) {
-        preparedFile = file;
-        try {
+      if (preparedFile) {
+        return;
+      }
+      preparedFile = file;
+      try {
+        if (change === "dispatch") {
+          // Admission alone withdraws local access; activation requires an attached environment.
+          await placements.startDispatch({
+            sessionId: entry.sessionId,
+            sessionKey,
+            agentId: "main",
+            executionMode: "worker-turn",
+          });
+        } else {
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
           await fs.rename(databasePath, `${databasePath}.retired`);
           const { createWorkerSessionPlacementStore } =
             await import("./worker-environments/placement-store.js");
-          const replacement = createWorkerSessionPlacementStore();
-          expect(await replacement.getManyAsync([entry.sessionId])).toEqual(new Map());
-          expect((await fs.stat(databasePath)).ino).not.toBe(original.ino);
-          replaced = true;
-        } catch (error) {
-          // Fixture failures must not become the media handler's expected 404.
-          replacementError = error;
+          expect(await createWorkerSessionPlacementStore().getManyAsync([entry.sessionId])).toEqual(
+            new Map(),
+          );
+          expect((await fs.stat(databasePath)).ino).not.toBe(originalInode);
         }
+        changed = true;
+      } catch (error) {
+        // Fixture failures must not become the handler's expected 404.
+        changeError = error;
       }
     });
     try {
-      const denied = await request(source, { ticket, bytes: true });
-      expect(replacementError).toBeUndefined();
-      expect(replaced).toBe(true);
+      const denied = await request(source, { ticket, bytes: operation === "bytes" });
+      expect(changeError).toBeUndefined();
+      expect(changed).toBe(true);
+      if (change === "dispatch") {
+        expect(placements.get(entry.sessionId)?.state).toBe("requested");
+      }
       expect(preparedFile?.fd).toBe(-1);
       expect(entry.execNode).toBeUndefined();
       expect(denied.res.statusCode).toBe(404);
@@ -634,8 +614,8 @@ it("withdraws Gateway-local media after placement database replacement during by
       openSpy.mockRestore();
       await preparedFile?.close();
     }
-  });
-});
+  },
+);
 
 it("preserves legacy Full Access PDF attachments under the configured agent workspace", async () => {
   const name = "report.pdf";

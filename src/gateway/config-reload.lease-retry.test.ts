@@ -65,18 +65,13 @@ async function admittedWrite(hash: string) {
 it("coalesces config writes after a delayed Gateway scheduler wake", async () => {
   const { clock, scheduler } = createConfigReloadTestClock();
   const harness = await readyHarness("delayed-wake", { scheduler });
-  try {
-    harness.emitWrite(harness.write);
-    harness.emitWrite({ ...harness.write, revision: 2 });
-    await clock.advanceBy(60_000);
-    expect(harness.onHotReload).toHaveBeenCalledOnce();
-    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
-    await clock.advanceBy(60_000);
-    expect(harness.onHotReload).toHaveBeenCalledOnce();
-  } finally {
-    await harness.reloader.stop();
-    await scheduler.stop();
-  }
+  harness.emitWrite(harness.write);
+  harness.emitWrite({ ...harness.write, revision: 2 });
+  await clock.advanceBy(60_000);
+  expect(harness.onHotReload).toHaveBeenCalledOnce();
+  expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+  await clock.advanceBy(60_000);
+  expect(harness.onHotReload).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
@@ -191,8 +186,6 @@ it("joins an admitted reload when its Gateway scheduler stops", async () => {
     release.resolve();
     releaseChild.resolve();
     await Promise.all([waking, closing]);
-    await harness.reloader.stop();
-    await scheduler.stop();
   }
 });
 
