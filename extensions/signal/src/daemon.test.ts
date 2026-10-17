@@ -19,10 +19,8 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: spawnMock };
-});
+// mock-isolation: Keep process owners and worker runtimes out of this daemon fixture.
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ spawnOomScoreAdjusted: spawnMock }));
 
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {

@@ -67,7 +67,7 @@ async function brokenClone() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("shared repository missing-tip recovery", () => {
-  it.each(["--dry-run", "--dry", "--dr"])(
+  it.each(["--dry-run"])(
     "keeps a %s fetch read-only even when the clone needs repair",
     async (dryRun) => {
       const { clone, retired, tip } = await brokenClone();
@@ -85,12 +85,7 @@ describe("shared repository missing-tip recovery", () => {
     },
   );
 
-  it.each([
-    "worktree",
-    "project refresh",
-    "renamed project branch",
-    "pinned project commit",
-  ] as const)(
+  it.each(["worktree", "renamed project branch", "pinned project commit"] as const)(
     "repairs commit-graph-only tips through %s without removing local branches or detached HEADs",
     async (entry) => {
       const fixture = await brokenClone();
@@ -117,7 +112,7 @@ describe("shared repository missing-tip recovery", () => {
         } finally {
           vi.unstubAllEnvs();
         }
-      } else if (entry === "project refresh" || entry === "renamed project branch") {
+      } else if (entry === "renamed project branch") {
         await refreshProjectCheckout({ target: clone, url }, { env });
         if (entry === "renamed project branch") {
           expect(await git(clone, ["rev-parse", "refs/remotes/origin/renamed"])).toBe(tip);

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
+import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon, providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
@@ -10,11 +11,10 @@ import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
 import {
+  ChatContextWindowControl,
   type ChatContextWindowControlParams,
-  renderContextWindowControl,
-} from "./chat-context-window-control.ts";
+} from "./chat-context-window-control.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
@@ -37,7 +37,7 @@ import {
   toggleModelProviderGroup,
   updateModelSearch,
 } from "./chat-model-picker-search.ts";
-import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -75,17 +75,6 @@ export type ChatModelPickerParams = {
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
 };
-
-function closeModelPickerAfterSelection(event: MouseEvent) {
-  // SAFETY: Model option buttons are the only callers of this click handler.
-  const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
-  if (details) {
-    details.open = false;
-    if (event.detail === 0) {
-      details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
-    }
-  }
-}
 
 function prepareChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
@@ -144,6 +133,12 @@ function prepareChatModelPicker(params: ChatModelPickerParams) {
     }
     providerGroups.set(provider, group);
   }
+  // Unranked catalogs can contain hundreds of models; browse the rest through All models.
+  for (const [provider, group] of providerGroups) {
+    if (!recommendingProviders.has(provider)) {
+      group.more = group.lead.splice(9);
+    }
+  }
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
   const activeProvider = activeModelOption && groupProvider(activeModelOption);
@@ -195,14 +190,56 @@ function ModelList(props: { label: string; more?: boolean; children: JSX.Element
 }
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
-  const state = createMemo(() => prepareChatModelPicker(params));
-  const contextWindowContent = createMemo(() => {
-    const control = params.contextWindow;
-    return control ? renderContextWindowControl(control, params.sessionKey) : undefined;
-  });
+  let summary: HTMLElement;
+  let searchInput: HTMLInputElement | undefined;
   let details: HTMLDetailsElement | undefined;
+  let pendingSearchFocus: Element | null | undefined;
+  const focusSearch = () => {
+    if (pendingSearchFocus === undefined || !details) {
+      return;
+    }
+    if (
+      !details.isConnected ||
+      !details.open ||
+      details.ownerDocument.activeElement !== pendingSearchFocus
+    ) {
+      pendingSearchFocus = undefined;
+    } else if (searchInput?.isConnected) {
+      pendingSearchFocus = undefined;
+      searchInput.focus({ preventScroll: true });
+    }
+  };
+  // Retain choices after first use so provider expansion survives dismissal.
+  const [choicesMounted, mountChoices] = createSignal(false);
+  const pickerOverlay = createChatPickerOverlay((target) => {
+    if (target.open) {
+      mountChoices(true);
+    }
+    params.onOpenChange?.(target.open);
+    if (!target.open) {
+      pendingSearchFocus = undefined;
+      params.accountSection?.onClose();
+      resetModelSearch(target);
+      return;
+    }
+    void params.onOpen?.();
+    pendingSearchFocus = target.ownerDocument.activeElement;
+    requestAnimationFrame(focusSearch);
+  });
+  const state = createMemo(() => prepareChatModelPicker(params));
+  const closeModelPickerAfterSelection = (event: MouseEvent) => {
+    // Option buttons live inside the picker overlay; its summary lives outside it.
+    if (event.currentTarget instanceof Element) {
+      findOverlayParent(event.currentTarget)?.request(false);
+    }
+    if (event.detail === 0) {
+      summary.focus({ preventScroll: true });
+    }
+  };
+  // Keep the imperative search/filter DOM island synchronized with catalog updates.
   createEffect(
     () => [
+      choicesMounted(),
       params.modelCatalogState,
       params.modelOptions,
       params.targetGroups,
@@ -213,6 +250,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     () => {
       if (details) {
         syncChatModelSearch(details);
+        focusSearch();
       }
     },
   );
@@ -267,19 +305,23 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
     const auth = () => params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
-    const showAuth = () =>
-      auth() &&
-      !(
-        auth()?.kind === "missing" &&
-        options().some(
-          (option) =>
-            option.disabled &&
-            (option.unavailableReason === "missing-auth" ||
-              option.unavailableReason === "auth-failed"),
-        )
-      );
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authKind = createMemo(() => auth()?.kind);
+    const showAuth = createMemo(
+      () =>
+        Boolean(auth()) &&
+        !(
+          auth()?.kind === "missing" &&
+          options().some(
+            (option) =>
+              option.disabled &&
+              (option.unavailableReason === "missing-auth" ||
+                option.unavailableReason === "auth-failed"),
+          )
+        ),
+    );
+    const authLabel = createMemo(() =>
+      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined,
+    );
     const routeDetail = () => {
       const route = resolveModelRuntimeRoute(props.provider);
       return route ? t(`chat.modelControls.routes.${route}.detail`) : undefined;
@@ -314,13 +356,13 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             </span>
           </button>
           {showAuth() ? (
-            <span class="chat-controls__auth-meta" data-auth-kind={auth()?.kind}>
+            <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
               <span aria-hidden="true">
                 <Icon
                   name={
-                    auth()?.kind === "subscription"
+                    authKind() === "subscription"
                       ? "circleUser"
-                      : auth()?.kind === "api"
+                      : authKind() === "api"
                         ? "key"
                         : "alertTriangle"
                   }
@@ -380,35 +422,15 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     <details
       ref={(element) => {
         details = element;
+        pickerOverlay(element);
       }}
       class="chat-controls__inline-select chat-controls__model-picker"
       data-chat-autotype-shortcuts
       prop:open={params.open === true}
       onKeyDown={handleModelPickerKeydown}
-      onToggle={(event: Event) => {
-        // SAFETY: This toggle handler belongs to the surrounding native details.
-        const target = event.currentTarget as HTMLDetailsElement;
-        params.onOpenChange?.(target.open);
-        handleChatComposerDetailsToggle(event);
-        syncChatPickerOverlay(target);
-        if (!target.open) {
-          params.accountSection?.onClose();
-          resetModelSearch(target);
-          return;
-        }
-        void params.onOpen?.();
-        syncChatModelSearch(target);
-        const active = target.ownerDocument.activeElement;
-        requestAnimationFrame(() => {
-          if (target.isConnected && target.open && target.ownerDocument.activeElement === active) {
-            target
-              .querySelector<HTMLInputElement>("[data-chat-model-search]")
-              ?.focus({ preventScroll: true });
-          }
-        });
-      }}
     >
       <summary
+        ref={(element) => (summary = element)}
         class={[
           "chat-controls__inline-select-trigger chat-controls__model-trigger",
           {
@@ -424,14 +446,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         aria-busy={params.triggerLoading ? "true" : "false"}
         aria-disabled={params.disabled ? "true" : "false"}
         title={params.disabledReason?.trim() || undefined}
-        onClick={(event: MouseEvent) => {
-          if (params.disabled) {
-            event.preventDefault();
-            return;
-          }
-          // SAFETY: This click handler belongs to the surrounding native summary.
-          (event.currentTarget as HTMLElement).focus({ preventScroll: true });
-        }}
       >
         {state().modelToolsUnavailable ? (
           <openclaw-tooltip prop:content={t("chat.modelControls.chatOnlyHelp")}>
@@ -469,7 +483,16 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           <Icon name="chevronUp" />
         </span>
       </summary>
-      <wa-popup data-anchored-overlay>
+      <div
+        class="oc-overlay chat-picker-overlay"
+        data-anchored-overlay
+        popover="manual"
+        onOverlay-show={() => {
+          if (searchInput?.isConnected) {
+            updateModelSearch(searchInput, true);
+          }
+        }}
+      >
         <div
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label={t("chat.selectors.model")}
@@ -493,6 +516,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                 <div class="chat-controls__model-search-wrap">
                   <Icon name="search" />
                   <input
+                    ref={(element) => (searchInput = element)}
                     class="chat-controls__model-search"
                     data-chat-model-search="true"
                     type="search"
@@ -532,74 +556,76 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
               />
               {state().hasOptions || params.accountSection ? (
                 <>
-                  <div class="chat-controls__model-options">
-                    <For each={state().orderedProviderGroups} keyed={(group) => group[0]}>
-                      {(group) => (
-                        <ProviderGroup
-                          provider={group()[0]}
-                          lead={group()[1].lead}
-                          more={group()[1].more}
-                        />
-                      )}
-                    </For>
-                    <For each={state().targetGroups} keyed={(group) => group.id}>
-                      {(group) => (
-                        <section
-                          class="chat-controls__provider-model-group"
-                          data-chat-model-target-group={group().id}
-                          aria-label={group().label}
-                        >
-                          <div class="chat-controls__provider-heading">
-                            <span
-                              class="chat-controls__provider-icon chat-controls__target-icon"
-                              aria-hidden="true"
-                            >
-                              <Icon name="terminal" />
-                            </span>
-                            <span>{group().label}</span>
-                          </div>
-                          {group().status !== "ready" ? (
-                            <ChatModelCatalogState
-                              state={{ hasSnapshot: false, status: group().status }}
-                              hasOptions={false}
-                              hasSelectableOptions={false}
-                              errorLabel={group().errorLabel}
-                              retryTarget={
-                                params.onTargetRetry
-                                  ? {
-                                      disabled: params.disabled,
-                                      groupId: group().id,
-                                      onRetry: params.onTargetRetry!,
-                                    }
-                                  : undefined
-                              }
-                            />
-                          ) : undefined}
-                          <ModelList label={group().label}>
-                            <For each={group().options} keyed={(entry) => entry.value}>
-                              {(entry, index) => (
-                                <ChatModelPickerTargetOption
-                                  disabled={params.disabled}
-                                  entry={entry()}
-                                  groupId={group().id}
-                                  groupLabel={group().label}
-                                  index={state().orderedOptions.length + index()}
-                                  onSelect={selectTarget}
-                                />
-                              )}
-                            </For>
-                          </ModelList>
-                        </section>
-                      )}
-                    </For>
-                    {params.accountSection ? (
-                      <ChatModelAccountSectionView
-                        {...params.accountSection.viewProps(
-                          state().orderedOptions.length + state().targetOptionCount,
+                  <Show when={choicesMounted()}>
+                    <div class="chat-controls__model-options">
+                      <For each={state().orderedProviderGroups} keyed={(group) => group[0]}>
+                        {(group) => (
+                          <ProviderGroup
+                            provider={group()[0]}
+                            lead={group()[1].lead}
+                            more={group()[1].more}
+                          />
                         )}
-                      />
-                    ) : undefined}
-                  </div>
+                      </For>
+                      <For each={state().targetGroups} keyed={(group) => group.id}>
+                        {(group) => (
+                          <section
+                            class="chat-controls__provider-model-group"
+                            data-chat-model-target-group={group().id}
+                            aria-label={group().label}
+                          >
+                            <div class="chat-controls__provider-heading">
+                              <span
+                                class="chat-controls__provider-icon chat-controls__target-icon"
+                                aria-hidden="true"
+                              >
+                                <Icon name="terminal" />
+                              </span>
+                              <span>{group().label}</span>
+                            </div>
+                            {group().status !== "ready" ? (
+                              <ChatModelCatalogState
+                                state={{ hasSnapshot: false, status: group().status }}
+                                hasOptions={false}
+                                hasSelectableOptions={false}
+                                errorLabel={group().errorLabel}
+                                retryTarget={
+                                  params.onTargetRetry
+                                    ? {
+                                        disabled: params.disabled,
+                                        groupId: group().id,
+                                        onRetry: params.onTargetRetry!,
+                                      }
+                                    : undefined
+                                }
+                              />
+                            ) : undefined}
+                            <ModelList label={group().label}>
+                              <For each={group().options} keyed={(entry) => entry.value}>
+                                {(entry, index) => (
+                                  <ChatModelPickerTargetOption
+                                    disabled={params.disabled}
+                                    entry={entry()}
+                                    groupId={group().id}
+                                    groupLabel={group().label}
+                                    index={state().orderedOptions.length + index()}
+                                    onSelect={selectTarget}
+                                  />
+                                )}
+                              </For>
+                            </ModelList>
+                          </section>
+                        )}
+                      </For>
+                      {params.accountSection ? (
+                        <ChatModelAccountSectionView
+                          {...params.accountSection.viewProps(
+                            state().orderedOptions.length + state().targetOptionCount,
+                          )}
+                        />
+                      ) : undefined}
+                    </div>
+                  </Show>
                   <div
                     class="chat-controls__model-search-empty"
                     data-chat-model-search-empty
@@ -607,7 +633,12 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                   >
                     {t("chat.modelControls.noMatchingModels")}
                   </div>
-                  <LitContent value={contextWindowContent()} />
+                  {params.contextWindow ? (
+                    <ChatContextWindowControl
+                      contextWindow={params.contextWindow}
+                      sessionKey={params.sessionKey}
+                    />
+                  ) : undefined}
                 </>
               ) : undefined}
             </>
@@ -623,7 +654,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             </div>
           ) : undefined}
         </div>
-      </wa-popup>
+      </div>
     </details>
   );
 }

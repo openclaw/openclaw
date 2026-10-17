@@ -78,21 +78,11 @@ suite.define(() => {
       const identity = sidebar.locator(".sidebar-identity-card");
       await sidebar.getByText("Retained sample session", { exact: true }).waitFor();
       await gateway.setMethodResponse("sessions.catalog.list", { __mockError: suspensionError });
+      const beforeSuspension = await gateway.deferNext("sessions.catalog.list");
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
       await reactivatePage(page);
-      await expect
-        .poll(async () => {
-          const app = await sidebar.evaluate(
-            (element) =>
-              (
-                element as HTMLElement & {
-                  sessionData: { sessionCatalogRefreshStatus: { awaitingGateway: boolean } };
-                }
-              ).sessionData.sessionCatalogRefreshStatus.awaitingGateway,
-          );
-          return app;
-        })
-        .toBe(true);
+      await gateway.waitForRequest("sessions.catalog.list", { after: beforeSuspension });
+      await gateway.rejectDeferred("sessions.catalog.list", suspensionError);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
       await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
       expect(await identity.getAttribute("aria-label")).toContain("Suspending…");

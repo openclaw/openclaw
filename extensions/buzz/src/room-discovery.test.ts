@@ -1,4 +1,4 @@
-import { getPublicKey } from "nostr-tools";
+import { getPublicKey, type Filter, type Relay } from "nostr-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type AuthSigner = (template: {
@@ -114,7 +114,7 @@ describe("discoverBuzzRooms", () => {
               ["p", publicKey, "", "member"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       )
@@ -136,7 +136,7 @@ describe("discoverBuzzRooms", () => {
               ["about", "Humans and agents"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       );
@@ -174,6 +174,96 @@ describe("discoverBuzzRooms", () => {
     expect(signedAuthTags).toContainEqual(AUTH_TAG);
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { notification: true, firstSnapshot: "empty" },
+    { notification: false, firstSnapshot: "closed" },
+  ])(
+    "waits for room publication without notification EOSE ($notification, $firstSnapshot)",
+    async ({ notification, firstSnapshot }) => {
+      vi.useFakeTimers();
+      const abort = new AbortController();
+      const publicKey = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
+      type Handlers = Parameters<Relay["prepareSubscription"]>[1];
+      const subscribed = Promise.withResolvers<Handlers>();
+      let snapshots = 0;
+      const eventBase = {
+        id: "membership-a",
+        pubkey: RELAY_PUBLIC_KEY,
+        created_at: 1,
+        content: "",
+        sig: "sig",
+      };
+      relayMocks.subscribe.mockImplementation((filters: Filter[], handlers: Handlers) => {
+        if (filters[0]?.kinds?.includes(44_100)) {
+          subscribed.resolve(handlers);
+        } else if (filters[0]?.kinds?.includes(39002)) {
+          snapshots += 1;
+          if (snapshots === 1 && firstSnapshot === "closed") {
+            queueMicrotask(() => handlers.onclose?.("membership snapshot temporarily unavailable"));
+          } else {
+            if (snapshots > 1) {
+              handlers.onevent?.({
+                ...eventBase,
+                kind: 39002,
+                tags: [
+                  ["d", ROOM_A],
+                  ["p", publicKey, "", "bot"],
+                ],
+              });
+            }
+            queueMicrotask(() => handlers.oneose?.());
+          }
+        } else {
+          handlers.onevent?.({
+            ...eventBase,
+            id: "metadata-a",
+            kind: 39000,
+            tags: [
+              ["d", ROOM_A],
+              ["name", "Agent room"],
+            ],
+          });
+          queueMicrotask(() => handlers.oneose?.());
+        }
+        return { close: vi.fn() };
+      });
+      const { waitForBuzzRoomAccess } = await import("./room-access-wait.js");
+      const waiting = waitForBuzzRoomAccess({
+        relayUrl: "wss://buzz.example.com",
+        privateKey: PRIVATE_KEY,
+        signal: abort.signal,
+      });
+      let rooms: Awaited<typeof waiting> | undefined;
+      const observed = waiting.then(
+        (value) => {
+          rooms = value;
+        },
+        () => {},
+      );
+      try {
+        const notifications = await subscribed.promise;
+        if (notification) {
+          notifications.onevent?.({
+            ...eventBase,
+            id: "notification-a",
+            kind: 44_100,
+            tags: [
+              ["p", publicKey],
+              ["h", ROOM_A],
+            ],
+          });
+        }
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(rooms).toEqual([{ id: ROOM_A, name: "Agent room" }]);
+        expect(relayMocks.close).toHaveBeenCalledOnce();
+      } finally {
+        abort.abort(new Error("test cleanup"));
+        await observed;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("applies one timeout budget to authentication and closes the relay", async () => {
     relayMocks.auth.mockImplementationOnce(
@@ -213,7 +303,7 @@ describe("discoverBuzzRooms", () => {
               ["p", publicKey, "", "bot"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       )
@@ -247,7 +337,7 @@ describe("discoverBuzzRooms", () => {
               ["archived", "true"],
             ],
           });
-          handlers.oneose();
+          queueMicrotask(() => handlers.oneose());
           return { close: vi.fn() };
         },
       );

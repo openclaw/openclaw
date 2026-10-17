@@ -50,7 +50,6 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  isCronAddAction,
   isMiddlewareToolResultError,
   loadHookRunnerGlobal,
   readApplyPatchSummary,
@@ -83,6 +82,7 @@ import {
   readAsyncStartedTaskIds,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { isCronAddAction } from "./harness/tool-result-facts.js";
 import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
@@ -342,7 +342,6 @@ export async function handleToolExecutionEnd(
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
-    ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
   if (didDeliverMessagingResult && confirmedMessageTarget) {
@@ -579,10 +578,6 @@ export async function handleToolExecutionEnd(
       });
     }
   }
-
-  ctx.log.debug(
-    `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
-  );
 
   if (!planUpdate) {
     await emitToolResultOutput({

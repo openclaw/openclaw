@@ -18,7 +18,7 @@ import {
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
-  buildBaseChannelStatusSummary,
+  buildProbeChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
@@ -284,13 +284,11 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     status: createComputedAccountStatusAdapter<ResolvedIrcAccount, IrcProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: ({ account, snapshot }) => ({
-        ...buildBaseChannelStatusSummary(snapshot),
+        ...buildProbeChannelStatusSummary(snapshot),
         host: account.host,
         port: snapshot.port,
         tls: account.tls,
         nick: account.nick,
-        probe: snapshot.probe,
-        lastProbeAt: snapshot.lastProbeAt ?? null,
       }),
       probeAccount: async ({ cfg, account, timeoutMs }) =>
         probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),

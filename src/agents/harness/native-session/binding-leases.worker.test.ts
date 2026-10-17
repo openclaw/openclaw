@@ -1,5 +1,10 @@
 import { setImmediate as immediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import * as mutationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { pluginStatePublication } from "../../../plugin-state/plugin-state-publication.js";
@@ -7,10 +12,11 @@ import {
   createPluginStateKeyedStoreV2,
   type PluginStateActionAuthority,
 } from "../../../plugin-state/plugin-state-store.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
+import { retainNativeSessionGenerationAuthority } from "./binding-generation-authority.js";
 import { createNativeSessionBindingLeasesV2 } from "./binding-leases.js";
 import {
   bindingTestOptions,
@@ -46,6 +52,78 @@ afterEach(() => {
 });
 
 describe("native binding worker admission", () => {
+  it.each(["lease", "action"] as const)(
+    "refuses a binding write when its prepared %s lineage changes after observation",
+    async (changed) => {
+      await withOpenClawTestState({ label: "binding-worker-lineage" }, async (fixture) => {
+        const { owner, state, asyncState } = bindingStores(fixture.env);
+        const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: fixture.env });
+        const scope = (kind: string) => ({
+          agentId: "main",
+          storePath,
+          sessionKey: `agent:main:${kind}`,
+        });
+        const retain = async (kind: string) => {
+          await upsertSessionEntryCore(scope(kind), { sessionId: kind, updatedAt: 1 });
+          return retainNativeSessionGenerationAuthority({
+            target: { ...scope(kind), sessionId: kind },
+            storePath,
+            createSupersededError: () => new Error(`${kind} lineage superseded`),
+          });
+        };
+        using captures = new DisposableStack();
+        const lease = await retain("lease");
+        captures.defer(() => lease.release());
+        const action = await retain("action");
+        captures.defer(() => action.release());
+        await asyncState.register("binding", { value: "before" });
+        await owner.withLease(
+          "binding",
+          async () => {
+            const entered = createDeferred();
+            const resume = createDeferred();
+            const withCurrent = state.withCurrent.bind(state);
+            state.withCurrent = (authority) => {
+              const store = withCurrent(authority);
+              return {
+                ...store,
+                async observe(key) {
+                  const observed = await store.observe(key);
+                  entered.resolve();
+                  await resume.promise;
+                  return observed;
+                },
+              };
+            };
+            const pending = owner
+              .transact(
+                "binding",
+                (record) => ({ next: { ...record, value: "unauthorized" }, result: true }),
+                undefined,
+                undefined,
+                action.authority,
+              )
+              .catch((error: unknown) => error);
+            try {
+              await awaitGateBeforeSettlement(
+                entered.promise,
+                pending,
+                "Binding observation was not reached",
+              );
+              await patchSessionEntryCore(scope(changed), () => ({ sessionId: "replacement" }));
+            } finally {
+              state.withCurrent = withCurrent;
+              resume.resolve();
+            }
+            expect(await pending).toMatchObject({ message: `${changed} lineage superseded` });
+            expect(await asyncState.lookup("binding")).toMatchObject({ value: "before" });
+          },
+          { prepareLease: prepareBindingTestLease, authority: lease.authority },
+        );
+      });
+    },
+  );
+
   it.each(["binding", "unicode-\ud800"])(
     "keeps %s native effect guards current from renewal, revocation, and unknown receipts",
     async (prefix) => {
@@ -74,17 +152,18 @@ describe("native binding worker admission", () => {
               } else if (mutation === "delete") {
                 await asyncState.delete(key);
               } else {
-                const context = captureOpenClawStateWorkerContext({ env: fixture.env });
-                pluginStatePublication.invalidateEntries(
-                  { identity: context.admission.identity.key, incarnation: "unknown-settlement" },
-                  [{ plugin_id: "binding-proof", namespace: "bindings", entry_key: key }],
-                );
+                const stopFault = pluginStatePublication.subscribeFacts((change) => {
+                  if (change.kind === "committed") {
+                    throw new Error("Synthetic binding publication failure");
+                  }
+                });
+                try {
+                  await asyncState.register(key, current);
+                } finally {
+                  stopFault();
+                }
               }
               expect(assertCurrent).toThrow();
-              if (mutation === "unknown") {
-                await owner.owner(key)!.facts!.refresh();
-                expect(assertCurrent).not.toThrow();
-              }
             },
             { prepareLease: prepareBindingTestLease },
           );

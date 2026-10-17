@@ -29,6 +29,7 @@ import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
   type ApplicationPlacementStartupDependencies,
+  type ApplicationPlacementStartupStatus,
 } from "./session-placement-startup.ts";
 
 registerNewSessionSetupEnglish();
@@ -379,11 +380,14 @@ export default function createApplicationPlacementStartupRuntime(
             : entry.work.recovery.phase === "sending"
               ? "sending"
               : "pending";
+      let startStatus: ApplicationPlacementStartupStatus["startStatus"];
       if (phase === "pending") {
         const row = params.sessions.state.result?.sessions.find((candidate: GatewaySessionRow) =>
           areUiSessionKeysEquivalent(candidate.key, entry.owner.sessionKey),
         );
         const placementState = row?.placement?.state;
+        startStatus =
+          row?.placement?.state === "provisioning" ? row.placement.startStatus : undefined;
         if (placementState && isStartupPlacementPhase(placementState)) {
           phase = placementState;
         }
@@ -392,6 +396,7 @@ export default function createApplicationPlacementStartupRuntime(
         sessionKey: entry.owner.sessionKey,
         targetKind: entry.work.recovery.target.kind,
         phase,
+        ...(startStatus ? { startStatus } : {}),
         startedAt: entry.createdAt,
         initialTurn: buildPlacementStartupInitialTurn({
           recovery: entry.work.recovery,

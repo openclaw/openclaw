@@ -1,7 +1,7 @@
 /** Deliver drained requester waves; lifecycle owns their persisted outbox on retained run rows. */
 import { getRuntimeConfig } from "../../../config/config.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
-import { logWarn } from "../../../logger.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import {
@@ -66,14 +66,17 @@ import {
   readSharedBatchState,
   createRequesterSettleBatchClaim,
   createRequesterSettleBatchDeferral,
+  waitForRequesterDescendants,
   captureRequesterRunOwner,
-  resolvePrivateSettlePolicy,
+  resolveRequesterSettlePolicy,
   retainedYieldIdentity,
   startRequesterSettleWakeAttempt,
   deferRequesterSettleWakePreparation,
   type RequesterSettleWakeBatchState,
   type RequesterSettleWakeBatchCallbacks,
 } from "./subagent-announce.requester-settle-state.js";
+
+const log = createSubsystemLogger("agents/subagent-announce");
 
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
@@ -87,6 +90,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     settledEntry: SubagentRunRecord;
     signal?: AbortSignal;
     isSourceCurrent: () => boolean;
+    onDescendantsPending?: (deadline?: number) => void;
   },
 ): Promise<boolean> {
   return withSubagentRequesterSource(
@@ -147,7 +151,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       }),
     );
   };
-  const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {
     await completeBatch([params.settledEntry], initialState);
     return false;
@@ -164,7 +167,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     !currentSettledEntry ||
     !isSameSubagentRunOwner(currentSettledEntry, params.settledEntry) ||
     !currentState ||
-    currentState.rearmGeneration !== admittedRearmGeneration
+    currentState.rearmGeneration !== initialState.rearmGeneration
   ) {
     return false;
   }
@@ -187,6 +190,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // must be terminal before this batch can wake its requester.
     settledBatch = frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake);
     if (!settledBatch.every(hasSettled)) {
+      params.onDescendantsPending?.();
       return false;
     }
   } else {
@@ -217,6 +221,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   };
 
   const resolveGatewayContext = getSharedGatewayContextResolver(settledBatch);
+  const preparation = requesterAgentId
+    ? resolveGatewayContext?.()?.agentDatabaseStartup?.waitForAgentPreparation(requesterAgentId, {
+        signal: params.signal,
+      })
+    : undefined;
+  if (preparation) {
+    await preparation;
+    if (params.signal?.aborted || !params.isSourceCurrent()) {
+      return false;
+    }
+  }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
   const currentCompletionRows = (rows: SubagentRunRecord[]) =>
@@ -270,7 +285,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   try {
     // Scheduling is per child, but every replay of this frozen wave is one input.
     // Retain all possible shipped sources only for exact accepted-input matching.
-    const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
     // Keep the batch members themselves in the settle check, including paused work.
     const rootRunIds = frozen ? new Set(frozenBatchRunIds) : undefined;
     const readRequesterDescendants = createRequesterDescendantReader({
@@ -278,7 +292,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       requesterAgentId,
       requesterStorePath,
       settledEntry: currentSettledEntry,
-      settledBefore: batchCreatedAt,
+      settledBefore: Math.min(...settledBatch.map((entry) => entry.createdAt)),
       rootRunIds,
       signal: params.signal,
       isSourceCurrent: params.isSourceCurrent,
@@ -287,10 +301,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (!initialDescendants) {
       return false;
     }
-    const hasUnsettledDescendants = !pauseNotice && initialDescendants.unsettled;
-    if (!frozen && hasUnsettledDescendants) {
-      return false;
-    }
+    const waitForDescendants = (facts: NonNullable<typeof initialDescendants>) =>
+      !pauseNotice && waitForRequesterDescendants(facts, frozen, params.onDescendantsPending);
 
     const retainedBatchRunIds = pauseNotice ? frozenBatchRunIds : batchRunIds;
     const isStoreCurrent = () =>
@@ -352,16 +364,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
     const deferBatch = createRequesterSettleBatchDeferral({
-      readDescendants: readRequesterDescendants,
       claimCurrentBatch: () => acquireBatch() && params.isSourceCurrent() && refreshBatch(),
       readState: () => readSharedBatchState(settledBatch),
       transitionBatch,
       batchRunIds: retainedBatchRunIds,
-      retryDelayMs: REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
     });
-    // Unfrozen waves with unsettled descendants returned above; a frozen wave
-    // defers until its stale-descendant wait is spent.
-    if (hasUnsettledDescendants && !(await deferBatch())) {
+    if (waitForDescendants(initialDescendants)) {
       return false;
     }
     const interruptedContinuations = settledBatch.filter(isQuietSubagentRestartContinuation);
@@ -412,14 +420,18 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       lifecycleRevision: requesterEntry.lifecycleRevision,
     };
     const completionRows = currentCompletionRows(settledBatch);
+    const recoveryRows = completionRows.filter((entry) =>
+      matchesSubagentRequesterSession(entry, requesterIdentity),
+    );
     // Delivered children remain in yield cohorts; the admitted marker owns whether
     // the requester may deliver its final under the conversation's reply policy.
-    const { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker } =
-      resolvePrivateSettlePolicy(
+    const { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker } =
+      resolveRequesterSettlePolicy(
         completionRows,
         requesterYieldedAfterDelivery,
         selectedState,
         requesterIdentity,
+        recoveryRows.length === completionRows.length,
       );
     // `/new` keeps the session id but rotates the lifecycle revision, so compare the
     // whole incarnation; a deliverable retry must not post old findings into a reset session.
@@ -434,9 +446,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       });
       return false;
     }
-    const recoveryRows = completionRows.filter((entry) =>
-      matchesSubagentRequesterSession(entry, requesterIdentity),
-    );
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
       : await readChildCompletionFindings(completionRows);
@@ -465,11 +474,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     state = readSharedBatchState(settledBatch);
     const descendantsUnsettled = !pauseNotice && currentDescendants.unsettled;
-    if (descendantsUnsettled) {
-      if (!(await deferBatch())) {
-        return false;
-      }
-      state = readSharedBatchState(settledBatch);
+    if (waitForDescendants(currentDescendants)) {
+      return false;
     }
     const wakeMessage = buildRequesterSettleWakeMessage({
       findings: preparedFindings.text,
@@ -563,7 +569,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           sourceReceiptAdmission.isRequesterCurrent()
         ) {
           // Requester turnover revokes this attempt, not the child's need for direction.
-          await deferBatch(knownUndelivered ? { status: "pending" } : {}, false);
+          await deferBatch(knownUndelivered ? { status: "pending" } : {});
           return true;
         }
         await completeBatch(settledBatch, state);
@@ -615,7 +621,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                 requesterIsSubagent: requesterDepth >= 1,
                 expectsCompletionMessage: false,
                 requireDirectDelivery: true,
-                ...privateBinding,
+                ...requesterBinding,
                 ...(!pauseNotice && requireVisibleReply ? { requireVisibleReply } : {}),
                 directIdempotencyKey,
                 signal: params.signal,
@@ -669,13 +675,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         nextAttemptAt: Date.now() + retryDelayMs,
         batchRunIds: retainedBatchRunIds,
         ...retainedYieldIdentity(state),
-        deferralCount: state.deferralCount,
         lastError,
       };
       await transitionBatch(state);
-      logWarn(
-        `requester settle wake transport replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
-      );
+      log.warn("requester settle wake transport replay scheduled", {
+        err: error,
+        requesterSessionKey,
+        directIdempotencyKey,
+        replayCount,
+        retryDelayMs,
+      });
       return false;
     }
     if (delivery.delivered) {
@@ -686,13 +695,13 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
     if (pauseNotice && delivery.reason === "source_owner_changed") {
-      await deferBatch({ status: "pending" }, false);
+      await deferBatch({ status: "pending" });
       return false;
     }
     if (delivery.reason === "requester_turn_pending") {
       // An existing Gateway turn still owns the input. Observe the same request
       // without spending failure attempts or closing its completion obligation.
-      await deferBatch({ lastError: undefined }, false);
+      await deferBatch({ lastError: undefined });
       return false;
     }
     if (
@@ -723,12 +732,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       nextAttemptAt: Date.now() + retryDelayMs,
       batchRunIds: retainedBatchRunIds,
       ...retainedYieldIdentity(state),
-      deferralCount: state.deferralCount,
       lastError,
     });
-    logWarn(
-      `requester settle wake attempt ${attemptCount} failed; retrying in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
-    );
+    log.warn("requester settle wake attempt failed; retry scheduled", {
+      error: lastError,
+      requesterSessionKey,
+      directIdempotencyKey,
+      attemptCount,
+      retryDelayMs,
+      disposition: delivery.disposition,
+      reason: delivery.reason,
+    });
     return false;
   } finally {
     requesterCurrent?.release();

@@ -7,17 +7,10 @@ import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
-
-export const SESSION_ARCHIVE_ZSTD_SUFFIX = ".zst";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
+export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
 const zstdCodec = resolveZstdCodec();
-
-/** Strips the optional zstd suffix so archive name parsers see one shape. */
-export function stripSessionArchiveCompressionSuffix(fileName: string): string {
-  return fileName.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
-    ? fileName.slice(0, -SESSION_ARCHIVE_ZSTD_SUFFIX.length)
-    : fileName;
-}
 
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;

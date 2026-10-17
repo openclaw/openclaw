@@ -54,6 +54,12 @@ export type ControlUiPluginFrameGrantAck = {
 
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
+  /** Viewer-scoped display projection, never an editable config snapshot. */
+  preferences?: {
+    profileId?: string;
+    config?: Record<string, unknown>;
+    entries?: Record<string, unknown>;
+  };
   basePath: string;
   assistantName: string;
   assistantAvatar: string;
@@ -75,6 +81,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   /** Whether experimental speech-bubble presentation is available. */
   chatBubblesEnabled?: boolean;
+  /** Whether optional composer prediction inference is enabled. */
+  composerPredictionsEnabled?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */

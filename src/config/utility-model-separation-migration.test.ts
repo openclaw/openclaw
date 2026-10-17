@@ -47,13 +47,23 @@ describe("utility model separation migration", () => {
     "added-provider",
     "candidate-marker",
     "builtin",
+    "builtin-object",
     "small@q8_0",
     "small@20260101",
   ])("preserves the previous implicit primary and unrelated config for %s", (kind) => {
-    const previous: OpenClawConfig =
-      kind === "builtin"
-        ? { agents: { defaults: { utilityModel: "remote/utility" }, entries: { worker: {} } } }
-        : legacyConfig();
+    const previous: OpenClawConfig = kind.startsWith("builtin")
+      ? {
+          agents: {
+            defaults: {
+              utilityModel:
+                kind === "builtin-object"
+                  ? { primary: "remote/utility", fallbacks: ["remote/backup"] }
+                  : "remote/utility",
+            },
+            entries: { worker: {} },
+          },
+        }
+      : legacyConfig();
     if (kind.startsWith("small@")) {
       expectDefined(previous.models?.providers?.["local-fixture"]?.models[0], "model").id = kind;
     }
@@ -77,13 +87,13 @@ describe("utility model separation migration", () => {
       };
     } else if (kind === "candidate-marker") {
       next.meta = { migrations: { utilityModelSeparation: true } };
-    } else if (kind === "builtin") {
+    } else if (kind.startsWith("builtin")) {
       next.models = legacyConfig().models;
     }
     const result = materializeUtilityModelSeparation(next, previous);
     expect(resolveUtilityModelSeparationError(result.config)).toBeUndefined();
     expect(result.config.agents?.defaults?.model).toEqual(
-      kind === "builtin"
+      kind.startsWith("builtin")
         ? { primary: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}` }
         : {
             primary: `local-fixture/${kind.startsWith("small@") ? kind : "small"}`,

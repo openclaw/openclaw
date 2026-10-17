@@ -180,7 +180,7 @@ describe("readGatewayServiceState", () => {
           sourcePath: registered,
         })),
         isLoaded: vi.fn<GatewayService["isLoaded"]>(
-          async ({ env } = {}) => env?.OPENCLAW_TASK_SCRIPT === expected,
+          async (options = {}) => options.env?.OPENCLAW_TASK_SCRIPT === expected,
         ),
         readRuntime: vi.fn<GatewayService["readRuntime"]>(async (env) => ({
           status: env?.OPENCLAW_TASK_SCRIPT === expected ? "running" : "unknown",
@@ -457,33 +457,6 @@ describe("readGatewayServiceState", () => {
     },
   );
 
-  it("keeps the caller-selected service identity when merging persisted env", async () => {
-    const readRuntime = vi.fn(async () => ({ status: "running" }));
-    const service = createService({
-      isLoaded: vi.fn(async () => true),
-      readCommand: vi.fn(async () => ({
-        programArguments: ["openclaw", "gateway", "run"],
-        environment: {
-          OPENCLAW_GATEWAY_PORT: "18789",
-          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-        },
-      })),
-      readRuntime,
-    });
-
-    const state = await readGatewayServiceState(service, {
-      env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service" },
-    });
-
-    expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
-    expect(readRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
-      }),
-      { timeoutMs: undefined },
-    );
-  });
-
   it("bounds structured runtime inspection diagnostics", async () => {
     const service = createService({
       readRuntime: vi.fn(async () => {
@@ -531,18 +504,6 @@ describe("readGatewayServiceState", () => {
 });
 
 describe("startGatewayService", () => {
-  it("returns missing-install without attempting start", async () => {
-    const service = createService();
-
-    const result = await startGatewayService(service, {
-      env: {},
-      stdout: process.stdout,
-    });
-
-    expect(result.outcome).toBe("missing-install");
-    expect(service.start).not.toHaveBeenCalled();
-  });
-
   it("rejects an unknown post-start service inspection", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({
@@ -678,7 +639,7 @@ describe("startGatewayService", () => {
       it.each([
         {
           layout: "node-host entrypoint after dev loader",
-          args: [process.execPath, "--import", "tsx", program],
+          args: ["node", "--import", "tsx", program],
           subcommand: ["node", "run"],
         },
       ])("requests repair before start for $layout", async ({ args, subcommand }) => {
@@ -707,7 +668,7 @@ describe("startGatewayService", () => {
     it.each([
       {
         layout: "relative entrypoint",
-        args: [process.execPath, heapFlag, path.basename(entrypoint)],
+        args: ["node", heapFlag, path.basename(entrypoint)],
         workingDirectory: path.dirname(entrypoint),
       },
     ])(

@@ -230,7 +230,7 @@ suite.define(() => {
         const switchAgent = async (name: string) => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
-            .locator("wa-dropdown.sidebar-agent-menu")
+            .locator(".sidebar-agent-menu")
             .getByRole("menuitem", { name, exact: true })
             .click();
         };

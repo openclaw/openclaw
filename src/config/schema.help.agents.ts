@@ -3,7 +3,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
-    "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured seam color or theme default.",
+    "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -44,15 +44,15 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.subagent.allowModelOverride":
     "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
   "plugins.entries.*.subagent.allowedModels":
-    'Allowed override targets for trusted plugin subagent runs as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+    'Allowed override targets for trusted plugin subagent runs as full "provider/model" references. Use "*" only when you intentionally allow any model.',
   "plugins.entries.*.llm":
     "Per-plugin api.runtime.llm.complete controls for model and agent override trust. Keep this unset unless a plugin must explicitly steer host-owned completion calls.",
   "plugins.entries.*.llm.allowModelOverride":
     "Explicitly allows this plugin to request model overrides in api.runtime.llm.complete. Keep false unless the plugin is trusted to steer model selection.",
   "plugins.entries.*.llm.allowedModels":
-    'Allowed override targets for trusted plugin LLM calls as canonical "provider/model" refs. Use "*" only when you intentionally allow any model override.',
+    'Allowed override targets for trusted plugin LLM calls as full "provider/model" references. Use "*" only when you intentionally allow any model override.',
   "plugins.entries.*.llm.allowedCompletionModels":
-    'Allowed targets for every plugin LLM completion as canonical "provider/model" refs, including host-resolved defaults and overrides. Use "*" only when you intentionally allow any model.',
+    'Allowed targets for every plugin LLM completion as full "provider/model" references, including host-resolved defaults and overrides. Use "*" only when you intentionally allow any model.',
   "plugins.entries.*.llm.allowAuthProfileOverride":
     "Allows this plugin to select a non-default auth profile for isolated agent-runtime completions. Keep false unless the plugin is trusted for explicit isolated credential routing.",
   "plugins.entries.*.llm.allowAgentIdOverride":
@@ -65,6 +65,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
+  "agents.entries.*.nativeRuntimeConsent":
+    "Harness IDs allowed to use their native permissions for this agent. New chats use Full access with sandbox off. Remove an ID to revoke remembered consent immediately; explicit per-chat consent is unchanged. Required sandbox and workspace boundaries still apply.",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
@@ -77,9 +79,16 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
     "How long an unavailable escalation target is skipped for the current session.",
   "agents.defaults.utilityModel":
-    "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
+    "Optional lower-cost model (provider/model, alias, or { primary, fallbacks }) for short internal tasks such as generated titles and progress narration. Utility fallbacks use the same retry, alias resolution, and model-selection policy as configured model fallbacks, independently of model.fallbacks. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
+  "agents.defaults.utilityModel.primary": "Primary utility model (provider/model or alias).",
+  "agents.defaults.utilityModel.fallbacks":
+    "Ordered utility fallback models (provider/model or alias), independent of the main model fallback list.",
   "agents.entries.*.utilityModel":
-    "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
+    "Per-agent utility model string or { primary, fallbacks }. Unset inherits agents.defaults.utilityModel. An explicit primary without fallbacks clears inherited fallbacks; an empty string disables utility routing.",
+  "agents.entries.*.utilityModel.primary":
+    "Per-agent utility primary. Omit to inherit the default utility primary.",
+  "agents.entries.*.utilityModel.fallbacks":
+    "Ordered per-agent utility fallback models. An empty list clears inherited utility fallbacks.",
   "agents.defaults.decisionModel":
     "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
   "agents.entries.*.decisionModel":
@@ -160,7 +169,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections":
     'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
-    "Seconds a built-in compaction model request may go without progress (default: 180). Each request start and each streamed output token refreshes the window, so a slow request that keeps streaming is not cut off; the complete compaction stops after 10 windows. Plugin-owned compaction receives one window for the complete operation.",
+    "Seconds a built-in compaction model request may go without progress (default: 180). Each request start and each streamed output token refreshes the window, so a slow request that keeps streaming is not cut off; the complete compaction stops after 10 windows. Plugin-owned compaction receives one window unless the engine explicitly declares onProgress in info.acceptedHostParams and reports progress; the same 10-window ceiling applies.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
@@ -238,7 +247,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "mcp.servers.*.oauth.authProfileId":
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":
-    "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Empty, blank, or invalid lists fail closed; when omitted, the server is projected for all Codex app-server agents.",
+    "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Lists with no valid agent IDs grant no access; when omitted, the server is projected for all Codex app-server agents.",
   "mcp.servers.*.codex.defaultToolsApprovalMode":
     'Optional Codex MCP tool approval mode for this server: "auto", "prompt", or "approve". Use only for MCP servers you intentionally trust.',
   "mcp.servers.*.codex.default_tools_approval_mode":

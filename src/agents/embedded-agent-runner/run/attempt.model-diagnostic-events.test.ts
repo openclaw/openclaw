@@ -6,6 +6,7 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -19,6 +20,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../../../infra/diagnostic-model-request.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { formatModelTransportContext } from "../../../llm/model-transport-context.js";
 import {
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
@@ -100,6 +102,13 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
   }
 }
 
+function withFinalResult<T>(stream: AsyncIterable<T>) {
+  return Object.assign(stream, {
+    result: async () =>
+      makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
+  });
+}
+
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function expectNumberField(record: Record<string, unknown>, key: string) {
@@ -124,6 +133,54 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("carries the existing model call identity into asynchronous transport work", async () => {
+    const observed: string[] = [];
+    const source: StreamFn = async () => {
+      await Promise.resolve();
+      observed.push(`create${formatModelTransportContext()}`);
+      return {
+        async *[Symbol.asyncIterator]() {
+          await Promise.resolve();
+          observed.push(`iterate${formatModelTransportContext()}`);
+          yield {
+            type: "done",
+            reason: "stop",
+            message: makeAssistantMessageFixture({ stopReason: "stop" }),
+          } as const;
+        },
+        async result() {
+          await Promise.resolve();
+          observed.push(`result${formatModelTransportContext()}`);
+          return makeAssistantMessageFixture({ stopReason: "stop" });
+        },
+      };
+    };
+    const model = makeProviderModelFixture({
+      id: "test-model",
+      provider: "test-provider",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid",
+    });
+    await Promise.all(
+      [1, 2].map(async (number) => {
+        const stream = await wrap(source, {
+          runId: `run-${number}`,
+          sessionKey: `session-${number}`,
+          nextCallId: () => `run-${number}:model:7`,
+        })(model, { messages: [] });
+        await drain(stream);
+        await stream.result();
+      }),
+    );
+    expect(observed.toSorted()).toEqual(
+      ["create", "iterate", "result"].flatMap((phase) => [
+        `${phase} sessionKey="session-1" runId="run-1" requestId="run-1:model:7" requestNumber=7`,
+        `${phase} sessionKey="session-2" runId="run-2" requestId="run-2:model:7" requestNumber=7`,
+      ]),
+    );
+    expect(formatModelTransportContext()).toBe("");
   });
 
   it("observes each iterator value once without mutating a frozen provider stream", async () => {
@@ -199,9 +256,11 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const requestTimeouts: Array<number | undefined> = [];
     const wrapped = wrap(
       (() =>
-        (async function* () {
-          yield { type: "text", text: "ok" };
-        })()) as unknown as StreamFn,
+        withFinalResult(
+          (async function* () {
+            yield { type: "text", text: "ok" };
+          })(),
+        )) as unknown as StreamFn,
       {
         runId: "run-timeouts",
         sessionKey: "session-key",
@@ -291,6 +350,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
           },
         };
       },
+      result: async () => makeAssistantMessageFixture(),
     };
     const wrapped = wrap((() => stream) as unknown as StreamFn);
 
@@ -406,10 +466,11 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       date: new Date("2026-01-01T00:00:00Z"),
       custom: { toJSON: (key: string) => key.repeat(1024) },
     };
-    const messages = [{ role: "user", content: value }];
+    const messages = [{ role: "user" as const, content: "fixture", timestamp: 0, extra: value }];
+    const tools = [{ name: "fixture", description: "fixture", parameters: Type.Object({}, value) }];
     const measurePromptStats = createModelPromptStats();
     const observer = createModelObserver({
-      streamContext: { messages, tools: [value] },
+      streamContext: { messages, tools },
       capturePromptStats: true,
       measurePromptStats,
     });
@@ -417,16 +478,16 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     observer.observeResponseChunk(Date.now(), value);
 
     expect(observer.promptStats?.inputMessagesChars).toBe(JSON.stringify(messages).length);
-    expect(observer.promptStats?.toolDefinitionsChars).toBe(JSON.stringify([value]).length);
+    expect(observer.promptStats?.toolDefinitionsChars).toBe(JSON.stringify(tools).length);
     expect(observer.sizeTimingFields()).toMatchObject({
       requestPayloadBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
       responseStreamBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
     });
     for (const text of ["changed 漢字\ud800".repeat(512), "short"]) {
       value.large = text;
-      expect(measurePromptStats({ messages, tools: [value] })).toMatchObject({
+      expect(measurePromptStats({ messages, tools })).toMatchObject({
         inputMessagesChars: JSON.stringify(messages).length,
-        toolDefinitionsChars: JSON.stringify([value]).length,
+        toolDefinitionsChars: JSON.stringify(tools).length,
       });
     }
   });
@@ -437,7 +498,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const second = { role: "user" as const, content: "append 🦞\n".repeat(512), timestamp: 2 };
     const messages = [first];
     const context = { messages, systemPrompt: "system", tools: [] };
-    const wrapped = wrap(() => ({}) as never);
+    const wrapped = wrap(() => createAssistantMessageEventStream());
     const expected: unknown[] = [];
     const events = await collectModelCallEvents(async () => {
       for (const change of [
@@ -487,8 +548,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
   it("does not assemble multi-megabyte JSON strings just to measure messages", () => {
     const messages = Array.from({ length: 128 }, (_, index) => ({
-      role: "user",
+      role: "user" as const,
       content: `${index}: ${'A "quoted" line.\n'.repeat(1024)}`,
+      timestamp: index,
     }));
     const expectedChars = JSON.stringify(messages).length;
     const expectedBytes = Buffer.byteLength(JSON.stringify({ messages }), "utf8");
@@ -584,7 +646,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         runProgressEvents.push(event);
       }
     });
-    const wrapped = wrap((() => stream()) as unknown as StreamFn, {
+    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn, {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "vllm",
@@ -636,7 +698,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       options: Parameters<StreamFn>[2],
     ) => {
       await options?.onPayload?.(originalPayload, model);
-      return stream();
+      return withFinalResult(stream());
     }) as unknown as StreamFn);
 
     const events = await collectModelCallEvents(async () => {
@@ -695,7 +757,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       async function* stream() {
         yield* sourceChunks;
       }
-      const wrapped = wrap((() => stream()) as unknown as StreamFn);
+      const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
       const chunks: unknown[] = [];
       const events = await collectModelCallEvents(async () => {
         for await (const chunk of wrapped(
@@ -847,7 +909,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     async function* stream() {
       yield { type: "text_delta", delta: "ok" };
     }
-    const wrapped = wrap((() => stream()) as unknown as StreamFn);
+    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
 
     await drain(
       wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,

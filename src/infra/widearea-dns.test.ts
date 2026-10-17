@@ -118,6 +118,28 @@ describe("wide-area DNS-SD zone rendering", () => {
 });
 
 describe("wide-area DNS zone writes", () => {
+  it.each(["EACCES", "EIO"])("preserves the previous zone on %s read failure", async (code) => {
+    const error = Object.assign(new Error("cannot read existing zone"), { code });
+    vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {
+      throw error;
+    });
+
+    await expect(writeWideAreaGatewayZone(makeZoneOpts())).rejects.toBe(error);
+    expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("creates the zone when no previous file exists", async () => {
+    vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("missing zone"), { code: "ENOENT" });
+    });
+
+    await expect(writeWideAreaGatewayZone(makeZoneOpts())).resolves.toEqual({
+      zonePath: getWideAreaZonePath(baseZoneOpts.domain),
+      changed: true,
+    });
+    expect(replaceFileAtomicSyncMock).toHaveBeenCalledOnce();
+  });
+
   it("rejects blank domains", async () => {
     await expect(writeWideAreaGatewayZone(makeZoneOpts({ domain: "   " }))).rejects.toThrow(
       "wide-area discovery domain is required",

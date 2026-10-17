@@ -104,6 +104,7 @@ describe("connection live-text delivery", () => {
     const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", onEvent });
     client.start();
     const ws = getLatestWebSocket();
+    ws.emitOpen();
     const peer = createPeer("shared-observers", true);
     peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
     const send = peer.socket.send;

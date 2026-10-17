@@ -6,21 +6,21 @@ read_when:
   - You need to select a SQLite library for Bun on macOS
 ---
 
-Bun is an explicit opt-in runtime for standalone OpenClaw CLI, Gateway, and managed node host installations. Node remains their primary and recommended runtime. The native macOS app and fresh local Tauri installations on Linux use the OpenClaw Bun fork for their app-managed runtime. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for standalone installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
+Bun is an explicit opt-in runtime for standalone OpenClaw CLI, Gateway, and managed node host installations. Node remains their primary and recommended runtime. The native macOS app and fresh local Tauri installations on Linux and Windows use the OpenClaw Bun fork for their app-managed runtime. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for standalone installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
 
 Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, even when `Module.registerHooks` is available; Node uses `Module.registerHooks`. Windows paths alone do not force native loading: captured source uses the same capability-based selection as other platforms, and retiring a plugin generation removes its native and Jiti cache records. Native SDK aliases return platform-native filenames from `require.resolve()`; Jiti transformation maps retain their own path spelling.
 
 ## Requirements
 
-OpenClaw requires **Bun 1.4.0+**, an available **`node:sqlite`** API, and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
+OpenClaw supports only the **latest stable Bun release (currently 1.4.3)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
 
 | Platform | SQLite library Bun uses                       | Extension loading              | What OpenClaw does                                 |
 | -------- | --------------------------------------------- | ------------------------------ | -------------------------------------------------- |
-| Linux    | Statically linked SQLite; 3.53.2 in Bun 1.4.2 | Supported                      | No additional library setup needed.                |
+| Linux    | Statically linked SQLite; 3.53.4 in Bun 1.4.3 | Supported                      | No additional library setup needed.                |
 | macOS    | Apple system SQLite by default                | Unavailable in Apple's library | Selects a supported library or refuses; see below. |
 | Windows  | Same static SQLite build as Linux             | Supported                      | No additional library setup needed.                |
 
-The platform defaults come from [Bun's SQLite build policy](https://github.com/oven-sh/bun/blob/bun-v1.4.2/scripts/build/deps/sqlite.ts); the [Bun 1.4.2 version definition](https://github.com/oven-sh/bun/blob/bun-v1.4.2/src/jsc/bindings/sqlite/sqlite3_local.h) pins SQLite 3.53.2.
+The platform defaults come from [Bun's SQLite build policy](https://github.com/oven-sh/bun/blob/bun-v1.4.3/scripts/build/deps/sqlite.ts); the [Bun 1.4.3 version definition](https://github.com/oven-sh/bun/blob/bun-v1.4.3/src/jsc/bindings/sqlite/sqlite3_local.h) pins SQLite 3.53.4.
 
 ## macOS app private runtime
 
@@ -146,7 +146,7 @@ the selected Bun even when PATH has no Bun or contains a different build.
 When an owned managed Bun Gateway serves a different package root from the CLI,
 `openclaw update` advances the Gateway installation in place and leaves the
 invoking CLI installation unchanged. The updater validates that service's actual
-Bun for Bun 1.4+ and WAL-safe `node:sqlite`, without comparing its emulated Node
+Bun for Bun 1.4.3+ and WAL-safe `node:sqlite`, without comparing its emulated Node
 version to `engines.node`. If the updater runs on Node, that Node must also meet
 the target package's Node and SQLite requirements because finalization uses it.
 The existing service install/restart path retains the recorded Bun pin. Node split-root routing is unchanged, and a path under
@@ -159,7 +159,7 @@ refuses maintenance before stopping the service. Use
 `<bun> <service-root>/openclaw.mjs doctor --fix` for repair from the service's
 installation.
 
-First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
+First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4.3+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
 
 The trusted package lifecycle creates the launcher only when Bun's existing global
 bin points to that package and no persistent Node is present. Updates create it in
@@ -214,6 +214,12 @@ Npm-sourced plugins use OpenClaw's bundled npm 12.1.0 CLI under Bun and do not r
 
 ## SQLite worker lifecycle
 
+SQLite worker requests and replies use exclusively owned transfer buffers on both
+Node and Bun. Bun's serializer can return shared backing storage; OpenClaw copies
+those bytes before transfer, including prepared opens and large command frames.
+Doctor migrations and runtime database operations retain their existing admission,
+byte limits, and native cleanup.
+
 After selecting SQLite, long-lived Gateway, node, and worker hosts that own SQLite
 pools on macOS and Linux await a check of whether Bun's ordinary
 `DatabaseSync.close()` and `Symbol.dispose()` release native statements and WAL
@@ -221,7 +227,7 @@ resources. The check runs once in a small isolated worker; it uses behavior, not
 the Bun version string. Short CLI paths do not run it. A passing result enables
 the shared writer pool and targeted reader cleanup used on Node.
 
-Stock Bun 1.4.2 fails this check and retains the conservative lifecycle below.
+Stock Bun 1.4.3 fails this check and retains the conservative lifecycle below.
 Errors, timeouts, and unsupported WAL behavior also keep that lifecycle and record
 the reason. A timeout or error returns the conservative decision without waiting
 for worker cleanup. Cleanup waits up to five seconds for worker exit before
@@ -268,14 +274,13 @@ config or state. Gateway startup logs include the decision and its reason.
 ## Known limitations
 
 - **Supervised command output:** Large piped responses, including CUA screenshots, preserve backpressure under Bun. Completed output reaches EOF while process cleanup retains authority, including on builds that retain duplicate standard-output descriptors. A runtime that already closed its output socket does not trigger descendant cleanup.
-- **Text boundaries:** OpenClaw works around a [JSC segment lookup bug](https://github.com/oven-sh/WebKit/pull/753) that can include the preceding cluster when a lookup starts on an emoji's high surrogate. Message chunking and terminal cells preserve the intended grapheme boundaries on Bun without runtime configuration changes.
-- **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
+- **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.3's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.
 - **Package scripts:** Some scripts hardcode pnpm, so `bun run` still invokes pnpm internally.
 - **PTY terminals:** macOS and Linux use Bun's native PTY without a Node runtime only on builds providing `Bun.Terminal.pause()` and `Bun.Terminal.resume()`, such as the OpenClaw Bun fork builds that also carry the [macOS child-exit fix](https://github.com/openclaw/bun/pull/11). Other Bun releases use the Node helper and require an installed Node runtime for terminal I/O. OpenClaw skips Bun's `node` shim when selecting that runtime, including under `bun --bun`. Windows keeps `node-pty`.
 - **Windows browser extension:** native messaging registration accepts only `node.exe` as the host interpreter. Run `openclaw browser extension install` with Node on Windows.
-- **Launched desktop apps:** Node marks inherited descriptors close-on-exec at startup and Bun 1.4.2 does not, so an app that Gateway computer control launches inherits the helper's standard streams. The Gateway's 30-second cleanup timeout then stops the app when its execution closes. OpenClaw's Bun fork adopts Node's behavior in [openclaw/bun#12](https://github.com/openclaw/bun/pull/12).
-- **SQLite handles:** Bun builds that fail the [native-close capability check](/install/bun-compatibility#sqlite-worker-lifecycle), including stock Bun 1.4.2, can retain statement handles and WAL/shared-memory files after close or disposal. OpenClaw cannot finalize them through Bun's public `node:sqlite` API and waits for worker exit. Builds with the [upstream close fix](https://github.com/oven-sh/bun/pull/40005) can use targeted cleanup after passing the check. Windows and processes without completed admission retain the conservative policy.
+- **Launched desktop apps:** Node marks inherited descriptors close-on-exec at startup and Bun 1.4.3 does not, so an app that Gateway computer control launches inherits the helper's standard streams. The Gateway's 30-second cleanup timeout then stops the app when its execution closes. OpenClaw's Bun fork adopts Node's behavior in [openclaw/bun#12](https://github.com/openclaw/bun/pull/12).
+- **SQLite handles:** Bun builds that fail the [native-close capability check](/install/bun-compatibility#sqlite-worker-lifecycle), including stock Bun 1.4.3, can retain statement handles and WAL/shared-memory files after close or disposal. OpenClaw cannot finalize them through Bun's public `node:sqlite` API and waits for worker exit. Builds with the [upstream close fix](https://github.com/oven-sh/bun/pull/40005) can use targeted cleanup after passing the check. Windows and processes without completed admission retain the conservative policy.
 - **Shared-state reads:** Successful reads reuse their worker and native reader on both lifecycle policies. With the native-close capability, idle readers close after 30 minutes and targeted cleanup can retain the worker. Without it, closing or replacing a reader waits for worker exit, including host-requested cleanup; idle readers retire with their worker, and transcript discovery retires its worker before releasing captured database aliases. Failed reads and uncertain cleanup retain their existing retirement rules on every runtime.
 - **SQLite storage workers:** A Bun broker created without the native-close capability uses one worker per distinct database, up to 64 dedicated workers within the host's 64-client cap. Clients of the same database share its worker, and closing the last client waits for worker exit. Capacity exhaustion rejects new work without interrupting existing stores. Node and Bun brokers created with the capability multiplex databases across two to eight shared workers based on available CPUs; a confirmed close releases only the closed actor, while failed or empty slots still retire.
 - **Headless node updates on Windows:** a node host running on Bun still prepares updates with npm because Bun's Windows binary launchers cannot be staged. A Windows Bun-only host logs that failure at each hourly check and keeps running its current version.
@@ -287,6 +292,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Requires Bun 1.4.3+ at startup and package preinstall, retaining the pinned OpenClaw fork; removes the fixed JSC segment lookup workaround.                                                           |
 | Unreleased (main)                  | Refuses Apple's system SQLite on macOS when discovery finds no supported library, naming unloadable candidates such as an arm64 Homebrew library under x64 Rosetta Bun.                               |
 | Unreleased (main)                  | Reuses SQLite workers after a native-close check passes on macOS or Linux. Stock Bun 1.4.2, Windows, and inconclusive checks retain conservative cleanup.                                             |
 | Unreleased (main)                  | Runs the macOS app's private worker and Chrome setup on the OpenClaw Bun fork, bundling the full package and signed extension-capable SQLite in one shared runtime. Gateway hosting remains external. |

@@ -14,6 +14,19 @@ import {
 
 const HELLO_FINAL = "Hello final";
 describe("createLaneTextDeliverer", () => {
+  it("replaces a raw trailing-token preview with the prepared final answer", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.answer?.update("answer\n\nNO_REPLY");
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const delivery = expectPreviewFinalized(await deliverFinalAnswer(harness, "answer"));
+
+    expect(delivery.messageId).toBe(999);
+    expect(delivery.content).toBe("answer");
+    expect(harness.answer?.lastDeliveredText()).toBe("answer");
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("preserves a finalized preview receipt when the final history write fails", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     const historyFailure = new Error("retained Telegram history write failed");

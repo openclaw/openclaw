@@ -47,10 +47,7 @@ export type NodeWorkspaceTransferInvalidReason =
 export function isNodeWorkspaceTransferInvalidReason(
   value: unknown,
 ): value is NodeWorkspaceTransferInvalidReason {
-  return (
-    typeof value === "string" &&
-    NODE_WORKSPACE_TRANSFER_INVALID_REASONS.some((reason) => reason === value)
-  );
+  return NODE_WORKSPACE_TRANSFER_INVALID_REASONS.some((reason) => reason === value);
 }
 
 /** Retains private transfer context until the node boundary serializes a safe diagnostic. */

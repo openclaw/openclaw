@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   createMessageEndContext,
   createMessageToolEnvelope,
@@ -55,9 +56,7 @@ describe("handleMessageEnd", () => {
       },
     });
     await endMessage(ctx, { message: textMessage("NO_REPLY") });
-    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "NO_REPLY" }),
-    );
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
     expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("<internal escalation note>");
   });
 
@@ -67,6 +66,27 @@ describe("handleMessageEnd", () => {
       message: { ...textMessage("Done."), provider: "openclaw", model: "delivery-mirror" },
     });
     expect(ctx.state.assistantTurnCount).toBe(0);
+  });
+
+  it.each([
+    { text: "Deployment finished.", delivered: false },
+    { text: "Deployment finished. Actually it failed.", delivered: true },
+    { text: "Deployment finished. Tests passed.", delivered: false },
+  ])("block-streams $text after message-tool sends: $delivered", async ({ text, delivered }) => {
+    const onBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onBlockReply,
+      state: {
+        messagingToolSentTextsNormalized: ["Deployment finished.", "Tests passed."].map(
+          normalizeTextForComparison,
+        ),
+      },
+    });
+
+    await endMessage(ctx, { message: textMessage(text) });
+
+    const texts = onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string }).text);
+    expect(texts).toEqual(delivered ? [text] : []);
   });
 
   it("diagnoses text pretending to call a registered tool", async () => {
@@ -233,8 +253,7 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({ enforceFinalTag: true, onAgentEvent, onBlockReply });
     await endMessage(ctx, {
       message: {
-        role: "assistant",
-        content: "Hello world",
+        ...textMessage("Hello world"),
         usage: { input: 10, output: 5, total: 15 },
       },
     });

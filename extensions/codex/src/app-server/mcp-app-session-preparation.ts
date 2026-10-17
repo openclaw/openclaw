@@ -65,6 +65,7 @@ export async function prepareCodexMcpAppSession(params: {
       signal: input.abortSignal,
       assertCurrent: assertSourceCurrent,
     });
+    using _ = { [Symbol.dispose]: admitted.release };
     const assertCurrent = () => {
       assertSourceCurrent();
       admitted.authority.assertLegacyCurrent();
@@ -131,7 +132,7 @@ export async function prepareCodexMcpAppSession(params: {
       });
       const client = await getLeasedSharedCodexAppServerClient({
         startOptions,
-        pluginConfig: params.pluginConfig,
+        pluginConfig,
         agentId: input.agentId,
         agentDir: input.agentDir,
         config: input.config,
@@ -209,6 +210,7 @@ export async function prepareCodexMcpAppSession(params: {
           bindingStore: params.bindingStore,
           params: { ...input, authProfileId },
           assertCurrent,
+          authority: admitted.authority,
           agentId: input.agentId,
           agentDir: input.agentDir,
           cwd: input.workspaceDir,

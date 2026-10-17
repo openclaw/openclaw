@@ -14,7 +14,7 @@ import { isBoundaryTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedScope,
   isCiDocumentationPath as isDocumentationPath,
-  isNodeTestDataOnlyPath,
+  isIndependentlyCheckedDocumentation,
 } from "../ci-changed-scope.mjs";
 import {
   buildVitestRunPlans,
@@ -53,6 +53,7 @@ import {
   type NodeTestShard,
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
+import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -83,6 +84,7 @@ import {
 
 // The manifest protocol also reads this policy from historical target planners.
 export { hasQaSmokeAffectingChange } from "./ci-qa-smoke-scope.mts";
+export { isCiDocumentationPath, resolveReleaseFastLaneScope } from "../ci-changed-scope.mjs";
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
@@ -223,7 +225,7 @@ const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 // Built-artifact test inputs below also require this lane even though they do
 // not change the bytes under test.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|cli-invocation\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
 const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
@@ -255,7 +257,9 @@ export function hasControlUiPerformanceAffectingChange(
   changedPaths: string[],
   options: CwdOptions = {},
 ) {
-  const sources = changedPaths.filter((file) => !isTestOnlyPath(file));
+  const sources = changedPaths.filter(
+    (file) => !isTestOnlyPath(file) && !isDocumentationPath(file),
+  );
   if (sources.some((file) => CONTROL_UI_PERFORMANCE_SURFACE_RE.test(file))) {
     return true;
   }
@@ -282,9 +286,6 @@ const PROMPT_SNAPSHOT_SURFACE_RE =
 // plugin-sdk agent harness, codex catalog fixtures).
 const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
 
-const GLOBAL_NODE_TEST_INPUT_RE =
-  /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-process-env\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
-
 /**
  * True when a changed path can influence generated prompt snapshots: it
  * touches the snapshot surface directly, or the generator's import graph
@@ -293,10 +294,11 @@ const GLOBAL_NODE_TEST_INPUT_RE =
  */
 export function hasPromptSnapshotAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
   const cwd = options.cwd ?? process.cwd();
-  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+  const relevantPaths = changedPaths.filter((changedPath) => !isDocumentationPath(changedPath));
+  if (relevantPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
     return true;
   }
-  const sourcePaths = changedPaths.filter(
+  const sourcePaths = relevantPaths.filter(
     (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
   );
   if (sourcePaths.length === 0) {
@@ -366,46 +368,6 @@ function createBoundaryShard() {
     runner: DEFAULT_NODE_TEST_RUNNER,
     shardName: "changed-boundary",
   };
-}
-
-function isIndependentlyCheckedDocumentation(changedPath: string, cwd: string) {
-  if (
-    changedPath !== changedPath.trim() ||
-    path.posix.normalize(changedPath) !== changedPath ||
-    !isNodeTestDataOnlyPath(changedPath)
-  ) {
-    return false;
-  }
-  // Docs/instruction routing owns these pages; packaged templates retain runtime proof.
-  // Missing pages are deletions, but symlinks (including dangling ones) are not pages.
-  const entry = lstatSync(path.join(cwd, changedPath), { throwIfNoEntry: false });
-  return entry === undefined || entry.isFile();
-}
-
-export function resolveReleaseFastLaneScope(
-  changedPaths: readonly string[] | null,
-  options: CwdOptions = {},
-): { eligible: true } | { eligible: false; reason: string } {
-  if (!changedPaths?.length) {
-    return { eligible: false, reason: "missing changed paths" };
-  }
-  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
-  if (globalInput) {
-    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
-  }
-  const cwd = options.cwd ?? process.cwd();
-  const outsideScope = changedPaths.find(
-    (file) =>
-      !file.startsWith(".github/workflows/") &&
-      !file.startsWith("scripts/") &&
-      !file.startsWith("test/scripts/") &&
-      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
-      file !== "docs/reference/RELEASING.md" &&
-      !isIndependentlyCheckedDocumentation(file, cwd),
-  );
-  return outsideScope === undefined
-    ? { eligible: true }
-    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
 }
 
 /** The fixed cross-area smoke travels through the same exact-file owners as changed tests. */
@@ -692,6 +654,18 @@ function createChangedTargetShards(
     }
     return shard;
   });
+}
+
+/** Balance slow process proofs while reserving both rows inside the existing matrix cap. */
+export function createNodeWorkerE2eTestShards() {
+  return createChangedTargetShards(
+    resolvePreciseChangedTargets(NODE_WORKER_E2E_TEST_FILES, process.cwd()),
+    {
+      checkName: "checks-node-worker-e2e",
+      shardName: "node-worker-e2e",
+    },
+    2,
+  ).map((shard) => Object.assign(shard, { planConcurrency: 1 }));
 }
 
 /** Narrow canonical envelopes without changing their workers, routing, or isolation. */

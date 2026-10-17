@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import {
   createPluginRecord,
   createPluginRegistry,
   createPluginRuntimeMock,
@@ -37,8 +42,10 @@ import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js
 import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
   createStandingIntent,
+  cancelStandingIntent,
   listStandingIntents,
   matchStandingIntents,
+  startStandingIntentMaintenance,
 } from "./standing-intents.js";
 
 function deferred() {
@@ -286,6 +293,124 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 }
 
 describe("standing-intent admitted operations", () => {
+  it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
+    const clock = createGatewaySchedulerClock(1_000);
+    const gateway = createTestGatewayScheduler(clock.clock);
+    const scheduler = createTestPluginServiceScheduler(gateway);
+    const stop = startStandingIntentMaintenance({
+      agentIds: ["main"],
+      scheduler,
+      warn: vi.fn(),
+    });
+    const open = vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2");
+    try {
+      await clock.wake();
+      open.mockClear();
+      const match = () => matchStandingIntents({ agentId: "main", prompt: "launch", nowMs: 1_000 });
+      await expect(match()).resolves.toEqual([]);
+      await expect(match()).resolves.toEqual([]);
+      expect(open).not.toHaveBeenCalled();
+
+      const other = await createStandingIntent({
+        agentId: "other",
+        description: "Another agent's launch.",
+        triggerKeywords: ["launch"],
+        creatorSender: "owner",
+        maxFires: 1,
+      });
+      await expect(
+        matchStandingIntents({ agentId: "other", prompt: "launch" }),
+      ).resolves.toMatchObject([{ id: other.id, fireCount: 1 }]);
+
+      const held = await holdWriter();
+      const created = keep(seed());
+      const matching = keep(match());
+      await expectWaiting(matching, held.entered);
+      held.release();
+      const intent = await created;
+      await expect(matching).resolves.toMatchObject([{ id: intent.id, fireCount: 1 }]);
+      await held.done;
+      await clock.wake();
+      open.mockClear();
+      await expect(match()).resolves.toEqual([]);
+      expect(open).not.toHaveBeenCalled();
+
+      stop();
+      await expect(match()).resolves.toEqual([]);
+      expect(open).toHaveBeenCalledOnce();
+    } finally {
+      open.mockRestore();
+      stop();
+      await scheduler.stop();
+      await gateway.stop();
+    }
+  });
+
+  it("recovers overdue intents at restart and schedules writes and cooldowns while idle", async () => {
+    const expired = await createStandingIntent({
+      agentId: "main",
+      description: "Already expired at restart.",
+      triggerKeywords: ["old"],
+      creatorSender: "owner",
+      nowMs: 0,
+      expiresAt: 500,
+    });
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const clock = createGatewaySchedulerClock(1_000);
+    const gateway = createTestGatewayScheduler(clock.clock);
+    const scheduler = createTestPluginServiceScheduler(gateway);
+    const warn = vi.fn();
+    const stop = startStandingIntentMaintenance({ agentIds: ["main"], scheduler, warn });
+    try {
+      await clock.wake();
+      expect(readStored(expired.id)?.status).toBe("expired");
+      expect(gateway.nextWakeAtMs).toBeNull();
+
+      const intent = await createStandingIntent({
+        agentId: "main",
+        description: "Review launch.",
+        triggerKeywords: ["launch"],
+        creatorSender: "owner",
+        nowMs: 1_000,
+        expiresAt: 5_000,
+        cooldownSeconds: 1,
+        maxFires: 3,
+      });
+      await clock.wake();
+      expect(gateway.nextWakeAtMs).toBe(5_000);
+      await matchStandingIntents({ agentId: "main", prompt: "launch", nowMs: 1_000 });
+      await clock.wake();
+      expect(gateway.nextWakeAtMs).toBe(2_000);
+      await clock.advanceTo(2_000);
+      expect(readStored(intent.id)?.status).toBe("armed");
+      expect(gateway.nextWakeAtMs).toBe(5_000);
+      await clock.advanceTo(5_000);
+      expect(readStored(intent.id)?.status).toBe("expired");
+      expect(gateway.nextWakeAtMs).toBeNull();
+
+      const cancelled = await createStandingIntent({
+        agentId: "main",
+        description: "Do not deliver.",
+        triggerKeywords: ["cancel"],
+        creatorSender: "owner",
+        nowMs: 5_000,
+        expiresAt: 10_000,
+      });
+      await clock.wake();
+      await cancelStandingIntent({ agentId: "main", id: cancelled.id });
+      await clock.wake();
+      expect(gateway.nextWakeAtMs).toBeNull();
+      await clock.advanceBy(300_000);
+      expect(gateway.nextWakeAtMs).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      await scheduler.stop();
+      await gateway.stop();
+    }
+  });
+
   it.each(["create", "list", "cancel"] as const)(
     "rejects %s after owner revocation during writer admission without changing persisted rows",
     async (action) => {
@@ -328,19 +453,44 @@ describe("standing-intent admitted operations", () => {
     },
   );
 
-  it("waits for the writer before restoring the first-use standing-intent schema", async () => {
+  it("restores first-use schema and creates once under the queued writer", async () => {
     const held = await holdWriter();
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.exec("DROP TABLE standing_intents; DROP TABLE standing_intents_fts");
     const schemaExists = () =>
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'standing_intents'").get();
-    const work = keep(seed());
-    await expectWaiting(work, held.entered);
-    expect(schemaExists()).toBeUndefined();
-    held.release();
-    const created = await work;
-    expect(schemaExists()).toBeDefined();
-    expect(readStored(created.id)).toMatchObject({ status: "armed", fire_count: 0 });
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    const publications: Array<() => number> = [];
+    const admissions: string[] = [];
+    const observed = vi
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
+      .mockImplementation(async (options, source, worker) => {
+        const store = await open(options, source, {
+          ...worker,
+          onAdmitted(request) {
+            admissions.push(request.stage);
+            worker.onAdmitted?.(request);
+          },
+        });
+        const execute = vi.spyOn(store, "execute");
+        publications.push(() => execute.mock.calls.length);
+        return store;
+      });
+    try {
+      const work = keep(seed());
+      await expectWaiting(work, held.entered);
+      expect(schemaExists()).toBeUndefined();
+      held.release();
+      const created = await work;
+      expect(schemaExists()).toBeDefined();
+      expect(readStored(created.id)).toMatchObject({ status: "armed", fire_count: 0 });
+      expect(publications.reduce((count, calls) => count + calls(), 0)).toBe(1);
+      expect(admissions.filter((stage) => stage === "transaction")).toHaveLength(0);
+      // Schema recovery and the intent stay independently durable, each with live commit authority.
+      expect(admissions.filter((stage) => stage === "commit")).toHaveLength(2);
+    } finally {
+      observed.mockRestore();
+    }
   });
 
   it.each(["create", "cancel"] as const)(
@@ -528,29 +678,6 @@ describe("standing-intent admitted operations", () => {
       held.release();
       vi.useRealTimers();
     }
-  });
-
-  it.each(["cron"] as const)("awaits registered %s lifecycle maintenance", async (trigger) => {
-    const existing = await seed(true);
-    const { runner } = await registerHooks();
-    const held = await holdWriter();
-    const work = keep(
-      runner.runBeforeAgentReply(
-        { cleanedBody: "ordinary scheduled turn" },
-        { ...context, trigger },
-      ),
-    );
-    await expectWaiting(work, held.entered);
-    expect(readStored(existing.id)?.status).toBe("armed");
-    const observation = observeStandingIntentHostSql();
-    try {
-      held.release();
-      await work;
-    } finally {
-      observation.restore();
-    }
-    expect(readStored(existing.id)?.status).toBe("expired");
-    expectNoHostStandingIntentSql(observation);
   });
 
   it("refuses a queued create when its original database path is replaced", async () => {

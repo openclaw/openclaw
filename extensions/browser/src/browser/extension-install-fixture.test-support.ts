@@ -10,10 +10,7 @@ import * as registration from "./extension-install-registration.js";
 import type { NativeWindowsContext } from "./extension-windows-contract.js";
 import * as windows from "./extension-windows-host.js";
 import { runWindowsManagement } from "./extension-windows-management.js";
-import {
-  createWindowsNativePlatform,
-  type WindowsNativePlatform,
-} from "./extension-windows-platform.js";
+import { windowsNativePlatform } from "./extension-windows-platform.js";
 
 vi.mock("node:timers/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:timers/promises")>();
@@ -33,7 +30,7 @@ vi.mock("openclaw/plugin-sdk/state-paths", async (importOriginal) => {
 });
 vi.mock("./extension-windows-platform.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./extension-windows-platform.js")>();
-  return { ...actual, createWindowsNativePlatform: vi.fn(actual.createWindowsNativePlatform) };
+  return { ...actual, windowsNativePlatform: { ...actual.windowsNativePlatform } };
 });
 vi.mock("./extension-windows-management.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./extension-windows-management.js")>();
@@ -53,7 +50,7 @@ export type InstallFixture = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   windowsNative?: {
-    platform?: WindowsNativePlatform;
+    platform?: typeof windowsNativePlatform;
     manage?: typeof runWindowsManagement;
     context?: NativeWindowsContext;
     executable?: string;
@@ -135,8 +132,9 @@ function selectFixture(fixture: InstallFixture = {}) {
   }
   const native = fixture.windowsNative;
   if (native?.platform) {
-    vi.mocked(createWindowsNativePlatform).mockReturnValue(native.platform);
-    restores.push(() => vi.mocked(createWindowsNativePlatform).mockReset());
+    const previous = { ...windowsNativePlatform };
+    Object.assign(windowsNativePlatform, native.platform);
+    restores.push(() => Object.assign(windowsNativePlatform, previous));
   }
   if (native?.manage) {
     vi.mocked(runWindowsManagement).mockImplementation(native.manage);

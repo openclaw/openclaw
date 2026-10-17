@@ -514,11 +514,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         if (
           this.closed ||
           database.closed ||
-          !database.db.isOpen ||
+          !database.isOpen ||
           this.database !== database ||
           sourceDatabase !== this.publishedDatabase ||
           sourceDatabase.closed ||
-          !sourceDatabase.db.isOpen ||
+          !sourceDatabase.isOpen ||
           (generation && this.syncProviderGeneration !== generation)
         ) {
           throw new Error("Memory source owner changed before replacement");

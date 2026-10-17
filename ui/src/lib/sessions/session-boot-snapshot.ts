@@ -10,6 +10,7 @@ import {
   sidebarSnapshotScopeKey,
   subscribeSidebarBootRetirement,
 } from "../../pages/chat/session-snapshot-prewarm.ts";
+import { listen } from "../reactive/listener.ts";
 import type { SessionGateway, SessionState } from "./session-capability.ts";
 
 export function createSessionBootSnapshot(
@@ -73,7 +74,7 @@ export function createSessionBootSnapshot(
       resolve();
       return;
     }
-    retirement.signal.addEventListener("abort", () => resolve(), { once: true });
+    listen(retirement.signal, "abort", () => resolve(), { once: true });
     void readSidebarBootSnapshot(gateway)
       .then((snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {

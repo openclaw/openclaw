@@ -41,7 +41,13 @@ type DescriptorSnapshot = {
 };
 
 const snapshots = new Map<string, DescriptorSnapshot>();
-registerPluginMetadataProcessMemoLifecycleClear(() => snapshots.clear());
+// Seeds a session's first attempt from the latest publication with the same inputs;
+// per-tool identity checks still gate every reuse.
+const latestByKey = new Map<string, DescriptorSnapshot>();
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  snapshots.clear();
+  latestByKey.clear();
+});
 
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {
   const projected = publishRuntimeToolInputSchema(parameters, `${name}.parameters`, name);
@@ -78,10 +84,11 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
     inputs.modelCompat,
     inputs.tools.map((tool) => tool.name),
   ]);
-  const previous = inputs.sessionId ? snapshots.get(inputs.sessionId) : undefined;
+  const own = inputs.sessionId ? snapshots.get(inputs.sessionId) : undefined;
+  const previous = own?.key === key ? own : latestByKey.get(key);
   const entries =
-    previous?.key === key && previous.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
-      ? previous.entries
+    previous?.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
+      ? previous?.entries
       : undefined;
 
   return {
@@ -110,39 +117,65 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
       if (!inputs.sessionId) {
         return;
       }
+      // Capture only descriptor data before returning to the attempt.
+      const pending = finalized.map((tool, index): PreparedDescriptor => {
+        const entry = entries?.[index];
+        if (
+          entry &&
+          entry.source === sources[index] &&
+          entry.descriptor.parameters === tool.parameters &&
+          entry.descriptor.outputSchema === tool.outputSchema &&
+          entry.descriptor.description === tool.description
+        ) {
+          // Keep the original output source when another tool changes this catalog.
+          return entry;
+        }
+        return {
+          // SAFETY: Finalization maps the same ordered tools without filtering or reordering.
+          source: sources[index]!,
+          // SAFETY: Normalized schemas are captured from that same positional finalization pass.
+          normalized: normalized[index]!,
+          finalSource: tool.parameters,
+          outputSource: tool.outputSchema,
+          descriptor: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+            outputSchema: tool.outputSchema,
+          },
+        };
+      });
       if (
-        entries?.length === finalized.length &&
-        finalized.every((tool, index) => {
-          const entry = entries[index];
-          return (
-            entry !== undefined &&
-            entry.source === sources[index] &&
-            entry.descriptor.parameters === tool.parameters &&
-            entry.descriptor.outputSchema === tool.outputSchema &&
-            entry.descriptor.description === tool.description
-          );
-        })
+        entries?.length === pending.length &&
+        pending.every((entry, index) => entry === entries[index])
       ) {
         return;
       }
-      // Capture only descriptor data before returning to the attempt.
-      const pending = finalized.map((tool, index) => ({
-        // SAFETY: Finalization maps the same ordered tools without filtering or reordering.
-        source: sources[index]!,
-        // SAFETY: Normalized schemas are captured from that same positional finalization pass.
-        normalized: normalized[index]!,
-        finalSource: tool.parameters,
-        outputSource: tool.outputSchema,
-        descriptor: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-          outputSchema: tool.outputSchema,
-        },
-      }));
       const sessionId = inputs.sessionId;
       const publish = () => {
-        const prepared = pending.map((entry): PreparedDescriptor | undefined => {
+        // Concurrent cold sessions settle after one another; reuse what they already published.
+        const latest = latestByKey.get(key);
+        const published =
+          latest?.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
+            ? latest?.entries
+            : undefined;
+        const prepared = pending.map((entry, index): PreparedDescriptor | undefined => {
+          if (entry === entries?.[index]) {
+            return entry;
+          }
+          const shared = published?.[index];
+          if (
+            shared &&
+            shared.descriptor.name === entry.descriptor.name &&
+            shared.source === entry.source &&
+            shared.outputSource === entry.outputSource &&
+            shared.descriptor.description === entry.descriptor.description &&
+            (entry.finalSource === entry.normalized
+              ? shared.finalSource === shared.normalized
+              : shared.finalSource === entry.finalSource)
+          ) {
+            return shared;
+          }
           const normalizedSchema = publishParameters(entry.normalized, entry.descriptor.name);
           const parameters =
             entry.finalSource === entry.normalized
@@ -173,13 +206,17 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
           });
         });
         // A late settlement may replace a newer entry; input matching makes that a cold miss.
-        snapshots.delete(sessionId);
-        snapshots.set(sessionId, {
+        const snapshot = {
           key,
           pluginMetadataSnapshot: inputs.pluginMetadataSnapshot,
           entries: Object.freeze(prepared),
-        });
+        };
+        snapshots.delete(sessionId);
+        snapshots.set(sessionId, snapshot);
         pruneMapToMaxSize(snapshots, 64);
+        latestByKey.delete(key);
+        latestByKey.set(key, snapshot);
+        pruneMapToMaxSize(latestByKey, 16);
       };
       if (registerCleanup) {
         registerCleanup(async () => publish());

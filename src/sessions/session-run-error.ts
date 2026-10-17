@@ -31,6 +31,7 @@ type GatewaySessionRunFailure = {
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
+  suppressErrorNotice?: boolean;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -49,7 +50,8 @@ export async function recordGatewaySessionRunFailure(
         : (renderAssistantRequestFailureCopy({ storageFailure }) ??
           renderCodexAppServerFailureCopy(error) ??
           `Your request couldn't be completed: ${error}`),
-    display: true,
+    display: params.suppressErrorNotice !== true,
+    excludeFromContext: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };
   const result = await withSessionTranscriptWriteAssertion(
@@ -61,7 +63,6 @@ export async function recordGatewaySessionRunFailure(
         {
           kind: "custom",
           customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-          suppressWhenAssistantRun: runId,
           selectReport: (latest) => {
             params.assertCommitAllowed?.();
             return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;

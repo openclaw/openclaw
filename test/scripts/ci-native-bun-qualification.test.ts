@@ -101,26 +101,34 @@ describe("native Bun qualification inspection", () => {
     expect(inspectNativeBunQualifications(cwd)).toEqual({ staleEntries: [], changedInputs: [] });
   });
 
-  it("stays silent and preserves the existing native-to-Vitest fallback", () => {
-    const { cwd, write } = qualifiedSource();
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const selection = {
-      configs: ["test/vitest/vitest.unit-fast.config.ts"],
-      includePatterns: [fixture.tests[0]],
-    };
-    inspectNativeBunQualifications(cwd);
-    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible", cwd)).toEqual([
-      { runtime: "bun", engine: "bun-test", files: [fixture.tests[0]] },
-    ]);
-    write(fixture.tests[0], "// changed test\n");
-    inspectNativeBunQualifications(cwd);
-    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible", cwd)).toEqual([
-      { runtime: "bun", includePatterns: [fixture.tests[0]] },
-    ]);
-    expect(log).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["bun-compatible", "bun-all", "dual-all"] as const)(
+    "stays silent and preserves the native-to-Vitest fallback under %s",
+    (policy) => {
+      const { cwd, write } = qualifiedSource();
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const selection = {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        includePatterns: [fixture.tests[0]],
+      };
+      inspectNativeBunQualifications(cwd);
+      expect(resolveCiTestRuntimeSelections(selection, policy, cwd)).toEqual([
+        ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
+        { runtime: "bun", engine: "bun-test", files: [fixture.tests[0]] },
+      ]);
+      write(fixture.tests[0], "// changed test\n");
+      inspectNativeBunQualifications(cwd);
+      expect(resolveCiTestRuntimeSelections(selection, policy, cwd)).toEqual([
+        ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
+        {
+          runtime: "bun",
+          ...(policy === "bun-compatible" ? { includePatterns: [fixture.tests[0]] } : {}),
+        },
+      ]);
+      expect(log).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 });

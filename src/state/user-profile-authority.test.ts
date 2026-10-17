@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
@@ -45,7 +46,11 @@ async function fixture() {
 it("preserves profile authority through unrelated feature schema admission", async () => {
   const { options, profile, context } = await fixture();
   const { db } = openOpenClawStateDatabase(options);
-  assertExistingOpenClawStateRuntimeSchema(db, options.path, context.stateIntegrity);
+  assertExistingOpenClawStateRuntimeSchema(
+    requireNativeSqliteDatabase(db),
+    options.path,
+    context.stateIntegrity,
+  );
   const authority = await captureUserProfileAuthorityRead(context.admission);
   const bound = authority.bind(profile.id)!;
   const settled = authority.transferSettled(profile.id);

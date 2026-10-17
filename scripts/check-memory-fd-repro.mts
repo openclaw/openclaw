@@ -14,6 +14,7 @@ import { asNullableRecord as asRecord } from "../packages/normalization-core/src
 import { readNonBlankString } from "../packages/normalization-core/src/string-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
@@ -719,10 +720,8 @@ async function main() {
     const configPath = writeConfig({ homeDir, workspaceDir, port, token });
     const workspaceRealPath = fs.realpathSync.native(workspaceDir);
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...createBuildSmokeEnv(homeDir),
       ...SKIP_GATEWAY_ENV,
-      HOME: homeDir,
-      OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_GATEWAY_TOKEN: token,
       // The measured PID must not respawn for compile-cache activation.

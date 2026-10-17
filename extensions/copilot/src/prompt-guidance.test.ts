@@ -32,7 +32,7 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance({ delegationCapability: "report_only" });
 
     expect(guidance).not.toContain("## Delegation");
-    expect(guidance).toContain("You can participate in the conversation throughout your work.");
+    expect(guidance).toContain("is your complete reply.");
   });
 
   it("omits the appended developer instructions for prompt mode none", () => {

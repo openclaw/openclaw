@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { findLegacyConfigRuleIssues } from "../config/legacy.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
+import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
@@ -94,9 +96,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         repairPrefixedConfig: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
-        ...(params.agentDatabaseMigrationDiscovery
-          ? { agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery }
-          : {}),
+        agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
           params.prompter,
           progress.done,
@@ -109,6 +109,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   );
   const { snapshot, baseConfig: baseCfg } = preflight;
   preparingResources.use(preflight.pluginCache);
+  if (!snapshot.exists || snapshot.valid) {
+    await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
+  }
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
@@ -152,7 +155,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
-  const configRepairWarnings: string[] = [];
+  const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     fixHint: string,
@@ -508,6 +511,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         : {}),
     });
     state = repairSequence.state;
+    configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -566,6 +570,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     state,
     shouldRepair,
     doctorFixCommand,
+    preservedPaths: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig)?.flatMap(
+      (pending) => (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
   });
   state = unknownStep.state;
   if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
@@ -637,6 +644,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
+  await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 

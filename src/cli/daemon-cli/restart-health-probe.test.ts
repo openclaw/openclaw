@@ -310,7 +310,7 @@ describe("restart health", () => {
     );
   });
 
-  it("marks matching-version restarts unhealthy when activated plugins failed to load", async () => {
+  it("stops waiting once the expected-version gateway reports activated plugin errors", async () => {
     callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "2026.4.24", connId: "new" },
@@ -335,14 +335,18 @@ describe("restart health", () => {
         },
       }),
     );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "running", pid: 8000 },
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
       expectedVersion: "2026.4.24",
-      portUsage: ownedPortUsage,
     });
 
     expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("plugin-errors");
+    expect(snapshot.elapsedMs).toBe(0);
     expect(snapshot.gatewayVersion).toBe("2026.4.24");
     expect(snapshot.expectedVersion).toBe("2026.4.24");
     expect(snapshot.activatedPluginErrors).toEqual([
@@ -358,46 +362,12 @@ describe("restart health", () => {
       method: "health",
       scopes: ["operator.read"],
     });
+    expect(sleep).not.toHaveBeenCalled();
 
     const { renderRestartDiagnostics } = await import("./restart-health.js");
     expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
       "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
     );
-  });
-
-  it("stops waiting once the expected-version gateway reports activated plugin errors", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-        health: {
-          ok: true,
-          plugins: {
-            errors: [
-              {
-                id: "telegram",
-                origin: "bundled",
-                activated: true,
-                error: "failed to load plugin dependency: ENOSPC",
-              },
-            ],
-          },
-        },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      expectedVersion: "2026.4.24",
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("plugin-errors");
-    expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.activatedPluginErrors?.[0]?.id).toBe("telegram");
-    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("stops waiting once the expected-version gateway reports channel probe errors", async () => {

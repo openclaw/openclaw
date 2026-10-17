@@ -16,8 +16,6 @@ export function createUsageRequest<Args, Value>(
     active = null;
     try {
       publish();
-    } catch {
-      // Completion notifications retain the former Task's error isolation.
     } finally {
       notify();
     }

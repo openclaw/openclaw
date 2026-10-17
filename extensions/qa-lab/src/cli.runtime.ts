@@ -4,18 +4,15 @@ import { fileURLToPath } from "node:url";
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  buildQaAgenticParityComparison,
-  buildQaRuntimeParityReport,
-  renderQaAgenticParityMarkdownReport,
-  renderQaRuntimeParityMarkdownReport,
-  type QaParitySuiteSummary,
-} from "./agentic-parity-report.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
-import { writeQaCliReport } from "./cli-report.js";
+import {
+  resolveQaCommandOutputDir,
+  writeQaCliReport,
+  writeQaCommandVerdict,
+} from "./cli-report.js";
 import {
   buildQaConfidenceReport,
   readQaConfidenceManifestFile,
@@ -46,10 +43,6 @@ import {
   resolveQaRunProfileMembership,
 } from "./profile-planning.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
-import {
-  QA_FRONTIER_PARITY_BASELINE_LABEL,
-  QA_FRONTIER_PARITY_CANDIDATE_LABEL,
-} from "./providers/live-frontier/parity.js";
 import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
   addQaCredentialSet,
@@ -95,17 +88,9 @@ import {
   selectQaScenarioDefinitionsForChannelResolution,
 } from "./suite-planning.js";
 import {
-  readCompletedQaSuiteSummaryFile,
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
   resolveQaReportOnlyOptionalScenarioNames,
 } from "./suite-summary.js";
-import {
-  buildTokenEfficiencyReport,
-  renderTokenEfficiencyMarkdownReport,
-} from "./token-efficiency-report.js";
-
-export { runQaCoverageReportCommand } from "./cli-coverage.runtime.js";
-
 export { runQaLabUiCommand, runQaProviderServerCommand } from "./cli-server.runtime.js";
 
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
@@ -586,20 +571,6 @@ function printQaCredentialDoctorTable(
   }
 }
 
-function resolveQaCommandOutputDir(repoRoot: string, outputDir: string | undefined, kind: string) {
-  return (
-    resolveRepoRelativeOutputDir(repoRoot, outputDir) ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `${kind}-${createQaArtifactRunId()}`)
-  );
-}
-
-function writeQaCommandVerdict(label: string, pass: boolean) {
-  process.stdout.write(`${label} verdict: ${pass ? "pass" : "fail"}\n`);
-  if (!pass) {
-    process.exitCode = 1;
-  }
-}
-
 export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
@@ -1031,91 +1002,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     expectedCells: runtimeResult.expectedCells,
     observedCells: runtimeResult.observedCells,
   };
-}
-
-export async function runQaParityReportCommand(opts: {
-  repoRoot?: string;
-  candidateSummary?: string;
-  baselineSummary?: string;
-  candidateLabel?: string;
-  baselineLabel?: string;
-  outputDir?: string;
-  runtimeAxis?: boolean;
-  summary?: string;
-  tokenEfficiency?: boolean;
-}) {
-  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  if (opts.tokenEfficiency === true && opts.runtimeAxis !== true) {
-    throw new Error("--token-efficiency requires --runtime-axis.");
-  }
-  const outputDir = resolveQaCommandOutputDir(repoRoot, opts.outputDir, "parity");
-  await fs.mkdir(outputDir, { recursive: true });
-
-  if (opts.runtimeAxis === true) {
-    if (!opts.summary?.trim()) {
-      throw new Error("--runtime-axis requires --summary.");
-    }
-    const summaryPath = path.resolve(repoRoot, opts.summary);
-    const summary = (await readCompletedQaSuiteSummaryFile(summaryPath)) as QaParitySuiteSummary;
-    const reportPayload = buildQaRuntimeParityReport({ summary });
-    await writeQaCliReport(
-      outputDir,
-      "qa-runtime-parity",
-      renderQaRuntimeParityMarkdownReport(reportPayload),
-      reportPayload,
-    );
-    process.stdout.write(`QA runtime parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
-
-    let tokenEfficiencyPass = true;
-    if (opts.tokenEfficiency === true) {
-      const tokenPayload = buildTokenEfficiencyReport({
-        summary,
-      });
-      tokenEfficiencyPass = tokenPayload.pass;
-      await writeQaCliReport(
-        outputDir,
-        "qa-runtime-token-efficiency",
-        renderTokenEfficiencyMarkdownReport(tokenPayload),
-        tokenPayload,
-      );
-      process.stdout.write(
-        `QA runtime token efficiency verdict: ${tokenPayload.status === "skipped" ? "skipped" : tokenPayload.pass ? "pass" : "fail"}\n`,
-      );
-    }
-
-    if (!reportPayload.pass || !tokenEfficiencyPass) {
-      process.exitCode = 1;
-    }
-    return;
-  }
-
-  if (!opts.candidateSummary?.trim() || !opts.baselineSummary?.trim()) {
-    throw new Error(
-      "--candidate-summary and --baseline-summary are required unless --runtime-axis is set.",
-    );
-  }
-  const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
-  const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
-  const candidateSummary = (await readCompletedQaSuiteSummaryFile(
-    candidateSummaryPath,
-  )) as QaParitySuiteSummary;
-  const baselineSummary = (await readCompletedQaSuiteSummaryFile(
-    baselineSummaryPath,
-  )) as QaParitySuiteSummary;
-
-  const comparison = buildQaAgenticParityComparison({
-    candidateLabel: opts.candidateLabel?.trim() || QA_FRONTIER_PARITY_CANDIDATE_LABEL,
-    baselineLabel: opts.baselineLabel?.trim() || QA_FRONTIER_PARITY_BASELINE_LABEL,
-    candidateSummary,
-    baselineSummary,
-  });
-  await writeQaCliReport(
-    outputDir,
-    "qa-agentic-parity",
-    renderQaAgenticParityMarkdownReport(comparison),
-    comparison,
-  );
-  writeQaCommandVerdict("QA parity", comparison.pass);
 }
 
 export async function runQaConfidenceReportCommand(opts: {

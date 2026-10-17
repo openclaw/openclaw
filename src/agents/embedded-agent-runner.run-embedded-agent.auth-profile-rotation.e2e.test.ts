@@ -114,11 +114,13 @@ let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 let registerAgentHarnessFn: typeof import("./harness/registry.js").registerAgentHarness;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
+  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
@@ -153,6 +155,7 @@ async function runEmbeddedAgentInline(
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -775,25 +778,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("rotates auto-pinned profiles immediately on long-window rate limits", async () => {
-    await runAutoPinnedRotationCase({
-      errorMessage: "429 Too Many Requests: subscription usage limit reached",
-      sessionKey: "agent:test:auto",
-      runId: "run:auto",
-    });
-  });
-
-  it("rotates for overloaded assistant failures across auto-pinned profiles", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
-      exhaustTransientRetries: true,
-      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      sessionKey: "agent:test:overloaded-rotation",
-      runId: "run:overloaded-rotation",
-    });
-    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-    expect(computeBackoffMock).not.toHaveBeenCalled();
-  });
-
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
     const logCapture = createDiagnosticLogRecordCaptureFn();
     cleanupLogCapture = logCapture.cleanup;
@@ -803,13 +787,15 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
     });
 
-    await runAutoPinnedRotationCase({
+    const { usageStats } = await runAutoPinnedRotationCase({
       exhaustTransientRetries: true,
       errorMessage:
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
       sessionKey: "agent:test:overloaded-logging",
       runId: "run:overloaded-logging",
     });
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(computeBackoffMock).not.toHaveBeenCalled();
     await logCapture.flush();
 
     const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
@@ -1479,6 +1465,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       });
 
       expectAuthProfileAttempts(["openai:p1", "openai:p3"]);
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
       expect(usageStats["openai:p3"]?.lastUsed).toBeGreaterThan(3);

@@ -208,12 +208,16 @@ describe("renderActivity", () => {
     expect(
       toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
     ).not.toBeNull();
-    const filterTrigger = toolbar?.querySelector("#activity-live-filter-trigger");
+    const filterTrigger = toolbar?.querySelector<HTMLButtonElement>(
+      "#activity-live-filter-trigger",
+    );
     expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
     expect(
       container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
     ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
+    filterTrigger?.click();
+    expect(document.activeElement).toBe(container.querySelector(".activity-live-filter-popover"));
 
     const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
     if (!search) {

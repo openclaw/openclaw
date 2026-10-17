@@ -127,12 +127,15 @@ async function executeControlUiLocaleModule(
 }
 
 describe("Control UI Vite config", () => {
-  it("emits Brotli and gzip variants only for bundled compressible assets", () => {
+  it("emits Brotli and gzip variants only for bundled compressible assets", async () => {
     const source = Array.from(
       { length: 200 },
       (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
     ).join("");
-    const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
+    const variants = await createControlUiPrecompressedAssetVariants(
+      "assets/app-AbCd1234.js",
+      source,
+    );
 
     expect(variants.map((variant) => variant.fileName)).toEqual([
       "assets/app-AbCd1234.js.br",
@@ -143,9 +146,11 @@ describe("Control UI Vite config", () => {
     expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
       "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
     );
-    expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
-    expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
-    expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+    expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
+    expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
+    expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual(
+      [],
+    );
   });
 
   it("filters only a locale target and its matching config-hint preload", () => {
@@ -579,6 +584,14 @@ describe("Control UI Vite config", () => {
     const rootAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core",
     );
+    const comparisonAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/session-key-comparison",
+    );
+    expect(aliases[comparisonAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/session-key-comparison",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/session-key-comparison.ts"),
+    });
+    expect(comparisonAliasIndex).toBeLessThan(rootAliasIndex);
     expect(aliases[resultAliasIndex]).toEqual({
       find: "@openclaw/normalization-core/result",
       replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),

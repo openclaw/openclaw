@@ -14,6 +14,7 @@ export type LobsterdexCopyFeedback = { paletteId: LobsterPetPaletteId; status: "
 type LobsterdexViewProps = {
   entries: ReturnType<typeof getLobsterdexEntries>;
   copyFeedback?: LobsterdexCopyFeedback | null;
+  onCardRef?: (id: LobsterPetPaletteId, element: HTMLElement) => void;
   onCopyLink?: (paletteId: LobsterPetPaletteId) => void;
 };
 
@@ -77,6 +78,7 @@ export function LobsterdexView(props: LobsterdexViewProps) {
             return (
               <article
                 id={`lobsterdex-${palette.id}`}
+                ref={(element) => props.onCardRef?.(palette.id, element)}
                 class={["lobsterdex-page__card", { "lobsterdex-page__card--unseen": !entry() }]}
               >
                 <button
@@ -98,7 +100,9 @@ export function LobsterdexView(props: LobsterdexViewProps) {
                 </button>
                 <div
                   class={[
-                    `lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id}`,
+                    "lobsterdex-page__sprite",
+                    "lobster-pet",
+                    `lobster-pet--palette-${palette.id}`,
                     { "lobsterdex__mini--unseen": !entry() },
                   ]}
                   style={lobsterLookStyle(look)}

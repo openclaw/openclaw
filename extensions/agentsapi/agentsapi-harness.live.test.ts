@@ -47,6 +47,17 @@ describeLive("Agents API isolated hosted execution", () => {
         headers: { Authorization: "Bearer ${OPENCLAW_LIVE_AGENTSAPI_UNSET_CANARY}" },
       };
       const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              ["openai/" + modelId]: {
+                params: { responsesServerCompaction: true, responsesCompactThreshold: 700000 },
+                agentRuntime: { id: "openclaw" },
+                pickerRuntimes: ["agentsapi"],
+              },
+            },
+          },
+        },
         plugins: {
           entries: {
             agentsapi: {

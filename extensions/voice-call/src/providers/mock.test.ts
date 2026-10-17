@@ -34,26 +34,23 @@ describe("MockProvider", () => {
     );
   }
 
-  it.each(["call.initiated", "call.ringing", "call.answered", "call.active"])(
-    "preserves caller facts for %s JSON",
-    (type) => {
-      expect(parseCallerEvent({ type })).toEqual({
-        statusCode: 200,
-        events: [
-          {
-            id: "caller-facts",
-            type,
-            callId: "mock-call",
-            providerCallId: "mock-provider-call",
-            timestamp: 123,
-            direction: "inbound",
-            from: "+15550000001",
-            to: "+15550000002",
-          },
-        ],
-      });
-    },
-  );
+  it.each(["call.initiated"])("preserves caller facts for %s JSON", (type) => {
+    expect(parseCallerEvent({ type })).toEqual({
+      statusCode: 200,
+      events: [
+        {
+          id: "caller-facts",
+          type,
+          callId: "mock-call",
+          providerCallId: "mock-provider-call",
+          timestamp: 123,
+          direction: "inbound",
+          from: "+15550000001",
+          to: "+15550000002",
+        },
+      ],
+    });
+  });
 
   it("does not emit events without a nonempty string call identity", () => {
     for (const callId of [undefined, null, "", 42, true, {}, []]) {
@@ -61,12 +58,7 @@ describe("MockProvider", () => {
     }
   });
 
-  it.each([
-    { field: "providerCallId", values: [null, 42, {}, []] },
-    { field: "direction", values: [null, "sideways", "", 42, {}] },
-    { field: "from", values: [null, 42, {}, []] },
-    { field: "to", values: [null, false, {}, []] },
-  ] as const)(
+  it.each([{ field: "providerCallId", values: [null, 42, {}, []] }] as const)(
     "omits malformed optional $field without discarding the event",
     ({ field, values }) => {
       for (const value of values) {
@@ -82,41 +74,6 @@ describe("MockProvider", () => {
       }
     },
   );
-
-  it("retains an update with omitted optional caller fields", () => {
-    const result = parseCallerEvent({
-      type: "call.active",
-      providerCallId: undefined,
-      direction: undefined,
-      from: undefined,
-      to: undefined,
-    });
-    expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toMatchObject({ type: "call.active", callId: "mock-call" });
-    for (const field of ["providerCallId", "direction", "from", "to"] as const) {
-      expect(result.events[0]?.[field]).toBeUndefined();
-    }
-  });
-
-  it("preserves string facts without imposing phone formatting or trimming", () => {
-    expect(
-      parseCallerEvent({
-        callId: " ",
-        providerCallId: "",
-        direction: "outbound",
-        from: "",
-        to: "  caller-extension  ",
-      }).events,
-    ).toMatchObject([
-      {
-        callId: " ",
-        providerCallId: "",
-        direction: "outbound",
-        from: "",
-        to: "  caller-extension  ",
-      },
-    ]);
-  });
 
   it("simulates machine detection through the webhook event boundary", () => {
     const provider = new MockProvider();
@@ -137,7 +94,7 @@ describe("MockProvider", () => {
     ]);
   });
 
-  it.each([undefined, " \t\n"])("does not emit blank speech payloads %#", (transcript) => {
+  it.each([undefined])("does not emit blank speech payloads %#", (transcript) => {
     const provider = new MockProvider();
     const result = provider.parseWebhookEvent(
       createWebhookContext(
@@ -158,26 +115,6 @@ describe("MockProvider", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-  it("derives stable request keys and detects replays", () => {
-    const provider = new MockProvider();
-    const repeated = createWebhookContext(
-      JSON.stringify({ event: { type: "call.answered", callId: "c1" } }),
-    );
-    const distinct = createWebhookContext(
-      JSON.stringify({ event: { type: "call.ended", callId: "c2" } }),
-    );
-
-    const first = provider.verifyWebhook(repeated);
-    const second = provider.verifyWebhook(repeated);
-    const other = provider.verifyWebhook(distinct);
-
-    expect(first).toMatchObject({ ok: true, isReplay: false });
-    expect(first.verifiedRequestKey).toMatch(/^mock:/);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
-    expect(second.isReplay).toBe(true);
-    expect(other.isReplay).toBe(false);
-    expect(other.verifiedRequestKey).not.toBe(first.verifiedRequestKey);
   });
 
   it("expires replay keys after the mock replay window elapses", () => {

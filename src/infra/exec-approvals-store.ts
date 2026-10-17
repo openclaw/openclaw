@@ -549,23 +549,20 @@ function enqueueExecAuthorization(
         });
         return pending.map((item, index) => {
           const result = results[index];
-          try {
-            if (!result?.ok) {
-              throw new Error(result?.message ?? "Missing exec authorization result");
-            }
-            item.policy.seed(result.snapshot.file);
+          if (!result?.ok) {
             return () =>
-              item.resolve({
-                snapshot: result.snapshot,
-                readCurrent: () => {
-                  item.signal?.throwIfAborted();
-                  item.assertCurrent?.();
-                  return item.policy.read();
-                },
-              });
-          } catch (error) {
-            return () => item.reject(error);
+              item.reject(new Error(result?.message ?? "Missing exec authorization result"));
           }
+          item.policy.seed(result.snapshot.file);
+          return () =>
+            item.resolve({
+              snapshot: result.snapshot,
+              readCurrent: () => {
+                item.signal?.throwIfAborted();
+                item.assertCurrent?.();
+                return item.policy.read();
+              },
+            });
         });
       },
       {
@@ -582,6 +579,7 @@ function enqueueExecAuthorization(
               [context.admission.databasePath],
             )(operation),
           context,
+          pending,
         ),
       },
     ).then(

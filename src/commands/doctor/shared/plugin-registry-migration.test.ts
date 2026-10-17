@@ -16,11 +16,13 @@ import {
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 

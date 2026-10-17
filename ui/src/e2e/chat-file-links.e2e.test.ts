@@ -695,4 +695,98 @@ describeControlUiE2e("Control UI chat file links", () => {
       await context.close();
     }
   });
+
+  it("previews skill source on hover, focus, and touch without leaving the chat", async () => {
+    const source =
+      "---\nname: release-notes\ndescription: Write concise release notes from verified changes.\n---\n\n# Release notes\n\nRead the source, then describe the user-visible changes.\n" +
+      "\nMore instructions.".repeat(410) +
+      "\nEnd of the full skill.";
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 1366, height: 768 },
+      { width: 1440, height: 900 },
+    ]) {
+      const context = await browser.newContext({
+        viewport,
+        hasTouch: viewport.width === 390,
+        colorScheme: "dark",
+      });
+      try {
+        const page = await context.newPage();
+        page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+        const gateway = await installMockGateway(page, {
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Inspect the [release-notes skill](skills/release-notes/SKILL.md).",
+                },
+              ],
+              timestamp: 1,
+            },
+          ],
+          methodResponses: {
+            "skills.files.get": {
+              path: "skills/release-notes/SKILL.md",
+              name: "release-notes",
+              content: source,
+            },
+          },
+        });
+        await page.goto(`${server.baseUrl}chat`);
+        const link = page.locator('a[data-file-path="skills/release-notes/SKILL.md"]');
+        await link.waitFor();
+        if (viewport.width === 390) {
+          await link.tap();
+        } else {
+          await link.hover();
+        }
+        const card = page.getByRole("dialog", { name: "Skill file preview" });
+        const code = card.getByLabel("Skill source");
+        await code.waitFor();
+        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+        expect(await code.textContent()).toContain("Read the source");
+        expect(await code.locator(".skill-file-hovercard__line").count()).toBe(400);
+        expect(await code.textContent()).not.toContain("End of the full skill.");
+        const bounds = await card.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+        expect(await code.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        await page.screenshot({
+          path: path.join(artifactDir, `skill-hover-${viewport.width}.png`),
+        });
+        // The hover bridge keeps the preview available for selection and scrolling.
+        await code.hover();
+        await code.click();
+        await page.keyboard.press("End");
+        await page.keyboard.press("Escape");
+        await card.waitFor({ state: "detached" });
+        expect(await link.evaluate((el) => el === document.activeElement)).toBe(true);
+        await link.press("Enter");
+        await code.waitFor();
+        await link.press("Tab");
+        expect(
+          await card
+            .getByRole("button", { name: "Copy file" })
+            .evaluate((el) => el === document.activeElement),
+        ).toBe(true);
+        await card.getByRole("button", { name: "Open full file" }).click();
+        await page.locator(".sidebar-file-view").waitFor();
+        await page.locator(".sidebar-file-view .cm-scroller").hover();
+        await page.mouse.wheel(0, 30_000);
+        await expect
+          .poll(() => page.locator(".cm-content").textContent())
+          .toContain("End of the full skill.");
+        expect((await gateway.getRequests("skills.files.get")).length).toBe(2);
+        expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    }
+  });
 });

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -9,12 +9,15 @@ import {
   realpathSync,
   readFileSync,
   lstatSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, expect, it, vi } from "vitest";
+import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
 import { withUpdateCommandExecutor } from "../../src/cli/update-cli/update-command-executor.js";
 import {
   resolvePackageActivationHelper,
@@ -189,8 +192,69 @@ it.each(
         ? pathToFileURL(path.join(outDir, runtimeEntry))
         : runtimeWorker.resolveRuntimeWorkerUrl(entry),
     );
+    const helperName = "windows-security-helper.exe";
+    const publishedHelper = readFileSync(
+      path.join(
+        path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
+        "dist",
+        helperName,
+      ),
+    );
+    expect(readFileSync(path.join(outDir, helperName))).toEqual(publishedHelper);
+    const packageFiles = globSync("**/*", { cwd: outDir })
+      .filter((name) => lstatSync(path.join(outDir, name)).isFile())
+      .map((name) => `dist/${name.replaceAll(path.sep, "/")}`);
+    const readPackageText = (name: string) =>
+      readFileSync(path.join(outDir, name.slice("dist/".length)), "utf8");
+    expect(
+      collectPackageDistImportErrors({ files: packageFiles, readText: readPackageText }),
+    ).toEqual([]);
+    // Reproduce the original archive defect without compiling an unchanged baseline.
+    expect(
+      collectPackageDistImportErrors({
+        files: packageFiles.filter((name) => name !== `dist/${helperName}`),
+        readText: readPackageText,
+      }),
+    ).toContain(`dist/${runtimeEntry} imports missing dist/${helperName}`);
     let entry: string;
     if (kind === "managed") {
+      // The repository runner compiles a separate graph from this production build.
+      const invocationAssets = await vi.importActual<
+        typeof import("../../src/infra/update-managed-service-handoff-runtime-assets.js")
+      >("../../src/infra/update-managed-service-handoff-runtime-assets.js");
+      const invocationEntry = runtimeWorker.resolveRuntimeWorkerUrl(
+        invocationAssets.managedHandoffRuntimeEntrypoint,
+      );
+      expect(readFileSync(new URL(`./${helperName}`, invocationEntry))).toEqual(publishedHelper);
+      const manifest = JSON.parse(
+        readFileSync(new URL("../manifest.json", invocationEntry), "utf8"),
+      );
+      const helperHash = createHash("sha256").update(publishedHelper).digest("hex");
+      expect(manifest.outputs[helperName]).toBe(helperHash);
+      if (manifest.cacheSignature) {
+        const helperSource = realpathSync(
+          path.join("node_modules/@openclaw/fs-safe/dist", helperName),
+        );
+        expect(manifest.inputs[helperSource]).toBe(helperHash);
+        const packageManifest = realpathSync(
+          path.join("node_modules/@openclaw/fs-safe/package.json"),
+        );
+        expect(manifest.inputs[packageManifest]).toBe(
+          createHash("sha256").update(readFileSync(packageManifest)).digest("hex"),
+        );
+      }
+      if (process.platform === "win32") {
+        rmSync(path.join(outDir, helperName));
+        try {
+          expect(() => stageManagedHandoffRuntime(directory)).toThrow(/ENOENT/);
+          expect(readdirSync(path.join(directory, "runtime"))).toEqual([
+            MANAGED_HANDOFF_RUNTIME_ENTRY,
+          ]);
+        } finally {
+          rmSync(path.join(directory, "runtime"), { recursive: true, force: true });
+          writeFileSync(path.join(outDir, helperName), publishedHelper);
+        }
+      }
       const staged = stageManagedHandoffRuntime(directory);
       entry = path.join(directory, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
       const nativeAssets =
@@ -215,7 +279,12 @@ it.each(
               ),
             ]
           : [];
-      expect(staged.toSorted()).toEqual([entry, ...nativeAssets].toSorted());
+      const windowsAssets =
+        process.platform === "win32" ? [path.join(path.dirname(entry), helperName)] : [];
+      expect(staged.toSorted()).toEqual([entry, ...nativeAssets, ...windowsAssets].toSorted());
+      for (const helper of windowsAssets) {
+        expect(readFileSync(helper)).toEqual(publishedHelper);
+      }
       if (process.platform === "freebsd") {
         const privateModules = path.join(directory, "runtime", "node_modules");
         const stagedPackageFiles = globSync("**/*", { cwd: privateModules })
@@ -227,7 +296,7 @@ it.each(
       expect(readdirSync(path.dirname(entry))).toEqual(
         process.platform === "freebsd"
           ? [MANAGED_HANDOFF_RUNTIME_ENTRY, "node_modules"]
-          : [MANAGED_HANDOFF_RUNTIME_ENTRY],
+          : [MANAGED_HANDOFF_RUNTIME_ENTRY, ...(process.platform === "win32" ? [helperName] : [])],
       );
     } else {
       const base = path.join(realpathSync(directory), "literal-$HOME-`id`-'quoted'");
@@ -280,6 +349,10 @@ it.each(
       );
     }
 
+    // Recovery must survive loss of the old package and all its neighboring assets.
+    // The POSIX activation helper intentionally has no Windows executable in custody.
+    const builtRuntime = readFileSync(path.join(outDir, runtimeEntry));
+    rmSync(outDir, { recursive: true });
     const result = spawnSync(
       resolveTestNodeExecPath(),
       [
@@ -287,7 +360,8 @@ it.each(
         "--eval",
         `
           import assert from "node:assert/strict";
-          import { isBuiltin, registerHooks } from "node:module";
+          import { isBuiltin, registerHooks, syncBuiltinESMExports } from "node:module";
+          import childProcess from "node:child_process";
           import path from "node:path";
           import { fileURLToPath } from "node:url";
           import { DatabaseSync } from "node:sqlite";
@@ -306,6 +380,15 @@ it.each(
               "Dependency escaped private runtime: " + specifier);
             return resolved;
           } });
+          const helperCalls = [];
+          for (const method of ["spawn", "spawnSync"]) {
+            const original = childProcess[method];
+            childProcess[method] = function(file, ...args) {
+              if (String(file).endsWith("windows-security-helper.exe")) helperCalls.push(String(file));
+              return Reflect.apply(original, this, [file, ...args]);
+            };
+          }
+          syncBuiltinESMExports();
           const runtime = await import(entry);
           if (kind === "managed") for (const name of [
             "assertOpenClawStateWriteAllowed",
@@ -317,6 +400,23 @@ it.each(
             assert.equal(typeof runtime[name], "function", name);
           }
           if (kind === "managed") {
+          if (process.platform === "win32") {
+            const store = await runtime.prepareManagedHandoffLeaseStore({
+              databasePath: process.argv[5], serviceManagerEnv: {},
+            });
+            assert.deepEqual(store.read(process.cwd()), { kind: "absent" });
+            const acquired = store.acquire(process.cwd(), "fixture-owner", { kind: "update" });
+            assert.equal(acquired.kind, "acquired");
+            try {
+              assert.equal(store.read(process.cwd()).kind, "current");
+            } finally {
+              assert.equal(store.release(acquired.lease), true);
+            }
+            assert.deepEqual(store.read(process.cwd()), { kind: "absent" });
+            assert(helperCalls.length > 0, "Windows handoff did not execute the packaged ACL helper");
+            assert(helperCalls.every(file => file === path.join(path.dirname(entryPath), "windows-security-helper.exe")));
+            console.log("staged Windows ACL helper executed");
+          }
           if (process.platform === "freebsd") {
             const options = { databasePath: path.join(process.cwd(), "identity.sqlite"), serviceManagerEnv: {} };
             const store = runtime.createManagedHandoffLeaseStore(options);
@@ -354,6 +454,7 @@ it.each(
         kind,
         preparedPackage?.anchor ?? "",
         preparedPackage?.journal.read().descriptor.operationId ?? "",
+        databasePath,
       ],
       {
         cwd: directory,
@@ -392,7 +493,11 @@ it.each(
       const completedJournal = readFileSync(
         resolvePackageActivationJournalPath(preparedPackage.anchor),
       );
+      mkdirSync(outDir);
+      // A new preparation reads its own build; its detached commands still run without it.
+      writeFileSync(path.join(outDir, runtimeEntry), builtRuntime);
       const second = await prepareNext();
+      rmSync(outDir, { recursive: true });
       const recordB = second.journal.read();
       const journalPath = resolvePackageActivationJournalPath(second.anchor);
       const archivedJournal = path.join(

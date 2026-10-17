@@ -1,5 +1,8 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import {
+  collectControlUiRawCopyFromSource,
+  CONTROL_UI_TEST_FILE_PATTERN,
+} from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const parser = createNativeTypeScriptParser();
@@ -14,6 +17,20 @@ function collect(source: string) {
     text,
   }));
 }
+
+describe("Control UI i18n source scope", () => {
+  it.each([
+    ["ui/src/pages/model-providers/model-providers-page.login.test-support.ts", true],
+    ["ui/src/pages/model-providers/model-providers-page.test-support.tsx", true],
+    ["ui/src/pages/example.test.ts", true],
+    ["ui/src/pages/example.browser.test.tsx", true],
+    ["ui/src/pages/example.node.test.ts", true],
+    ["ui/src/pages/model-providers/login-controller.ts", false],
+    ["ui/src/pages/model-providers/model-providers-page.tsx", false],
+  ] as const)("classifies %s as test-only: %s", (file, testOnly) => {
+    expect(CONTROL_UI_TEST_FILE_PATTERN.test(file)).toBe(testOnly);
+  });
+});
 
 describe("Control UI JSX raw copy", () => {
   it("collects text across elements, fragments, and interpolations", () => {

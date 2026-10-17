@@ -2,11 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { z } from "zod";
 import { toRepoArtifactPath } from "./cli-paths.js";
 import type { QaEvidenceOccurrence } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { shellQuote } from "./shell-quote.js";
 import {
   formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,

@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -56,7 +56,7 @@ function publishLeaseExpiryObservation(shared: BigInt64Array, expiresAt: bigint)
 }
 
 function stageLeaseExpiryObservation(
-  db: DatabaseSync,
+  db: EngineConnection,
   shared: BigInt64Array,
   expiresAt: number | undefined,
 ): void {
@@ -75,7 +75,7 @@ function stageLeaseExpiryObservation(
 }
 
 function readOwnedLeaseExpiry(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
 ): number {
   return verifyOpenClawStateLeaseOwnership({
@@ -86,7 +86,7 @@ function readOwnedLeaseExpiry(
 }
 
 function assertOpenClawStateLeaseWorkerOwned(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
@@ -108,7 +108,7 @@ function assertOpenClawStateLeaseWorkerOwned(
 
 /** The live owner grants this exact transaction; the receipt alone grants nothing. */
 export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
@@ -122,7 +122,7 @@ export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
 
 /** One grant covers the complete lease set held by this transaction. */
 export function assertOpenClawStateLeasesWorkerOwnedInTransaction(
-  database: DatabaseSync,
+  database: EngineConnection,
   identities: readonly OpenClawStateLeaseIdentity[],
   stage: "transaction" | "commit" = "transaction",
 ): void {

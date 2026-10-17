@@ -4,7 +4,10 @@ import {
   type BackgroundPreference,
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
-import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeUiAppearancePreference,
+  UI_APPEARANCE_PREFERENCE_KEYS,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -55,7 +58,7 @@ const optionalPrefSpec = <
   prefSpec<UiSettings[K]>({
     configSync,
     extract: normalize,
-    local: (settings) => normalize(settings[key]),
+    local: (settings) => settings[key],
     write: (value) => ({ [key]: value }),
   });
 
@@ -90,7 +93,7 @@ export const SYNCED_PREFS = {
   background: prefSpec<BackgroundPreference>({
     configSync: false,
     extract: normalizeBackgroundPreference,
-    local: (settings) => normalizeBackgroundPreference(settings.background),
+    local: (settings) => settings.background,
     write: (value) => ({ background: value }),
   }),
   locale: prefSpec<string>({
@@ -134,8 +137,6 @@ export type SyncedServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | 
 // Browser storage can retain unknown keys until authoritative rejection; known fields stay typed.
 export type ServerUiPrefs = SyncedServerUiPrefs &
   Record<string, unknown> & {
-    /** Browser-only identities of the last confirmed navigation publications, never RPC entries. */
-    navigationConfirmation?: Partial<Record<"sidebarEntries", string>>;
     /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
     sidebarEntriesBase?: readonly string[];
     /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */
@@ -178,3 +179,29 @@ export type ServerUiPrefReadiness = {
   appearanceReady: boolean;
   navigationReady?: boolean;
 };
+
+export const PROFILE_UI_PREFERENCE_KEYS = [
+  ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
+  ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
+];
+
+export function extractProfileUiPrefs(entries: Record<string, unknown>): ServerUiPrefs {
+  const prefs: ServerUiPrefs = {};
+  for (const [key, preferenceKey] of Object.entries(UI_APPEARANCE_PREFERENCE_KEYS)) {
+    if (!isAppearancePref(key)) {
+      continue;
+    }
+    const value = normalizeUiAppearancePreference(preferenceKey, entries[preferenceKey]);
+    if (value !== undefined) {
+      Object.assign(prefs, { [key]: value });
+    }
+  }
+  for (const key of Object.keys(UI_NAVIGATION_PREFERENCE_KEYS).filter(isNavigationPref)) {
+    const preferenceKey = UI_NAVIGATION_PREFERENCE_KEYS[key];
+    const value = SYNCED_PREFS[key].extract(entries[preferenceKey]);
+    if (value !== undefined) {
+      Object.assign(prefs, { [key]: value });
+    }
+  }
+  return prefs;
+}

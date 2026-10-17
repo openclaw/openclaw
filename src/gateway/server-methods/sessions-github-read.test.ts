@@ -12,6 +12,7 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateWriter from "../../state/openclaw-state-worker-owner.js";
 import type { UserGitHubConnection } from "../../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -55,6 +56,31 @@ afterEach(() => {
 });
 
 describe("publication receipt reads", () => {
+  it("reads cold personal options while writer dispatch is unavailable", async () => {
+    await withReadFixture(
+      async (fixture) => {
+        fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
+        const writer = vi
+          .spyOn(stateWriter, "getOpenClawStateWorkerOwner")
+          .mockImplementation(() => {
+            throw new Error("Writer dispatch unavailable");
+          });
+        try {
+          const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+            personal: expect.objectContaining({ state: "disconnected" }),
+            shared: publisher,
+            pendingPersonal: null,
+            latestShared: receipt,
+          });
+        } finally {
+          writer.mockRestore();
+        }
+      },
+      { personal: true },
+    );
+  });
+
   it("reads personal options and receipts while shared identity discovery is pending", async ({
     signal,
   }) => {
@@ -161,6 +187,7 @@ describe("publication receipt reads", () => {
           expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
           "owned-unknown-attempt",
           expect.any(Function),
+          expect.any(Function),
         );
         expect(fixture.personalPending).not.toHaveBeenCalled();
         expect(fixture.requestForSession).not.toHaveBeenCalled();
@@ -208,6 +235,70 @@ describe("publication receipt reads", () => {
       } finally {
         refresh.resolve(Response.json({ id: 7, login: "shared-bot", avatar_url: null }));
       }
+    });
+  });
+
+  it("serves warm options while expired native authentication refreshes, then observes logout", async ({
+    signal,
+  }) => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const refresh = createDeferredCore<{
+      stdout: Buffer;
+      stderr: Buffer;
+      code: number;
+      termination: "exit";
+    }>();
+    const entered = createDeferredCore();
+    mocks.runCommandBuffered
+      .mockReset()
+      .mockResolvedValueOnce({
+        stdout: Buffer.from("synthetic-options-native-expired"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+        termination: "exit",
+      })
+      .mockImplementation(() => {
+        entered.resolve();
+        return refresh.promise;
+      });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ id: 7, login: "shared-bot", avatar_url: null }),
+    );
+    await withReadFixture(async (fixture) => {
+      await fixture.invoke("sessions.github.options", { sessionKey });
+      now.mockReturnValue(61_001);
+      const request = fixture.invoke("sessions.github.options", { sessionKey });
+      try {
+        await withinTest(entered.promise, signal);
+        const stale = await awaitGateBeforeSettlement(
+          request,
+          refresh.promise,
+          "Warm options waited for native authentication",
+        );
+        expect(stale).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            stale: true,
+            shared: { ...publisher, source: "system-detected" },
+          }),
+        );
+      } finally {
+        refresh.resolve({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 1,
+          termination: "exit",
+        });
+        await request;
+      }
+      const unavailable = await fixture.invoke("sessions.github.options", { sessionKey });
+      expect(unavailable).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ shared: null, sharedUnavailableReason: "unavailable" }),
+      );
     });
   });
 

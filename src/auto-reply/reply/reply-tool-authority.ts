@@ -22,7 +22,6 @@ import {
 import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
-  createMemorySessionCapabilityStore,
   prepareSessionCapabilityRead,
   type SessionCapabilityStore,
 } from "../../agents/subagents/spawn/subagent-session-store.js";
@@ -34,17 +33,15 @@ import {
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   prepareGatewaySessionEntryReadOnlyInWorker,
   type GatewaySessionEntryReadPlan,
 } from "../../gateway/session-utils-store-worker.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { FollowupRun } from "./queue/types.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRoute,
@@ -55,100 +52,14 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { prepareMemoryReplyToolAuthorityCaller } from "./reply-tool-authority-memory.js";
-import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
-
-export type ReplyToolAuthorityInput = {
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  originatingChannel?: FollowupRun["originatingChannel"];
-  toolsAllow?: string[];
-  disableTools?: boolean;
-  run: Partial<
-    Pick<
-      FollowupRun["run"],
-      | "config"
-      | "sessionKey"
-      | "runtimePolicySessionKey"
-      | "agentId"
-      | "agentDir"
-      | "agentAccountId"
-      | "messageProvider"
-      | "chatType"
-      | "conversationToolPolicy"
-      | "groupId"
-      | "groupChannel"
-      | "groupSpace"
-      | "memberRoleIds"
-      | "spawnedBy"
-      | "senderId"
-      | "senderName"
-      | "senderUsername"
-      | "senderE164"
-      | "senderIsOwner"
-      | "cwd"
-      | "inputProvenance"
-      | "trustedInternalHandoff"
-      | "scheduledToolPolicy"
-      | "runtimePluginToolGrant"
-      | "permissionMode"
-      | "toolOverrides"
-      | "execOverrides"
-      | "elevatedLevel"
-      | "bashElevated"
-      | "traceAuthorized"
-      | "approvalReviewerDeviceId"
-      | "authProfileId"
-      | "authProfileIdSource"
-      | "clientCaps"
-      | "gatewayUiCommandTarget"
-      | "toolBindings"
-    >
-  > &
-    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
-};
+import { applyReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
+import {
+  captureMemoryReplyToolAuthoritySession,
+  prepareMemoryReplyToolAuthorityCaller,
+} from "./reply-tool-authority-memory.js";
+import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
-
-function applyReplyToolAuthorityOverlay(
-  snapshot: ReplyToolAuthorityInput,
-  overlay: ReplyToolAuthorityOverlay,
-): ReplyToolAuthorityInput {
-  return {
-    ...snapshot,
-    originatingChannel: overlay.originatingChannel,
-    operatorAuthority: overlay.operatorAuthority,
-    toolsAllow: overlay.toolsAllow,
-    disableTools: overlay.disableTools,
-    run: {
-      ...snapshot.run,
-      permissionMode: overlay.permissionMode,
-      toolOverrides: overlay.toolOverrides,
-      messageProvider: overlay.messageProvider,
-      chatType: overlay.chatType,
-      agentAccountId: overlay.agentAccountId,
-      conversationToolPolicy: overlay.conversationToolPolicy,
-      groupId: overlay.groupId,
-      groupChannel: overlay.groupChannel,
-      groupSpace: overlay.groupSpace,
-      memberRoleIds: overlay.memberRoleIds,
-      spawnedBy: overlay.spawnedBy,
-      senderId: overlay.senderId,
-      senderName: overlay.senderName,
-      senderUsername: overlay.senderUsername,
-      senderE164: overlay.senderE164,
-      senderIsOwner: overlay.senderIsOwner,
-      inputProvenance: overlay.inputProvenance,
-      trustedInternalHandoff: overlay.trustedInternalHandoff,
-      scheduledToolPolicy: overlay.scheduledToolPolicy,
-      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
-      traceAuthorized: overlay.traceAuthorized,
-      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
-      clientCaps: overlay.clientCaps,
-      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
-      toolBindings: overlay.toolBindings,
-    },
-  };
-}
 
 function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
   return {
@@ -301,6 +212,8 @@ function resolveFollowupRunToolAuthorityFingerprint(
           ? readToolAllowlistIntersection(snapshot.toolsAllow)
           : undefined,
         disableTools: snapshot.disableTools === true,
+        forceRestartSafeTools: snapshot.forceRestartSafeTools === true,
+        forceCodeModeTools: snapshot.forceCodeModeTools === true,
         sessionFile: execution.sessionFile,
         agentDir: execution.agentDir,
         workspaceDir: execution.workspaceDir,
@@ -397,6 +310,8 @@ export function prepareReplyToolAuthority(
     operatorAuthority: run.operatorAuthority,
     toolsAllow,
     disableTools: run.disableTools === true,
+    forceRestartSafeTools: run.forceRestartSafeTools === true,
+    forceCodeModeTools: run.forceCodeModeTools === true,
     run: {
       ...run.run,
       config: run.run.config ? captureRuntimeConfig(run.run.config) : undefined,
@@ -429,8 +344,11 @@ export function prepareReplyToolAuthority(
   };
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
-  const memoryCapabilities = memory ? createMemorySessionCapabilityStore(memory) : undefined;
+  const memory = captureMemoryReplyToolAuthoritySession(sessionKey, () =>
+    assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+  );
+  const readMemoryEntry = memory?.readEntry;
+  const memoryCapabilities = memory?.capabilities;
   let captured: CapturedReplyToolAuthoritySession | undefined;
   let capturedReadPlan: GatewaySessionEntryReadPlan | undefined;
   const releases = new Set<() => void>();
@@ -501,17 +419,11 @@ export function prepareReplyToolAuthority(
     const assertEntry = retainEntry(entry);
     let selectedInput = input;
     let selectedRoute = route;
-    // Native incognito keeps its existing synchronous compatibility owner until its cutover.
-    const nativeCapabilityReader =
-      !memory && isIncognitoSessionKey(sessionKey)
-        ? (await import("../../agents/subagents/spawn/subagent-session-store-legacy.js"))
-            .withLegacySessionCapabilityRead
-        : undefined;
     const resolveFingerprint = () =>
       resolvePreparedReplyToolAuthorityFingerprint(
         selectedInput,
         selectedRoute,
-        memory ? memory.actor.snapshot(memory.authority)?.entry : entry,
+        readMemoryEntry ? readMemoryEntry() : entry,
         narrow,
         memoryCapabilities,
       );
@@ -519,9 +431,7 @@ export function prepareReplyToolAuthority(
       assertOpen();
       capturedReadPlan?.assertCurrent();
       assertEntry.assertCurrent();
-      return nativeCapabilityReader
-        ? nativeCapabilityReader(resolveFingerprint)
-        : resolveFingerprint();
+      return resolveFingerprint();
     }).catch((error: unknown) => {
       assertEntry.release();
       throw error;
@@ -540,8 +450,8 @@ export function prepareReplyToolAuthority(
     assertOpen();
     assertCurrentOperatorAuthority(input.operatorAuthority);
     let entry: SessionEntry | undefined;
-    if (memory) {
-      entry = memory.actor.snapshot(memory.authority)?.entry;
+    if (readMemoryEntry) {
+      entry = readMemoryEntry();
     } else if (capturedReadPlan) {
       entry = await withSessionEntriesFromStoresInWorker(capturedReadPlan.reads, (reads) =>
         capturedReadPlan!.selectPrepared(reads),
@@ -590,6 +500,11 @@ export function prepareReplyToolAuthority(
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) => {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "ReplyToolAuthoritySnapshot.fingerprint",
+        replacement: "await fingerprintAsync()",
+      });
       if (!fingerprintRead) {
         throw new Error("Reply tool authority requires asynchronous preparation");
       }
@@ -606,6 +521,11 @@ export function prepareReplyToolAuthority(
       return prepared.read();
     },
     project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "ReplyToolAuthoritySnapshot.project",
+        replacement: "await projectAsync()",
+      });
       const prepared = projectionRead ?? fingerprintRead;
       if (!prepared) {
         throw new Error("Reply tool authority requires asynchronous preparation");
@@ -616,7 +536,7 @@ export function prepareReplyToolAuthority(
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
-      if (memory) {
+      if (readMemoryEntry) {
         const projected = projectInput(caller);
         const policy = await prepareSessionCapabilityRead(() =>
           [snapshot, projected].every(
@@ -624,14 +544,14 @@ export function prepareReplyToolAuthority(
               resolvePreparedReplyToolAuthorityFingerprint(
                 input,
                 route,
-                memory.actor.snapshot(memory.authority)?.entry,
+                readMemoryEntry(),
                 undefined,
                 memoryCapabilities,
               ) === expected,
           ),
         );
         releases.add(policy.release);
-        const prepared = prepareMemoryReplyToolAuthorityCaller(memory, assertActive, () =>
+        const prepared = prepareMemoryReplyToolAuthorityCaller(readMemoryEntry, assertActive, () =>
           policy.read(),
         );
         recordPreparedToolAuthorityRead({
@@ -639,20 +559,6 @@ export function prepareReplyToolAuthority(
           assertLegacyCurrent: () => prepared.assertPrepared([]),
         });
         return prepared;
-      }
-      if (isIncognitoSessionKey(snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey)) {
-        if (!captured) {
-          await prepare(snapshot, route);
-        }
-        const original = captured;
-        if (!original) {
-          throw new Error("Tool authority classification source is unavailable");
-        }
-        recordPreparedToolAuthorityRead(
-          prepareNativeReplyToolAuthorityRead(original, assertActive),
-        );
-        // Published lineage is SQL-free; mutable native policy still uses compatibility.
-        return undefined;
       }
       // The consuming phase rereads this plan's original sources before checking policy.
       if (!captured) {

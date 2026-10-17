@@ -427,6 +427,17 @@ describe("diagnostic stability bundles", () => {
             external: 1024,
             arrayBuffers: 512,
             sampleAgeMs: 20,
+            retainedData: [
+              {
+                structure: "catalog-source",
+                entries: 100,
+                approximateBytes: 512,
+                generations: 1,
+                providers: 2,
+                accounts: 3,
+                truncated: true,
+              },
+            ],
           },
         ],
         workerMemoryMissing: [
@@ -474,6 +485,17 @@ describe("diagnostic stability bundles", () => {
           external: 1024,
           arrayBuffers: 512,
           sampleAgeMs: 20,
+          retainedData: [
+            {
+              structure: "catalog-source",
+              entries: 100,
+              approximateBytes: 512,
+              generations: 1,
+              providers: 2,
+              accounts: 3,
+              truncated: true,
+            },
+          ],
         },
       ],
       workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
@@ -523,6 +545,32 @@ describe("diagnostic stability bundles", () => {
             heapUsedBytes: 1536,
             externalBytes: 128,
             arrayBuffersBytes: 64,
+            workerHeaps: [
+              {
+                script: "prepared-model-catalog.worker.js",
+                heapUsed: 512,
+                heapTotal: 1024,
+                retainedData: [
+                  {
+                    structure: "catalog-config",
+                    entries: 1,
+                    approximateBytes: 256,
+                    stringBytes: 128,
+                    objects: 2,
+                    providers: 2,
+                    accounts: 3,
+                    truncated: false,
+                    credentials: "catalog-credential-secret",
+                    modelKeys: ["private-model-key"],
+                  },
+                  {
+                    structure: "private-provider-name",
+                    entries: 1,
+                    approximateBytes: 100,
+                  },
+                ],
+              },
+            ],
           },
           topSessionFiles: [
             {
@@ -617,6 +665,25 @@ describe("diagnostic stability bundles", () => {
       "agents/<agent>/sessions/<session>.jsonl",
     );
     expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
+    expect(result.bundle.evidence?.memoryPressure?.memory?.workerHeaps?.[0]?.retainedData).toEqual([
+      {
+        structure: "catalog-config",
+        entries: 1,
+        approximateBytes: 256,
+        stringBytes: 128,
+        objects: 2,
+        providers: 2,
+        accounts: 3,
+        truncated: false,
+      },
+    ]);
+    for (const secret of [
+      "catalog-credential-secret",
+      "private-model-key",
+      "private-provider-name",
+    ]) {
+      expect(JSON.stringify(result.bundle)).not.toContain(secret);
+    }
     expect(result.bundle.evidence?.memoryPressure).toMatchObject({
       thresholdBytes: 0,
       rssGrowthBytes: -1,

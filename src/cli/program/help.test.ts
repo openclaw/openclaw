@@ -3,7 +3,7 @@ import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExitError } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { configureProgramHelp } from "./help.js";
+import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 
 const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
@@ -105,12 +105,14 @@ describe("configureProgramHelp", () => {
     configureProgramHelp(program, testProgramContext);
     program.configureOutput({
       writeOut: (value) => {
-        stdout += value;
+        stdout += formatProgramHelpOutput(value);
       },
       writeErr: (value) => {
         stderr += value;
       },
     });
+    program.command("models").description("models");
+    program.command("status").description("status");
     const plugins = program.command("plugins").description("Manage plugins");
     plugins
       .command("list")
@@ -121,35 +123,6 @@ describe("configureProgramHelp", () => {
     expect(error).toBeInstanceOf(CommanderError);
     return { error: error as CommanderError, stderr, stdout };
   }
-
-  it("adds root help hint and marks commands with subcommands", () => {
-    process.argv = ["node", "openclaw", "--help"];
-    const program = makeProgramWithCommands();
-    configureProgramHelp(program, testProgramContext);
-
-    const help = captureHelpOutput(program);
-    expect(help).toContain("Hint: commands suffixed with * have subcommands");
-    expect(help).toContain("models *");
-    expect(help).toContain("status");
-    expect(help).not.toContain("status *");
-  });
-
-  it("includes banner and docs/examples in root help output", () => {
-    process.argv = ["node", "openclaw", "--help"];
-    const program = makeProgramWithCommands();
-    configureProgramHelp(program, testProgramContext);
-
-    const help = captureHelpOutput(program);
-    expect(help).toContain("BANNER-LINE");
-    const [version, options] = (formatCliBannerLineMock.mock.calls[0] as unknown as
-      | [string, { mode?: string }]
-      | undefined) ?? [undefined, undefined];
-    expect(version).toBe(testProgramContext.programVersion);
-    expect(options?.mode).toBe("default");
-    expect(help).toContain("Examples:");
-    expect(help).toContain("openclaw setup --baseline");
-    expect(help).toContain("https://docs.openclaw.ai/cli");
-  });
 
   it("keeps valid root, group, subcommand, short, and help-command output successful", async () => {
     const rootHelp = await parseHelp(["--help"]);
@@ -163,6 +136,14 @@ describe("configureProgramHelp", () => {
       expect(result.stderr).toBe("");
     }
     expect(rootHelp.error.code).toBe("commander.helpDisplayed");
+    expect(rootHelp.stdout).toContain("Hint: commands suffixed with * have subcommands");
+    expect(rootHelp.stdout).toContain("models *");
+    expect(rootHelp.stdout).toContain("status");
+    expect(rootHelp.stdout).not.toContain("status *");
+    expect(rootHelp.stdout).toContain("BANNER-LINE");
+    expect(rootHelp.stdout).toContain("Examples:");
+    expect(rootHelp.stdout).toContain("openclaw setup --baseline");
+    expect(rootHelp.stdout).toContain("https://docs.openclaw.ai/cli");
     expect(shortHelp.stdout).toBe(rootHelp.stdout);
     expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
     expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");
@@ -219,23 +200,5 @@ describe("configureProgramHelp", () => {
     process.argv = ["node", "openclaw", "--version"];
     resolveCommitHashMock.mockReturnValue(null);
     expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
-  });
-
-  it("does not treat subcommand --version options as root version requests", () => {
-    process.argv = ["node", "openclaw", "skills", "verify", "discrawl", "--version", "1.0.0"];
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    try {
-      const program = makeProgramWithCommands();
-      expect(() => configureProgramHelp(program, testProgramContext)).not.toThrow();
-      expect(logSpy).not.toHaveBeenCalled();
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
   });
 });

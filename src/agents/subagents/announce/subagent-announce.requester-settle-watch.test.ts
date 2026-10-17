@@ -13,7 +13,9 @@ import { resolvePhysicalSessionStorePath } from "../../../config/sessions/sessio
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { registerSessionStateWatch } from "../../../sessions/session-state-events.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
@@ -39,11 +41,70 @@ import {
   settledChild,
   publishWakeTransition,
   useRequesterSettleDispatchFixture,
+  createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 describe("requester settle watch admission", () => {
   useRequesterSettleDispatchFixture();
+
+  it("waits for requester startup preparation before reserving a delivery attempt", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const child = settledChild();
+    const pendingState = structuredClone(child.requesterSettleWake);
+    const preparation = createDeferredCore();
+    const preparationObserved = createDeferredCore();
+    const context = createContext();
+    context.agentDatabaseStartup = {
+      hasPendingAgents: true,
+      waitForAgentPreparation: (agentId) => {
+        expect(agentId).toBe("main");
+        preparationObserved.resolve();
+        return preparation.promise;
+      },
+    };
+    bindGatewayContextResolver(child, () => context);
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    deliver.mockResolvedValue({ delivered: true, path: "direct" });
+    const transitionBatch = vi.fn(publishWakeTransition);
+    const completeBatch = vi.fn();
+    const wake = maybeWakeRequesterAfterAllChildrenSettled({
+      isSourceCurrent: () => true,
+      requesterSessionKey: REQUESTER_KEY,
+      settledEntry: child,
+      transitionBatch,
+      completeBatch,
+    });
+    try {
+      await expect(
+        Promise.race([
+          preparationObserved.promise.then(() => "preparing"),
+          wake.then(() => "completed"),
+        ]),
+      ).resolves.toBe("preparing");
+      expect(transitionBatch).not.toHaveBeenCalled();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toEqual(pendingState);
+
+      preparation.resolve();
+      await expect(wake).resolves.toBe(true);
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(transitionBatch).toHaveBeenCalledExactlyOnceWith(
+        [child],
+        expect.objectContaining({ status: "dispatching", attemptCount: 1 }),
+        expect.any(Function),
+      );
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(Date.now()).toBe(10_000);
+    } finally {
+      preparation.resolve();
+      await wake;
+    }
+  });
 
   it.each(["current", "owner reset", "same-store handoff"] as const)(
     "fences a settled requester's worker watch without retiring its wake (%s)",

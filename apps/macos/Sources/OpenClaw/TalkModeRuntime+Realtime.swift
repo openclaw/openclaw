@@ -188,7 +188,6 @@ extension TalkModeRuntime {
 
     func shouldAttemptRealtimeRelay() -> Bool {
         guard macOSRealtimeRelayOptIn else {
-            logger.debug("talk macOS realtime relay disabled locally; using native speech")
             return false
         }
         guard hasGatewayRealtimeRelayTuple else {
@@ -287,9 +286,7 @@ extension TalkModeRuntime {
                 options: options,
                 audioCapture: audioCapture,
                 pcmPlayer: dependencies.pcmPlayer(),
-                onStatus: { [weak self] status in
-                    Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
-                },
+                onStatus: { _ in },
                 onIssue: { [weak self] issue in
                     Task { await self?.handleRealtimeIssue(issue, relayGeneration: relayGeneration) }
                 },
@@ -364,13 +361,6 @@ extension TalkModeRuntime {
             }
             throw CancellationError()
         }
-    }
-
-    private func handleRealtimeStatus(_ status: String, relayGeneration: UInt64) {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session)
-        else { return }
-        logger.debug("talk realtime status=\(status, privacy: .public)")
     }
 
     private func handleRealtimeIssue(_ issue: RealtimeTalkRelayIssue, relayGeneration: UInt64) async {

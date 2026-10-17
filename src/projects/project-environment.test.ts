@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
+  read: vi.fn(),
   checkout: vi.fn(),
   lease: vi.fn(),
   resolveCheckout: vi.fn(),
@@ -49,6 +50,10 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
+}));
+// mock-isolation: Capture Windows environment routing without opening SQLite or touching disk.
+vi.mock("../state/openclaw-state-db-readonly.js", () => ({
+  executeExistingOpenClawStateRead: mocks.read,
 }));
 vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
@@ -102,11 +107,7 @@ import { registerProjectRegistry, removeProjectRegistry } from "./project-regist
 import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectOperation = "remove" | "register" | "materialize" | "refresh";
-type ProjectCommandName =
-  | "projects.list"
-  | "projects.insert"
-  | "projects.remove"
-  | "projects.resolveRefreshOwner";
+type ProjectCommandName = "projects.insert" | "projects.remove" | "projects.resolveRefreshOwner";
 type ProjectCommand = {
   [Name in ProjectCommandName]: { type: Name; input: OpenClawStateWorkerOperations[Name]["input"] };
 }[ProjectCommandName];
@@ -171,11 +172,10 @@ it.each(
       });
       mocks.clone.mockResolvedValue(undefined);
       mocks.refresh.mockResolvedValue(undefined);
+      mocks.read.mockResolvedValue({ ok: true, type: "projects.list", projects: [] });
       mocks.execute.mockImplementation(
         async (_context: OpenClawStateWorkerContext, command: ProjectCommand) => {
           switch (command.type) {
-            case "projects.list":
-              return [];
             case "projects.insert":
               return { id: project.id, ...command.input.project };
             case "projects.remove":
@@ -218,6 +218,13 @@ it.each(
             OPENCLAW_SUPERVISOR_MODE: "external",
           });
           expect(context.admission.databasePath).toBe(databasePath);
+        }
+        for (const [readOptions, , { context }] of mocks.read.mock.calls) {
+          expect(readOptions.path).toBe(databasePath);
+          expect(context.environment).toEqual({
+            OPENCLAW_STATE_DIR: root,
+            OPENCLAW_SUPERVISOR_MODE: "external",
+          });
         }
         for (const [, captured] of mocks.checkout.mock.calls) {
           expect(captured.path).toBe(databasePath);

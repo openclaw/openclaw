@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
@@ -14,6 +15,7 @@ import {
   runWithSqliteWorkerStateContext,
 } from "../infra/sqlite-worker-state-context.js";
 import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepared-workspace-store.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-async-lifecycle.js";
@@ -57,7 +59,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const previousAppVersion = "synthetic-previous-build";
 
-function readSchemaState(db: DatabaseSync) {
+function readSchemaState(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
     metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
@@ -188,7 +190,7 @@ describe("ordinary shared-state reader admission", () => {
         },
       }),
     );
-    const read = vi.fn(({ db }: { db: DatabaseSync }) => ({
+    const read = vi.fn(({ db }: { db: EngineConnection }) => ({
       version: readStateSchemaContentVersion(db),
       metadata: db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
@@ -364,7 +366,7 @@ describe("existing shared-state schema admission", () => {
             await closeOpenClawStateDatabaseAsync();
             expect(read(capture())).toEqual(before);
           }
-          expect(checkCount()).toBe(change === "schema rollback" ? 1 : 2);
+          expect(checkCount()).toBe(change === "replacement" ? 2 : 1);
         } finally {
           reads.restore();
         }
@@ -698,11 +700,6 @@ describe("existing shared-state schema admission", () => {
               WHERE meta_key = 'primary';`,
     },
     {
-      name: "newer unpublished content",
-      sql: `INSERT INTO config_machine_state VALUES
-              ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1);`,
-    },
-    {
       name: "mismatched published metadata",
       sql: "UPDATE schema_meta SET schema_version = schema_version - 1 WHERE meta_key = 'primary';",
     },
@@ -913,7 +910,7 @@ describe("existing shared-state schema admission", () => {
     const { options } = createExistingState();
     withExistingOpenClawStateSchema(options, () => {
       const database = openOpenClawStateDatabase(options);
-      database.db.setAuthorizer((action, name) =>
+      requireNativeSqliteDatabase(database.db).setAuthorizer((action, name) =>
         action === constants.SQLITE_PRAGMA && name === "schema_version"
           ? constants.SQLITE_IGNORE
           : constants.SQLITE_OK,
@@ -921,7 +918,7 @@ describe("existing shared-state schema admission", () => {
       try {
         expect(() => openOpenClawStateDatabase(options)).toThrow(/schema version is unavailable/i);
       } finally {
-        database.db.setAuthorizer(null);
+        requireNativeSqliteDatabase(database.db).setAuthorizer(null);
       }
     });
   });

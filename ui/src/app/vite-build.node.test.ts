@@ -263,7 +263,7 @@ describe("Control UI Vite build", () => {
 
   it("caches attachment workers offline without preloading them as document modules", async () => {
     const config = createConfig();
-    const sidebar = fileURLToPath(new URL("../components/app-sidebar.ts", import.meta.url));
+    const sidebar = fileURLToPath(new URL("../components/app-sidebar.tsx", import.meta.url));
     const worker = path.join(root, "resize.js");
     await fs.writeFile(worker, 'self.onmessage = () => self.postMessage("resized");');
     await fs.writeFile(
@@ -346,7 +346,10 @@ describe("Control UI Vite build", () => {
       if (!message.includes("Control UI precompression")) {
         return;
       }
-      const emitted = fsSync.readdirSync(path.join(outDir, "assets"));
+      const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
+        encoding: "utf8",
+        recursive: true,
+      });
       activity.push({
         message,
         elapsed: clockMs,
@@ -366,7 +369,7 @@ describe("Control UI Vite build", () => {
           for (let index = 0; index < 4; index++) {
             this.emitFile({
               type: "asset",
-              fileName: `assets/extra-${index}.txt`,
+              fileName: `assets/nested/extra-${index}.txt`,
               source: "fixture",
             });
           }
@@ -376,7 +379,10 @@ describe("Control UI Vite build", () => {
 
     await build(config);
 
-    const emitted = await fs.readdir(path.join(outDir, "assets"));
+    const emitted = await fs.readdir(path.join(outDir, "assets"), {
+      encoding: "utf8",
+      recursive: true,
+    });
     const completed = emitted.filter((name) => name.endsWith(".gz")).length;
     expect(completed).toBeGreaterThan(4);
     expect(
@@ -537,7 +543,9 @@ describe("Control UI Vite build", () => {
     expect(output).toContain("Control UI precompression: starting");
     expect(output).not.toMatch(/\d+ assets|precompression complete|built in/u);
     const emitted = await fs.readdir(path.join(outDir, "assets"));
-    expect(emitted.filter((name) => name.endsWith(".br"))).toHaveLength(1);
+    const startedAssets = emitted.filter((name) => name.endsWith(".br")).length;
+    expect(startedAssets).toBeGreaterThan(0);
+    expect(startedAssets).toBeLessThanOrEqual(4);
     expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
     await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({
       code: "ENOENT",

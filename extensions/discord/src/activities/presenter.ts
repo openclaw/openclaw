@@ -1,5 +1,4 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveDiscordAccount } from "../accounts.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import { buildDiscordPresentationComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
@@ -42,12 +41,11 @@ function resolveDiscordPresentationRoute(
     return undefined;
   }
   const cfg = runtime.currentConfig();
-  const account = resolveDiscordAccount({
-    cfg,
-    accountId: context.accountId ?? context.deliveryContext?.accountId,
-  });
   const channelId = resolveDiscordChannelId(context);
-  const activityAccount = runtime.resolveAccount(account.accountId, cfg);
+  const activityAccount = runtime.resolveAccount(
+    context.accountId ?? context.deliveryContext?.accountId,
+    cfg,
+  );
   if (!channelId || !activityAccount) {
     return undefined;
   }
@@ -93,21 +91,18 @@ export function createDiscordWidgetPresenter(runtime: DiscordActivitiesRuntime):
       let result: Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
       let deliveredResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>> | undefined;
       let deliveryRecord: Promise<void> | undefined;
-      let deliveryRecordError: Error | undefined;
-      const recordDelivery = async (
+      const recordDelivery = (
         deliveryResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>>,
       ) => {
         deliveredResult = deliveryResult;
-        deliveryRecord ??= runtime.store.markWidgetDelivered(widgetId, deliveryResult.messageId);
-        try {
-          await deliveryRecord;
-        } catch (error) {
-          deliveryRecordError ??= new Error(
-            "Discord widget was delivered, but its delivery state could not be saved",
-            { cause: error },
-          );
-          throw deliveryRecordError;
-        }
+        return (deliveryRecord ??= runtime.store
+          .markWidgetDelivered(widgetId, deliveryResult.messageId)
+          .catch((error: unknown) => {
+            throw new Error(
+              "Discord widget was delivered, but its delivery state could not be saved",
+              { cause: error },
+            );
+          }));
       };
       try {
         const components = buildDiscordPresentationComponents({
@@ -138,15 +133,12 @@ export function createDiscordWidgetPresenter(runtime: DiscordActivitiesRuntime):
         );
         await recordDelivery(result);
       } catch (error) {
-        if (deliveryRecordError) {
-          throw deliveryRecordError;
-        }
         if (!deliveredResult) {
           await runtime.store.deleteWidget(widgetId);
           throw error;
         }
-        // sendDiscordComponentMessage awaits onDeliveryResult before later bookkeeping. Marker
-        // failures were surfaced above, so only post-delivery bookkeeping can reach this recovery.
+        // Retain delivered widgets, but never hide a failed delivery-state write.
+        await deliveryRecord;
         result = deliveredResult;
       }
       return { ok: true, value: { kind: "message", receipt: result.receipt } };

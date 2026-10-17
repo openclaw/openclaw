@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
@@ -13,6 +19,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -20,10 +27,8 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import {
-  withLocalWorkspaceProjection,
-  withSettledLocalWorkspace,
-} from "./local-workspace-projection.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
@@ -64,6 +69,7 @@ function observeAcknowledgedUpdate(
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -144,6 +150,42 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it.each([false, true])(
+    "settles old runtime-file results (source already copied: %s)",
+    async (copied) => {
+      const { proveGeneratedWorkspaceRecovery } =
+        await import("./local-workspace-generated-paths.test-support.js");
+      await proveGeneratedWorkspaceRecovery(owner, copied);
+    },
+  );
+
+  it("expires an old runtime-file baseline while preserving unaccepted source", async () => {
+    const { proveGeneratedWorkspaceExpiry } =
+      await import("./local-workspace-generated-paths.test-support.js");
+    await proveGeneratedWorkspaceExpiry(owner);
+  });
+
+  it("settles stopped commands without admitting new work or a replacement session", async () => {
+    const { proveStoppedLocalWorkspaceCheckpoint } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedLocalWorkspaceCheckpoint(owner);
+  });
+
+  it("settles a stopped command after its parent disposes the workspace", async () => {
+    const { proveStoppedLocalWorkspaceCheckpoint } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedLocalWorkspaceCheckpoint(owner, true);
+  });
+
+  it.each(["operator", "gateway"] as const)(
+    "rejects canonical checkpoint writes after original %s authority ends",
+    async (authority) => {
+      const { proveStoppedSandboxAuthority } =
+        await import("./local-workspace-cancellation.test-support.js");
+      await proveStoppedSandboxAuthority(owner, authority);
+    },
+  );
+
   it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
     const sql = observeLocalWorkspaceStoreSql();
     try {
@@ -199,7 +241,7 @@ describe("local sandbox workspace reconciliation", () => {
       import("../../state/openclaw-state-schema.js"),
       import("../../state/openclaw-state-db-contract.js"),
       import("../../infra/sqlite-schema-sql.js"),
-      import("../../infra/sqlite-schema-contract.js"),
+      import("../../infra/sqlite-schema-contract.test-support.js"),
     ]);
     const db = openOpenClawStateDatabase().db;
     const version = db
@@ -215,7 +257,7 @@ describe("local sandbox workspace reconciliation", () => {
       "",
     );
     expect(() =>
-      assertSqliteSchemaContains(db, "prior schema", priorSchema, {
+      assertSqliteSchemaContains(requireNativeSqliteDatabase(db), "prior schema", priorSchema, {
         allowedMissingTables: FIRST_USE_STATE_TABLES,
       }),
     ).not.toThrow();
@@ -532,70 +574,144 @@ describe("local sandbox workspace reconciliation", () => {
     },
   );
 
-  it("retirement preserves a same-name replacement browser after quiescence", async () => {
-    const [{ insertRegistryWorktree }, registry, engine] = await Promise.all([
-      import("../../agents/worktrees/registry.js"),
+  it("waits for checkpoint resume before preparing the next guest command", async ({ signal }) => {
+    const [
+      projectionOwner,
+      { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
+      { createSandboxTestContext },
+      { createSandboxFsBridge },
+      { resolveSandboxConfigForAgent },
+      registry,
+      engine,
+    ] = await Promise.all([
+      import("./local-workspace-projection.js"),
+      import("../../agents/sandbox/local-workspace.js"),
+      import("../../agents/sandbox/test-fixtures.js"),
+      import("../../agents/sandbox/fs-bridge.js"),
+      import("../../agents/sandbox/config.js"),
       import("../../agents/sandbox/registry.js"),
       import("../../agents/sandbox/container-engine.js"),
     ]);
-    await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
+      ...owner,
+      [Symbol.dispose]() {},
+    });
+    using projection = await prepareLocalSandboxWorkspace({
+      cfg: { worktreeAcceleration: false },
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: owner.worktree.path,
+      sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+    });
+    if (!projection) {
+      throw new Error("Expected managed projection");
+    }
+    const paused = createDeferred();
+    const settle = createDeferred();
+    let runtimePaused = false;
+    const events: string[] = [];
     const entry = {
-      containerName: "retirement-owned",
+      containerName: "checkpoint-command-owned",
       backendId: "docker",
       sessionKey: owner.sessionKey,
-      workspaceDir: projection,
+      workspaceDir: projection.workspaceDir,
       createdAtMs: 1,
       lastUsedAtMs: 1,
       image: "fixture",
-      cdpPort: 9222,
     };
-    await registry.updateBrowserRegistry(entry);
-    const captured = "a".repeat(64);
-    const replacement = "b".repeat(64);
-    const physical = new Set([captured]);
-    let named = captured;
-    const removeTargets: string[] = [];
-    const execute = vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
-      const target = args.at(-1) === entry.containerName ? named : args.at(-1)!;
+    await registry.updateRegistry(entry);
+    vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
       if (args[0] === "inspect") {
-        if (!physical.has(target)) {
-          return { code: 1, stdout: "", stderr: "no such container" };
-        }
         return {
           code: 0,
-          stdout: args.includes("{{.State.Paused}}")
-            ? "false"
-            : args.includes("{{.Id}}")
-              ? target
-              : target + " true false",
           stderr: "",
+          stdout: args.includes("{{.State.Paused}}")
+            ? String(runtimePaused)
+            : `${"a".repeat(64)} true ${runtimePaused}`,
         };
       }
       if (args[0] === "pause") {
-        physical.delete(captured);
-        physical.add(replacement);
-        named = replacement;
-      }
-      if (args[0] === "rm") {
-        removeTargets.push(args.at(-1)!);
-        physical.delete(target);
+        runtimePaused = true;
+        events.push("paused");
+        paused.resolve();
+        await settle.promise;
+      } else if (args[0] === "unpause") {
+        runtimePaused = false;
+        events.push("resumed");
       }
       return { code: 0, stdout: "", stderr: "" };
     });
-    const operation = vi.fn(async () => {});
+    const dispatch = (kind: string) => {
+      if (runtimePaused) {
+        throw new Error("Container is paused");
+      }
+      events.push(kind);
+    };
+    const backend: SandboxBackendHandle = {
+      id: "docker",
+      runtimeId: entry.containerName,
+      runtimeLabel: entry.containerName,
+      workdir: "/workspace",
+      buildExecSpec: async () => {
+        dispatch("exec");
+        return { argv: ["true"], env: {}, stdinMode: "pipe-closed" };
+      },
+      runShellCommand: async () => {
+        dispatch("shell");
+        return { code: 0, stdout: Buffer.from("ready"), stderr: Buffer.alloc(0) };
+      },
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: { workspaceDir: projection.workspaceDir, backend },
+    });
+    sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+    bindLocalSandboxWorkspace(sandbox, projection);
+    const checkpoint = projection.checkpoint();
+    let commands: Promise<unknown>[] = [];
+    let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
     try {
-      await expect(
-        withSettledLocalWorkspace({ worktree: owner.worktree, retireRuntime: true }, operation),
-      ).rejects.toThrow("generation");
-      expect(physical.has(replacement)).toBe(true);
-      expect(removeTargets).not.toContain(entry.containerName);
-      expect(operation).not.toHaveBeenCalled();
-      const remaining = await registry.readBrowserRegistry();
-      expect(remaining.entries).toHaveLength(1);
+      await awaitGateBeforeSettlement(
+        paused.promise,
+        checkpoint,
+        "Checkpoint did not pause runtime",
+      );
+      const controller = new AbortController();
+      const reason = new Error("cancelled during checkpoint");
+      const cancelled = backend.runShellCommand({ script: "true", signal: controller.signal });
+      commands = [cancelled];
+      controller.abort(reason);
+      await expect(withinTest(cancelled, signal)).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_ABORTED",
+        cause: reason,
+      });
+      expect(runtimePaused).toBe(true);
+      expect(events).toEqual(["paused"]);
+      pendingExec = backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      commands = [backend.runShellCommand({ script: "true" }), pendingExec];
+      const outcomes = Promise.allSettled(commands);
+      settle.resolve();
+      await checkpoint;
+      expect((await outcomes).map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
+      expect(events.slice(2).toSorted()).toEqual(["exec", "shell"]);
+      // Preparing an exec must release admission before that background command exits.
+      await projection.provision(async () => events.push("next admission"));
+      expect(events.at(-1)).toBe("next admission");
     } finally {
-      execute.mockRestore();
-      await registry.removeBrowserRegistryEntry(entry.containerName);
+      settle.resolve();
+      await Promise.allSettled([checkpoint, ...commands]);
+      if (pendingExec) {
+        const [result] = await Promise.allSettled([pendingExec]);
+        if (result.status === "fulfilled") {
+          await backend.finalizeExec!({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: result.value.finalizeToken,
+          });
+        }
+      }
+      await registry.removeRegistryEntry(entry.containerName);
     }
   });
 
@@ -611,8 +727,7 @@ describe("local sandbox workspace reconciliation", () => {
         import("../../agents/worktrees/service.js"),
         import("../../agents/worktrees/provisioned-files.js"),
       ]);
-      let now = Date.now();
-      const service = new ManagedWorktreeService({ now: () => now });
+      const service = new ManagedWorktreeService();
       owner.worktree.repoFingerprint = (
         await service.resolveRepositoryIdentity(owner.worktree.path)
       ).fingerprint;
@@ -661,7 +776,9 @@ describe("local sandbox workspace reconciliation", () => {
       expect(legacyState).toEqual([{ path: ".env.allowed", mode: expect.any(Number), chunks: 1 }]);
       await closeOpenClawStateDatabaseAsync();
       if (mode === "retention") {
-        now += SNAPSHOT_RETENTION_MS + 1;
+        await updateRegistryWorktree(process.env, owner.worktree.id, {
+          removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+        });
         await fs.writeFile(path.join(projection, "guest-ignored/data"), "unaccepted newer bytes");
         expect((await service.gc()).snapshotsPruned).toBe(0);
         expect(
@@ -726,7 +843,7 @@ describe("local sandbox workspace reconciliation", () => {
         expect(existsSync(path.join(owner.worktree.path, "guest-ignored/data"))).toBe(false);
         await updateRegistryWorktree(process.env, owner.worktree.id, {
           removedAt: undefined,
-          lastActiveAt: now + 1,
+          lastActiveAt: Date.now(),
           provisionedPaths: legacyState.map((entry) => entry.path),
         });
         await closeOpenClawStateDatabaseAsync();

@@ -86,7 +86,7 @@ describe("stale exec heartbeat wakes", () => {
         status: "skipped",
         reason: "disabled",
       }));
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(250);
     }
     currentHandlerDisposer?.();
     currentHandlerDisposer = undefined;

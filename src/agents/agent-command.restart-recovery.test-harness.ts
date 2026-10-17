@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Mock } from "vitest";
 import { expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -81,15 +82,21 @@ export function registerAgentCommandRecoveryCases(
       state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
         (
           params as {
-            onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
+            onDeliveryResult?: (
+              result: { deliveryStatus: Record<string, unknown> },
+              payloads: ReplyPayload[],
+            ) => void;
           }
-        ).onDeliveryResult?.({
-          deliveryStatus: {
-            status: "failed",
-            errorMessage: `Authorization: Bearer ${secret}`,
-            target: "discord:dm:private",
+        ).onDeliveryResult?.(
+          {
+            deliveryStatus: {
+              status: "failed",
+              errorMessage: `Authorization: Bearer ${secret}`,
+              target: "discord:dm:private",
+            },
           },
-        });
+          [],
+        );
         throw new Error("strict delivery failed");
       });
       await expect(

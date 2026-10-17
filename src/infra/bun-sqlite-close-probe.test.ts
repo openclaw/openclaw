@@ -6,9 +6,6 @@ import { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 
 vi.hoisted(() => vi.resetModules());
 
-vi.mock("./runtime-process-entrypoints.js", () => ({
-  runtimeProcessEntrypoints: { sqliteCloseProbe: {} },
-}));
 vi.mock("./runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///fixture/sqlite-close-probe.js"),
 }));

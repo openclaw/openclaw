@@ -1,7 +1,7 @@
 // Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
@@ -124,6 +124,46 @@ describe("check-deadcode-exports", () => {
     expect(remaining).not.toContain("readPostCoreSnapshot");
     expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
+  });
+
+  it("models release publication imports from the workflow source", () => {
+    const workflow = ".github/workflows/openclaw-release-publish.yml";
+    const source = fs.readFileSync(workflow, "utf8");
+    const compile = knipConfig.compilers.yml;
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toContain(`${workflow}!`);
+    }
+    expect(compile(source, workflow)).toContain(
+      'import { prefetchPreparedPlugins } from "../../scripts/openclaw-release-ready.mjs";',
+    );
+    const withoutPrefetch = source.replace(
+      /^\s*import \{ prefetchPreparedPlugins \}[^\n]+\n/mu,
+      "",
+    );
+    expect(compile(withoutPrefetch, workflow)).not.toContain("prefetchPreparedPlugins");
+    expect(compile(source, ".github/workflows/other.yml")).toBe("");
+  });
+
+  it("models only Vite runner members consumed by the build", () => {
+    const source = [
+      'const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(',
+      '  path.join(here, "src/app-route-paths.ts"), options);',
+      "const offlineShell = { routes: routes.APP_ROUTE_PATHS };",
+    ].join("\n");
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    try {
+      expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
+      const compile = knipConfig.compilers.mjs;
+      const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+      expect(read).toHaveBeenCalledWith(path.resolve("ui/vite.config.ts"), "utf8");
+      expect(compiled).toContain(
+        'import { APP_ROUTE_PATHS as __vite0_0 } from "../ui/src/app-route-paths.ts";',
+      );
+      expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
+      expect(compile(source, "config/unrelated.mjs")).toBe(source);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("parses all compact export sections and expands symbol lists", () => {

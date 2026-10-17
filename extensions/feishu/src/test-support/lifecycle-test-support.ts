@@ -1,5 +1,6 @@
 // Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
@@ -9,6 +10,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
+import { createFeishuTestIngressQueue } from "../monitor.test-mocks.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
@@ -129,6 +131,9 @@ function installFeishuLifecycleRuntime(params: {
   resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
 }): PluginRuntime {
   const runtime = createPluginRuntimeMock({
+    state: {
+      openChannelIngressQueue: createFeishuTestIngressQueue,
+    },
     channel: {
       debounce: createImmediateInboundDebounce(),
       routing: {
@@ -458,7 +463,6 @@ export async function setupFeishuLifecycleHandler(params: {
     mockReturnValue: (value: unknown) => unknown;
     mockReturnValueOnce: (value: unknown) => unknown;
   };
-  onRegister: (registered: Record<string, (data: unknown) => Promise<void>>) => void;
   runtime: RuntimeEnv;
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -466,13 +470,12 @@ export async function setupFeishuLifecycleHandler(params: {
   missingHandlerMessage: string;
   once?: boolean;
 }): Promise<(data: unknown) => Promise<void>> {
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    params.onRegister(registered);
-  });
+  const dispatcher = new EventDispatcher({});
+  const register = vi.spyOn(dispatcher, "register");
   if (params.once) {
-    params.createEventDispatcherMock.mockReturnValueOnce({ register });
+    params.createEventDispatcherMock.mockReturnValueOnce(dispatcher);
   } else {
-    params.createEventDispatcherMock.mockReturnValue({ register });
+    params.createEventDispatcherMock.mockReturnValue(dispatcher);
   }
   getFeishuRuntime().config.current = vi.fn(
     () => params.cfg,

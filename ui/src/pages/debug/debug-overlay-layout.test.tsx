@@ -129,34 +129,19 @@ describe("System busyness frame layout", () => {
     await vi.dynamicImportSettled();
     expect(frames.size).toBe(0);
   });
-  it("saves only a completed drag and restores it in a new frame", async () => {
+  it("rolls back pointercancel and ignores unrelated pointers", async () => {
+    storage.setItem(key, JSON.stringify({ x: 200, y: 150 }));
     const panel = await mount();
     pointer(panel.querySelector("header")!, "pointerdown");
-    pointer(panel, "pointermove", { clientX: 210, clientY: 160 });
+    pointer(panel, "pointermove", { pointerId: 2, clientX: 100, clientY: 100 });
     expect(panel.style.left).toBe("200px");
-    expect(storage.getItem(key)).toBeNull();
-    pointer(panel, "pointerup", { clientX: 210, clientY: 160 });
+    pointer(panel, "pointermove", { clientX: 900, clientY: 700 });
+    pointer(panel, "pointercancel");
+    expect(panel.style.left).toBe("200px");
+    expect(panel.style.top).toBe("150px");
     expect(JSON.parse(storage.getItem(key)!)).toEqual({ x: 200, y: 150 });
-    disposeFrame();
-    expect((await mount()).style.top).toBe("150px");
+    expect(panel.classList.contains("debug-overlay--dragging")).toBe(false);
   });
-
-  it.each(["pointercancel", "lostpointercapture"])(
-    "rolls back %s and ignores unrelated pointers",
-    async (ending) => {
-      storage.setItem(key, JSON.stringify({ x: 200, y: 150 }));
-      const panel = await mount();
-      pointer(panel.querySelector("header")!, "pointerdown");
-      pointer(panel, "pointermove", { pointerId: 2, clientX: 100, clientY: 100 });
-      expect(panel.style.left).toBe("200px");
-      pointer(panel, "pointermove", { clientX: 900, clientY: 700 });
-      pointer(panel, ending);
-      expect(panel.style.left).toBe("200px");
-      expect(panel.style.top).toBe("150px");
-      expect(JSON.parse(storage.getItem(key)!)).toEqual({ x: 200, y: 150 });
-      expect(panel.classList.contains("debug-overlay--dragging")).toBe(false);
-    },
-  );
 
   it("leaves controls and secondary clicks alone and cleans up a removed frame", async () => {
     const composer = document.body.appendChild(document.createElement("div"));

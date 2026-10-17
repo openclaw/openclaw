@@ -1,7 +1,6 @@
 /** Doctor-owned migration from heartbeat scratch `tasks:` blocks into cron jobs. */
 
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -31,6 +30,7 @@ import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -247,7 +247,7 @@ async function loadCronPlanningSnapshot(
   };
 }
 
-function readScratchRevision(db: DatabaseSync, storeKey: string, jobId: string): number {
+function readScratchRevision(db: EngineConnection, storeKey: string, jobId: string): number {
   return (
     executeSqliteQuerySync(
       db,
@@ -481,7 +481,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         snapshot.nextSortOrder++;
       jobPlans.push({
         declarationKey,
-        ...(existing ? { previous: structuredClone(existing) } : {}),
+        ...(existing ? { previous: existing } : {}),
         job,
         sortOrder,
       });

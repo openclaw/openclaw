@@ -121,7 +121,7 @@ function resolveManualCompactContextTokenBudget(params: {
     }),
     allowAsyncLoad: false,
   });
-  if (typeof configuredContextTokens === "number" && configuredContextTokens > 0) {
+  if (configuredContextTokens !== undefined && configuredContextTokens > 0) {
     const configuredBudget = Math.floor(configuredContextTokens);
     return liveContextTokens !== undefined
       ? Math.min(liveContextTokens, configuredBudget)
@@ -132,9 +132,7 @@ function resolveManualCompactContextTokenBudget(params: {
 }
 
 function normalizeContextTokenBudget(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
 function resolveManualCompactContextModelId(params: {
@@ -226,9 +224,11 @@ export async function handleCompactCommand(
   });
   let expectedSession: InternalSessionEntry = targetSessionEntry;
   let compactionAccepted = false;
+  let ingressAdopted = false;
   const assertOwnerBeforeAcceptance = () => {
     operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
+      params.command.assertOwnerCurrent?.();
       assertOwnerCurrent?.();
     }
   };
@@ -270,6 +270,9 @@ export async function handleCompactCommand(
       if (!(await prepareCurrentEntry())) {
         return compactionUnavailable("command session changed", interruptionNotice);
       }
+      params.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+      await params.opts?.turnAdoptionLifecycle?.onAdopted();
+      ingressAdopted = true;
       failure = authorityFailure();
       if (failure) {
         return failure;
@@ -312,14 +315,24 @@ export async function handleCompactCommand(
     entry: prepared.entry,
     cfg: params.cfg,
   });
-  const replyOperation = params.opts?.replyOperation;
-  replyOperation?.setPhase("preflight_compacting");
   const assertActive = () => {
     assertOwnerBeforeAcceptance();
     params.opts?.abortSignal?.throwIfAborted();
     params.commandInvocationSignal?.throwIfAborted();
     currentRead?.assertCurrent();
   };
+  // Keep read-only preflight retryable; adopt before the first compaction effect.
+  if (!ingressAdopted) {
+    params.opts?.turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+    await params.opts?.turnAdoptionLifecycle?.onAdopted();
+  }
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  assertActive();
+  const replyOperation = params.opts?.replyOperation;
+  replyOperation?.setPhase("preflight_compacting");
   const compaction = runtime.compactEmbeddedAgentSession(
     {
       abortSignal: params.opts?.abortSignal,
@@ -411,7 +424,7 @@ export async function handleCompactCommand(
     result.ok || isBenignCompactionSkipResult(result) ? "Compaction skipped" : "Compaction failed";
   if (didCompact) {
     compactLabel =
-      typeof tokensAfterCompaction !== "number"
+      tokensAfterCompaction === undefined
         ? "Compaction finished (resulting context unknown)"
         : result.result?.tokensBefore != null
           ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
@@ -439,7 +452,7 @@ export async function handleCompactCommand(
     ? tokensAfterCompaction
     : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
-    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
+    totalTokens !== undefined && totalTokens > 0 ? totalTokens : null,
     contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);

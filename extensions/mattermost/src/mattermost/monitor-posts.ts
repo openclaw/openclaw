@@ -17,7 +17,6 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { MattermostPostSchema } from "./client.js";
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
@@ -117,7 +116,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       normalizeOptionalString(payload.data?.sender_name) ??
       normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
       senderId;
-    const rawPostText = typeof post.message === "string" ? post.message : "";
+    const rawPostText = post.message ?? "";
     const rawText = normalizeOptionalString(rawPostText) ?? "";
     // "@bot /new" addresses the bot, then issues a command: strip the mention before
     // detection and CommandBody, or the leading-slash check fails and the model gets prose.
@@ -146,7 +145,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             ? {
                 sender: senderName,
                 body: trimmed,
-                timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+                timestamp: post.create_at ?? undefined,
                 messageId: post.id,
               }
             : null,
@@ -400,7 +399,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     const body = formatInboundEnvelope({
       channel: "Mattermost",
       from: fromLabel,
-      timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+      timestamp: post.create_at ?? undefined,
       body: textWithId,
       chatType: kind,
       sender: { name: senderName, id: senderId },
@@ -483,7 +482,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
       MessageSidLast:
         allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-      Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+      Timestamp: post.create_at ?? undefined,
       WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       // Tag typed text-slash control commands (e.g. ` /new`, ` /reset` sent via the regular
@@ -501,9 +500,8 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             normalizeEntry: normalizeMattermostAllowEntry,
           })
         : null;
-    const previewLine = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
     monitor.logVerboseMessage(
-      `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
+      `mattermost inbound: from=${ctxPayload.From} id=${post.id} len=${bodyText.length}`,
     );
 
     await dispatchMattermostInboundTurn(monitor, {

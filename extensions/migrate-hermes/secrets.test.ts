@@ -1,12 +1,7 @@
 // Migrate Hermes tests cover secrets plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  resolveAuthStorePathForDisplay,
-  saveAuthProfileStore,
-  type AuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAuthStorePathForDisplay } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -24,6 +19,7 @@ import {
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
+import { fakeJwt, readAuthProfileStore, writeAuthProfileStore } from "./test/auth-helpers.js";
 import {
   makeConfigRuntime,
   makeHermesPaths,
@@ -39,23 +35,6 @@ async function expectMissingPath(filePath: string): Promise<void> {
 
 function authProfileTarget(agentDir: string, profileId: string): string {
   return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
-}
-
-function readAuthProfileStore(agentDir: string): AuthProfileStore {
-  return loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-}
-
-function writeAuthProfileStore(agentDir: string, store: AuthProfileStore): void {
-  saveAuthProfileStore(store, agentDir, {
-    filterExternalAuthProfiles: false,
-    syncExternalCli: false,
-  });
-}
-
-function fakeJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
 }
 
 const HERMES_ACCESS_FIELD = ["access", "token"].join("_");
@@ -1009,6 +988,10 @@ describe("Hermes migration secret items", () => {
             primary: "anthropic/claude-opus-4-8",
             fallbacks: ["openai/gpt-5.5"],
           },
+          models: {
+            "openai/gpt-5.5": { alias: "existing-openai", params: { temperature: 0.2 } },
+            "anthropic/claude-opus-4-8": { alias: "existing-claude" },
+          },
         },
       },
     } as OpenClawConfig;
@@ -1070,6 +1053,9 @@ describe("Hermes migration secret items", () => {
       primary: "anthropic/claude-opus-4-8",
       fallbacks: ["openai/gpt-5.5"],
     });
+    expect(config.agents?.defaults?.models).toMatchObject({
+      "openai/gpt-5.5": { alias: "existing-openai", params: { temperature: 0.2 } },
+      "anthropic/claude-opus-4-8": { alias: "existing-claude" },
+    });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

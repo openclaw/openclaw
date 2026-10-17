@@ -8,6 +8,12 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  claimMainSessionRecoveryOwner,
+  refreshMainSessionRecoveryOwner,
+  releaseMainSessionRecoveryOwner,
+} from "../main-session-recovery/main-session-recovery-store.js";
 import { recordCliCompactionInStore } from "./session-store.js";
 import {
   createRunResult,
@@ -548,6 +554,37 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
     },
   );
+
+  it("retains queued foreground recovery claims when an earlier turn completes", async () => {
+    await withSession(async ({ seed, update, read, storePath, sessionStore }) => {
+      await seed({
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      });
+      const claim = (runId: string) =>
+        claimMainSessionRecoveryOwner({
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionId,
+          runId,
+          target: { agentId: "main", sessionKey, storePath },
+        });
+      const first = await claim("queued-1");
+      const second = await claim("queued-2");
+      if (first.kind !== "claimed" || second.kind !== "claimed") {
+        throw new Error("expected two foreground recovery claims");
+      }
+      // The running command has adopted its claim. A queued peer still owns the
+      // same recovery cycle after this command records successful completion.
+      sessionStore[sessionKey] = read()!;
+      await update();
+      await releaseMainSessionRecoveryOwner(first.lease);
+      expect(await refreshMainSessionRecoveryOwner(second.lease, "queued-2")).toBeDefined();
+      expect(read()?.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([second.lease.claimId]);
+      await releaseMainSessionRecoveryOwner(second.lease);
+      expect(read()?.mainRestartRecovery).toBeUndefined();
+      expect(read()?.restartRecoveryRuns).toBeUndefined();
+    });
+  });
 
   it("clears settled main recovery state while retaining subagent recovery", async () => {
     await withSession(async ({ seed, update, read, sessionStore }) => {

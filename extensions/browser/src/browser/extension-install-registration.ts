@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import {
@@ -30,6 +31,7 @@ import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
 import {
   BROWSER_NATIVE_HOST_DESCRIPTION as NATIVE_HOST_DESCRIPTION,
   BROWSER_NATIVE_HOST_NAME,
+  NATIVE_HOST_MANIFEST_KEYS,
 } from "./extension-native-host.constants.js";
 import { isValidProfileName } from "./profiles.js";
 
@@ -37,10 +39,6 @@ const OWNED_LAUNCHER_MARKER = "# OpenClaw native messaging bootstrap v1";
 
 function nativeMessagingRoot(): string {
   return path.join(resolveInstallStateDir(), "browser", "native-messaging");
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export async function resolveNativeHostPath(pluginRoot: string): Promise<string> {
@@ -260,7 +258,7 @@ export async function inspectRegistration(
       ? expectedOriginsForExtensionIds(expectedPathExtensionIds)
       : null;
     if (
-      !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
+      !hasExactKeys(manifest, NATIVE_HOST_MANIFEST_KEYS) ||
       manifest.description !== NATIVE_HOST_DESCRIPTION ||
       manifest.type !== "stdio" ||
       !validOrigins ||

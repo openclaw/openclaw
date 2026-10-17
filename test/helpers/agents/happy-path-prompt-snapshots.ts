@@ -14,7 +14,6 @@ import {
 } from "../../../src/auto-reply/reply/inbound-meta.js";
 import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
-import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
@@ -651,8 +650,6 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
         chatContext: buildGroupChatContext({
           sessionCtx: discordGroupCtx,
           sourceReplyDeliveryMode: "message_tool_only",
-          silentReplyPolicy: "allow",
-          silentToken: SILENT_REPLY_TOKEN,
         }),
         intro: buildGroupIntro({
           defaultActivation: "mention",

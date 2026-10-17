@@ -1,13 +1,14 @@
 // Real child Gateway and real WebSocket authentication; no handler/client authority injection.
 import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import {
+  isGatewayEventFrame,
+  isGatewayResponseFrame,
+  type EventFrame,
+} from "@openclaw/gateway-protocol/frame-guards";
 import type { RawData } from "ws";
 import { WebSocket } from "../../../../packages/gateway-client/src/websocket.test-support.js";
-import type {
-  EventFrame,
-  HelloOk,
-  ResponseFrame,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { HelloOk, ResponseFrame } from "../../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibraryFile } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { VERSION } from "../../../../src/version.js";
@@ -53,12 +54,12 @@ export class SkillLibraryWireClient {
     onEvent?: (event: EventFrame) => void,
   ) {
     socket.on("message", (data) => {
-      const frame = JSON.parse(rawDataToString(data)) as ResponseFrame | EventFrame;
-      if (frame.type === "event") {
+      const frame: unknown = JSON.parse(rawDataToString(data));
+      if (isGatewayEventFrame(frame)) {
         onEvent?.(frame);
         return;
       }
-      if (frame.type !== "res") {
+      if (!isGatewayResponseFrame(frame)) {
         return;
       }
       const pending = this.pending.get(frame.id);
@@ -198,9 +199,12 @@ export class SkillLibraryWireClient {
   }
 }
 
-export async function createSkillLibraryWireInstance(): Promise<OpenClawTestInstance> {
+export async function createSkillLibraryWireInstance(
+  options: Pick<Parameters<typeof createOpenClawTestInstance>[0], "signal" | "verifyCleanup"> = {},
+): Promise<OpenClawTestInstance> {
   const instance = await createOpenClawTestInstance({
     name: "skill-library-wire",
+    ...options,
     startTimeoutMs: 120_000,
     env: {
       OPENCLAW_GATEWAY_TOKEN: undefined,
@@ -218,32 +222,44 @@ export async function createSkillLibraryWireInstance(): Promise<OpenClawTestInst
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     },
   });
-  await instance.state.writeConfig({
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      port: instance.port,
-      trustedProxies: ["127.0.0.1", "::1"],
-      // The Gateway approves the local device and its initial command surface.
-      nodes: { pairing: { autoApproveLocal: true } },
-      auth: {
-        mode: "trusted-proxy",
-        password: instance.gatewayToken,
-        identityScopes: {
-          [SKILL_LIBRARY_ALICE]: ["operator.admin", "operator.read", "operator.write"],
-          [SKILL_LIBRARY_BOB]: SKILL_LIBRARY_WRITER_SCOPES,
+  try {
+    await instance.state.writeConfig({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        port: instance.port,
+        trustedProxies: ["127.0.0.1", "::1"],
+        // The Gateway approves the local device and its initial command surface.
+        nodes: { pairing: { autoApproveLocal: true } },
+        auth: {
+          mode: "trusted-proxy",
+          password: instance.gatewayToken,
+          identityScopes: {
+            [SKILL_LIBRARY_ALICE]: ["operator.admin", "operator.read", "operator.write"],
+            [SKILL_LIBRARY_BOB]: SKILL_LIBRARY_WRITER_SCOPES,
+          },
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowLoopback: true,
+            requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+            allowUsers: [SKILL_LIBRARY_ALICE, SKILL_LIBRARY_BOB],
+          },
         },
-        trustedProxy: {
-          userHeader: "x-forwarded-user",
-          allowLoopback: true,
-          requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
-          allowUsers: [SKILL_LIBRARY_ALICE, SKILL_LIBRARY_BOB],
-        },
+        controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${instance.port}`] },
       },
-      controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${instance.port}`] },
-    },
-    agents: { defaults: { workspace: instance.state.workspaceDir } },
-    plugins: { enabled: false },
-  });
+      agents: { defaults: { workspace: instance.state.workspaceDir } },
+      plugins: { enabled: false },
+    });
+  } catch (error) {
+    try {
+      const cleanup = () => instance.cleanup();
+      await (options.verifyCleanup ? options.verifyCleanup(cleanup) : cleanup());
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Skill library instance acquisition failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  }
   return instance;
 }

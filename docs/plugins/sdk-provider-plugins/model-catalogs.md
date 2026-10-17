@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+`normalizeOpenRouterModelFamilyId` strips the optional `openrouter/` qualifier
+and leading `~` alias prefix for family detection, without changing the API model ID.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
 model-version and local quantization suffixes.
 
@@ -41,6 +43,14 @@ produces no missing-ID warning, and reprojecting retained evidence makes no
 provider requests.
 
 ## Live model discovery
+
+For interactive setup of an OpenAI-compatible custom endpoint, reuse
+`discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
+Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`
+to list models without updating the runtime catalog. The optional
+`configuredProvider: { config, id }` resolves only that provider row's header and
+transport SecretRefs and applies its existing private-network, proxy, and TLS policy.
+The authored configuration keeps its original secret references.
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
 single-provider helper into shared discovery:

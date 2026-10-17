@@ -128,9 +128,7 @@ suite.define(() => {
       await openChatSidePanelType(page, "Review");
       await page.locator('[data-panel-slot="detail"]:not([hidden])').waitFor();
       await page.getByRole("button", { name: "Actions for AFTER_RUN.md" }).click();
-      await page
-        .locator('openclaw-session-diff-menu wa-dropdown-item[value="reveal-file"]')
-        .click();
+      await page.locator('openclaw-session-diff-menu button[value="reveal-file"]').click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(3);

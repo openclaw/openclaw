@@ -142,6 +142,7 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
     let resumeBulk: (() => void) | undefined;
     try {
       await projection.ensureMaterialized();
+      projection.describe({ agentId: "main", key: "agent:main:clean" });
       database.db.exec(`UPDATE session_nodes SET entry_json = entry_json || ' '
         WHERE session_key != 'agent:main:clean'; UPDATE session_nodes SET entry_valid = 1`);
       markCanonicalSessionValidationPending(
@@ -279,21 +280,28 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
         factsInvalidated: true,
       });
       subscribeSessionMessageEvents.mockClear();
-      await expect(
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "corrupt-subscribe",
-            method: "sessions.messages.subscribe",
-            params: { key: "agent:main:dirty-0" },
-          },
-          client: { ...client, connId: "corrupt-subscribe" },
-          context,
-          respond: vi.fn(),
-          isWebchatConnect: () => false,
-          extraHandlers: sessionSubscriptionHandlers,
+      const corruptRespond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "corrupt-subscribe",
+          method: "sessions.messages.subscribe",
+          params: { key: "agent:main:dirty-0" },
+        },
+        client: { ...client, connId: "corrupt-subscribe" },
+        context,
+        respond: corruptRespond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionSubscriptionHandlers,
+      });
+      expect(corruptRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("invalid persisted session row"),
         }),
-      ).rejects.toThrow("invalid persisted session row");
+      );
       expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
     } finally {
       releaseRow.resolve();

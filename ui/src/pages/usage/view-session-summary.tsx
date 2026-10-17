@@ -74,8 +74,8 @@ export function renderSessionSummary(
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
-      value: formatUsageCost(entry.totals.totalCost),
-      sub: formatUsageTokens(entry.totals.totalTokens),
+      value: formatUsageCost(entry.totals.totalCost, 2, entry.totals.usageReport),
+      sub: formatUsageTokens(entry.totals.totalTokens, entry.totals.usageReport),
     })) ?? [];
   const cards = [
     {

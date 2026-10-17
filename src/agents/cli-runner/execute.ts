@@ -37,10 +37,8 @@ import {
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
-  buildCliExecLogLine,
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
-  logCliInvocation,
   NODE_CLAUDE_FORWARD_ENV_KEYS,
   parseCliBackendPreserveEnv,
   resolveNodeClaudeAuthEnv,
@@ -110,6 +108,8 @@ function assertExactToolAvailabilityRuntimeVersion(params: {
 
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
+  /** Receives the exact composed prompt sent to the CLI, once per attempt. */
+  onPromptPrepared?: (prompt: string) => void;
 };
 
 type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
@@ -254,9 +254,11 @@ export async function executePreparedCliRun(
     usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
+  const sentPrompt = composeCliPromptContext(prompt, promptContext);
+  options?.onPromptPrepared?.(sentPrompt);
   const diagnostics = createClaudeCliModelCallDiagnostics({
     context,
-    prompt: composeCliPromptContext(prompt, promptContext),
+    prompt: sentPrompt,
     systemPrompt: systemPromptArg ?? undefined,
     transport: nodePlacement
       ? "paired-node-cli"
@@ -320,19 +322,6 @@ export async function executePreparedCliRun(
       getRunState: () => ({ failed: runFailed, error: runError }),
     });
     try {
-      cliBackendLog.info(
-        buildCliExecLogLine({
-          provider: params.provider,
-          model: context.normalizedModel,
-          promptChars: basePrompt.length,
-          trigger: params.isolatedCompletionPurpose ?? params.trigger,
-          useResume,
-          cliSessionId: cliSessionIdToUse,
-          resolvedSessionId,
-          reusableSession: context.reusableCliSession,
-          hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
-        }),
-      );
       const logOutputText = isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]);
       const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
       const initialGatewayCaptureKey =
@@ -340,9 +329,7 @@ export async function executePreparedCliRun(
       const mcpCaptureAttempt = nodePlacement
         ? { env: {}, cleanup: undefined }
         : await prepareCliBundleMcpCaptureAttempt({
-            mode: context.backendResolved.bundleMcpMode,
-            backend,
-            env: context.preparedBackend.env,
+            preparedBackend: context.preparedBackend,
             captureKey: initialGatewayCaptureKey,
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
@@ -520,18 +507,6 @@ export async function executePreparedCliRun(
           sendSystemPromptOnResume: resendSystemPromptForSoftResume,
         });
 
-        if (logOutputText) {
-          logCliInvocation({
-            args,
-            command: executionCommand,
-            env,
-            systemPromptArg: backend.systemPromptArg,
-            modelArg: backend.modelArg,
-            imageArg: backend.imageArg,
-            argsPrompt,
-            log: (message) => cliBackendLog.info(message),
-          });
-        }
         return args;
       };
       const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
@@ -625,6 +600,10 @@ export async function executePreparedCliRun(
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
           }
           diagnostics?.emitStarted();
+          if (params.controlOperation === "compact") {
+            // A one-shot compactor rewrites persisted history behind the warm process.
+            await restartCliLiveSession(context);
+          }
           if (params.forkCliSessionOnResume && useResume) {
             if (!params.persistCliSessionForkSuccessor) {
               throw new Error("CLI session fork successor persistence is unavailable");

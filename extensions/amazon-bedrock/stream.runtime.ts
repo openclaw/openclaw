@@ -80,7 +80,6 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   asOptionalRecord,
-  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
@@ -192,34 +191,25 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       config.endpoint = model.baseUrl;
     }
 
-    if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      // Region resolution: explicit option > model ARN > env vars > SDK default chain.
-      // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
-      if (requestRegion) {
-        config.region = requestRegion;
-      } else if (endpointRegion && useExplicitEndpoint) {
-        config.region = endpointRegion;
-      } else if (!hasConfiguredProfile) {
-        config.region = "us-east-1";
-      }
+    // Region resolution: explicit option > model ARN > env vars > SDK default chain.
+    // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
+    if (requestRegion) {
+      config.region = requestRegion;
+    } else if (endpointRegion && useExplicitEndpoint) {
+      config.region = endpointRegion;
+    } else if (!hasConfiguredProfile) {
+      config.region = "us-east-1";
+    }
 
-      const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
-      if (proxyAgents) {
-        // Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
-        // on `http2` module and has no support for http agent.
-        // Use NodeHttpHandler to support HTTP(S) proxy agents.
-        config.requestHandler = new NodeHttpHandler(proxyAgents);
-      } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-        // Some custom endpoints require HTTP/1.1 instead of HTTP/2
-        config.requestHandler = new NodeHttpHandler();
-      }
-    } else {
-      // Non-Node environment (browser): fall back to us-east-1 since
-      // there's no config file resolution available.
-      config.region =
-        requestRegion ||
-        (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
-        "us-east-1";
+    const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
+    if (proxyAgents) {
+      // Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
+      // on `http2` module and has no support for http agent.
+      // Use NodeHttpHandler to support HTTP(S) proxy agents.
+      config.requestHandler = new NodeHttpHandler(proxyAgents);
+    } else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
+      // Some custom endpoints require HTTP/1.1 instead of HTTP/2
+      config.requestHandler = new NodeHttpHandler();
     }
 
     let client: BedrockRuntimeClient | undefined;
@@ -468,12 +458,11 @@ function handleContentBlockStart(
   const start = event.start;
 
   if (start?.toolUse) {
-    const startArguments = isRecord(start.toolUse) ? start.toolUse.input : undefined;
     const block: Block = {
       type: "toolCall",
       id: start.toolUse.toolUseId || "",
       name: start.toolUse.name || "",
-      arguments: isRecord(startArguments) ? startArguments : {},
+      arguments: {},
       partialJson: "",
       index,
     };

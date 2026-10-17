@@ -4,21 +4,32 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-writable.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { buildUsageOverview } from "../shared/usage-overview.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import {
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as agentList from "./agent-list.js";
+import { loadCostUsageSummaryCached } from "./server-methods/usage-result-cache.js";
 import { startSessionCostUsageProjectionLifetime } from "./session-cost-usage-lifetime.js";
 
 afterEach(() => {
@@ -26,7 +37,140 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("coalesces usage publications and flushes committed totals for an immediate overview", async () => {
+it("keeps usage backfill and all-agent totals available while another agent's deletion drains", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = { agents: { entries: { main: {}, retiring: {} } } };
+    setRuntimeConfigSnapshot(config);
+    const timestamp = Date.parse("2026-09-18T12:00:00Z");
+    for (const [agentId, tokens] of [
+      ["main", 10],
+      ["retiring", 900],
+    ] as const) {
+      const target = {
+        agentId,
+        sessionKey: `agent:${agentId}:usage`,
+        sessionId: `${agentId}-usage`,
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
+      await persistSessionTranscriptTurn(target, {
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content: "Synthetic usage",
+              timestamp,
+              usage: {
+                input: tokens,
+                output: 0,
+                totalTokens: tokens,
+                cost: { total: tokens / 100 },
+              },
+            },
+          },
+        ],
+        touchSessionEntry: false,
+      });
+      await aggregation.refreshCostUsageCacheForAgent({ config, agentId });
+    }
+    const cost = () =>
+      loadCostUsageSummaryCached({
+        config,
+        agentScope: "all",
+        startMs: timestamp - 1,
+        endMs: timestamp + 1,
+      });
+    expect((await cost()).totals.totalTokens).toBe(910);
+    const capturedRoster = createDeferred();
+    const releaseRoster = createDeferred();
+    const readRoster = agentList.listGatewayAgentsBasic;
+    const roster = vi
+      .spyOn(agentList, "listGatewayAgentsBasic")
+      .mockImplementationOnce(async (cfg) => {
+        const result = await readRoster(cfg);
+        capturedRoster.resolve();
+        await releaseRoster.promise;
+        return result;
+      });
+    const reading = loadCostUsageSummaryCached({
+      config,
+      agentScope: "all",
+      startMs: timestamp - 1,
+      endMs: timestamp + 2,
+    });
+    const readSettled = Promise.allSettled([reading]);
+    await withinTest(capturedRoster.promise, signal);
+    vi.useFakeTimers();
+    const queued = new AsyncWorkScope();
+    queued.run(() =>
+      cacheRuntime.requestCostUsageCacheRefresh({
+        config,
+        agentId: "retiring",
+        storePath: resolveSessionStorePathForScope({ agentId: "retiring" }, config),
+      }),
+    );
+    const reopen = closeAgentWorkAdmissions({
+      agentId: "retiring",
+      reason: new Error("Agent retiring deletion is draining active work."),
+    });
+    beginAgentDeletionJournal({
+      agentId: "retiring",
+      operationId: "usage-retiring",
+      agentDir: state.agentDir("retiring"),
+      workspaceDir: state.path("retiring-workspace"),
+      sessionsDir: state.sessionsDir("retiring"),
+      deleteFiles: false,
+      phase: "draining",
+    });
+    const publications: SessionCostUsagePublication[] = [];
+    const offUsage = onSessionCostUsageUpdated((event) => publications.push(event));
+    const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
+    const warn = vi.fn();
+    const lifetime = startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
+    try {
+      releaseRoster.resolve();
+      expect.soft(await cost()).toMatchObject({
+        totals: { totalTokens: 10, totalCost: 0.1 },
+        cacheStatus: { status: "fresh" },
+      });
+      await withinTest(roster.mock.results.at(-1)!.value, signal);
+      await vi.advanceTimersByTimeAsync(0);
+      const refreshed = await withinTest(
+        Promise.allSettled(refresh.mock.results.map((result) => result.value)),
+        signal,
+      );
+      await withinTest(
+        queued.runWhenIdle(() => {}),
+        signal,
+      );
+      await lifetime.stop();
+      await queued.drain();
+      expect(refreshed).not.toHaveLength(0);
+      expect.soft(refreshed.filter((result) => result.status === "rejected")).toEqual([]);
+      expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(await cost()).toMatchObject({
+        totals: { totalTokens: 10, totalCost: 0.1 },
+        cacheStatus: { status: "fresh" },
+      });
+      expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
+    } finally {
+      releaseRoster.resolve();
+      await lifetime.stop();
+      queued.beginClose();
+      await queued.drain();
+      await readSettled;
+      offUsage();
+      reopen();
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("coalesces usage through alias cleanup, flushes exact reads, and recovers deferred appends after restart", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config);
@@ -62,47 +206,85 @@ it("coalesces usage publications and flushes committed totals for an immediate o
         touchSessionEntry: false,
       });
     await append("assistant", 10);
+    const alias = { ...target, sessionKey: "agent:main:cron:usage:run:completed" };
+    replaceSessionEntrySync(alias, { sessionId: target.sessionId, updatedAt: timestamp });
+    const expectedAlias = await readSessionEntryInWorker(alias);
     await aggregation.refreshCostUsageCacheForAgent({ config, agentId: target.agentId });
     const roster = await agentList.listGatewayAgentsBasic(config);
-    vi.spyOn(agentList, "listGatewayAgentsBasic").mockResolvedValue({ ...roster, agents: [] });
+    const listAgents = vi
+      .spyOn(agentList, "listGatewayAgentsBasic")
+      .mockResolvedValue({ ...roster, agents: [] });
     const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
     const lifetime = startSessionCostUsageProjectionLifetime({
       getConfig: () => config,
       warn: vi.fn(),
     });
-    const overview = () =>
-      cacheRuntime.loadSessionCostOverviewFromCache({
-        config,
+    const sessions = [
+      {
+        key: target.sessionKey,
         agentId: target.agentId,
-        sessions: [
+        instances: [
           {
-            key: target.sessionKey,
-            agentId: target.agentId,
-            instances: [
-              {
-                sessionId: target.sessionId,
-                sessionFile: formatSqliteSessionFileMarker({
-                  ...target,
-                  storePath: resolveSessionStorePathForScope(target, config),
-                }),
-              },
-            ],
+            sessionId: target.sessionId,
+            sessionFile: formatSqliteSessionFileMarker({
+              ...target,
+              storePath: resolveSessionStorePathForScope(target, config),
+            }),
           },
         ],
-        options: {},
+      },
+    ];
+    const overview = async () => {
+      const cached = await cacheRuntime.loadSessionCostSummariesFromCache({
+        config,
+        agentId: target.agentId,
+        sessions: sessions.flatMap((session) => session.instances),
         requestRefresh: false,
       });
+      return {
+        ...buildUsageOverview({
+          rows: sessions.map((session, index) => ({
+            key: session.key,
+            agentId: session.agentId,
+            usage: cached.summaries[index] ?? null,
+            computing: cached.summaries[index] ? undefined : true,
+          })),
+          options: {},
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        }),
+        cacheStatus: cached.cacheStatus,
+      };
+    };
     vi.useFakeTimers();
     try {
+      const cost = () =>
+        loadCostUsageSummaryCached({
+          config,
+          agentId: target.agentId,
+          startMs: timestamp - 1,
+          endMs: timestamp + 1,
+        });
+      expect((await cost()).totals.totalTokens).toBe(10);
       await append("user");
       await append("system");
       await vi.advanceTimersByTimeAsync(1000);
       expect(refresh).not.toHaveBeenCalled();
 
       await append("assistant", 20);
+      await expect(
+        deleteSessionEntryLifecycle({
+          ...alias,
+          storePath: resolveSessionStorePathForScope(alias, config),
+          target: { canonicalKey: alias.sessionKey, storeKeys: [alias.sessionKey] },
+          expectedEntry: expectedAlias,
+          archiveTranscript: false,
+        }),
+      ).resolves.toMatchObject({ deleted: true });
       await vi.advanceTimersByTimeAsync(50);
       await append("assistant", 30);
       expect(refresh).not.toHaveBeenCalled();
+      // The outer RPC memo must not hide an append waiting for its quiet period.
+      expect((await cost()).totals.totalTokens).toBe(60);
       expect(await overview()).toMatchObject({
         totals: { totalTokens: 60 },
         aggregates: { messages: { user: 1, assistant: 3 } },
@@ -117,6 +299,53 @@ it("coalesces usage publications and flushes committed totals for an immediate o
         cacheStatus: { status: "fresh" },
       });
       expect(refresh).toHaveBeenCalledTimes(2);
+
+      await append("assistant", 50);
+      await lifetime.stop();
+      expect(refresh).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+      // Lose the dirty queue and worker caches as on process exit, keeping only
+      // the committed transcript and the older durable rollup.
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      listAgents.mockRestore();
+      const recovered = createDeferred();
+      const offUsage = onSessionCostUsageUpdated(() => recovered.resolve());
+      const restarted = startSessionCostUsageProjectionLifetime({
+        getConfig: () => config,
+        warn: vi.fn(),
+      });
+      try {
+        await withinTest(recovered.promise, signal);
+        await refresh.mock.results.at(-1)?.value;
+        expect(await overview()).toMatchObject({
+          totals: { totalTokens: 150 },
+          cacheStatus: { status: "fresh" },
+        });
+        await expect(
+          deleteSessionEntryLifecycle({
+            ...target,
+            storePath: resolveSessionStorePathForScope(target, config),
+            target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+            expectedEntry: await readSessionEntryInWorker(target),
+            archiveTranscript: false,
+            deleteTranscriptWithoutArchive: true,
+          }),
+        ).resolves.toMatchObject({ deleted: true });
+        expect(
+          (
+            await loadCostUsageSummaryCached({
+              config,
+              agentId: target.agentId,
+              startMs: timestamp - 1,
+              endMs: timestamp + 1,
+            })
+          ).totals.totalTokens,
+        ).toBe(0);
+      } finally {
+        offUsage();
+        await restarted.stop();
+      }
     } finally {
       await lifetime.stop();
       vi.useRealTimers();

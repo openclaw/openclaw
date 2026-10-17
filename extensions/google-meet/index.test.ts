@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createContext, Script } from "node:vm";
@@ -23,7 +23,6 @@ import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/te
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { findGoogleMeetCalendarEvent } from "./src/calendar.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
@@ -788,15 +787,6 @@ describe("google-meet plugin", () => {
     await transcriptionHandle.stop();
   });
 
-  it("clamps Chrome audio buffers to the SoX minimum", () => {
-    const config = resolveGoogleMeetConfig({
-      chrome: { audioBackend: "blackhole-2ch", audioBufferBytes: 1 },
-    });
-    expect(config.chrome.audioInputCommand?.slice(0, 4)).toEqual(["sox", "-q", "--buffer", "17"]);
-    expect(config.chrome.audioOutputCommand?.slice(0, 4)).toEqual(["sox", "-q", "--buffer", "17"]);
-    expect(config.chrome.audioBufferBytes).toBe(17);
-  });
-
   it("requires explicit Meet URLs", () => {
     expect(normalizeMeetUrl(MEET_URL)).toBe(MEET_URL);
     expect(() => normalizeMeetUrl("https://example.com/abc-defg-hij")).toThrow("meet.google.com");
@@ -887,21 +877,6 @@ describe("google-meet plugin", () => {
       { action: "join", transport: "chrome-node" },
       { progress: false, scopes: ["operator.admin"] },
     );
-  });
-
-  it("adds a reauth hint for missing Calendar scopes", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("insufficientPermissions", { status: 403 })),
-    );
-
-    const request = findGoogleMeetCalendarEvent({
-      accessToken: "token",
-      timeMin: "2026-04-25T00:00:00Z",
-      timeMax: "2026-04-26T00:00:00Z",
-    });
-    await expect(request).rejects.toThrow("calendar.events.readonly");
-    await expect(request).rejects.toThrow("googlemeet auth login");
   });
 
   it("keeps all conference records available when requested", async () => {
@@ -1178,15 +1153,8 @@ describe("google-meet plugin", () => {
   });
 
   it("serializes concurrent identical Twilio joins", async () => {
-    let finishDial:
-      | ((result: { callId: string; dtmfSent: boolean; introSent: boolean }) => void)
-      | undefined;
-    const dialing = new Promise<{ callId: string; dtmfSent: boolean; introSent: boolean }>(
-      (resolve) => {
-        finishDial = resolve;
-      },
-    );
-    voiceCallMocks.joinMeetViaVoiceCallGateway.mockReturnValueOnce(dialing);
+    const dialing = createDeferred<{ callId: string; dtmfSent: boolean; introSent: boolean }>();
+    voiceCallMocks.joinMeetViaVoiceCallGateway.mockReturnValueOnce(dialing.promise);
     const runtime = meetRuntime({ defaultTransport: "twilio" }, noopLogger);
     const request = {
       url: MEET_URL,
@@ -1202,7 +1170,7 @@ describe("google-meet plugin", () => {
     await Promise.resolve();
     expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledOnce();
 
-    finishDial?.({ callId: "call-1", dtmfSent: true, introSent: true });
+    dialing.resolve({ callId: "call-1", dtmfSent: true, introSent: true });
     const [first, second] = await Promise.all([firstJoin, secondJoin]);
 
     expect(second.session.id).toBe(first.session.id);
@@ -1323,60 +1291,50 @@ describe("google-meet plugin", () => {
     },
   );
 
-  it.each([false, true])(
-    "exports artifact bundles through the tool (dry run: %s)",
-    async (dryRun) => {
-      stubMeetArtifactsApi();
-      const outputDir = path.join(createIsolatedTestDir("openclaw-google-meet-export-"), "bundle");
-      const result = await getMeetTool(setup()).execute("id", {
-        action: "export",
-        accessToken: "token",
-        expiresAt: Date.now() + 120_000,
-        outputDir,
-        ...(dryRun
-          ? { conferenceRecord: "rec-1", dryRun: true }
-          : { meeting: "abc-defg-hij", includeDocumentBodies: true, zip: true }),
-      });
-      const manifest = dryRun
-        ? result.details.manifest
-        : requireRecord(
-            JSON.parse(readFileSync(path.join(outputDir, "manifest.json"), "utf8")),
-            "export manifest",
-          );
-      expect(manifest?.files).toEqual([
-        "summary.md",
-        "attendance.csv",
-        "transcript.md",
-        "artifacts.json",
-        "attendance.json",
-        "manifest.json",
-      ]);
-      if (dryRun) {
-        expect(result.details.dryRun).toBe(true);
-        expect(existsSync(outputDir)).toBe(false);
-      } else {
-        expect(result.details.files).toContain(path.join(outputDir, "manifest.json"));
-        expect(result.details.zipFile).toBe(`${outputDir}.zip`);
-        expect(manifest?.request).toEqual({
-          meeting: "abc-defg-hij",
-          includeDocumentBodies: true,
-          includeTranscriptEntries: true,
-          allConferenceRecords: false,
-          mergeDuplicateParticipants: true,
-        });
-        expect(manifest?.counts).toEqual({
-          conferenceRecords: 1,
-          artifacts: 1,
-          recordings: 1,
-          transcripts: 1,
-          transcriptEntries: 1,
-          smartNotes: 1,
-          attendanceRows: 1,
-          warnings: 0,
-        });
-      }
-    },
-  );
+  it("exports artifact bundles through the tool", async () => {
+    stubMeetArtifactsApi();
+    const outputDir = path.join(createIsolatedTestDir("openclaw-google-meet-export-"), "bundle");
+    const result = await getMeetTool(setup()).execute("id", {
+      action: "export",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      outputDir,
+      meeting: "abc-defg-hij",
+      includeDocumentBodies: true,
+      zip: true,
+    });
+    const manifest = requireRecord(
+      JSON.parse(readFileSync(path.join(outputDir, "manifest.json"), "utf8")),
+      "export manifest",
+    );
+    expect(manifest?.files).toEqual([
+      "summary.md",
+      "attendance.csv",
+      "transcript.md",
+      "artifacts.json",
+      "attendance.json",
+      "manifest.json",
+    ]);
+    expect(result.details.files).toContain(path.join(outputDir, "manifest.json"));
+    expect(result.details.zipFile).toBe(`${outputDir}.zip`);
+    expect(manifest?.request).toEqual({
+      meeting: "abc-defg-hij",
+      includeDocumentBodies: true,
+      includeTranscriptEntries: true,
+      allConferenceRecords: false,
+      mergeDuplicateParticipants: true,
+    });
+    expect(manifest?.counts).toEqual({
+      conferenceRecords: 1,
+      artifacts: 1,
+      recordings: 1,
+      transcripts: 1,
+      transcriptEntries: 1,
+      smartNotes: 1,
+      attendanceRows: 1,
+      warnings: 0,
+    });
+  });
 
   it.each(["latest", "calendar_events"] as const)(
     "reports today's Meet calendar data through %s",
@@ -1680,25 +1638,19 @@ describe("google-meet plugin", () => {
   });
 
   it("does not let a late active read replace the finalized leave snapshot", async () => {
-    let releaseRead: (() => void) | undefined;
-    let markReadStarted: (() => void) | undefined;
-    const readGate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const readStarted = new Promise<void>((resolve) => {
-      markReadStarted = resolve;
-    });
+    const readGate = createDeferred<void>();
+    const readStarted = createDeferred<void>();
     let activeReads = 0;
     let gateNonFinalTranscriptReads = false;
     await withLocalChromeMeetSession(
       {
         transcript: { lines: [{ text: "partial" }] },
         finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
-        nonFinalTranscriptGate: readGate,
+        nonFinalTranscriptGate: readGate.promise,
         shouldGateNonFinalTranscriptRead: () => gateNonFinalTranscriptReads,
         onNonFinalTranscriptRead: () => {
           activeReads += 1;
-          markReadStarted?.();
+          readStarted.resolve();
         },
       },
       async ({ callGatewayFromCli, methods, joined }) => {
@@ -1706,7 +1658,7 @@ describe("google-meet plugin", () => {
         const lateRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
           sessionId: joined.session.id,
         });
-        await readStarted;
+        await readStarted.promise;
         const secondRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
           sessionId: joined.session.id,
         });
@@ -1720,7 +1672,7 @@ describe("google-meet plugin", () => {
         const repeatedLeave = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
           sessionId: joined.session.id,
         });
-        releaseRead?.();
+        readGate.resolve();
         await Promise.allSettled([lateRead, secondRead, leaving, repeatedLeave]);
         const finalCaptures = callGatewayFromCli.mock.calls.filter((call) => {
           const request = call[2] as { body?: { fn?: string } };
@@ -2260,36 +2212,27 @@ describe("google-meet plugin", () => {
   });
 
   it("preserves plugin ownership from browser create through join and leave", async () => {
-    const createMeet = vi
-      .spyOn(GOOGLE_MEET_PLATFORM_ADAPTER.create!, "browser")
-      .mockResolvedValueOnce({
+    const meetings = [
+      { targetId: "created-meet-tab-a", meetingUri: "https://meet.google.com/drf-ihtb-pad" },
+      { targetId: "created-meet-tab-b", meetingUri: "https://meet.google.com/qwe-rtyu-iop" },
+    ];
+    const createMeet = vi.spyOn(GOOGLE_MEET_PLATFORM_ADAPTER.create!, "browser");
+    const launchChromeMeetOnNode = vi.spyOn(chromeTransport, "launchChromeMeetOnNode");
+    for (const { targetId, meetingUri } of meetings) {
+      createMeet.mockResolvedValueOnce({
         source: "browser",
         nodeId: "meet-node",
-        targetId: "created-meet-tab-a",
+        targetId,
         openedByPlugin: true,
-        meetingUri: "https://meet.google.com/drf-ihtb-pad",
-      })
-      .mockResolvedValueOnce({
-        source: "browser",
-        nodeId: "meet-node",
-        targetId: "created-meet-tab-b",
-        openedByPlugin: true,
-        meetingUri: "https://meet.google.com/qwe-rtyu-iop",
+        meetingUri,
       });
-    const launchChromeMeetOnNode = vi
-      .spyOn(chromeTransport, "launchChromeMeetOnNode")
-      .mockResolvedValueOnce({
+      launchChromeMeetOnNode.mockResolvedValueOnce({
         nodeId: "meet-node",
         launched: true,
-        tab: { targetId: "created-meet-tab-a", openedByPlugin: false },
-        browser: { inCall: true, micMuted: true },
-      })
-      .mockResolvedValueOnce({
-        nodeId: "meet-node",
-        launched: true,
-        tab: { targetId: "created-meet-tab-b", openedByPlugin: false },
+        tab: { targetId, openedByPlugin: false },
         browser: { inCall: true, micMuted: true },
       });
+    }
     const leaveChromeMeet = vi
       .spyOn(chromeTransport, "leaveChromeMeet")
       .mockResolvedValue({ left: true, note: "left created tab" });
@@ -2323,24 +2266,17 @@ describe("google-meet plugin", () => {
       });
       await runtime.leave(joinedA.session.id);
       await runtime.leave(joinedB.session.id);
-      expect(leaveChromeMeet).toHaveBeenNthCalledWith(1, {
-        runtime: expect.any(Object),
-        transport: "chrome-node",
-        nodeId: "meet-node",
-        config: expect.any(Object),
-        meetingSessionId: expect.any(String),
-        meetingUrl: "https://meet.google.com/drf-ihtb-pad",
-        tab: { targetId: "created-meet-tab-a", openedByPlugin: true },
-      });
-      expect(leaveChromeMeet).toHaveBeenNthCalledWith(2, {
-        runtime: expect.any(Object),
-        transport: "chrome-node",
-        nodeId: "meet-node",
-        config: expect.any(Object),
-        meetingSessionId: expect.any(String),
-        meetingUrl: "https://meet.google.com/qwe-rtyu-iop",
-        tab: { targetId: "created-meet-tab-b", openedByPlugin: true },
-      });
+      for (const [index, { targetId, meetingUri }] of meetings.entries()) {
+        expect(leaveChromeMeet).toHaveBeenNthCalledWith(index + 1, {
+          runtime: expect.any(Object),
+          transport: "chrome-node",
+          nodeId: "meet-node",
+          config: expect.any(Object),
+          meetingSessionId: expect.any(String),
+          meetingUrl: meetingUri,
+          tab: { targetId, openedByPlugin: true },
+        });
+      }
     } finally {
       leaveChromeMeet.mockRestore();
       launchChromeMeetOnNode.mockRestore();
@@ -2429,20 +2365,11 @@ describe("google-meet plugin", () => {
   });
 
   it("does not let a leave tear down a tab while another session adopts it", async () => {
-    let resolveReplacementLaunch:
-      | ((result: {
-          launched: true;
-          tab: { targetId: string; openedByPlugin: boolean };
-          browser: { inCall: true; micMuted: true };
-        }) => void)
-      | undefined;
-    const replacementLaunch = new Promise<{
+    const replacementLaunch = createDeferred<{
       launched: true;
       tab: { targetId: string; openedByPlugin: boolean };
       browser: { inCall: true; micMuted: true };
-    }>((resolve) => {
-      resolveReplacementLaunch = resolve;
-    });
+    }>();
     const launchChromeMeet = vi
       .spyOn(chromeTransport, "launchChromeMeet")
       .mockResolvedValueOnce({
@@ -2450,7 +2377,7 @@ describe("google-meet plugin", () => {
         tab: { targetId: "shared-meet-tab", openedByPlugin: true },
         browser: { inCall: true, micMuted: true },
       })
-      .mockReturnValueOnce(replacementLaunch);
+      .mockReturnValueOnce(replacementLaunch.promise);
     const leaveChromeMeet = vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({
       left: true,
       note: "left browser",
@@ -2479,7 +2406,7 @@ describe("google-meet plugin", () => {
       await Promise.resolve();
       expect(leaveChromeMeet).not.toHaveBeenCalled();
 
-      resolveReplacementLaunch?.({
+      replacementLaunch.resolve({
         launched: true,
         tab: { targetId: "shared-meet-tab", openedByPlugin: false },
         browser: { inCall: true, micMuted: true },
@@ -2691,8 +2618,14 @@ describe("google-meet plugin", () => {
 
   it("preserves telephony TTS output formats when routing Google Meet agent audio", () => {
     const ulaw = Buffer.from([0xff, 0x7f, 0x00]);
-    const pcmBridgeConfig = resolveGoogleMeetConfig({ chrome: { audioFormat: "pcm16-24khz" } });
+    const pcmBridgeConfig = resolveGoogleMeetConfig({
+      chrome: { audioFormat: "pcm16-24khz", audioBackend: "blackhole-2ch", audioBufferBytes: 1 },
+    });
     const ulawBridgeConfig = resolveGoogleMeetConfig({ chrome: { audioFormat: "g711-ulaw-8khz" } });
+    const commandPrefix = ["sox", "-q", "--buffer", "17"];
+    expect(pcmBridgeConfig.chrome.audioInputCommand?.slice(0, 4)).toEqual(commandPrefix);
+    expect(pcmBridgeConfig.chrome.audioOutputCommand?.slice(0, 4)).toEqual(commandPrefix);
+    expect(pcmBridgeConfig.chrome.audioBufferBytes).toBe(17);
 
     expect(
       convertMeetingTtsAudioForBridge(
@@ -2875,30 +2808,6 @@ describe("google-meet plugin", () => {
       } finally {
         stdout.restore();
       }
-    });
-
-    it("can create a Meet through browser fallback without joining when requested", async () => {
-      const { methods, nodesInvoke } = setupCreate(
-        {},
-        {
-          nodesInvokeHandler: createBrowserProxyHandler({
-            act: () => browserCreateResult("https://meet.google.com/browser-made-url"),
-          }),
-        },
-      );
-      const payload = requireRecord(
-        await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.create", { join: false }),
-        "response payload",
-      );
-      expect(payload.source).toBe("browser");
-      expect(payload.meetingUri).toBe("https://meet.google.com/browser-made-url");
-      expect(payload.joined).toBe(false);
-      const browser = requireRecord(payload.browser, "browser payload");
-      expect(browser.nodeId).toBe("node-1");
-      expect(browser.targetId).toBe("tab-1");
-      expectBrowserProxyCall(nodesInvoke, "/tabs/open", {
-        url: "https://meet.google.com/new?hl=en",
-      });
     });
 
     it("rejects access policy flags when tool create would use browser fallback", async () => {

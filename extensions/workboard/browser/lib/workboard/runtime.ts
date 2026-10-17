@@ -24,7 +24,6 @@ type WorkboardRuntime = {
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
   loadClient?: GatewayBrowserClient;
-  loadCatalogOnly?: boolean;
   loadError?: string;
   liveLastChange?: WorkboardChange;
   liveRefreshPending?: boolean;
@@ -50,7 +49,6 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   delete runtime.cardsRevision;
   delete runtime.loadPromise;
   delete runtime.loadClient;
-  delete runtime.loadCatalogOnly;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
@@ -95,6 +93,7 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,
     lastDispatchSummary: null,

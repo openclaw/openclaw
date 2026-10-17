@@ -31,6 +31,7 @@ import {
 } from "./server-cron.events.test-support.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -275,14 +276,6 @@ async function directCronReq(
   return expectDefined(result, `${method} did not respond`);
 }
 
-function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
-  expect(response.ok, JSON.stringify((response as { error?: unknown }).error ?? null)).toBe(true);
-  const value = (response.payload as { id?: unknown } | null)?.id;
-  const id = typeof value === "string" ? value : "";
-  expect(id.length > 0).toBe(true);
-  return id;
-}
-
 async function addWebhookCronJob(params: {
   ws: WebSocket;
   name: string;
@@ -365,6 +358,60 @@ describe("gateway server cron", () => {
     // Keep polling helpers deterministic even if other tests left fake timers enabled.
     vi.useRealTimers();
     sendCronAnnouncePayloadStrictMock.mockClear();
+  });
+
+  test("broadcasts cron attention state without repeating job definitions", async () => {
+    await setupCronTestRun();
+    const ws = await startCronClient();
+    const text = "Synthetic scheduled inspection. ".repeat(512).trim();
+    const addedEvent = waitForCronEvent(ws, (event) => event?.action === "added");
+    const response = await rpcReq(ws, "cron.add", {
+      name: "compact cron event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text },
+    });
+    const jobId = expectCronJobIdFromResponse(response);
+    const added = await addedEvent;
+    expect(added).toMatchObject({
+      action: "added",
+      jobId,
+      job: {
+        id: jobId,
+        name: "compact cron event",
+        enabled: true,
+        updatedAtMs: expect.any(Number),
+        state: { nextRunAtMs: expect.any(Number) },
+      },
+    });
+    expect(added?.job).not.toHaveProperty("payload");
+    expect(added?.job).not.toHaveProperty("schedule");
+    expect(Buffer.byteLength(JSON.stringify(added))).toBeLessThan(1_024);
+    const current = await rpcReq(ws, "cron.get", { id: jobId });
+    expect(current.payload).toMatchObject({ payload: { kind: "systemEvent", text } });
+
+    const finished = await runCronJobAndWaitForFinished(ws, jobId);
+    expect(finished).toMatchObject({
+      jobId,
+      action: "finished",
+      status: "ok",
+      job: { id: jobId, state: { lastRunStatus: "ok", lastRunAtMs: expect.any(Number) } },
+    });
+    expect(finished?.job).not.toHaveProperty("payload");
+    expect(finished?.job).not.toHaveProperty("schedule");
+    expect(finished).not.toHaveProperty("summary");
+    expect(Buffer.byteLength(JSON.stringify(finished))).toBeLessThan(1_024);
+
+    const removedEvent = waitForCronEvent(
+      ws,
+      (event) => event?.action === "removed" && event.jobId === jobId,
+    );
+    expect((await rpcReq(ws, "cron.remove", { id: jobId })).ok).toBe(true);
+    const removed = await removedEvent;
+    expect(removed?.job).toMatchObject({ id: jobId, name: "compact cron event" });
+    expect(removed?.job).not.toHaveProperty("payload");
   });
 
   test("does not persist cron.add when the delivery preview cannot be resolved", async () => {
@@ -550,7 +597,6 @@ describe("gateway server cron", () => {
       jobId,
       action: "finished",
       status: "ok",
-      summary: "hello",
       deliveryStatus: "not-requested",
     });
 

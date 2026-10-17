@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
@@ -31,7 +31,7 @@ function stringifyFingerprint(value: ConfigHealthFingerprint | null | undefined)
   return value ? JSON.stringify(value) : null;
 }
 
-function selectConfigHealthRows(db: DatabaseSync) {
+function selectConfigHealthRows(db: EngineConnection) {
   const query = getNodeSqliteKysely<ConfigHealthDatabase>(db)
     .selectFrom("config_health_entries")
     .select([
@@ -61,7 +61,7 @@ function decodeConfigHealthRows(
   };
 }
 
-export function readConfigHealthStateInDatabase(db: DatabaseSync): ConfigHealthState {
+export function readConfigHealthStateInDatabase(db: EngineConnection): ConfigHealthState {
   return decodeConfigHealthRows(selectConfigHealthRows(db));
 }
 
@@ -86,7 +86,7 @@ export const configHealthReadOperations = {
       },
     };
   },
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 /** Omitted fields remain untouched; explicit undefined and null clear their stored value. */
 export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): ConfigHealthPatch {
@@ -105,7 +105,7 @@ export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): Con
 
 /** Compare the original read and merge in one write transaction, preserving untouched JSON. */
 export function patchConfigHealthEntryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configPath: string,
   patch: ConfigHealthPatch,
   expected: ConfigHealthEntryBasis | null | undefined,
@@ -115,7 +115,7 @@ export function patchConfigHealthEntryInDatabase(
     return false;
   }
   const sql = getNodeSqliteKysely<ConfigHealthDatabase>(db);
-  // SQLite IS compares nulls as values, preserving the exact persisted read basis.
+  // Compare nulls explicitly while preserving the exact persisted text on either engine.
   const query =
     expected === null
       ? sql
@@ -133,16 +133,28 @@ export function patchConfigHealthEntryInDatabase(
           .updateTable("config_health_entries")
           .set({ ...patch, updated_at_ms: updatedAtMs })
           .where("config_path", "=", configPath)
-          .where("last_known_good_json", "is", expected.lastKnownGoodJson)
-          .where("last_promoted_good_json", "is", expected.lastPromotedGoodJson)
-          .where("last_observed_suspicious_signature", "is", expected.suspiciousSignature)
+          .where(
+            "last_known_good_json",
+            expected.lastKnownGoodJson === null ? "is" : "=",
+            expected.lastKnownGoodJson,
+          )
+          .where(
+            "last_promoted_good_json",
+            expected.lastPromotedGoodJson === null ? "is" : "=",
+            expected.lastPromotedGoodJson,
+          )
+          .where(
+            "last_observed_suspicious_signature",
+            expected.suspiciousSignature === null ? "is" : "=",
+            expected.suspiciousSignature,
+          )
           .where("updated_at_ms", "=", expected.updatedAtMs);
   return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
 /** The caller owns the transaction; omitted fields and sibling paths remain unchanged. */
 export function writeConfigHealthPatchInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configPath: string,
   patch: ConfigHealthPatch,
   updatedAtMs: number,

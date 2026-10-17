@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -18,6 +19,7 @@ import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recover
 import {
   getAgentDeletionJournalStatus,
   loadAgentDeletionJournalStatus,
+  seedAgentDeletionDiscovery,
 } from "./agent-deletion-journal-status.js";
 import type {
   AgentDatabaseDeletionSnapshot,
@@ -68,7 +70,7 @@ export async function readAgentDeletionJournalForCreation(
 
 /** Completed cleanup still retains a deletion tombstone. */
 export function readAgentDeletionJournalStatusInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalStatus {
   const cached = getAgentDeletionJournalStatus(database, agentId);
@@ -106,10 +108,7 @@ export async function readAgentDeletionJournalStatusInWorker(
 
 export function parseAgentDeletionDatabasePaths(value: string): string[] {
   const parsed: unknown = JSON.parse(value);
-  if (
-    Array.isArray(parsed) &&
-    parsed.every((entry): entry is string => typeof entry === "string")
-  ) {
+  if (isStringArray(parsed)) {
     return parsed;
   }
   throw new Error("Invalid agent deletion database path journal.");
@@ -117,7 +116,7 @@ export function parseAgentDeletionDatabasePaths(value: string): string[] {
 
 /** Read existing deletion history without initializing or repairing the journal. */
 export function readRetainedAgentDeletionsFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): AgentDeletionJournalDisposition {
@@ -134,8 +133,8 @@ export function readRetainedAgentDeletionsFromDatabase(
           .selectAll()
           .where((eb) => {
             const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
-            // Pending stores belong to deletion recovery, not offline migration.
-            return purpose === "maintenance"
+            // Pending stores leave runtime discovery as soon as deletion commits.
+            return purpose !== "runtime"
               ? eb.or([retained, eb("cleanup_completed", "=", 0)])
               : retained;
           })
@@ -250,6 +249,9 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
       { context: readContext, current: true },
     );
     assertReadCurrent();
+    if (purpose === "runtime-discovery" && reply) {
+      seedAgentDeletionDiscovery(options.path, reply.snapshot.retainedDeletions);
+    }
     return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
   };
   const read = () => readSnapshot(context);

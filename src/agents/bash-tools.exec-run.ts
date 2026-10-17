@@ -9,7 +9,6 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
-  requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
@@ -49,7 +48,6 @@ import {
   type ExecProcessHandle,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
-  resolveExecTarget,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
@@ -70,7 +68,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
-import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
@@ -99,6 +97,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   let subagentExecutionPromise: Promise<boolean> | undefined;
   const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
     (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
       () =>
         resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
@@ -249,10 +248,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       let execCommandOverride: string | undefined;
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
-      const foregroundFallbackWarning =
-        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
-          ? "Warning: continuation options are unavailable; running synchronously."
-          : undefined;
       const yieldWindow = allowBackground
         ? params.background === true
           ? 0
@@ -295,14 +290,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const target = resolveExecTarget({
-        configuredTarget: defaults?.host,
-        requestedTarget: requireValidExecTarget(params.host),
-        elevatedRequested,
-        sandboxAvailable: Boolean(defaults?.sandbox),
-        sandboxRequired: defaults?.sandboxRequired,
-      });
-      const host = target.effectiveHost;
+      const host = resolveHostForParams(params);
+      const foregroundFallbackWarning =
+        (host === "node" || !backgroundAvailable) &&
+        (params.background === true || typeof params.yieldMs === "number")
+          ? host === "node"
+            ? "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session."
+            : "Warning: continuation options are unavailable; running synchronously."
+          : undefined;
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
@@ -352,7 +347,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",
@@ -412,7 +407,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
-          logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+          logInfo("exec: elevated command");
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
@@ -674,7 +669,16 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        backgrounded.resolve({ status: "backgrounded" });
+        void Promise.resolve(run.session.exitNotificationPersistence).then(
+          () => backgrounded.resolve({ status: "backgrounded" }),
+          (error: unknown) =>
+            backgrounded.reject(
+              new Error(
+                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
+                { cause: error },
+              ),
+            ),
+        );
       };
 
       try {

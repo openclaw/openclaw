@@ -336,6 +336,7 @@ async function runMcpOAuthAuthorizationAttempt(
     config: params.config,
     allowAuthorizationRedirect: true,
     suppressStoredTokens: params.suppressStoredTokens,
+    replaceAuthorization: Boolean(params.authorizationCode) || params.suppressStoredTokens,
     lease,
     login: params.login,
     storeContext: context,

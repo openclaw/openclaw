@@ -727,6 +727,11 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       state: { restDuplicate },
       admitted: restDuplicate === "same-workflow",
     })),
+    ...[999, 1_000].map((restUnseenSuiteCount) => ({
+      name: `suite inventory limit with ${restUnseenSuiteCount} empty suites`,
+      state: { restUnseenSuite: "queued-empty-custom", restUnseenSuiteCount },
+      admitted: restUnseenSuiteCount === 999,
+    })),
     {
       name: "successful check with rerunning suite",
       state: { restSuite: "rerunning" },
@@ -764,6 +769,49 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     } else {
       expect(() => f.record()).toThrow();
     }
+  });
+
+  it.each(["queued-empty-custom", "labeler"])(
+    "bounds complete REST evidence reads for 173 %s suites",
+    (restUnseenSuite) => {
+      const f = restFixture();
+      f.save({ ...f.state(), quotaAt: "checks", restUnseenSuite, restUnseenSuiteCount: 173 });
+      const run = f.run();
+      expect(run.status, run.output).toBe(0);
+      expect(f.state().mutations).toBe(1);
+      const checkCalls = f
+        .state()
+        .calls.filter((call) => call.some((arg) => /\/check-(runs|suites)[/?]/.test(arg)));
+      // A full native attempt may reread evidence, but request count must not
+      // grow as two subprocesses per suite (346 calls per observation).
+      expect(checkCalls.length).toBeLessThan(40);
+      expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
+    },
+  );
+
+  it.each([
+    "duplicate",
+    "head",
+    "app",
+    "suite",
+    "partial",
+    "changed-total",
+    "removed-suite",
+    "duplicate-suite",
+  ])("rejects contradictory bulk check evidence: %s", (restBulkFault) => {
+    const f = restFixture();
+    f.save({
+      ...f.state(),
+      quotaAt: "checks",
+      restUnseenSuite: "labeler",
+      restUnseenSuiteCount: 173,
+      restBulkFault,
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("REST merge fallback:");
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
   });
 
   it.each([

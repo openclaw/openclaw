@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { VirtualizerController } from "@tanstack/lit-virtual";
+import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
@@ -20,32 +20,23 @@ function mountRows(scrolling = true) {
     row.dataset.virtualRowKey = String(index);
     return row;
   });
-  const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
-    {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: rows.length,
+    getScrollElement: () => viewport,
+    getItemKey: (index) => String(index),
+    estimateSize: () => 100,
+    observeElementRect: (_, callback) => {
+      callback({ width: 800, height: 300 });
     },
-    {
-      count: rows.length,
-      getScrollElement: () => viewport,
-      getItemKey: (index) => String(index),
-      estimateSize: () => 100,
-      observeElementRect: (_, callback) => {
-        callback({ width: 800, height: 300 });
-      },
-      observeElementOffset: (_, callback) => {
-        callback(0, scrolling);
-      },
-      scrollToFn: vi.fn(),
-      measureElement: measureTranscriptRow,
+    observeElementOffset: (_, callback) => {
+      callback(0, scrolling);
     },
-  );
-  controller.hostConnected();
-  controller.hostUpdated();
-  const virtualizer = controller.getVirtualizer();
-  const cleanup = () => controller.hostDisconnected();
+    scrollToFn: vi.fn(),
+    measureElement: measureTranscriptRow,
+  });
+  const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
+  const cleanup = mountVirtualizer();
+  updateVirtualizer();
   virtualizer.getVirtualItems();
   const readViewport = vi.fn(() => 300);
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
@@ -65,10 +56,11 @@ describe("transcript mounted-row measurement", () => {
     { kind: "overscan", scrolling: true, indexes: [6, 7, 8] },
     { kind: "cold idle", scrolling: false, indexes: [0, 1, 2] },
     { kind: "cold scrolling", scrolling: true, indexes: [0, 1, 2] },
+    { kind: "re-stamped", scrolling: false, indexes: [0, 1, 2], restamped: true },
     { kind: "later microtask", scrolling: true, indexes: [0, 1], deferred: true },
   ])(
     "defers $kind row measurement to observers without layout reads",
-    async ({ kind, scrolling, indexes, deferred }) => {
+    async ({ kind, scrolling, indexes, deferred, restamped }) => {
       const { rows, virtualizer, refs, readViewport, cleanup } = mountRows(scrolling);
       const mounted = indexes.map((index) => expectDefined(rows[index], "mounted row"));
       let height = deferred ? 160 : 80;
@@ -79,6 +71,9 @@ describe("transcript mounted-row measurement", () => {
           Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
           if (kind === "cached") {
             virtualizer.resizeItem(index, 80);
+          }
+          if (restamped) {
+            refs.forKey(String(index))();
           }
           if (deferred && index === 1) {
             queueMicrotask(() => {

@@ -17,6 +17,8 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   cacheChatSessionSnapshot,
@@ -28,6 +30,7 @@ import {
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  stateRevision?: ChatHistoryState["stateRevision"];
   activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
@@ -44,6 +47,7 @@ export type ChatHistoryResult = {
   verboseLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
+  sessionInfoSnapshotAt?: number;
   metadata?: ChatMetadataResult;
   inFlightRun?: {
     runId: string;
@@ -59,7 +63,7 @@ export type ChatHistoryDeltaResult = Omit<
   ProtocolChatHistoryDeltaResult,
   "sessionInfo" | "inFlightRun" | "metadata"
 > & {
-  sessionInfo: GatewaySessionRow;
+  sessionInfo?: GatewaySessionRow;
   inFlightRun?: ChatHistoryResult["inFlightRun"];
   metadata?: ChatMetadataResult;
 };
@@ -189,10 +193,29 @@ export function reconcileHistoryTail(options: {
   };
 }
 
+export function applyChatHistoryRefill(state: ChatState, result: ChatHistoryResult): void {
+  // A byte-limited refill can be smaller than the cache. Replace its
+  // window; the projection owner alone retains live and pending rows.
+  const messages = result.messages ?? [];
+  const tail = reconcileHistoryTail({
+    nextMessages: messages,
+    nextPagination: resolveChatHistoryPagination(result),
+    nextSessionId: historySessionId(result),
+    previousMessages: state.chatMessages,
+    previousPagination: state.chatHistoryPagination,
+    previousSessionId: state.currentSessionId ?? null,
+  });
+  reduceChatSessionProjection(state, {
+    type: "snapshotLoaded",
+    messages: tail?.messages ?? messages,
+  });
+}
+
 export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
   sessionInfo?: GatewaySessionRow,
+  historyState?: ChatHistoryState | null,
 ): void {
   if (deltaCursor !== undefined) {
     setChatHistoryCursor(state, deltaCursor ?? undefined);
@@ -223,6 +246,8 @@ export function commitCurrentChatHistorySnapshot(
         ? projectChatTranscriptMetadata(sessionInfo)
         : retained?.transcriptMetadata,
       progressCard: retained?.progressCard,
+      historyState:
+        historyState === undefined ? retained?.historyState : (historyState ?? undefined),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

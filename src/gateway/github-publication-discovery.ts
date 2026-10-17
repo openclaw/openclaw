@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { subscribeGitHubIdentityChanges } from "../agents/github-read-identity.js";
+import { onManagedGitHubProfileChanged } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import {
-  captureIncognitoSessionBinding,
-  withAcquiredIncognitoSessionBinding,
-  type IncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  runWithSessionActorStorage,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -14,7 +16,12 @@ import type { SelectionRow } from "./session-row-projection-record.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 
 type WorkspaceRow = Pick<SelectionRow, "agentId" | "key" | "entry">;
-type PublicationFact = { available: boolean; github?: WorkerGitHubLaunchBinding };
+type PublicationFact = {
+  available: boolean;
+  github?: WorkerGitHubLaunchBinding;
+  identity?: PreparedGitHubPublicationIdentity;
+  workspaceKey?: string;
+};
 const unavailable: PublicationFact = { available: false };
 const PUBLICATION_FACT_MAX_AGE_MS = 60_000;
 let readPublished: ((session: PublicationSessionIdentity) => PublicationFact) | undefined;
@@ -27,8 +34,6 @@ export function readGitHubPublicationFact(session: PublicationSessionIdentity): 
 export function startGitHubPublicationDiscovery(params: {
   scheduler: GatewayScheduler;
   projection?: {
-    ensureMaterialized(): Promise<void>;
-    selectEntries(): WorkspaceRow[];
     onSelectionChange(
       listener: (change: { kind: "reset" } | { kind: "row"; row?: WorkspaceRow }) => void,
     ): void;
@@ -39,7 +44,7 @@ export function startGitHubPublicationDiscovery(params: {
   const sessions = new LruCache<{
     session: PublicationSessionIdentity;
     binding?: string;
-    incognito?: Pick<IncognitoSessionBinding["actor"], "path" | "identity">;
+    incognito?: Pick<CapturedSessionActorStorageOwner, "owner" | "agentId" | "path">;
     fact: PublicationFact;
     refreshAfterMs: number;
   }>(256);
@@ -66,17 +71,37 @@ export function startGitHubPublicationDiscovery(params: {
               ...current.session,
               assertCurrent: () => !scheduler.signal.aborted && sessions.peek(key) === current,
             });
-          const fact = await (current.incognito
-            ? withAcquiredIncognitoSessionBinding(
-                { ...current.session, storePath: current.incognito.path },
-                { assertCurrent: () => scheduler.signal.throwIfAborted() },
-                async ({ actor }) =>
-                  actor.identity.incarnation === current.incognito?.identity.incarnation
-                    ? prepare()
-                    : undefined,
-                { signal: scheduler.signal },
-              )
-            : prepare());
+          let fact: PublicationFact | undefined;
+          if (current.incognito) {
+            // Discovery belongs to the Gateway, independently of the borrowing turn.
+            const assertCurrent = () => scheduler.signal.throwIfAborted();
+            try {
+              const actor = await current.incognito.owner?.acquireExisting(
+                current.session.sessionKey,
+                { assertCurrent, assertReadable: assertCurrent },
+              );
+              if (actor) {
+                try {
+                  fact = await runWithSessionActorStorage(
+                    {
+                      actor,
+                      agentId: current.incognito.agentId,
+                      path: current.incognito.path,
+                      authority: { assertCurrent, authorize: assertCurrent },
+                    },
+                    prepare,
+                  );
+                } finally {
+                  await actor.release();
+                }
+              }
+            } catch {
+              // Closed memory owners retire discovery without creating a replacement.
+              fact = undefined;
+            }
+          } else {
+            fact = await prepare();
+          }
           if (!scheduler.signal.aborted && sessions.peek(key) === current) {
             current.fact = fact ?? unavailable;
           }
@@ -91,7 +116,10 @@ export function startGitHubPublicationDiscovery(params: {
     if (!current || current.session.sessionId !== session.sessionId) {
       current = {
         session: { ...session },
-        incognito: captureIncognitoSessionBinding(session)?.actor,
+        incognito: captureSessionActorStorageOwner(session, {
+          assertCurrent: () => scheduler.signal.throwIfAborted(),
+          authorize() {},
+        }),
         fact: unavailable,
         refreshAfterMs: 0,
       };
@@ -111,6 +139,7 @@ export function startGitHubPublicationDiscovery(params: {
       refresh(key, retireCredentials);
     }
   };
+  const stopProfile = onManagedGitHubProfileChanged(() => refreshAll(true));
   const stopIdentity = subscribeGitHubIdentityChanges(() => refreshAll(true));
   const stopConfig = sessionChanges.subscribe((change) => {
     if ("all" in change && change.scope === "config") {
@@ -123,13 +152,22 @@ export function startGitHubPublicationDiscovery(params: {
     }
     const session = { agentId: row.agentId, sessionKey: row.key, sessionId: row.entry.sessionId };
     const key = keyOf(session);
+    // Only demand creates discovery work; roster hydration must not warm the whole corpus.
+    const previous = sessions.peek(key);
+    if (!previous) {
+      return;
+    }
+    if (!row.entry.repositoryWorkspaceId && !row.entry.worktree?.id) {
+      // Resident absence retires pending facts; explicit demand can still prepare an unknown target.
+      sessions.delete(key);
+      return;
+    }
     const binding = JSON.stringify([
       row.entry.lifecycleRevision,
       row.entry.worktree,
       row.entry.repositoryWorkspaceId,
     ]);
-    const previous = sessions.peek(key);
-    if (previous?.session.sessionId !== session.sessionId || previous.binding !== binding) {
+    if (previous.session.sessionId !== session.sessionId || previous.binding !== binding) {
       sessions.set(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
       refresh(key);
     }
@@ -139,20 +177,11 @@ export function startGitHubPublicationDiscovery(params: {
       observe(change.row);
     }
   });
-  scheduler.schedule({
-    id: "github-publication-startup",
-    delayMs: 0,
-    run: async () => {
-      await params.projection?.ensureMaterialized();
-      for (const row of params.projection?.selectEntries() ?? []) {
-        observe(row);
-      }
-    },
-  });
   return {
     stop: async () => {
       scheduler.beginClose();
       stopIdentity();
+      stopProfile();
       stopConfig();
       if (readPublished === read) {
         readPublished = undefined;

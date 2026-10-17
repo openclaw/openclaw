@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
@@ -20,7 +20,7 @@ import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 
 function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
-  database: DatabaseSync,
+  database: EngineConnection,
   query: (key: string) => Row | undefined,
 ): (key: string) => Row | undefined {
   let last: { key: string; revision: SqliteReadScopeRevision; row: Row | undefined } | undefined;
@@ -40,7 +40,7 @@ function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
 }
 
 // Each query retains only its last exact row at the connection's admitted revision.
-export const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
+export const getExactSessionEntryQueries = createSqliteQueryCache((database: EngineConnection) => {
   const rowQueries = new Map<string, (key: string) => ResolvedSessionEntryRow["row"] | undefined>();
   const canonicalQueries = new Map<
     string,

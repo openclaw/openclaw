@@ -90,7 +90,7 @@ export function createSessionDescribeReads(host: {
     reads.delete(key);
     const request = scope.client.request<Result>("sessions.describe", params, ...requestOptions);
     const pending: Read = {
-      params: { ...params },
+      params,
       scope,
       promise: request,
       issuedRow: host.currentRow(params),

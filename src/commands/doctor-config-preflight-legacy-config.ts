@@ -1,13 +1,14 @@
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import {
+  createConfigIO,
   parseConfigJson5,
   recoverConfigFromJsonRootSuffix,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
-import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
@@ -15,7 +16,6 @@ import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cro
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
-import { listReferencedLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import {
   canPlanAutomaticConfigRepair,
@@ -72,6 +72,9 @@ export async function migrateLegacyDoctorConfig(params: {
 /** Repair active legacy bytes before considering an older backup. */
 export async function prepareDoctorConfigRecovery(params: {
   enabled: boolean;
+  /** Before engine selection only file-backed repair is available. */
+  databaseAccess?: "none";
+  stateMigrationsRequested: boolean;
   snapshotRead: ConfigPreflightSnapshotRead;
   planRepair: (snapshot: ConfigFileSnapshot) => ReturnType<typeof planAutomaticConfigRepair>;
   readSnapshot: () => Promise<ConfigPreflightSnapshotRead>;
@@ -84,24 +87,24 @@ export async function prepareDoctorConfigRecovery(params: {
     if (retired) {
       throw new Error(`${retired.message} ${retired.nextAction}`);
     }
-    assertNoRetiredStateFiles(
-      "OAuth credential sidecars",
-      listReferencedLegacyOAuthSidecarPaths(process.env, coerceConfig(config)),
-    );
   };
   assertSupportedConfig(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
-  assertNoRetiredStateFiles(
-    "Cron state",
-    await listRetiredCronStateFiles(
-      resolveCronJobsStorePathFromConfig(
-        snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
-      ),
-    ),
-  );
+  const sourceConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+  // Config-only repair cannot discard the locator before Doctor imports its retained data.
+  if (
+    params.enabled &&
+    !params.stateMigrationsRequested &&
+    typeof asOptionalRecord(sourceConfig?.cron)?.store === "string"
+  ) {
+    assertNoRetiredStateFiles(
+      "Cron state (state migration is disabled)",
+      await listRetiredCronStateFiles(resolveCronJobsStorePathFromConfig(sourceConfig ?? {})),
+    );
+  }
   let activeConfigRepair: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null;
   const recoveryEnabled =
     params.enabled && !resolveFutureConfigActionBlock({ action: "recover config", snapshot });
-  if (recoveryEnabled && snapshot.valid) {
+  if (recoveryEnabled && snapshot.valid && params.databaseAccess !== "none") {
     const recovery = await prepareDoctorConfigRecoverySnapshot(
       { configPath: snapshot.path },
       snapshot,
@@ -119,14 +122,21 @@ export async function prepareDoctorConfigRecovery(params: {
         ? await params.planRepair(snapshot)
         : null;
     let configRepaired = false;
-    if (
-      !activeConfigRepair &&
-      (await recoverConfigFromJsonRootSuffix(snapshot, assertSupportedConfig))
-    ) {
+    const recoverPrefix =
+      params.databaseAccess === "none"
+        ? createConfigIO({
+            configPath: snapshot.path,
+            observe: false,
+            pluginValidation: "core-only",
+          }).recoverConfigFromJsonRootSuffix
+        : recoverConfigFromJsonRootSuffix;
+    if (!activeConfigRepair && (await recoverPrefix(snapshot, assertSupportedConfig))) {
       note("Removed non-JSON prefix from openclaw.json.", "Config");
       configRepaired = true;
     } else if (
       !activeConfigRepair &&
+      // Last-known-good recovery must verify its promotion in the selected database.
+      params.databaseAccess !== "none" &&
       (await recoverDoctorConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
     ) {
       note(
@@ -139,7 +149,12 @@ export async function prepareDoctorConfigRecovery(params: {
       snapshotRead = await params.readSnapshot();
       snapshot = snapshotRead.snapshot;
     }
-    if (!snapshot.valid && typeof snapshot.raw === "string" && !parseConfigJson5(snapshot.raw).ok) {
+    if (
+      params.databaseAccess !== "none" &&
+      !snapshot.valid &&
+      typeof snapshot.raw === "string" &&
+      !parseConfigJson5(snapshot.raw).ok
+    ) {
       throw new Error(
         `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`,
       );

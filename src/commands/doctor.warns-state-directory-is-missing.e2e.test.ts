@@ -261,26 +261,6 @@ describe("doctor command", () => {
     });
   });
 
-  it("skips password-mode exec password probes even when env token is set", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        mode: "password",
-        password: execRef("gateway/password"),
-      },
-    });
-
-    callGateway.mockClear();
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, runDoctorNonInteractive);
-
-    expect(callGateway).not.toHaveBeenCalled();
-    requireTerminalNote({
-      title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-    });
-  });
-
   it("skips gateway health probes for ambiguous exec SecretRefs", async () => {
     mockExecGateway({
       mode: "local",

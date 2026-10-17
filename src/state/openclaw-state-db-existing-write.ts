@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   assertSqliteIntegrity,
@@ -10,7 +13,7 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import {
   assertSqliteSchemaContains,
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
@@ -27,6 +30,11 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import {
+  ensureStatePostgresFragment,
+  isStatePostgres,
+  openExistingStatePostgresConnection,
+} from "./openclaw-state-db-engine.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
@@ -53,7 +61,7 @@ type OneShotWriteContract = ExistingWriteContract & {
   recoverTaskDeliveryOrphans?: true;
 };
 type ExistingWriteOperation<T> = (database: {
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   recoveryChanges: string[];
 }) => T;
@@ -77,13 +85,15 @@ function assertExistingOpenClawStateSchemaMetadata(
 function assertExistingOpenClawStateSchema(
   db: DatabaseSync,
   pathname: string,
-  schemaSql: string,
+  schemaSql: string | undefined,
   compatibility?: SqliteSchemaCompatibility,
 ): number {
   const version = assertSupportedStateSchemaVersion(db, pathname);
   assertExistingOpenClawStateSchemaMetadata(db, pathname, version);
   assertStateDatabaseIntegrityOnce(db, pathname);
-  assertSqliteSchemaContains(db, pathname, schemaSql, compatibility);
+  if (schemaSql !== undefined) {
+    assertSqliteSchemaContains(db, pathname, schemaSql, compatibility);
+  }
   return version;
 }
 
@@ -155,6 +165,9 @@ function createExistingOpenClawStateWriter(
   };
   assertSameFile();
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+  if (isStatePostgres()) {
+    return createExistingPostgresStateWriter(pathname, contract, assertSameFile);
+  }
   const db = openTrackedStateDatabase(pathname, {
     existingOnly: true,
     // Match Doctor: inbound dependents must fail validation, never cascade away.
@@ -169,7 +182,7 @@ function createExistingOpenClawStateWriter(
   const ensureAdditiveSchema = contract.initializeAdditiveSchema
     ? createSqliteSchemaEnsurer(() => contract.schemaSql, {
         tables: getCanonicalSqliteTableNames(contract.schemaSql),
-        indexes: getCanonicalSqliteNamedIndexContracts(contract.schemaSql).map(({ name }) => name),
+        indexes: getCanonicalSqliteNamedIndexNames(contract.schemaSql),
       })
     : undefined;
   let closed = false;
@@ -208,7 +221,7 @@ function createExistingOpenClawStateWriter(
             assertExistingOpenClawStateSchema(
               db,
               pathname,
-              needsAdmission && contract.initializeAdditiveSchema ? "" : contract.schemaSql,
+              needsAdmission && contract.initializeAdditiveSchema ? undefined : contract.schemaSql,
               contract.schemaCompatibility,
             );
           let version: number;
@@ -279,6 +292,69 @@ function createExistingOpenClawStateWriter(
       closed = true;
       clearNodeSqliteKyselyCacheForDatabase(db);
       closeTrackedStateDatabase(db);
+    },
+  };
+}
+
+/** Reuse the admitted physical schema without running the candidate's version migrations. */
+function createExistingPostgresStateWriter(
+  pathname: string,
+  contract: OneShotWriteContract,
+  assertSameFile: () => void,
+) {
+  const connection = withEngineStoreAdmission(() => openExistingStatePostgresConnection(pathname));
+  if (!connection) {
+    throw new Error("Existing PostgreSQL state writer requires its selected engine");
+  }
+  const { db } = connection.database;
+  const tables = getCanonicalSqliteTableNames(contract.schemaSql);
+  return {
+    run<T>(operation: ExistingWriteOperation<T>, options: ExistingWriteOptions) {
+      if (!db.isOpen) {
+        throw new Error("Existing-state writer is closed.");
+      }
+      if (options.database || options.readOnly) {
+        throw new Error("Existing-state writes require their own tracked writable connection.");
+      }
+      const env = options.env ?? process.env;
+      if (resolveDatabasePath({ path: options.path, env }) !== pathname) {
+        throw new Error("Existing-state writer cannot change its database path.");
+      }
+      return withEngineStoreAdmission(() =>
+        runManagedStateTransaction(
+          db,
+          () => {
+            assertSameFile();
+            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+            const catalog = getPostgresPhysicalFacts(db)!.catalog;
+            for (const table of tables) {
+              if (contract.initializeAdditiveSchema) {
+                ensureStatePostgresFragment(db, table);
+              } else if (!catalog.some((fact) => fact.kind === "table" && fact.table === table)) {
+                throw new Error(`Existing PostgreSQL state schema is missing ${table}`);
+              }
+            }
+            const value = operation({ db, path: pathname, recoveryChanges: [] });
+            assertSameFile();
+            return value;
+          },
+          {
+            databaseLabel: pathname,
+            operationLabel: contract.operationLabel,
+            beginLockFailureReporting: contract.beginLockFailureReporting,
+          },
+        ),
+      );
+    },
+    assertSettled() {
+      assertSameFile();
+      assertTransactionUsable(db);
+      if (db.isOpen && db.isTransaction) {
+        throw new Error("Existing-state writer retained an unsettled transaction");
+      }
+    },
+    close() {
+      connection.close();
     },
   };
 }

@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sendJsonNoStore as writeJsonResponse } from "openclaw/plugin-sdk/http-response-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { boundedJsonUtf8Bytes } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -51,17 +52,6 @@ type A2aHttpHandlerParams = {
   dispatchInbound: (message: A2aInboundDispatch) => Promise<void>;
 };
 
-function writeJsonResponse(response: ServerResponse, statusCode: number, value: unknown): void {
-  writeJsonBody(response, statusCode, JSON.stringify(value));
-}
-
-function writeJsonBody(response: ServerResponse, statusCode: number, body: string): void {
-  response.statusCode = statusCode;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(body);
-}
-
 function createRpcError(id: A2aRpcIdentifier, code: number, message: string): A2aRpcResponse {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
@@ -72,7 +62,7 @@ function writeRpcResponse(
 ): void {
   const measured = boundedJsonUtf8Bytes(value, MAX_RESPONSE_BODY_BYTES);
   if (measured.complete) {
-    writeJsonBody(response, 200, JSON.stringify(value));
+    writeJsonResponse(response, 200, value);
     return;
   }
   const errorMessage = "A2A response exceeds the 1 MiB limit";

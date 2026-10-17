@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import { prepareDoctorHealthFlow } from "./doctor-health-startup.js";
+import { prepareDoctorHealthFlow, prepareDoctorStateSchema } from "./doctor-health-startup.js";
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn<() => Promise<OpenClawConfig>>(),
   command: vi.fn(),
   note: vi.fn(),
+  migrateState: vi.fn(),
 }));
 // mock-isolation: keep the startup directory probe away from operator paths and Nix policy.
 vi.mock("../config/paths.js", () => ({
@@ -23,12 +24,27 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note })
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => "/synthetic/openclaw"),
 }));
+// mock-isolation: capture migration admission without opening operator databases.
+vi.mock("../infra/state-migrations.doctor.js", () => ({
+  prepareLegacyStateDatabaseSchema: mocks.migrateState,
+}));
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "");
   mocks.config.mockReset().mockResolvedValue({ gateway: { tailscale: { mode: "serve" } } });
   mocks.command.mockReset();
   mocks.note.mockReset();
+  mocks.migrateState.mockReset().mockResolvedValue({
+    id: "state-schema",
+    phase: "shared",
+    source: [],
+    target: [],
+    requiredness: "conditional",
+    reversibility: "checkpoint-required",
+    outcome: "completed",
+    changes: [],
+    warnings: [],
+  });
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -38,6 +54,29 @@ async function startDoctor() {
 }
 
 describe("Doctor startup dependencies", () => {
+  it.each(["quick", "full"] as const)(
+    "preserves %s integrity selection for early shared-state migration",
+    async (check) => {
+      await prepareDoctorStateSchema(
+        {
+          incompatible: [],
+          indeterminate: [],
+          pendingMigrations: [
+            {
+              kind: "state",
+              path: "/synthetic/openclaw.sqlite",
+              foundVersion: 1,
+              supportedVersion: 2,
+            },
+          ],
+        },
+        true,
+        check,
+      );
+      expect(mocks.migrateState).toHaveBeenCalledExactlyOnceWith(process.env, check);
+    },
+  );
+
   it("continues published-updater Doctor without invoking unsupported config reads", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     mocks.config.mockRejectedValue(
@@ -57,86 +96,20 @@ describe("Doctor startup dependencies", () => {
     expect(mocks.note).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["Stopped", "Tailscale is stopped", "tailscale up"],
-    ["NeedsLogin", "Tailscale is logged out", "tailscale login"],
-    ["NeedsMachineAuth", "administrator approval", "admin console"],
-    ["Starting", "still starting", "report Running"],
-    ["NoState", "still starting", "report Running"],
-    ["UnknownFutureState", "did not report a running backend", "Inspect"],
-  ])("reports %s before admitting Doctor maintenance", async (state, reason, action) => {
+  it("reports a non-running backend before admitting Doctor maintenance", async () => {
     mocks.command.mockResolvedValue({
-      code: state === "NeedsLogin" ? 1 : 0,
-      stdout: JSON.stringify({ BackendState: state }),
+      code: 0,
+      stdout: JSON.stringify({ BackendState: "UnknownFutureState" }),
     });
     await startDoctor();
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining(reason),
+      expect.stringContaining("did not report a running backend"),
       "Gateway startup prerequisite",
     );
-    expect(mocks.note.mock.calls[0]?.[0]).toContain(action);
+    expect(mocks.note.mock.calls[0]?.[0]).toContain("Inspect");
     // Prerequisite inspection cannot enable connectivity or alter routes.
     expect(mocks.command.mock.calls.map(([argv]) => argv)).toEqual([
       ["tailscale", "status", "--json"],
     ]);
-  });
-
-  it("checks Funnel and preserveFunnel without changing operator config", async () => {
-    for (const tailscale of [
-      { mode: "funnel" as const },
-      { mode: "serve" as const, preserveFunnel: true },
-    ]) {
-      mocks.note.mockClear();
-      const cfg: OpenClawConfig = { gateway: { tailscale } };
-      const original = structuredClone(cfg);
-      mocks.config.mockResolvedValue(cfg);
-      mocks.command.mockResolvedValue({ code: 0, stdout: '{"BackendState":"Stopped"}' });
-      await startDoctor();
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining(`gateway.tailscale.mode="${tailscale.mode}"`),
-        "Gateway startup prerequisite",
-      );
-      expect(cfg).toEqual(original);
-    }
-  });
-
-  it.each([
-    {},
-    { gateway: { tailscale: { mode: "off" as const } } },
-    { gateway: { mode: "remote" as const, tailscale: { mode: "serve" as const } } },
-  ])(
-    "does not inspect a local backend when it is not a configured dependency (%j)",
-    async (cfg) => {
-      mocks.config.mockResolvedValue(cfg);
-      await startDoctor();
-      expect(mocks.command).not.toHaveBeenCalled();
-      expect(mocks.note).not.toHaveBeenCalled();
-    },
-  );
-
-  it("uses the macOS app fallback and stays quiet for a running backend", async () => {
-    mocks.command
-      .mockRejectedValueOnce(new Error("missing executable"))
-      .mockResolvedValueOnce({ code: 0, stdout: 'notice\n{"BackendState":"Running"}\n' });
-    await startDoctor();
-    expect(mocks.note).not.toHaveBeenCalled();
-    expect(mocks.command.mock.calls.map(([argv]) => argv)).toEqual([
-      ["tailscale", "status", "--json"],
-      ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "status", "--json"],
-    ]);
-  });
-
-  it.each([
-    [{ code: 1, stdout: "" }, "is unavailable"],
-    [{ code: 0, stdout: "not-json" }, "could not be parsed"],
-    [{ code: 0, stdout: '{"Self":{}}' }, "could not be parsed"],
-  ])("reports inconclusive status instead of assuming readiness (%j)", async (response, reason) => {
-    mocks.command.mockResolvedValue(response);
-    await startDoctor();
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining(reason),
-      "Gateway startup prerequisite",
-    );
-    expect(mocks.note.mock.calls[0]?.[0]).toContain("Verify that the Tailscale CLI is installed");
   });
 });

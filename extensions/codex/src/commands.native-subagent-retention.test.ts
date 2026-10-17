@@ -11,6 +11,7 @@ import {
 } from "./app-server/client-runtime.js";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
+import type { CodexPluginConfig } from "./app-server/config.js";
 import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import { nativeCompletionNotification } from "./app-server/native-subagent-monitor.test-support.js";
 import { isJsonObject, type CodexServerNotification } from "./app-server/protocol.js";
@@ -25,6 +26,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import { createCodexCommand } from "./commands.js";
 import {
   createContext,
@@ -75,7 +77,7 @@ describe("codex command", () => {
           homeScope: "user",
           requestTimeoutMs: 10_000,
         },
-      };
+      } satisfies CodexPluginConfig;
       const startedThread = threadStartResult(threadId, "/repo");
       const response = {
         ...startedThread,
@@ -267,7 +269,10 @@ describe("codex command", () => {
         const completionCursor = notifications.length;
         harness.send(closeCompletion);
         await vi.waitFor(() => expect(replyToLoadedSnapshot).toBeTypeOf("function"));
-        const command = createCodexCommand({ pluginConfig, deps: { bindingStore } });
+        const command = createCodexCommand({
+          pluginConfig,
+          deps: createCodexCommandHost({ bindingStore }),
+        });
         const reply = await command.handler(
           createContext(`resume ${threadId}`, undefined, context),
         );

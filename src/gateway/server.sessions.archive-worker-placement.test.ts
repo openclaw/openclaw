@@ -11,6 +11,7 @@ import {
   placementReader,
   workerPlacement,
 } from "./server.sessions.archive-lifecycle.test-support.js";
+import { sessionLog } from "./session-log.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -199,6 +200,35 @@ test.each([false, true])(
       await release.promise;
       return await destroy(environmentId);
     });
+    const archiveWarnings = vi.spyOn(sessionLog, "warn");
+    // Keep the runtime read in flight through our own cleanup publication.
+    const reclaimed = createDeferredCore();
+    const reclaim = harness.service.reclaim.bind(harness.service);
+    vi.spyOn(harness.service, "reclaim").mockImplementation(async (...args) => {
+      try {
+        return await reclaim(...args);
+      } finally {
+        reclaimed.resolve();
+      }
+    });
+    const readProjection = placements.readProjection.bind(placements);
+    const prepareRuntimeRefresh = placements.prepareRuntimeRefresh.bind(placements);
+    let refreshingRuntime = false;
+    vi.spyOn(placements, "prepareRuntimeRefresh").mockImplementation(async (...args) => {
+      refreshingRuntime = true;
+      try {
+        return await prepareRuntimeRefresh(...args);
+      } finally {
+        refreshingRuntime = false;
+      }
+    });
+    vi.spyOn(placements, "readProjection").mockImplementation(async (...args) => {
+      const projection = await readProjection(...args);
+      if (refreshingRuntime) {
+        await reclaimed.promise;
+      }
+      return projection;
+    });
     const archive = directSessionReq(
       "sessions.patch",
       {
@@ -242,8 +272,14 @@ test.each([false, true])(
         ).toBeUndefined();
         return;
       }
-      const archived = await archive;
-      expect(archived, JSON.stringify(archived)).toMatchObject({ ok: true });
+      const outcome = await archive;
+      expect(
+        outcome,
+        [
+          outcome.error?.message,
+          ...archiveWarnings.mock.calls.map((args) => JSON.stringify(args)),
+        ].join("\n"),
+      ).toMatchObject({ ok: true });
       expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
       expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
       expect(loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt).toEqual(
@@ -252,6 +288,7 @@ test.each([false, true])(
     } finally {
       release.resolve();
       await archive;
+      archiveWarnings.mockRestore();
     }
   },
 );

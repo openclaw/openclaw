@@ -202,7 +202,7 @@ export type CronRuntimeMutationContracts = {
   "cron.maintainHistory": {
     input: CronRuntimeMutationInputs["cron.maintainHistory"];
     snapshot: { nowMs: number; protectedJobIds: string[] };
-    outcome: { reconciled: number; pruned: number };
+    outcome: { reconciled: number; pruned: number; nextSweepAtMs: number | null };
   };
 
   "cron.markDeliveryStarted": {

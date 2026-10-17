@@ -4,7 +4,9 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectAcpReplayUtf8Accounting } from "../acp/event-ledger.test-support.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -12,7 +14,7 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
-function seedLegacyReplay(db: DatabaseSync) {
+function seedLegacyReplay(db: EngineConnection) {
   const session = db.prepare(`INSERT INTO acp_replay_sessions
     (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes)
     VALUES (?, ?, ?, 1, 123, 456, 5, ?)`);
@@ -40,7 +42,7 @@ function seedLegacyReplay(db: DatabaseSync) {
   );
 }
 
-function canonicalReplay(db: DatabaseSync) {
+function canonicalReplay(db: EngineConnection) {
   return {
     sessions: db
       .prepare(
@@ -55,7 +57,7 @@ function canonicalReplay(db: DatabaseSync) {
   };
 }
 
-function estimates(db: DatabaseSync) {
+function estimates(db: EngineConnection) {
   return {
     sessions: db
       .prepare("SELECT estimated_bytes FROM acp_replay_sessions ORDER BY session_id")
@@ -70,12 +72,7 @@ function estimates(db: DatabaseSync) {
 async function withoutHistoricalPayloadReads<T>(
   pathname: string,
   operation: () => T | Promise<T>,
-): Promise<T> {
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  const databaseLocation = path.toNamespacedPath(fs.realpathSync(pathname));
-  const opened = new Set<DatabaseSync>();
-  const historicalReads: string[] = [];
-  const historicalColumns = new Set([
+  columns = [
     "acp_replay_events.update_json",
     "acp_replay_sessions.estimated_bytes",
     "subagent_runs.payload_json",
@@ -83,7 +80,13 @@ async function withoutHistoricalPayloadReads<T>(
     "operator_approvals.resolution_ref",
     "cron_jobs.job_json",
     "delivery_queue_entries.entry_json",
-  ]);
+  ],
+): Promise<T> {
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  const databaseLocation = path.toNamespacedPath(fs.realpathSync(pathname));
+  const opened = new Set<DatabaseSync>();
+  const historicalReads: string[] = [];
+  const historicalColumns = new Set(columns);
   const spy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
     const database = open(...args);
     const location = database.location();
@@ -118,6 +121,34 @@ async function withoutHistoricalPayloadReads<T>(
 describe("ACP replay accounting repair", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
+  it("reuses completed accounting repair and repairs newly restored legacy columns", async () => {
+    await withTestDir({ prefix: "openclaw-acp-repair-complete-" }, async (dir) => {
+      const options = { path: path.join(dir, "state.sqlite") };
+      seedLegacyReplay(openOpenClawStateDatabase(options).db);
+      closeOpenClawStateDatabaseForTest();
+      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      const repaired = openOpenClawStateDatabase(options).db;
+      const before = canonicalReplay(repaired);
+      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
+      closeOpenClawStateDatabaseForTest();
+
+      const repeated = await withoutHistoricalPayloadReads(
+        options.path,
+        () => repairOpenClawStateDatabaseSchema(options),
+        ["acp_replay_events.update_json", "acp_replay_sessions.estimated_bytes"],
+      );
+      expect(repeated.warnings).toEqual([]);
+      {
+        using legacy = new DatabaseSync(options.path);
+        legacy.exec(`ALTER TABLE acp_replay_events DROP COLUMN estimated_bytes;
+          ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;`);
+      }
+      const restored = openOpenClawStateDatabase(options).db;
+      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(restored));
+      expect(canonicalReplay(restored)).toEqual(before);
+    });
+  });
+
   it.each(["runtime", "automatic"])(
     "populates newly added accounting columns through %s without changing canonical rows",
     async (entrance) => {
@@ -136,7 +167,7 @@ describe("ACP replay accounting repair", () => {
           expect((await prepareOpenClawStateDatabaseSchema(options)).warnings).toEqual([]);
         }
         const upgraded = openOpenClawStateDatabase(options).db;
-        expectAcpReplayUtf8Accounting(upgraded);
+        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(upgraded));
         expect(canonicalReplay(upgraded)).toEqual(before);
         closeOpenClawStateDatabaseForTest();
 
@@ -146,7 +177,7 @@ describe("ACP replay accounting repair", () => {
           )
         ).db;
         expect(reopened.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
-        expectAcpReplayUtf8Accounting(reopened);
+        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(reopened));
         expect(canonicalReplay(reopened)).toEqual(before);
       });
     },
@@ -231,7 +262,7 @@ describe("ACP replay accounting repair", () => {
 
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
         const repaired = openOpenClawStateDatabase(options).db;
-        expectAcpReplayUtf8Accounting(repaired);
+        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
         expect(canonicalReplay(repaired)).toEqual(before);
         const repairedEstimates = estimates(repaired);
         closeOpenClawStateDatabaseForTest();
@@ -269,7 +300,7 @@ describe("ACP replay accounting repair", () => {
       }
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       const repaired = openOpenClawStateDatabase(options).db;
-      expectAcpReplayUtf8Accounting(repaired);
+      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
       expect(canonicalReplay(repaired)).toEqual(before);
     });
   });

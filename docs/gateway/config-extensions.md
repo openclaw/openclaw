@@ -65,7 +65,7 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   `openclaw doctor --fix` normalize into the current `transport` field.
 - `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
   while excluding it from embedded OpenClaw MCP discovery and tool projection.
-- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds.
+- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds. The built-in HTTP client keeps header and body inactivity timeouts at least this long, preserving longer transport defaults without imposing a deadline on the entire SSE stream.
 - `mcp.servers.<name>.connectionTimeoutMs`: per-server connection timeout in milliseconds.
 - `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
   adapters that can choose whether to issue parallel MCP tool calls.
@@ -203,7 +203,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 ```
 
 - Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
-- Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
+- Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup. A standalone file uses its file name as plugin id and starts with the Gateway once enabled through `allow` or `entries.<id>.enabled`.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - With the default hybrid reload mode, ordinary plugin policy, entry, and discovery-path changes hot-reload the plugin runtime. Entry config changes replace the affected instance. Use `openclaw plugins reload <id>` after source or manifest edits; active plugins can still declare restart-triggering config prefixes. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.

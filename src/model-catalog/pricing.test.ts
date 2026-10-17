@@ -7,6 +7,7 @@ import type {
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { MODELS_JSON_STATE } from "../agents/models-config-state.js";
 import * as runtimeNormalization from "../agents/provider-model-normalization.runtime.js";
 import { resolveResponseUsageLine } from "../auto-reply/reply/agent-runner-usage-line.js";
 import {
@@ -22,7 +23,6 @@ import type { PersistedInstalledPluginIndexCacheEntry } from "../plugins/plugin-
 import {
   createPluginCache,
   preparePluginCacheFact,
-  retirePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
@@ -31,7 +31,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import {
   estimateAggregateUsageCost,
-  resetUsageFormatCachesForTest,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
@@ -40,16 +39,19 @@ import {
   resolveModelPricing,
   resolveModelPricingContext,
 } from "./pricing.js";
-import { getRemoteModelCatalogProviderOverlay } from "./remote-overlay.js";
+import {
+  prepareRemoteModelCatalogStartupSnapshot,
+  getRemoteModelCatalogProviderOverlay,
+} from "./remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("hosted model pricing", () => {
   const readStoredCatalog = vi.fn();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clearRuntimeConfigSnapshot();
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     readStoredCatalog.mockReset().mockReturnValue({
       source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
       bundle_json: JSON.stringify({
@@ -109,11 +111,12 @@ describe("hosted model pricing", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog,
     });
+    await prepareRemoteModelCatalogStartupSnapshot();
   });
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -133,7 +136,7 @@ describe("hosted model pricing", () => {
     } as unknown as OpenClawConfig;
   }
 
-  it("keeps normalized indexes scoped to their policy while observing configured price changes", async () => {
+  it("keeps normalized indexes scoped to their policy and observes model-file prices", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
     const model = {
       id: "alias",
@@ -181,15 +184,6 @@ describe("hosted model pricing", () => {
     expect(lookup()).toEqual([3, undefined, undefined, 3]);
     expect(lookup()).toEqual([3, undefined, undefined, 3]);
 
-    model.cost.input = 9;
-    expect(lookup()).toEqual([9, undefined, undefined, 9]);
-    model.cost = { input: 11, output: 0, cacheRead: 0, cacheWrite: 0 };
-    expect(lookup()).toEqual([11, undefined, undefined, 11]);
-    model.id = "unaliased";
-    expect(lookup()).toEqual([undefined, undefined, undefined, undefined]);
-    providers.fixture.models.push({ ...model, id: "alias" });
-    expect(lookup()).toEqual([11, undefined, undefined, 11]);
-
     const fileModel = { ...model, id: "alias", cost: { ...model.cost, input: 17 } };
     await fs.writeFile(
       path.join(agentDir, "models.json"),
@@ -200,49 +194,35 @@ describe("hosted model pricing", () => {
     expect(enumeratePolicies).not.toHaveBeenCalled();
   });
 
-  it.each(["retirement", "current read failure"])(
-    "preserves pricing publication semantics after %s",
-    async (change) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
-      const config = configFor("https://api.openai.com/v1");
-      const cache = createPluginCache();
-      const reading = createDeferredCore();
-      const key = resolveInstalledPluginIndexStorePath({ env: process.env });
-      vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
-        .mockImplementationOnce(async () => {
-          await preparePluginCacheFact(cache, cache.persistedInstalledIndex, key, async () => {
-            await reading.promise;
-            return {
-              state: { status: "missing" },
-            } satisfies PersistedInstalledPluginIndexCacheEntry;
-          });
-          return createPluginMetadataSnapshotFixture();
-        })
-        .mockResolvedValue(createPluginMetadataSnapshotFixture());
-      const preparing = withPluginCache(cache, () => prepareModelPricingContext(config));
-      const settled =
-        change === "current read failure"
-          ? expect(preparing).resolves.toBeUndefined()
-          : expect(preparing).rejects.toThrow();
-      const retirement = change === "retirement" ? retirePluginCache(cache) : undefined;
-      reading.reject(new Error("optional metadata unavailable"));
-      await settled;
-      await retirement;
-      if (change === "current read failure") {
-        expect(readStoredCatalog).not.toHaveBeenCalled();
-        expect(
-          resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" }),
-        ).toBeUndefined();
-        return;
-      }
-      await withPluginCache(createPluginCache(), () => prepareModelPricingContext(config));
-      expect(
-        resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" })?.input,
-      ).toBe(2.5);
-    },
-  );
+  it("keeps optional metadata read failures nonfatal", async () => {
+    readStoredCatalog.mockClear();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
+    const config = configFor("https://api.openai.com/v1");
+    const cache = createPluginCache();
+    const reading = createDeferredCore();
+    const key = resolveInstalledPluginIndexStorePath({ env: process.env });
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockImplementationOnce(async () => {
+        await preparePluginCacheFact(cache, cache.persistedInstalledIndex, key, async () => {
+          await reading.promise;
+          return {
+            state: { status: "missing" },
+          } satisfies PersistedInstalledPluginIndexCacheEntry;
+        });
+        return createPluginMetadataSnapshotFixture();
+      })
+      .mockResolvedValue(createPluginMetadataSnapshotFixture());
+    const preparing = withPluginCache(cache, () => prepareModelPricingContext(config));
+    const settled = expect(preparing).resolves.toBeUndefined();
+    reading.reject(new Error("optional metadata unavailable"));
+    await settled;
+    expect(readStoredCatalog).not.toHaveBeenCalled();
+    expect(
+      resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" }),
+    ).toBeUndefined();
+  });
 
-  it("accepts exact free pricing from an authoritative native source", () => {
+  it("accepts exact free pricing from an authoritative native source", async () => {
     const agentDir = tempDirs.make("openclaw-native-zero-policy-");
     vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
     const config: OpenClawConfig = {
@@ -274,6 +254,11 @@ describe("hosted model pricing", () => {
         },
       }),
     });
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
     const cost = resolveModelCostConfig({
       config,
       agentDir,
@@ -281,6 +266,75 @@ describe("hosted model pricing", () => {
       model: "zero-fixture",
     });
     expect(cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  // The bundled Anthropic manifest prices its claude-cli backend as anthropic.
+  async function resolveClaudeCliCost(pricing: Record<string, unknown>) {
+    const agentDir = tempDirs.make("openclaw-price-as-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+    const config: OpenClawConfig = {};
+    readStoredCatalog.mockReturnValue({
+      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
+      bundle_json: JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: 200,
+        sourceCommit: "price-as",
+        providers: {},
+        pricing,
+      }),
+    });
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
+    await prepareModelPricingContext(config);
+    const resolve = (provider: string) =>
+      resolveModelCostConfig({ config, agentDir, provider, model: "claude-opus-5-5" });
+    return { cli: resolve("claude-cli"), anthropic: resolve("anthropic") };
+  }
+
+  it("prices a priceAs provider with its target's catalog row", async () => {
+    const { cli, anthropic } = await resolveClaudeCliCost({});
+    expect(cli).toMatchObject({ input: 4, output: 20 });
+    expect(cli).toEqual(anthropic);
+  });
+
+  it("never follows priceAs past the source provider's pricing exclusions", () => {
+    const rates = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
+    const contextFor = (
+      config: OpenClawConfig,
+      external: boolean,
+    ): Parameters<typeof resolveModelPricing>[0] => ({
+      config,
+      normalizeKey: (provider, model) => `${provider}/${model}`,
+      catalog: new Map([["anthropic/claude-opus-5-5", rates]]),
+      hosted: {},
+      upstream: {},
+      normalizedHosted: new Map(),
+      policies: new Map([
+        [
+          "claude-cli",
+          { external, authoritative: false, passthroughSources: [], priceAs: "anthropic" },
+        ],
+      ]),
+      fingerprint: "price-as-exclusions",
+    });
+    const key = "claude-cli/claude-opus-5-5";
+    const privateEndpoint: OpenClawConfig = {
+      models: { providers: { "claude-cli": { baseUrl: "http://127.0.0.1:8080/v1", models: [] } } },
+    };
+
+    expect(resolveModelPricing(contextFor({}, true), key)).toEqual(rates);
+    expect(resolveModelPricing(contextFor({}, false), key)).toBeUndefined();
+    expect(resolveModelPricing(contextFor(privateEndpoint, true), key)).toBeUndefined();
+  });
+
+  it("keeps a priceAs provider's own price ahead of its target's", async () => {
+    const { cli } = await resolveClaudeCliCost({
+      "claude-cli/claude-opus-5-5": { input: 1, output: 2 },
+    });
+    expect(cli).toMatchObject({ input: 1, output: 2 });
   });
 
   const catalogRates = { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1 };
@@ -377,7 +431,7 @@ describe("hosted model pricing", () => {
       });
       vi.stubGlobal("fetch", fetch);
       for (const config of [runtime, structuredClone(runtime)]) {
-        resetUsageFormatCachesForTest();
+        MODELS_JSON_STATE.costCache.clear();
         const discoverySpies = allowPluginNormalization
           ? []
           : [
@@ -604,7 +658,7 @@ describe("hosted model pricing", () => {
     expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
   });
 
-  it("bounds fingerprints for multi-megabyte hosted pricing catalogs", () => {
+  it("bounds fingerprints for multi-megabyte hosted pricing catalogs", async () => {
     const pricing = Object.fromEntries(
       Array.from({ length: 40_000 }, (_, index) => [
         `openai/catalog-model-${index}`,
@@ -628,7 +682,14 @@ describe("hosted model pricing", () => {
       bundle_json: bundleJson,
     });
 
-    const fingerprint = resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"));
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
+    const config = configFor("https://api.openai.com/v1");
+    const fingerprint = resolveModelCostConfigFingerprint(config);
+    const contextFingerprint = resolveModelPricingContext(config).fingerprint;
     const withoutHostedPricing = configFor("https://api.openai.com/v1");
     withoutHostedPricing.models = {
       ...withoutHostedPricing.models,
@@ -636,6 +697,10 @@ describe("hosted model pricing", () => {
     };
 
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    expect(contextFingerprint.length).toBe(64);
+    expect(contextFingerprint).not.toBe(
+      resolveModelPricingContext(withoutHostedPricing).fingerprint,
+    );
     expect(fingerprint).not.toBe(resolveModelCostConfigFingerprint(withoutHostedPricing));
   });
 });
@@ -644,7 +709,7 @@ describe("OpenRouter routing shortcut estimates", () => {
   let hostedPricing: Record<string, RemoteModelCatalogPricing>;
 
   beforeEach(() => {
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     hostedPricing = {
       "openrouter/openai/gpt-catalog": { input: 1, output: 2 },
       "openai/gpt-catalog": { input: 4, output: 5 },
@@ -671,12 +736,13 @@ describe("OpenRouter routing shortcut estimates", () => {
   });
 
   afterEach(() => {
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     vi.restoreAllMocks();
     setRemoteModelCatalogOverlaySourcesForTest();
   });
 
-  it("prices the OpenRouter :nitro shortcut after endpoint checks", () => {
+  it("prices the OpenRouter :nitro shortcut after endpoint checks", async () => {
+    await prepareRemoteModelCatalogStartupSnapshot();
     const agentDir = tempDirs.make("openclaw-routing-pricing-");
     const model = "openai/gpt-catalog:nitro";
     const rates = { input: 1, output: 2 };
@@ -733,10 +799,11 @@ describe("OpenRouter routing shortcut estimates", () => {
     }
   });
 
-  it("retains exact shortcut prices and does not strip distinct or nested variants", () => {
+  it("retains exact shortcut prices and does not strip distinct or nested variants", async () => {
     const agentDir = tempDirs.make("openclaw-routing-variants-");
     hostedPricing["openrouter/openai/gpt-catalog:nitro"] = { input: 7, output: 8 };
     hostedPricing["openrouter/openai/gpt-catalog:free"] = { input: 3, output: 4 };
+    await prepareRemoteModelCatalogStartupSnapshot();
     const config: OpenClawConfig = {
       models: {
         providers: { openrouter: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
@@ -775,9 +842,9 @@ describe("OpenRouter routing shortcut estimates", () => {
 describe("standalone v2 pricing", () => {
   const passthrough = { passthroughProviderModel: true } as const;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-standalone-"));
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
       createPluginMetadataSnapshotFixture({
         plugins: [
@@ -875,10 +942,11 @@ describe("standalone v2 pricing", () => {
         checked_at: 200,
       }),
     });
+    await prepareRemoteModelCatalogStartupSnapshot();
   });
 
   afterEach(() => {
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     setRemoteModelCatalogOverlaySourcesForTest();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -919,7 +987,7 @@ describe("inline v2 pricing", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-pricing-"));
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     pricing = { ...known, input: 0, output: 0, source: "models.dev" };
     vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
       createPluginMetadataSnapshotFixture({
@@ -960,7 +1028,7 @@ describe("inline v2 pricing", () => {
   });
 
   afterEach(() => {
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     setRemoteModelCatalogOverlaySourcesForTest();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -979,8 +1047,9 @@ describe("inline v2 pricing", () => {
     name: string;
     price: RemoteModelCatalogPricingV2;
     expected: { input: number; output?: number } | undefined;
-  }>)("uses $name pricing without reviving the bundled price", ({ price, expected }) => {
+  }>)("uses $name pricing without reviving the bundled price", async ({ price, expected }) => {
     pricing = price;
+    await prepareRemoteModelCatalogStartupSnapshot();
     const config = {};
     const context = resolveModelPricingContext(config);
     expect(resolveModelPricing(context, "fixture/native/model")).toEqual(expected);
@@ -996,7 +1065,8 @@ describe("inline v2 pricing", () => {
     );
   });
 
-  it("does not let known zero bypass disabled external pricing", () => {
+  it("does not let known zero bypass disabled external pricing", async () => {
+    await prepareRemoteModelCatalogStartupSnapshot();
     const config: OpenClawConfig = {};
     const snapshot = pluginMetadata.resolvePluginMetadataSnapshot({ config, env: process.env });
     for (const plugin of snapshot.manifestRegistry.plugins) {

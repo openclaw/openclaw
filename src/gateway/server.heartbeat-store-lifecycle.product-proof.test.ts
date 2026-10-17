@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -14,6 +14,9 @@ import { resetSubagentRegistryForTests } from "../agents/subagents/registry/suba
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeatAndWait, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
+import { isSystemEventTurnOwned, peekSystemEventEntries } from "../infra/system-events.js";
+import * as stateEventSweep from "../sessions/session-state-events.sweep.js";
+import { decodeSessionStateNoticeContextKey } from "../sessions/session-state-notices.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -91,7 +94,7 @@ async function startProvider() {
         ]);
       } else {
         writeOpenAiResponsesText(response, {
-          text: title ? "Store lifecycle proof" : isNotice ? "NO_REPLY" : "CHILD-DONE",
+          text: title ? "Store lifecycle proof" : isNotice ? "NOTICE-RECEIVED" : "CHILD-DONE",
           messageId: `msg_${requests.length}`,
           responseId: `resp_${requests.length}`,
         });
@@ -145,6 +148,15 @@ describe("session notification store ownership through the Gateway", () => {
       const home = await setupGatewayTempHome({ prefix: "openclaw-heartbeat-store-" });
       let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let sweepSettled = createDeferredCore();
+      const originalSweep = stateEventSweep.sweepSessionStateWatchNotices;
+      const sweepSpy = vi
+        .spyOn(stateEventSweep, "sweepSessionStateWatchNotices")
+        .mockImplementation(async (options) => {
+          const observedSweep = sweepSettled;
+          await originalSweep(options);
+          observedSweep.resolve();
+        });
       await runQaGatewayFixture(
         async () => {
           provider = await startProvider();
@@ -208,6 +220,8 @@ describe("session notification store ownership through the Gateway", () => {
           const configPath = await createGatewayConfigPath(home.tempHome);
           gateway = await start();
           await gateway.server.startupSettled;
+          // Startup observers settle separately from startupSettled.
+          await withinTest(sweepSettled.promise, signal);
           const parentKey = `agent:main:store-proof-${randomUUID()}`;
           const wait = (runId: string) =>
             gateway!.client.request<{ status: string }>(
@@ -275,14 +289,36 @@ describe("session notification store ownership through the Gateway", () => {
             expect(after.sessions.map((entry) => entry.key)).not.toContain(child.childSessionKey);
             expect(provider.requests.map((request) => request.model)).not.toContain("backup");
           } else {
+            expect(
+              peekSystemEventEntries(parentKey).some(
+                (event) =>
+                  decodeSessionStateNoticeContextKey(event.contextKey ?? "") ===
+                    child.childSessionKey && !isSystemEventTurnOwned(parentKey, event),
+              ),
+              "Child notice must still be passive before Gateway replacement",
+            ).toBe(true);
             await disconnectGatewayClient(gateway.client);
             await gateway.server.close({ reason: "same-store replacement" });
             gateway = undefined;
             const replacementRequestOffset = provider.requests.length;
             const replacementNotice = provider.armNoticeObservation();
+            sweepSettled = createDeferredCore();
             gateway = await start();
             await gateway.server.startupSettled;
-            // Await the actual delayed notification; replacement must not need another wake.
+            await withinTest(sweepSettled.promise, signal);
+            // Restart restores unread notices as context for the next ordinary turn.
+            const resumed = await gateway.client.request<{ runId: string }>(
+              "chat.send",
+              {
+                sessionKey: parentKey,
+                message: "Continue after the Gateway restart.",
+                deliver: false,
+                idempotencyKey: randomUUID(),
+              },
+              { expectFinal: false },
+            );
+            const resumedResult = await wait(resumed.runId);
+            expect(resumedResult.status, JSON.stringify(resumedResult)).toBe("ok");
             const notice = await withinTest(replacementNotice, signal);
             expect(provider.requests.indexOf(notice)).toBeGreaterThanOrEqual(
               replacementRequestOffset,
@@ -314,6 +350,7 @@ describe("session notification store ownership through the Gateway", () => {
         },
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "heartbeat store proof complete" }),
+        () => sweepSpy.mockRestore(),
         () => provider?.stop(),
         () => resetSubagentRegistryForTests({ persist: false }),
         () => removeGatewayTempHome(home.tempHome),

@@ -117,7 +117,15 @@ describe("Codex installed skills", () => {
         expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
         expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
       } else {
-        expect(read.contentItems).toEqual([{ type: "inputText", text: skill.readContent }]);
+        expect(read.contentItems).toEqual([
+          {
+            type: "inputText",
+            text:
+              `Skill location: ${skill.filePath}\n` +
+              "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+              skill.readContent,
+          },
+        ]);
       }
     }
   });

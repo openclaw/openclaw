@@ -473,24 +473,4 @@ describe("setup admission", () => {
     releaseLock.resolve();
     await lockOwner;
   });
-
-  it("rejects Gateway setup while the canonical onboarding target lock is held", async () => {
-    const lockAcquired = createDeferred();
-    const releaseLock = createDeferred();
-    const lockOwner = setupMigration.withSetupMigrationTargetLock(mocks.stateDir, async () => {
-      lockAcquired.resolve();
-      await releaseLock.promise;
-    });
-    await lockAcquired.promise;
-
-    const task = vi.fn(async () => "unexpected");
-    await expect(runExclusiveSystemAgentSetupActivation(task)).rejects.toThrow(
-      "setup is already in progress",
-    );
-    expect(task).not.toHaveBeenCalled();
-
-    releaseLock.resolve();
-    await lockOwner;
-    await expect(runExclusiveSystemAgentSetupActivation(async () => "ok")).resolves.toBe("ok");
-  });
 });

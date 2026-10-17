@@ -1,5 +1,5 @@
 import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
-import { applyHistoricalWebhookPins } from "../commands/doctor/shared/legacy-webhook-pins.js";
+import { createHistoricalWebhookPinMigration } from "../commands/doctor/shared/legacy-webhook-pins.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -77,7 +77,10 @@ export function applyResolvedPluginDoctorCompatibilityMigrations(
     isDeferred: (pluginId: string) => boolean;
   },
 ): PluginDoctorCompatibilityResult {
-  const initialized = params.historicalWebhookListeners
+  const applyHistoricalWebhookPins = params.historicalWebhookListeners
+    ? createHistoricalWebhookPinMigration(params.env)
+    : undefined;
+  const initialized = applyHistoricalWebhookPins
     ? applyHistoricalWebhookPins({ config: cfg, changes: [] }, undefined, params)
     : { config: cfg, changes: [] };
   const result = applyPluginDoctorCompatibilitySequence(
@@ -94,7 +97,7 @@ export function applyResolvedPluginDoctorCompatibilityMigrations(
       return {
         pluginId: entry.pluginId,
         normalizeCompatibilityConfig: entry.normalizeCompatibilityConfig,
-        transform: params.historicalWebhookListeners
+        transform: applyHistoricalWebhookPins
           ? (mutation: ChannelDoctorConfigMutation) => {
               if (entry.historicalWebhookNormalizer) {
                 mutation.historicalWebhookAccountIds = entry.historicalWebhookNormalizer({

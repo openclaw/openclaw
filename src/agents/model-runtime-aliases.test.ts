@@ -1,6 +1,7 @@
 // Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -103,6 +104,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     providerKey = "anthropic",
     profiles: AuthProfileStore["profiles"] = {},
   ): void {
+    prepareSharedAuthStoreOwnershipForNative();
     setRuntimeAuthProfileStoreSnapshot({
       version: 1,
       profiles,

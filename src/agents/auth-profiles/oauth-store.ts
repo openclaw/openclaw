@@ -1,3 +1,4 @@
+import { continueAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import { createFailedOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { beginOAuthRefreshObservation } from "./oauth-refresh-observation.js";
@@ -63,7 +64,7 @@ export async function loadStoredOAuthRefreshStore(
   });
 }
 
-export async function updateOAuthStore(
+async function updateOAuthStore(
   params: Parameters<typeof updateAuthProfileStoreWithLock>[0] & {
     personalStore?: PersonalAuthProfileStore;
     assertCurrent?: () => void;
@@ -72,6 +73,36 @@ export async function updateOAuthStore(
   return params.personalStore
     ? params.personalStore.update(params.updater, params.assertCurrent)
     : updateAuthProfileStoreWithLock(params);
+}
+
+/** Claim against the persisted credential, which may differ from an adopted bootstrap token. */
+export async function persistOAuthRefreshClaim(params: {
+  personalStore?: PersonalAuthProfileStore;
+  agentDir?: string;
+  profileId: string;
+  expected: OAuthCredential;
+  fence: OAuthCredential;
+  assertCurrent: () => void;
+}): Promise<boolean> {
+  let claimed = false;
+  const updated = await updateOAuthStore({
+    personalStore: params.personalStore,
+    agentDir: params.agentDir,
+    profileId: params.profileId,
+    assertCurrent: params.assertCurrent,
+    updater: (store) => {
+      if (!isExactOAuthCredential(store.profiles[params.profileId], params.expected)) {
+        return false;
+      }
+      store.profiles[params.profileId] = continueAuthProfileAuthorization(
+        params.expected,
+        params.fence,
+      );
+      claimed = true;
+      return true;
+    },
+  });
+  return updated !== null && claimed;
 }
 
 export async function settleOAuthRefreshClaim(params: {
@@ -106,7 +137,9 @@ export async function settleOAuthRefreshClaim(params: {
         return false;
       }
       if (isExactOAuthCredential(existing, params.fence)) {
-        store.profiles[params.profileId] = { ...params.refreshed };
+        store.profiles[params.profileId] = continueAuthProfileAuthorization(existing, {
+          ...params.refreshed,
+        });
         credential = params.refreshed;
         persisted = true;
         return true;
@@ -162,7 +195,9 @@ export async function rollbackOAuthRefreshOwnerClaim(params: {
       if (!isExactOAuthCredential(existing, params.fence)) {
         return false;
       }
-      store.profiles[params.profileId] = { ...params.original };
+      store.profiles[params.profileId] = continueAuthProfileAuthorization(params.fence, {
+        ...params.original,
+      });
       restored = true;
       return true;
     },

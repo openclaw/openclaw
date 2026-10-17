@@ -8,8 +8,8 @@ import type { FileOperations } from "../types.js";
 
 export type { FileOperations } from "../types.js";
 
-function normalizeFileToolName(value: unknown): string {
-  const name = typeof value === "string" ? value.toLowerCase() : "";
+function normalizeFileToolName(value: string): string {
+  const name = value.toLowerCase();
   const separator = name.indexOf("__", name.startsWith("mcp__") ? 5 : 0);
   return separator < 0 ? name : name.slice(separator + 2);
 }
@@ -52,12 +52,11 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
     return;
   }
 
-  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+  if (message.role !== "assistant") {
     return;
   }
-  for (const block of message.content) {
-    const toolCall = asRecord(block);
-    if (toolCall?.type !== "toolCall") {
+  for (const toolCall of message.content) {
+    if (toolCall.type !== "toolCall") {
       continue;
     }
     const args = asRecord(toolCall.arguments);

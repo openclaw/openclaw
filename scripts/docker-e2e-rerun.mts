@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { shellEscapeBackslash as shellQuote } from "../src/shared/shell-quote.ts";
 import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mts";
 import { groupBy } from "./lib/group-by.mts";
 
@@ -86,10 +87,6 @@ function run(
 function readJson(file: string) {
   const value = readDockerE2eJsonArtifact(file);
   return isRecord(value) ? value : {};
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function laneNeedsReleasePath(lane: string): boolean {

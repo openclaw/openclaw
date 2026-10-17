@@ -39,7 +39,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import type { RunExit } from "../process/supervisor/types.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -51,6 +50,7 @@ import {
   registerGatewayCronMutationAuthorityTests,
   registerGatewayCronStreamMutationTests,
 } from "./server-cron.mutation-lifecycle.test-support.js";
+import { createWatchedRun, runExit } from "./server-cron.process.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
 import { registerGatewayCronSystemJobTests } from "./server-cron.system-jobs.test-support.js";
 
@@ -153,6 +153,7 @@ const {
     },
   })),
   getProcessSupervisorMock: vi.fn(() => ({
+    acquireScopeCleanup: vi.fn(() => async () => {}),
     spawn: vi.fn(),
     cancelScope: vi.fn(),
   })),
@@ -435,46 +436,30 @@ function addScriptJob(
   return addCronJob(service, name, { kind: "script", script }, overrides);
 }
 
-function runExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "manual-cancel",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
-function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {
-  const exit = createDeferred<RunExit>();
-  return {
-    exit,
-    startedAtMs: Date.now(),
-    cancel: vi.fn(() => {
-      if (settleOnCancel) {
-        exit.resolve(runExit(exitResult));
-      }
-    }),
-    detachOutput: vi.fn(),
-    wait: vi.fn(() => exit.promise),
-  };
-}
-
 function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {
   let nextRun = 0;
+  const activeRuns = new Map<number, ReturnType<typeof createWatchedRun>>();
   const spawn = vi.fn(async () => {
     const index = nextRun++;
-    return {
-      ...(runs.length ? expectDefined(runs[index], "watched process") : createWatchedRun()),
-      runId: `cron-watch-${index}`,
-    };
+    const run = runs.length ? expectDefined(runs[index], "watched process") : createWatchedRun();
+    activeRuns.set(index, run);
+    void run.exit.promise.then(() => activeRuns.delete(index));
+    return { ...run, runId: `cron-watch-${index}` };
   });
   const cancelScope = vi.fn();
-  getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+  const acquireScopeCleanup = vi.fn(() => {
+    const index = nextRun;
+    let closing: Promise<void> | undefined;
+    return () => {
+      if (!closing) {
+        const run = activeRuns.get(index);
+        run?.cancel();
+        closing = run ? run.wait().then(() => undefined) : Promise.resolve();
+      }
+      return closing;
+    };
+  });
+  getProcessSupervisorMock.mockReturnValue({ acquireScopeCleanup, spawn, cancelScope });
   return { spawn, cancelScope };
 }
 
@@ -523,6 +508,7 @@ function expectIsolatedRunFields(fields: Record<string, unknown>) {
     callArg(runCronIsolatedAgentTurnMock, 0, 0, "isolated cron run"),
     "isolated cron run",
   );
+  expect(options.trigger).toBe("cron");
   for (const [key, value] of Object.entries(fields)) {
     expect(options[key]).toEqual(value);
   }
@@ -548,6 +534,7 @@ describe("buildGatewayCronService", () => {
     requestSafeGatewayRestartMock.mockClear();
     getProcessSupervisorMock.mockReset();
     getProcessSupervisorMock.mockReturnValue({
+      acquireScopeCleanup: vi.fn(() => async () => {}),
       spawn: vi.fn(),
       cancelScope: vi.fn(),
     });
@@ -724,7 +711,6 @@ describe("buildGatewayCronService", () => {
       expect(spawn).toHaveBeenCalledOnce();
 
       await state.cron.start();
-      await state.reconcileExitWatchers?.();
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
     });
   });
@@ -923,7 +909,7 @@ describe("buildGatewayCronService", () => {
         });
         expect(rearmed.updatedAtMs).toBe(job.updatedAtMs);
         await state.reconcileExitWatchers();
-        expect(spawn).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
 
         if (exitTiming === "before") {
           secondExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
@@ -1274,8 +1260,8 @@ describe("buildGatewayCronService", () => {
     try {
       // Gate reconcile's first list call: capture the pre-add (empty) snapshot,
       // hold it while the add's direct route starts the owner, then release the
-      // stale snapshot. The revision fence must re-list instead of stopping the
-      // freshly started owner as "removed".
+      // stale snapshot. The older sweep must not stop the freshly started
+      // owner as "removed"; the mutation already routed its current definition.
       const originalList = state.cron.list.bind(state.cron);
       const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
       let armed = true;
@@ -1890,56 +1876,73 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("delivers isolated script notify through the cron announce path", async () => {
-    const cfg = createCronConfig("server-cron-script-announce");
-    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    cfg.gateway = { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } };
-    loadConfigMock.mockReturnValue(cfg);
-    cronScriptExecutorMock.mockResolvedValueOnce({
-      kind: "completed",
-      notify: "queue changed",
-      stateChanged: false,
-    });
+  it.each([
+    { notify: "queue changed", expected: "queue changed" },
+    { notify: "NO_REPLY", expected: undefined },
+    { notify: "NO_REPLY\nNO_REPLY", expected: "NO_REPLY" },
+    { notify: "NO_REPLY.", expected: "NO_REPLY." },
+  ])(
+    "prepares isolated script notify $notify before announcement",
+    async ({ notify, expected }) => {
+      const cfg = createCronConfig("server-cron-script-announce");
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      cfg.gateway = {
+        publicOrigin: "https://gateway.example",
+        controlUi: { basePath: "/control" },
+      };
+      loadConfigMock.mockReturnValue(cfg);
+      cronScriptExecutorMock.mockResolvedValueOnce({
+        kind: "completed",
+        notify,
+        stateChanged: false,
+      });
 
-    const state = createCronService(cfg);
-    try {
-      const job = await addScriptJob(
-        state,
-        "script-announce",
-        "return { notify: 'queue changed' }",
-        {
-          deleteAfterRun: false,
-          delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
-        },
-      );
+      const state = createCronService(cfg);
+      try {
+        const job = await addScriptJob(
+          state,
+          "script-announce",
+          "return { notify: 'queue changed' }",
+          {
+            deleteAfterRun: false,
+            delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
+          },
+        );
 
-      await state.cron.run(job.id, "force");
+        await state.cron.run(job.id, "force");
 
-      expect(cronScriptExecutorMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job: expect.objectContaining({
-            id: job.id,
-            payload: expect.objectContaining({
-              script: "return { notify: 'queue changed' }",
-              timeoutSeconds: 300,
-              toolBudget: 50,
+        expect(cronScriptExecutorMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            job: expect.objectContaining({
+              id: job.id,
+              payload: expect.objectContaining({
+                script: "return { notify: 'queue changed' }",
+                timeoutSeconds: 300,
+                toolBudget: 50,
+              }),
             }),
           }),
-        }),
-      );
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          jobId: job.id,
-          payload: [{ text: "queue changed" }],
-          inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
-          target: expect.objectContaining({ threadId: 456 }),
-        }),
-      );
-      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
-    } finally {
-      state.cron.stop();
-    }
-  });
+        );
+        if (expected === undefined) {
+          expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBe("silent");
+        } else {
+          expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              jobId: job.id,
+              payload: [{ text: expected }],
+              inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+              target: expect.objectContaining({ threadId: 456 }),
+            }),
+          );
+          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBeUndefined();
+        }
+        expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      } finally {
+        state.cron.stop();
+      }
+    },
+  );
 
   it("keeps script failure detail transient while preserving structured error payloads", async () => {
     const cfg = createCronConfig("server-cron-script-failure-detail");

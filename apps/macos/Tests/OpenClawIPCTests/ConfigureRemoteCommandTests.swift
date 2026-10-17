@@ -437,7 +437,7 @@ struct ConfigureRemoteCommandTests {
             #expect(gateway["mode"] as? String == "remote")
             #expect(gateway["port"] as? Int == 19089)
             #expect(remote["transport"] as? String == "direct")
-            #expect(remote["url"] as? String == "ws://192.168.0.202:18789")
+            #expect(remote["url"] as? String == "ws://\(host):18789")
             #expect(remote["remotePort"] == nil)
             #expect(remote["sshTarget"] == nil)
             #expect(remote["sshHostKeyPolicy"] == nil)

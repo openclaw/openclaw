@@ -39,7 +39,7 @@ resolveGlobalSingleton(cleanupKey, () => ({}), async () => {
     Reflect.deleteProperty(globalThis, cleanupKey);
   }
 });
-const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "${mode}-producer-state") } };
+const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "${mode}-producer-state") }, artifactPreservingReadOnly: false };
 ${registerListener}(${callback} => {
   appendFileSync(log, "A:" + ${observation} + "\\n");
 });
@@ -56,7 +56,7 @@ afterAll(() => {
 });
 `,
     [`${mode}-b-observer.test.ts`]: `${imports}
-const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "${mode}-observer-state") } };
+const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "${mode}-observer-state") }, artifactPreservingReadOnly: false };
 ${registerListener}(${callback} => {
   appendFileSync(log, "B:" + ${observation} + "\\n");
 });

@@ -106,6 +106,40 @@ async function createBackend(
   return backend;
 }
 
+const queryRows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
+const expectRows = (db: DatabaseSync, sql: string, rows: unknown[]) =>
+  expect(queryRows(db, sql)).toEqual(rows);
+const expectValues = (db: DatabaseSync, sql: string, rows: unknown[][]) =>
+  expect(queryRows(db, sql).map((row) => Object.values(row))).toEqual(rows);
+const sourceHash = (db: DatabaseSync) => db.prepare("SELECT hash FROM memory_index_sources").get();
+const publish = (owner: MemoryIndexDatabase, input: MemorySourceIndexReplacement) =>
+  owner.replaceSource(
+    input,
+    () => undefined,
+    async () => true,
+  );
+
+const disabled = { enabled: false, available: false };
+const enabled = { enabled: true, available: true };
+function stageSource(
+  backend: Awaited<ReturnType<typeof createBackend>>,
+  input: MemorySourceIndexReplacement,
+) {
+  const { chunks: _chunks, embeddings: _embeddings, ...header } = input;
+  backend.execute({ type: "stage.start", input: { header } });
+  for (const fragments of memoryPublicationBatches(input)) {
+    backend.execute({ type: "stage.append", input: { fragments } });
+  }
+}
+
+function forget(db: DatabaseSync, sessionId: string) {
+  recordMemorySessionTombstonesInDatabase(db, {
+    agentId: "main",
+    sessionIds: [sessionId],
+    createdAt: 1,
+  });
+}
+
 function replacement(text = "Violetmarker transfer text"): MemorySourceIndexReplacement {
   return {
     source: "memory",
@@ -155,18 +189,12 @@ describe("bounded memory publication transfer", () => {
           { databasePath: filename, database: db, admit: () => undefined },
         );
       const scalar = bind();
-      const state = {
-        vector: { enabled: false, available: false },
-        fts: { enabled: false, available: false },
-      };
       expect(
         scalar.execute({
           type: "index.writeMetadata",
           input: { provider: "none", model: "fts-only", chunkTokens: 400, chunkOverlap: 80 },
         }),
-      ).toMatchObject({
-        ok: true,
-      });
+      ).toMatchObject({ ok: true });
       expect(
         reads.mock.calls.filter(([statement]) =>
           /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
@@ -187,27 +215,22 @@ describe("bounded memory publication transfer", () => {
         sql.mock.calls.filter(([statement]) => /memory_publication_input/u.test(statement)),
       ).toEqual([]);
       const staged = bind();
-      const input = replacement("staged text survives scalar cleanup");
-      const { chunks: _chunks, embeddings: _embeddings, ...header } = input;
-      staged.execute({
-        type: "stage.start",
-        input: { header },
-      });
-      for (const fragments of memoryPublicationBatches(input)) {
-        staged.execute({ type: "stage.append", input: { fragments } });
-      }
-      expect(staged.execute({ type: "source.replace", input: { state } })).toMatchObject({
-        ok: true,
-      });
+      stageSource(staged, replacement("staged text survives scalar cleanup"));
+      expect(
+        staged.execute({
+          type: "source.replace",
+          input: { state: { vector: disabled, fts: disabled } },
+        }),
+      ).toMatchObject({ ok: true });
       staged.close();
-      expect(db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+      expectRows(db, "SELECT text FROM memory_index_chunks", [
         { text: "staged text survives scalar cleanup" },
       ]);
-      expect(
-        db
-          .prepare("SELECT name FROM sqlite_temp_master WHERE name = 'memory_publication_input'")
-          .all(),
-      ).toEqual([]);
+      expectRows(
+        db,
+        "SELECT name FROM sqlite_temp_master WHERE name = 'memory_publication_input'",
+        [],
+      );
     } finally {
       db.close();
     }
@@ -256,11 +279,7 @@ describe("bounded memory publication transfer", () => {
     const db = fixtureWriter(owner);
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
     ensureMemorySessionTombstones(db);
-    recordMemorySessionTombstonesInDatabase(db, {
-      agentId: "main",
-      sessionIds: ["forgotten"],
-      createdAt: 1,
-    });
+    forget(db, "forgotten");
     let refused = true;
     const backend = await createBackend(owner, (stage) => {
       if (stage === "commit" && refused) {
@@ -290,10 +309,10 @@ describe("bounded memory publication transfer", () => {
         committed: false,
         error: { message: "inline commit refused" },
       });
-      expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+      expectRows(db, "SELECT hash FROM memory_embedding_cache", []);
       refused = false;
       expect(backend.execute(command)).toMatchObject({ ok: true, value: true });
-      expect(db.prepare("SELECT hash, embedding FROM memory_embedding_cache").all()).toEqual([
+      expectRows(db, "SELECT hash, embedding FROM memory_embedding_cache", [
         { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
       ]);
       expect(sql.queries.filter((query) => query.includes("memory_publication_input"))).toEqual([]);
@@ -303,15 +322,14 @@ describe("bounded memory publication transfer", () => {
   });
 
   it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
-    "settles a single-statement source refresh through %s",
+    "settles an atomic source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
       const db = fixtureWriter(owner);
       db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
         VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
-      const stages: string[] = [];
+      const revision = readMemoryDatabaseRevision(db);
       const backend = await createBackend(owner, (stage) => {
-        stages.push(stage);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         if (fault === stage) {
           throw new Error(`refused ${stage}`);
@@ -324,7 +342,6 @@ describe("bounded memory publication transfer", () => {
       const locker =
         fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
       locker?.exec("BEGIN IMMEDIATE");
-      const exec = vi.spyOn(db, "exec");
       try {
         const outcome = backend.execute({
           type: "source.refresh",
@@ -341,24 +358,11 @@ describe("bounded memory publication transfer", () => {
             ? { ok: true, value: fault === "success" }
             : { ok: false, entered: fault !== "begin", committed: false },
         );
-        expect(stages).toEqual(
-          fault === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect(
-          exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
-        ).toHaveLength(fault === "transaction" || fault === "commit" ? 0 : 1);
-        expect(
-          exec.mock.calls.filter(([sql]) =>
-            /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/u.test(sql),
-          ),
-        ).toEqual([]);
         expect(db.isTransaction).toBe(false);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-        expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-          hash: fault === "success" ? "new" : "old",
-        });
+        expect(sourceHash(db)).toEqual({ hash: fault === "success" ? "new" : "old" });
+        expect(readMemoryDatabaseRevision(db)).toBe(revision + (fault === "success" ? 1 : 0));
       } finally {
-        exec.mockRestore();
         locker?.exec("ROLLBACK");
         locker?.close();
       }
@@ -378,14 +382,7 @@ describe("bounded memory publication transfer", () => {
       },
     );
     const backend = await createBackend(owner);
-    const { chunks: _chunks, embeddings: _embeddings, ...header } = replacement();
-    backend.execute({
-      type: "stage.start",
-      input: { header },
-    });
-    for (const fragments of memoryPublicationBatches(replacement())) {
-      backend.execute({ type: "stage.append", input: { fragments } });
-    }
+    stageSource(backend, replacement());
     backend.execute({ type: "stage.discard", input: undefined });
     expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
@@ -461,7 +458,7 @@ describe("bounded memory publication transfer", () => {
       let closed = false;
       const run = sqliteRuntime.runSqliteWorkerStoreWrite;
       vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite").mockImplementation(
-        (store, operation, assertCurrent, nativeLocations) =>
+        (store, operation, ...options) =>
           run(
             store,
             (scope) =>
@@ -477,8 +474,7 @@ describe("bounded memory publication transfer", () => {
                   return scope.execute(command);
                 },
               }),
-            assertCurrent,
-            nativeLocations,
+            ...options,
           ),
       );
       const open = sqliteRuntime.openSqliteWorkerStore;
@@ -496,17 +492,11 @@ describe("bounded memory publication transfer", () => {
         }
         return store;
       });
-      const result = owner.replaceSource(
-        replacement(),
-        () => undefined,
-        async () => true,
-      );
+      const result = publish(owner, replacement());
       if (failClose) {
         const failure: unknown = await result.catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(AggregateError);
-        if (!(failure instanceof AggregateError)) {
-          throw new Error("Expected publication and cleanup failures");
-        }
+        assert.ok(failure instanceof AggregateError);
         expect(failure.cause).toBe(original);
         expect(failure.errors).toHaveLength(2);
         expect(failure.errors[0]).toBe(original);
@@ -519,7 +509,7 @@ describe("bounded memory publication transfer", () => {
       }
       expect(closed).toBe(true);
       expect(commands).toEqual(["source.replace.inline"]);
-      expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
+      expectRows(owner.db, "SELECT * FROM memory_index_sources", []);
     },
   );
 
@@ -560,68 +550,42 @@ describe("bounded memory publication transfer", () => {
     for (const batch of batches) {
       expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
     }
-    await owner.replaceSource(
-      input,
-      () => undefined,
-      async () => true,
+    await publish(owner, input);
+    expectValues(
+      owner.db,
+      "SELECT path, source, start_line, end_line, hash, model, text, embedding, updated_at FROM memory_index_chunks",
+      [
+        [
+          input.entry.path,
+          "memory",
+          1,
+          3,
+          "chunk-hash",
+          "transfer-model",
+          text,
+          encodeMemoryEmbedding(vector.map((value) => (Object.is(value, -0) ? 0 : value))),
+          101,
+        ],
+      ],
     );
-    expect(
-      owner.db
-        .prepare(
-          "SELECT path, source, start_line, end_line, hash, model, text, embedding, updated_at " +
-            "FROM memory_index_chunks",
-        )
-        .all(),
-    ).toEqual([
-      {
-        path: input.entry.path,
-        source: "memory",
-        start_line: 1,
-        end_line: 3,
-        hash: "chunk-hash",
-        model: "transfer-model",
-        text,
-        embedding: encodeMemoryEmbedding(vector.map((value) => (Object.is(value, -0) ? 0 : value))),
-        updated_at: 101,
-      },
+    expectValues(owner.db, "SELECT path, source, hash, mtime, size FROM memory_index_sources", [
+      [input.entry.path, "memory", "source-hash", 100.25, Buffer.byteLength(text)],
     ]);
-    expect(
-      owner.db.prepare("SELECT path, source, hash, mtime, size FROM memory_index_sources").all(),
-    ).toEqual([
-      {
-        path: input.entry.path,
-        source: "memory",
-        hash: "source-hash",
-        mtime: 100.25,
-        size: Buffer.byteLength(text),
-      },
-    ]);
-    expect(
-      owner.db
-        .prepare("SELECT importance, triggers, project_key FROM memory_index_chunk_recall_metadata")
-        .all(),
-    ).toEqual([{ importance: 7, triggers: '["漢字","🧠"]', project_key: "project/é" }]);
-    expect(
-      owner.db
-        .prepare(
-          "SELECT origin_class, session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance",
-        )
-        .all(),
-    ).toEqual([
-      {
-        origin_class: "owner",
-        session_kind: "interactive",
-        observed_at: 90,
-        supersedes_key: "old/🔑",
-      },
-    ]);
-    expect(
-      owner.db
-        .prepare(
-          "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
-        )
-        .all(),
-    ).toEqual([{ path: input.entry.path }]);
+    expectValues(
+      owner.db,
+      "SELECT importance, triggers, project_key FROM memory_index_chunk_recall_metadata",
+      [[7, '["漢字","🧠"]', "project/é"]],
+    );
+    expectValues(
+      owner.db,
+      "SELECT origin_class, session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance",
+      [["owner", "interactive", 90, "old/🔑"]],
+    );
+    expectRows(
+      owner.db,
+      "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
+      [{ path: input.entry.path }],
+    );
   });
 
   it("keeps inline source replacement atomic and observes a later in-process forget", async () => {
@@ -646,10 +610,7 @@ describe("bounded memory publication transfer", () => {
       type: "source.replace.inline" as const,
       input: {
         ...inline,
-        state: {
-          vector: { enabled: false, available: false },
-          fts: { enabled: true, available: true },
-        },
+        state: { vector: disabled, fts: enabled },
       },
     };
     expect(backend.execute(command)).toMatchObject({ ok: true });
@@ -663,23 +624,15 @@ describe("bounded memory publication transfer", () => {
         },
       }),
     ).toMatchObject({ ok: false, entered: true, committed: false });
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-      hash: "source-hash",
-    });
+    expect(sourceHash(db)).toEqual({ hash: "source-hash" });
     refuseCommit = false;
-    recordMemorySessionTombstonesInDatabase(db, {
-      agentId: "main",
-      sessionIds: ["inline-session"],
-      createdAt: 1,
-    });
+    forget(db, "inline-session");
     expect(backend.execute(command)).toMatchObject({
       ok: false,
       committed: false,
       error: { message: expect.stringContaining("forgotten") },
     });
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-      hash: "source-hash",
-    });
+    expect(sourceHash(db)).toEqual({ hash: "source-hash" });
   });
 
   it("keeps concurrent large source transfers separate through their publication scopes", async () => {
@@ -692,19 +645,11 @@ describe("bounded memory publication transfer", () => {
       return input;
     });
 
-    await Promise.all(
-      inputs.map((input) =>
-        owner.replaceSource(
-          input,
-          () => undefined,
-          async () => true,
-        ),
-      ),
-    );
+    await Promise.all(inputs.map((input) => publish(owner, input)));
 
-    expect(
-      owner.db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all(),
-    ).toEqual(inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })));
+    expect(queryRows(owner.db, "SELECT path, text FROM memory_index_chunks ORDER BY path")).toEqual(
+      inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })),
+    );
   });
 
   it("publishes planned removals and keeps unchanged session rows searchable", async () => {
@@ -734,27 +679,16 @@ describe("bounded memory publication transfer", () => {
       retained,
     });
     const rows = () =>
-      owner.db
-        .prepare(
-          "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
-        )
-        .all();
+      queryRows(
+        owner.db,
+        "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+      );
 
-    await owner.replaceSource(
-      session("v1", [turn(1), turn(2)]),
-      () => undefined,
-      async () => true,
-    );
+    await publish(owner, session("v1", [turn(1), turn(2)]));
     const [first] = rows();
     const delta = session("v2", [turn(3)], [turn(1)]);
     delta.removedIds = [memoryChunkRowId("sessions", delta.entry.path, turn(2), delta.model)];
-    await expect(
-      owner.replaceSource(
-        delta,
-        () => undefined,
-        async () => true,
-      ),
-    ).resolves.toBe(true);
+    await expect(publish(owner, delta)).resolves.toBe(true);
     expect(rows()).toEqual([
       first,
       expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
@@ -763,13 +697,11 @@ describe("bounded memory publication transfer", () => {
       { count: 2 },
     );
 
-    expect(
-      owner.db
-        .prepare(
-          "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
-        )
-        .all(),
-    ).toEqual([{ start_line: 1 }, { start_line: 3 }]);
+    expectRows(
+      owner.db,
+      "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
+      [{ start_line: 1 }, { start_line: 3 }],
+    );
   });
 
   it.each([8, 4 * 1024 * 1024 + 1])(
@@ -798,7 +730,7 @@ describe("bounded memory publication transfer", () => {
         );
       }
       const readRows = () =>
-        owner.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+        queryRows(owner.db, "SELECT * FROM memory_embedding_cache ORDER BY hash");
       const assertCurrent = () => undefined;
       recordMemorySessionTombstonesInDatabase(writer, {
         agentId: "main",

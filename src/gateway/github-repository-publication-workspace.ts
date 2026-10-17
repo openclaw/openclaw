@@ -145,7 +145,7 @@ export async function captureCheckpoint<T>(
   return await withSessionRepositoryCheckpoint(
     {
       workspaceId: row.workspace_id,
-      checkpointRef,
+      checkpointRef: checkpointRef ?? undefined,
       includePublication: true,
     },
     async (payload) => {

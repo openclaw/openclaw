@@ -1,7 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
-import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -14,7 +14,6 @@ import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
 import { ChannelRefresh, resolveChannelDisplayState } from "./view.shared.tsx";
@@ -80,7 +79,7 @@ export function ChannelsView(props: ChannelsProps) {
         {props.channels.channelsError ? (
           <div class="callout danger">{props.channels.channelsError}</div>
         ) : undefined}
-        {props.wizardHost.blockedByDirtyConfig && props.config.configFormDirty ? (
+        {props.wizardHost.blockedByDirtyConfig() && props.config.configFormDirty ? (
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
         ) : undefined}
         <SettingsSection
@@ -137,14 +136,14 @@ export function ChannelsView(props: ChannelsProps) {
       </Show>
       {props.canAdmin ? (
         <ChannelWizard
-          wizard={props.wizardHost.state}
+          wizard={props.wizardHost.state()}
           channelLabel={(channelId) => resolveChannelLabel(props, channelId)}
           channelIconUrl={(channelId) => props.presentation.pluginIconUrls[channelId]}
-          multiselectValues={props.wizardHost.multiselect}
+          multiselectValues={props.wizardHost.draft.multiselect}
           onToggleMultiselect={(value) => props.wizardHost.toggleMultiselect(value)}
-          textValue={props.wizardHost.textValue}
-          secretVisible={props.wizardHost.secretVisible}
-          onTextInput={(value) => (props.wizardHost.textValue = value)}
+          textValue={props.wizardHost.draft.textValue}
+          secretVisible={props.wizardHost.draft.secretVisible}
+          onTextInput={(value) => props.wizardHost.setTextValue(value)}
           onToggleSecretVisibility={() => props.wizardHost.toggleSecretVisibility()}
           onAnswer={(value) => props.wizardHost.answer(value)}
           onClose={() => props.wizardHost.close()}
@@ -245,12 +244,11 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       class="settings-row settings-row--nav channels-item"
       onClick={() => params.props.onShowDetail(params.channelId)}
     >
-      <LitContent
-        render={() =>
-          renderChannelIcon(params.channelId, label(), "tile", {
-            pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-          })
-        }
+      <ChannelIcon
+        channelId={params.channelId}
+        label={label()}
+        variant="tile"
+        pluginIconUrl={params.props.presentation.pluginIconUrls[params.channelId]}
       />
       <div class="settings-row__text">
         <span class="settings-row__title">{label()}</span>
@@ -283,12 +281,11 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         title={t("channels.hub.openDetails")}
         onClick={() => params.props.onShowDetail(params.channelId)}
       >
-        <LitContent
-          render={() =>
-            renderChannelIcon(params.channelId, label(), "tile", {
-              pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-            })
-          }
+        <ChannelIcon
+          channelId={params.channelId}
+          label={label()}
+          variant="tile"
+          pluginIconUrl={params.props.presentation.pluginIconUrls[params.channelId]}
         />
         <span class="settings-row__text">
           <span class="settings-row__title">{label()}</span>

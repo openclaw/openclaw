@@ -4,6 +4,7 @@ import { resolveSessionParentSessionKey } from "../channels/plugins/session-conv
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionActorVersion } from "../config/sessions/session-actor-contract.js";
 import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
@@ -16,13 +17,16 @@ import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
+import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 export type ProjectionOptions = {
@@ -36,8 +40,6 @@ export type ProjectionOptions = {
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  /** A committed append's bounded preview; null means the newest message exceeded the bound. */
-  transcriptPreview?: string | null;
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
@@ -49,11 +51,7 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
   Partial<
     Pick<
       PreparedSessionRowDatabaseFacts,
-      | "acpMeta"
-      | "runtimeOwnership"
-      | "runtimeOwnershipDependencies"
-      | "repositoryWorkspace"
-      | "transcriptPreview"
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
     >
   >;
 
@@ -82,7 +80,7 @@ export type SessionRowStore = {
   agentId: string;
   discoveryAgentId: string | null;
   discoveryOrder?: number;
-  identity: string | symbol;
+  identity: OpenClawAgentDatabaseIdentity;
   birthtime: string | undefined;
   filename: string;
 };
@@ -92,6 +90,8 @@ export type Row = {
   agentId: string;
   storeTarget: SessionStoreTarget;
   storedEntry?: SessionEntry;
+  /** Committed archive metadata awaits the lineage registry before entry acquisition. */
+  entryAcquisitionPending?: true;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Presentation retains committed facets until their owner publishes or the row is demoted. */
@@ -113,6 +113,7 @@ export type Row = {
   profileRevision?: number;
   subagentRevision?: number;
   lastMessagePreview?: string;
+  lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
   fallbackModel?: ReturnType<
     typeof rowProjection.readSessionRowInputs
   >["presentation"]["activeModel"];
@@ -122,7 +123,7 @@ export type Row = {
   parents: Set<string>;
   generation: string | symbol;
   /** Exact private reads retain their session claim only for the consuming frame. */
-  privateSource?: { identity: string | symbol; assertCurrent(): void };
+  privateSource?: { identity: SessionActorVersion["epoch"]; assertCurrent(): void };
   preparedPrivate?: {
     relatedRows: Record<string, Pick<EntryRow, "key" | "agentId" | "storeTarget" | "entry">>;
     entries: Record<string, SessionEntry>;
@@ -170,10 +171,9 @@ export type Query = {
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
-export type SnapshotOptions = Pick<
-  Inputs,
-  "now" | "includeDerivedTitles" | "includeLastMessage" | "excludedChildKeys"
-> & {
+export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
   active?: boolean;
   subagentRuns?: SessionListRowContext["subagentRuns"];
   preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
@@ -257,7 +257,7 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
   };
 }
 
-/** Native acquisition and prepared worker facts share one transient row constructor. */
+/** Memory acquisition and prepared actor facts share one transient row constructor. */
 export function createIncognitoSessionRow(params: {
   cfg: Inputs["cfg"];
   key: string;
@@ -349,6 +349,7 @@ export function renewGeneration(row: Row): Row {
     ...row,
     entry: undefined,
     storedEntry: undefined,
+    entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
@@ -359,6 +360,7 @@ export function renewGeneration(row: Row): Row {
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
     generation: Symbol("row"),
   };
@@ -380,7 +382,7 @@ export function ready(row: Row | undefined): row is MaterializedRow {
 
 export function publishTranscriptFields(
   row: MaterializedRow,
-  fields: Pick<Row, "lastMessagePreview" | "fallbackModel">,
+  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
 ): boolean {
@@ -399,13 +401,20 @@ export function publishTranscriptFields(
   });
   if (
     row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
     isDeepStrictEqual(row.fallbackModel, fallbackModel)
   ) {
     return false;
   }
-  Object.assign(row, { lastMessagePreview: fields.lastMessagePreview, fallbackModel });
+  Object.assign(row, {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+    fallbackModel,
+  });
   row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
   row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
+  row.materialized.source.lastAssistantMessage = fields.lastAssistantMessage;
+  row.materialized.row.lastAssistantMessage = fields.lastAssistantMessage;
   return true;
 }
 
@@ -471,12 +480,20 @@ export function present(
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
+  // Naming belongs to the in-flight owner, not persisted or materialized row state.
+  row.titlePending =
+    sessionTitleRequests.get({
+      storePath: record.storeTarget.storePath,
+      sessionKey: record.key,
+      sessionId: record.entry.sessionId,
+    }) !== undefined;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
   }
   if (!options.includeLastMessage) {
     row.lastMessagePreview = undefined;
+    row.lastAssistantMessage = undefined;
   }
   return row;
 }
@@ -531,7 +548,10 @@ export function index(
   updateIndex(byKey, `key:${row.key}`, id, deleting);
   updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
   updateIndex(byKey, logical(row.agentId, row.key), id, deleting);
-  updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
+  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
+  if (row.key === "global" || row.key === "unknown") {
+    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
+  }
   for (const parent of row.parents) {
     updateIndex(byParent, parent, id, deleting);
   }
@@ -596,6 +616,7 @@ export function dematerialize(row: Row): Row {
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
   };
 }
@@ -659,13 +680,18 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
+  const entryChanged = !isDeepStrictEqual(lineage.entry, row.entry);
+  // Selection and profile indexes retain entry identity until its metadata changes.
+  if (!entryChanged && row.entry) {
+    lineage.entry = row.entry;
+  }
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
     !isDeepStrictEqual(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry) ||
-    !isDeepStrictEqual(entry, row.entry);
+    entryChanged;
   // Archive custody can retain new stored metadata before its lineage is acquired.
   const includeChildren =
     changesSessionRowDependents(row.storedEntry, storedEntry) ||
@@ -684,6 +710,7 @@ export function acquireSessionRowEntry(params: {
   let next: Row = {
     ...row,
     storedEntry,
+    entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts,
     databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
@@ -698,6 +725,7 @@ export function acquireSessionRowEntry(params: {
     ...(generation !== row.generation
       ? {
           lastMessagePreview: undefined,
+          lastAssistantMessage: undefined,
           fallbackModel: undefined,
           materialized: undefined,
           preparedAcpMeta: undefined,

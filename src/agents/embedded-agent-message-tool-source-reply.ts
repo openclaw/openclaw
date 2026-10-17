@@ -111,6 +111,8 @@ export function isDeliveredMessagingToolResult(params: {
   );
 }
 
+// The exported name is retained for SDK consumers; confirmed source routes also
+// qualify in automatic delivery mode.
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   toolName: string;
@@ -128,13 +130,25 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
     deliveryFact?.sourceReplyDelivered === true ||
     resultConfirmsCurrentSourceRoute(params.result) ||
     resultConfirmsCurrentSourceRoute(params.hookResult);
-  if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" &&
+    !confirmedCurrentSourceRoute &&
+    params.allowExplicitSourceRoute !== true
+  ) {
     return false;
   }
   if (normalizeToolPolicyName(params.toolName) !== "message") {
     return false;
   }
   const args = asOptionalRecord(params.args) ?? {};
+  if (
+    args.dryRun === true ||
+    (params.isError && !deliveryFact?.sourceReplyDelivered) ||
+    deliveryFact?.partialDelivery ||
+    [params.result, params.hookResult].some((result) => pluginEnvelopeHas(result, "partial"))
+  ) {
+    return false;
+  }
   const sourceRouteReplyAction =
     (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
     isMessageToolSourceReplyActionName(args.action);
@@ -154,8 +168,6 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   }
   return (
     params.deliveryConfirmed ??
-    (deliveryFact
-      ? deliveryFact.status === "settled" && (!params.isError || deliveryFact.partialDelivery)
-      : isDeliveredMessagingToolResult(params))
+    (deliveryFact ? deliveryFact.status === "settled" : isDeliveredMessagingToolResult(params))
   );
 }

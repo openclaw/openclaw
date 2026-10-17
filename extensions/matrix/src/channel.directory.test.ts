@@ -221,7 +221,7 @@ describe("matrix directory", () => {
     ).toBe(false);
   });
 
-  it("matches prefixed Matrix aliases in group context", () => {
+  it("does not trust prefixed Matrix aliases in group context", () => {
     const cfg = {
       channels: {
         matrix: {
@@ -238,7 +238,7 @@ describe("matrix directory", () => {
         groupId: "matrix:room:!room:example.org",
         groupChannel: "matrix:channel:#ops:example.org",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("reports room access warnings against the active Matrix config path", () => {

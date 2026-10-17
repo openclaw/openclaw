@@ -1,6 +1,7 @@
 // Subagent registry state tests cover hot read caching over the persisted SQLite snapshot.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { listControlledSubagentRunFacts } from "./subagent-control-scope.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -123,7 +124,6 @@ describe("subagent registry state read cache", () => {
           options?.onChunk?.(
             [...runs.values()].map((entry) => ({
               entry,
-              version: "fixture-version",
               createdAt: entry.createdAt,
             })),
           );
@@ -157,6 +157,43 @@ describe("subagent registry state read cache", () => {
         throw new Error("write refused");
       });
     },
+  });
+
+  it("bounds durable control reads and keeps requester visibility across controller moves", async () => {
+    const parent = "agent:main:parent";
+    const selected = { ...createRun("selected"), requesterSessionKey: parent };
+    const runs = new Map(
+      Array.from({ length: 5_000 }, (_, index) => {
+        const entry = createRun(`other-${index}`);
+        return [entry.runId, entry] as const;
+      }),
+    );
+    runs.set(selected.runId, selected);
+    mocks.readCompactRuns.mockReturnValue(runs);
+    await prepareSubagentSessionListReadCache();
+    const read = () => listControlledSubagentRunFacts(parent, "main", {});
+    expect(read().map((entry) => entry.runId)).toEqual([selected.runId]);
+    const scan = vi.spyOn(runs, "values");
+    const iterate = vi.spyOn(runs, Symbol.iterator);
+    const moved = { ...selected, controllerSessionKey: "agent:main:controller" };
+    persistRegistryFixture(new Map([[moved.runId, moved]]), [moved.runId]);
+    expect(read().map((entry) => entry.runId)).toEqual([selected.runId]);
+    expect(
+      listControlledSubagentRunFacts("agent:main:controller", "main", {}).map(
+        (entry) => entry.runId,
+      ),
+    ).toEqual([selected.runId]);
+    const replacement = {
+      ...moved,
+      runId: "replacement",
+      generation: 2,
+      requesterSessionKey: "agent:main:other",
+      controllerSessionKey: "agent:main:other",
+    };
+    persistRegistryFixture(new Map([[replacement.runId, replacement]]), [replacement.runId]);
+    expect(read()).toEqual([]);
+    expect(scan).not.toHaveBeenCalled();
+    expect(iterate).not.toHaveBeenCalled();
   });
 
   it("scopes compact reads while preserving owner writes and live controller moves", async () => {
@@ -211,11 +248,20 @@ describe("subagent registry state read cache", () => {
     ];
     try {
       expect(read()).toEqual([grandchild.runId, child.runId]);
+      const projection = getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [root]).get(
+        child.runId,
+      );
+      expect(getSubagentSessionListRunsSnapshotForRead(subagentRuns).get(child.runId)).toBe(
+        projection,
+      );
       const values = vi.spyOn(subagentRuns, "values");
       const entries = vi.spyOn(subagentRuns, Symbol.iterator);
       expect(read()).toEqual([grandchild.runId, child.runId]);
       subagentRuns.set(child.runId, { ...child, childSessionKey: "agent:main:moved" });
       expect(read()).toEqual([child.runId]);
+      expect(
+        getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [root]).get(child.runId),
+      ).not.toBe(projection);
       expect(values).not.toHaveBeenCalled();
       expect(entries).not.toHaveBeenCalled();
     } finally {

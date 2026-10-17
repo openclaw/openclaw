@@ -11,6 +11,7 @@ import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "../plugins/managed-npm-r
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
+  resolveRetainedManagedNpmInstallMarkerPath,
 } from "../plugins/managed-npm-retention.js";
 import { getProcessPluginCache } from "../plugins/plugin-cache.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "../plugins/plugin-lifecycle-lease-identity.js";
@@ -32,76 +33,88 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupGatewayRetiredPluginArtifacts } from "./server-retained-plugin-cleanup.js";
 
-it.each(["empty", "state", "temporary"] as const)(
-  "leaves shared state and hot metadata untouched with only %s captures",
-  async (placement) => {
-    await withOpenClawTestState({ label: "gateway-retained-plugin-empty" }, async (state) => {
-      const database = openOpenClawStateDatabase({ env: state.env });
-      loadInstalledPluginIndexInstallRecordsSync();
-      const cache = getProcessPluginCache();
-      const fact = cache.persistedInstalledIndex.get(database.path);
-      expect(fact).toBeDefined();
-      const capture =
-        placement === "empty"
-          ? undefined
-          : createPluginNativeCaptureRoot(state.stateDir, placement);
-      const witness = new DatabaseSync(database.path, { readOnly: true });
-      const version = () => witness.prepare("PRAGMA data_version").get()?.data_version;
-      const before = version();
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const observer = observeParentSqlite();
+it("leaves shared state and hot metadata untouched with only state captures", async () => {
+  await withOpenClawTestState({ label: "gateway-retained-plugin-empty" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    loadInstalledPluginIndexInstallRecordsSync();
+    const cache = getProcessPluginCache();
+    const fact = cache.persistedInstalledIndex.get(database.path);
+    expect(fact).toBeDefined();
+    const capture = createPluginNativeCaptureRoot(state.stateDir, "state");
+    const witness = new DatabaseSync(database.path, { readOnly: true });
+    const version = () => witness.prepare("PRAGMA data_version").get()?.data_version;
+    const before = version();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const observer = observeParentSqlite();
+    try {
       try {
-        try {
-          await cleanupGatewayRetiredPluginArtifacts({
-            log,
-            startupInstallPaths: [],
-            signal: new AbortController().signal,
-            assertCurrent: () => {},
-          });
-          expect(observer.counts).toEqual(emptySqliteCounts());
-        } finally {
-          observer.restore();
-        }
-        expect(version()).toBe(before);
-        expect(cache.persistedInstalledIndex.get(database.path)).toBe(fact);
-        expect(log.info).not.toHaveBeenCalled();
-        expect(log.warn).not.toHaveBeenCalled();
+        await cleanupGatewayRetiredPluginArtifacts({
+          log,
+          startupInstallPaths: [],
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        });
+        expect(observer.counts).toEqual(emptySqliteCounts());
       } finally {
-        witness.close();
-        await capture?.disposeAsync();
+        observer.restore();
+      }
+      expect(version()).toBe(before);
+      expect(cache.persistedInstalledIndex.get(database.path)).toBe(fact);
+      expect(log.info).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      witness.close();
+      await capture.disposeAsync();
+    }
+  });
+});
+
+it.each([
+  ["project", false],
+  ["project", true],
+  ["legacy", false],
+  ["legacy", true],
+] as const)(
+  "preserves uninstalled %s package files when its marker is malformed: %s",
+  async (layout, malformed) => {
+    await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {
+      const packageDir = writeManagedNpmPlugin({
+        stateDir: state.stateDir,
+        packageName: "@openclaw/kept-plugin",
+        pluginId: "kept-plugin",
+        version: "1.0.0",
+        layout,
+      });
+      await markRetainedManagedNpmInstall({
+        packageDir,
+        pluginId: "kept-plugin",
+        reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+      });
+      if (malformed) {
+        fs.writeFileSync(resolveRetainedManagedNpmInstallMarkerPath(packageDir), '{"reason":');
+      }
+      const log = { info: vi.fn(), warn: vi.fn() };
+
+      await cleanupGatewayRetiredPluginArtifacts({
+        log,
+        startupInstallPaths: [],
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+
+      expect(fs.existsSync(packageDir)).toBe(true);
+      expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
+      expect(log.info).not.toHaveBeenCalled();
+      if (malformed) {
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining("retired plugin cleanup unavailable"),
+        );
+      } else {
+        expect(log.warn).not.toHaveBeenCalled();
       }
     });
   },
 );
-
-it("preserves package files retained by plugin uninstall", async () => {
-  await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {
-    const packageDir = writeManagedNpmPlugin({
-      stateDir: state.stateDir,
-      packageName: "@openclaw/kept-plugin",
-      pluginId: "kept-plugin",
-      version: "1.0.0",
-    });
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "kept-plugin",
-      reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
-    });
-    const log = { info: vi.fn(), warn: vi.fn() };
-
-    await cleanupGatewayRetiredPluginArtifacts({
-      log,
-      startupInstallPaths: [],
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
-    });
-
-    expect(fs.existsSync(packageDir)).toBe(true);
-    expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
-    expect(log.info).not.toHaveBeenCalled();
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-});
 
 it.each(["project", "legacy"] as const)(
   "refreshes %s cleanup records without caller-thread SQLite and protects live packages",

@@ -1,5 +1,6 @@
 import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -202,14 +203,26 @@ export async function prepareCliSystemPrompt(
   });
 }
 
-function prependCliSessionDriftUserContext(
+function prependCliSessionResumeUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
+  preservedTurnsContext: string | undefined,
 ): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
+  const completionContext =
+    reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
+      ? preservedTurnsContext
+      : undefined;
+  const note = [
+    reusableCliSession.mode === "reuse-with-drift"
+      ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
+      : undefined,
+    completionContext,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+  if (!note) {
     return context;
   }
-  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
   if (!context) {
     return { text: note };
   }
@@ -223,11 +236,17 @@ function prependCliSessionDriftUserContext(
 export function createCliCurrentPromptRenderer(
   params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
   reusableCliSession: CliReusableSession,
-  inlineContext?: string,
+  notes: {
+    sessionGapContext?: string;
+    preservedTurnsContext?: string;
+    writer?: CliHistoryWriter;
+  } = {},
 ) {
-  const context = prependCliSessionDriftUserContext(
+  // Missed exchanges are saved conversation text: native reuse alone cannot replay them.
+  const context = prependCliSessionResumeUserContext(
     params.currentInboundContext,
     reusableCliSession,
+    notes.writer ? notes.preservedTurnsContext : undefined,
   );
   return (prompt: string, preferResumableText = false) =>
     composeCliPromptContext(
@@ -235,6 +254,6 @@ export function createCliCurrentPromptRenderer(
         buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
         params.inputProvenance,
       ),
-      { prependContext: inlineContext },
+      { prependContext: notes.sessionGapContext },
     );
 }

@@ -30,6 +30,7 @@ describe("channel turn terminal settlement", () => {
       sessionId: "session-1",
       ...scope,
     };
+    const noticeContext = { channel: "telegram", to: "chat-1", accountId: "default" };
     await replaceSessionEntry(scope, {
       sessionId: completion.sessionId,
       updatedAt: 1,
@@ -38,6 +39,7 @@ describe("channel turn terminal settlement", () => {
         text: "the final answer",
         createdAt: 1,
         intentId: completion.intentId,
+        context: noticeContext,
         deliveries: [
           { id: completion.deliveryId, state: "prepared" },
           ...(sibling ? [{ id: "delivery-2", state: "prepared" as const }] : []),
@@ -64,7 +66,20 @@ describe("channel turn terminal settlement", () => {
         }
       },
     );
-    const deliver = vi.fn(async () => ({ visibleReplySent: true, messageIds: ["message-1"] }));
+    let admittedEntry: Awaited<ReturnType<typeof readEntry>>;
+    const deliver = vi.fn(async () => {
+      admittedEntry = await readEntry();
+      expect(admittedEntry?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "unknown" },
+        ...(sibling ? [{ id: "delivery-2", state: "prepared" }] : []),
+      ]);
+      expect(admittedEntry?.pendingDeliveryNotice).toMatchObject({
+        intentId: completion.intentId,
+        state: "owed",
+        context: noticeContext,
+      });
+      return { visibleReplySent: true, messageIds: ["message-1"] };
+    });
     const onError = vi.fn();
     const settlement = vi.spyOn(deliveryCompletion, "settlePendingFinalDelivery");
     const dispatch: DispatchReplyWithBufferedBlockDispatcher = async (params) => {
@@ -112,6 +127,7 @@ describe("channel turn terminal settlement", () => {
     });
     expect(deliver).toHaveBeenCalledOnce();
     expect(onDelivered).toHaveBeenCalledOnce();
+    expect(settlement.mock.calls.some(([, state]) => state === "queued")).toBe(false);
     expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
     if (observerThrows) {
       expect(onError).toHaveBeenCalledExactlyOnceWith(observerError, { kind: "final" });
@@ -134,5 +150,18 @@ describe("channel turn terminal settlement", () => {
     expect(onDelivered).toHaveBeenCalledOnce();
     expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
     expect((await readEntry())?.updatedAt).toBe(1);
+
+    // Replaying a crash-ambiguous attempt must not restore it to sendable custody.
+    if (!admittedEntry) {
+      throw new Error("expected persisted pre-send custody");
+    }
+    await replaceSessionEntry(scope, admittedEntry);
+    await run();
+    await run();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(onDelivered).toHaveBeenCalledOnce();
+    const afterReplay = await readEntry();
+    expect(afterReplay?.pendingFinalDelivery).toEqual(admittedEntry.pendingFinalDelivery);
+    expect(afterReplay?.pendingDeliveryNotice).toEqual(admittedEntry.pendingDeliveryNotice);
   });
 });

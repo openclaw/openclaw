@@ -171,7 +171,7 @@ describe("runSessionBackfill", () => {
     await seedCanonicalTranscript("source", [
       {
         role: "user",
-        content: "Do not publish from a superseded physical source.",
+        content: "Do not publish a forgotten source.",
         timestamp: "2026-01-02T12:00:00.000Z",
         owner: true,
       },

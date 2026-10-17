@@ -6,6 +6,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
+import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -869,6 +873,37 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
+  test("isolates an autonomous agent from its caller transcript writer", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("separate-transcript-writer"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
+      opts.respond(true, { status: "accepted", runId: "child-run" });
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "parent-session",
+          sessionKey: "agent:main:parent",
+          storePath: "/tmp/transcript-writer-parent.sqlite",
+          expectedWriterRunId: "parent-run",
+        },
+        withTranscriptWrite: trackAsyncWork,
+      },
+      async () => {
+        await expect(
+          serverPluginsModule.dispatchGatewayMethodInProcess("agent", {
+            sessionKey: "agent:main:child",
+          }),
+        ).resolves.toEqual({ status: "accepted", runId: "child-run" });
+        expect(getOwnedSessionTranscriptWriterFence()).toMatchObject({
+          expectedWriterRunId: "parent-run",
+        });
+      },
+    );
   });
 
   test("carries delegated tool-policy handoffs only in synthetic client context", async () => {

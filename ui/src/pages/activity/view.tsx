@@ -3,8 +3,8 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import type { JSX } from "@solidjs/web";
 import { For, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { SettingsToggle, SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -33,6 +33,7 @@ type ActivityProps = {
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onEntryToggle: (id: string, open: boolean) => void;
+  onStream?: (element: HTMLDivElement) => void;
   onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
@@ -102,9 +103,14 @@ function StatusFilter(props: { activity: ActivityProps; status: ActivityStatus }
 }
 
 function ToolFilter(props: { activity: ActivityProps; toolNames: string[] }) {
+  let anchor!: HTMLButtonElement;
+  let popover: PopoverHandle | undefined;
   return (
     <>
       <button
+        ref={(node) => {
+          anchor = node;
+        }}
         id="activity-live-filter-trigger"
         type="button"
         class={[
@@ -114,19 +120,26 @@ function ToolFilter(props: { activity: ActivityProps; toolNames: string[] }) {
         title={t("activity.filters")}
         aria-label={t("activity.filters")}
         aria-haspopup="dialog"
+        aria-controls="activity-live-filter-popover"
         aria-expanded="false"
+        onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
         <Icon name="listFilter" />
       </button>
-      <wa-popover
-        ref={syncPopoverLabel}
+      <Popover
+        id="activity-live-filter-popover"
+        ref={(handle) => {
+          popover = handle;
+        }}
+        anchor={anchor}
+        label={t("activity.filters")}
         class="activity-live-filter-popover"
-        for="activity-live-filter-trigger"
-        aria-label={t("activity.filters")}
         placement="bottom-end"
-        without-arrow
-        onWa-show={syncPopoverExpanded}
-        onWa-hide={syncPopoverExpanded}
+        onOpenChange={(open) => {
+          if (open) {
+            popover?.overlay.surface.focus({ preventScroll: true });
+          }
+        }}
       >
         <div class="activity-live-filter-popover__panel">
           <label class="field">
@@ -150,7 +163,7 @@ function ToolFilter(props: { activity: ActivityProps; toolNames: string[] }) {
             </select>
           </label>
         </div>
-      </wa-popover>
+      </Popover>
     </>
   );
 }
@@ -201,7 +214,7 @@ function ActivityEntryView(props: {
 }) {
   return (
     <details
-      class={`activity-entry activity-entry--${props.entry.status}`}
+      class={["activity-entry", `activity-entry--${props.entry.status}`]}
       prop:open={props.activity.expandedIds.has(props.entry.id)}
       onToggle={(event) => props.activity.onEntryToggle(props.entry.id, event.currentTarget.open)}
     >
@@ -332,6 +345,7 @@ export function renderActivity(props: ActivityProps) {
         <LiveToolbar activity={props} toolNames={toolNames()} />
         <div
           class="activity-stream"
+          ref={(element) => props.onStream?.(element)}
           role="group"
           aria-label={t("activity.streamLabel")}
           onScroll={(event) => props.onScroll(event)}

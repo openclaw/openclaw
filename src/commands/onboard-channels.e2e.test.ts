@@ -42,29 +42,6 @@ function createUnexpectedPromptGuards() {
   };
 }
 
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function hasCallWithFields(mock: MockWithCalls, expected: Record<string, unknown>): boolean {
-  return mock.mock.calls.some(([value]) => {
-    if (
-      value === undefined ||
-      value === null ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
-      return false;
-    }
-    const arg = value as Record<string, unknown>;
-    return Object.entries(expected).every(([key, expectedValue]) => arg[key] === expectedValue);
-  });
-}
-
-function expectCalledWithFields(mock: MockWithCalls, expected: Record<string, unknown>): void {
-  expect(hasCallWithFields(mock, expected)).toBe(true);
-}
-
 type SetupChannels = typeof import("../flows/channel-setup.js").setupChannels;
 let setupChannels: SetupChannels;
 
@@ -96,130 +73,6 @@ function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
       npmSpec: "@openclaw/external-chat",
     },
   };
-}
-
-function setMinimalOnboardingRegistryForTests(): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "telegram",
-            label: "Telegram",
-            capabilities: { chatTypes: ["direct", "group"] },
-          }),
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { token?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  telegram: {
-                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
-                    ...(input.token ? { botToken: input.token } : {}),
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "telegram",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not configured",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean(cfg.channels?.telegram?.botToken),
-            },
-            credentials: [
-              {
-                inputKey: "token",
-                providerHint: "BotFather",
-                credentialLabel: "Telegram bot token",
-                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
-                keepPrompt: "Keep current Telegram bot token?",
-                inputPrompt: "Enter Telegram bot token",
-                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
-                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
-                }),
-              },
-            ],
-          },
-        },
-      },
-      {
-        pluginId: "whatsapp",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "whatsapp",
-            label: "WhatsApp",
-            capabilities: { chatTypes: ["direct", "group"] },
-          }),
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { account?: string; name?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  whatsapp: {
-                    ...(cfg.channels?.whatsapp as Record<string, unknown> | undefined),
-                    ...(input.account ? { account: input.account } : {}),
-                    ...(input.name ? { name: input.name } : {}),
-                    linked: false,
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "whatsapp",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not linked",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean((cfg.channels?.whatsapp as { account?: string } | undefined)?.account),
-              resolveSelectionHint: async ({ cfg }: { cfg: OpenClawConfig }) =>
-                (cfg.channels?.whatsapp as { account?: string } | undefined)?.account
-                  ? "configured"
-                  : "not linked",
-            },
-            credentials: [],
-            textInputs: [
-              {
-                inputKey: "account",
-                message: "Your personal WhatsApp number",
-                required: true,
-                applySet: ({ cfg, value }: { cfg: OpenClawConfig; value: string }) =>
-                  ({
-                    ...cfg,
-                    channels: {
-                      ...cfg.channels,
-                      whatsapp: {
-                        ...(cfg.channels?.whatsapp as Record<string, unknown> | undefined),
-                        account: value,
-                      },
-                    },
-                  }) as OpenClawConfig,
-              },
-            ],
-          },
-        },
-      },
-    ]),
-  );
 }
 
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
@@ -299,67 +152,9 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   };
 });
 
+// mock-isolation: Channel setup exercises the synthetic plugin catalog, not bundled plugin loading.
 vi.mock("../channels/plugins/bundled.js", () => ({
-  getBundledChannelSetupPlugin: (channel: string) =>
-    channel === "telegram"
-      ? {
-          id: "telegram",
-          meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
-            blurb: "test stub.",
-          },
-          capabilities: { chatTypes: ["direct", "group"] },
-          config: {
-            listAccountIds: () => ["default"],
-            resolveAccount: () => ({}),
-          },
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { token?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  telegram: {
-                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
-                    ...(input.token ? { botToken: input.token } : {}),
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "telegram",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not configured",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean(cfg.channels?.telegram?.botToken),
-            },
-            credentials: [
-              {
-                inputKey: "token",
-                providerHint: "BotFather",
-                credentialLabel: "Telegram bot token",
-                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
-                keepPrompt: "Keep current Telegram bot token?",
-                inputPrompt: "Enter Telegram bot token",
-                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
-                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
-                }),
-              },
-            ],
-          },
-        }
-      : undefined,
+  getBundledChannelSetupPlugin: () => undefined,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -384,7 +179,6 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
 describe("setupChannels", () => {
   beforeEach(async () => {
     ({ setupChannels } = await import("../flows/channel-setup.js"));
-    setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     manifestRegistryMocks.loadPluginManifestRegistryCore.mockReset();
@@ -675,10 +469,12 @@ describe("setupChannels", () => {
       prompter,
     );
 
-    expectCalledWithFields(vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel), {
-      channel: "external-chat",
-      pluginId: "@openclaw/external-chat-plugin",
-    });
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "external-chat",
+        pluginId: "@openclaw/external-chat-plugin",
+      }),
+    );
     expect(multiselect).not.toHaveBeenCalled();
   });
 

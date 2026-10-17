@@ -12,7 +12,9 @@ import {
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry-listing.js";
+import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { listAgentEntries, resolveAgentDir } from "../agent-scope.js";
 import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
@@ -40,7 +42,7 @@ import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import { runAuthProfileStoreUpdate } from "./store-update.js";
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 export type CandidateAuthProfileStore = {
@@ -114,7 +116,7 @@ export async function listCandidateAuthProfileStores(params: {
     });
   }
   sources.push(...(await collectStateRootCandidates(env)));
-  for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
+  for (const registered of await listOpenClawRegisteredAgentDatabasesAsync({ env })) {
     const agentId = normalizeAgentId(registered.agentId);
     sources.push({
       agentId,
@@ -174,6 +176,24 @@ export async function loadCandidateAuthProfileStoreAsync(
   } finally {
     await reader.dispose();
   }
+}
+
+/** Keep the owner's current credential facts available at a later write boundary. */
+export async function prepareCandidateAuthProfileCredentialRead(
+  candidate: CandidateAuthProfileStore,
+  profileId: string,
+): Promise<() => AuthProfileCredential | undefined> {
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ env: candidate.env }),
+    {
+      identity: `${candidate.databaseIdentity.key}:${candidate.databaseIdentity.birthtime ?? ""}`,
+      databasePath: candidate.databasePath,
+    },
+    profileId,
+  );
+  const store = await loadCandidateAuthProfileStoreAsync(candidate);
+  authority.observe(store?.profiles[profileId]);
+  return authority.readCurrentCredential;
 }
 
 type CandidateAuthProfileUpdate = {

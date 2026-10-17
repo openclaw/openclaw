@@ -6,10 +6,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   acquireSessionMcpRuntime,
-  getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -429,7 +429,7 @@ it.each(["completed", "interrupted"] as const)(
         admission?.release();
         await waitForSessionMaintenance(scope.sessionKey);
         // Retire fixture-owned leftovers after work settles, including failed setup or assertions.
-        const mcpManager = getSessionMcpRuntimeManagerForTesting();
+        const mcpManager = getSessionMcpRuntimeTestManager();
         for (const sessionId of mcpManager.listSessionIds()) {
           if (mcpManager.peekSession({ sessionId })?.workspaceDir === state.workspaceDir) {
             await mcpManager.disposeSession(sessionId);

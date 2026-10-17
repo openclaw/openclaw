@@ -16,6 +16,7 @@ import {
   createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
 import {
   createCrabboxSandboxBackendFactory,
   createCrabboxSandboxBackendManager,
@@ -52,6 +53,17 @@ function result(stdout = "", code = 0): SpawnResult {
 }
 function inspect(state = "started", id = LEASE_ID): SpawnResult {
   return result(JSON.stringify({ id, state, ready: state === "started" }));
+}
+function runtimeEntry() {
+  return {
+    containerName: LEASE_ID,
+    backendId: "crabbox",
+    sessionKey: "scope",
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "daytona/small",
+    workspaceDir: temporaryRoot,
+  };
 }
 function respond(argv: string[]): SpawnResult {
   if (argv[1] === "exec" && argv.includes("--check")) {
@@ -96,7 +108,9 @@ function params(
 function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> = respond) {
   const runCommand = vi
     .mocked(runCommandWithTimeout)
-    .mockImplementation(async (argv) => await handler(argv));
+    .mockImplementation(async (argv) =>
+      argv[1] === "--version" ? result(CRABBOX_MIN_VERSION) : await handler(argv),
+    );
   const dependencies = {
     openclawRoot: temporaryRoot,
     pluginConfig: {
@@ -147,7 +161,26 @@ describe("Crabbox sandbox provider lifecycle", () => {
       result(JSON.stringify({ execution: true, currentRepoStop: false })),
     );
     await expect(factory(params())).rejects.toThrow("repository-scoped cleanup");
-    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["exec"]);
+    expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["--version", "exec"]);
+  });
+
+  it("uses a supported managed binary for an outdated sandbox executable", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(temporaryRoot, "managed-state"));
+    const binary = resolveManagedCrabboxBinaryPath();
+    await fs.mkdir(path.dirname(binary), { recursive: true });
+    await fs.writeFile(binary, CRABBOX_MIN_VERSION);
+    const { factory, runCommand } = setup();
+    runCommand.mockImplementation(async (argv) =>
+      argv[1] === "--version"
+        ? result(argv[0] === "/fixture/crabbox" ? "0.76.0" : CRABBOX_MIN_VERSION)
+        : respond(argv),
+    );
+    const handle = await factory(params());
+    await handle.runShellCommand({ script: "printf upgraded" });
+    expect(
+      runCommand.mock.calls.filter(([argv]) => argv[1] !== "--version").map(([argv]) => argv[0]),
+    ).toEqual([binary, binary, binary]);
+    expect(remote.commands[0]?.argv[0]).toBe(binary);
   });
 
   it.each(["released"])("retires only a matching released inspection (%s)", async (state) => {
@@ -172,6 +205,17 @@ describe("Crabbox sandbox provider lifecycle", () => {
           : respond(argv),
     );
     await expect(factory(params())).rejects.toThrow("warmup failed");
+  });
+
+  it("does not retire a reservation from failed inspection output", async () => {
+    const { factory } = setup((argv) =>
+      argv[1] === "warmup"
+        ? result("fixture-credential@ssh.example.test", 4)
+        : argv[1] === "inspect"
+          ? { ...inspect("released"), code: 1 }
+          : respond(argv),
+    );
+    await expect(factory(params())).rejects.toThrow("Crabbox sandbox warmup failed: exit 4");
   });
 
   it("validates runtime authority and unsupported binds before allocation", async () => {
@@ -229,6 +273,7 @@ it("keeps management routed by the stored claim and original workspace", async (
   };
   await manager.removeRuntime({ entry, config: {} });
   expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual([
+    "--version",
     "stop",
     "exec",
     "warmup",
@@ -250,6 +295,40 @@ it("keeps management routed by the stored claim and original workspace", async (
   expect(await manager.describeRuntime({ entry, config: {} })).toMatchObject({
     running: true,
     configLabelMatch: true,
+  });
+});
+
+it.each([
+  ["unavailable provider", () => result("provider unavailable", 1), "provider unavailable"],
+  ["invalid JSON", () => result("not-json"), "returned invalid JSON"],
+  ["foreign lease", () => inspect("started", "cbx_aaaaaaaaaaaa"), "requested lease"],
+  [
+    "failed process",
+    () => {
+      throw new Error("process unavailable");
+    },
+    "process unavailable",
+  ],
+] as const)("surfaces %s instead of reporting a stopped runtime", async (_label, probe, error) => {
+  const { manager } = setup(probe);
+  await expect(manager.describeRuntime({ entry: runtimeEntry(), config: {} })).rejects.toThrow(
+    error,
+  );
+});
+
+it.each([
+  [
+    "missing exact-ID lease",
+    () => result(`daytona claim ${LEASE_ID} is bound to missing sandbox sandbox-fixture`, 4),
+    false,
+  ],
+  ["released lease", () => inspect("released"), true],
+] as const)("reports an observed %s as stopped", async (_label, probe, configLabelMatch) => {
+  const { manager } = setup(probe);
+  await expect(manager.describeRuntime({ entry: runtimeEntry(), config: {} })).resolves.toEqual({
+    running: false,
+    actualConfigLabel: "daytona/small",
+    configLabelMatch,
   });
 });
 

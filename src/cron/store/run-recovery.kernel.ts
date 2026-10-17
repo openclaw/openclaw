@@ -1,9 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
 import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
+import { resolveForcePreservedOneShotAtMs } from "../service/one-shot-schedule.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
@@ -26,7 +27,7 @@ import type { InterruptedStartupRun } from "./run-recovery.types.js";
 import { parseCronScheduledRunId } from "./run-request-id.js";
 
 function recordInterruptedRun(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storeKey: string;
   interrupted: InterruptedStartupRun;
   nowMs: number;
@@ -172,12 +173,20 @@ export function recoverCronJobInDatabase(
     receiptId: job.state.runningReceiptId ?? receipt?.receiptId,
   });
   const receiptId = job.state.runningReceiptId ?? receipt?.receiptId ?? task.receiptId;
+  // Only the matching manual receipt can borrow a separate authored occurrence.
+  const preservedOccurrenceAtMs =
+    receipt?.receiptId === pendingReceiptId &&
+    receipt?.startedAtMs === runningAtMs &&
+    !parseCronScheduledRunId(receipt.receiptId)
+      ? resolveForcePreservedOneShotAtMs(job)
+      : undefined;
   const finalized = task.finalized;
   const restored = finalized
     ? restoreFinalizedStartupRun({
         state,
         job,
         runningAtMs,
+        preservedOccurrenceAtMs,
         entry: finalized.entry,
         triggerStateRetired: receiptId
           ? isCronRunTriggerStateRetiredInDatabase({
@@ -196,8 +205,8 @@ export function recoverCronJobInDatabase(
       state,
       job,
       runningAtMs,
+      preservedOccurrenceAtMs,
       nowMs,
-      deferredNotifications: notifications,
     });
     if (job.enabled && job.state.nextRunAtMs === undefined) {
       recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications });

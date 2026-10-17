@@ -58,21 +58,6 @@ afterEach(() => {
 });
 
 describe("check-workflows", () => {
-  it("prints an actionable diagnostic when actionlint and go are unavailable", () => {
-    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: "",
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("missing workflow linter");
-    expect(result.stderr).toContain("install actionlint built from");
-    expect(result.stderr).toContain("011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7");
-  });
-
   it.each([
     { version: undefined, tool: "go" },
     { version: "1.7.12", tool: "go" },

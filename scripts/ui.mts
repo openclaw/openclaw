@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
@@ -13,6 +13,8 @@ import {
   CONTROL_UI_BUILD_PREFIX,
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
+import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
+import { isRecord } from "./lib/record-shared.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -385,6 +387,26 @@ async function buildAndPublishUi(
   toolCall: UiSpawnCall,
   env: NodeJS.ProcessEnv,
 ): Promise<UiSpawnResult> {
+  const validation = runSpawnCallSync(
+    resolveSpawnCall(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(path.join(here, "tsx.mjs")).href,
+        path.join(here, "generate-control-ui-validators.mts"),
+        "--check",
+      ],
+      env,
+      { cwd: repoRoot },
+    ),
+    "Control UI protocol validators",
+  );
+  if (validation.signal || validation.status !== 0) {
+    return validation;
+  }
+  // Prepare before cache input capture: presenter source edits must change the
+  // canonical bytes and inventory even when the UI bundle can otherwise be reused.
+  await prepareControlUiSettings(repoRoot);
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });
@@ -424,6 +446,18 @@ async function buildAndPublishUi(
       toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
         : undefined;
+    const sourcePluginInventory =
+      cache && env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1"
+        ? (await import("./lib/bundled-plugin-build-entries.mjs"))
+            .collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env })
+            .map(({ id, isolated, packageJson }) => {
+              const openclaw =
+                isRecord(packageJson) && isRecord(packageJson.openclaw)
+                  ? packageJson.openclaw
+                  : undefined;
+              return [id, isolated, openclaw?.controlUi];
+            })
+        : undefined;
     const step = {
       label: "ui:build",
       cache: {
@@ -445,6 +479,25 @@ async function buildAndPublishUi(
           "pnpm-lock.yaml",
           "tsconfig.json",
           "docs/assets/openclaw-hero-dark.png",
+          // Package metadata discovers new generations; all copied files (including
+          // deferred chunks absent from Vite's module graph) invalidate reuse.
+          ...(() => {
+            const root = path.join(repoRoot, "dist/extensions");
+            if (!fs.existsSync(root)) {
+              return [];
+            }
+            return fs
+              .readdirSync(root, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .flatMap((entry) => {
+                const relative = `dist/extensions/${entry.name}`;
+                return [
+                  `${relative}/package.json`,
+                  `${relative}/openclaw.plugin.json`,
+                  `${relative}/dist/control-ui`,
+                ];
+              });
+          })(),
         ],
         outputs: ["."],
         requiredOutputs: ["index.html", "sw.js", ".build-inputs.json"],
@@ -459,12 +512,18 @@ async function buildAndPublishUi(
           ...new Set([...staticInputs, ...inputs.map((file) => path.join(repoRoot, file))]),
         ].toSorted(),
         fs,
-        ["NODE_ENV", "OPENCLAW_CONTROL_UI_BASE_PATH", "OPENCLAW_CONTROL_UI_RELEASE_BUILD"],
+        [
+          "NODE_ENV",
+          "OPENCLAW_CONTROL_UI_BASE_PATH",
+          "OPENCLAW_CONTROL_UI_RELEASE_BUILD",
+          "OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS",
+        ],
         env,
         JSON.stringify({
           args: toolCall.args.slice(1),
           platform: process.platform,
           arch: process.arch,
+          sourcePluginInventory,
         }),
       );
     const cacheState = cache?.resolveBuildStepCacheState(step, {

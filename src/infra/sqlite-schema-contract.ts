@@ -1,26 +1,31 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isDeepStrictEqual } from "node:util";
-import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  ensureSqliteLibrarySelected,
-  SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
-  type SqliteLibrarySelection,
-} from "./bun-sqlite-library.js";
+  readGeneratedSqliteCatalog,
+  readGeneratedSqliteFingerprint,
+} from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import type {
+  SqliteColumnCatalog,
+  SqliteForeignKeyCatalog,
+  SqliteIndexListRow,
+  SqliteIndexTermRow,
+  SqliteSchemaCatalog,
+  SqliteSchemaRow,
+  SqliteSchemaSource,
+} from "./sqlite-schema-catalog-types.js";
+import {
+  createSqliteTableContractReader,
+  type SqliteTableContractReader,
+  sqliteSchemaContractFromCatalog,
+} from "./sqlite-schema-catalog.js";
 import {
   createSqliteIndexContract,
-  createSqliteTableContract,
   type SqliteIndexContract,
-  type SqliteIndexListRow,
-  type SqliteIndexTermRow,
-  type SqliteSchemaRow,
   type SqliteTableContract,
   type SqliteTableDefinition,
-  type SqliteTableListRow,
 } from "./sqlite-schema-contract-assembly.js";
+import { fingerprintSqliteSchemaCatalog } from "./sqlite-schema-fingerprint.js";
 import {
   createSqliteSchemaIssue,
   legacySqliteSchemaIssueMessages,
@@ -41,12 +46,11 @@ export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-sche
 
 type SqliteSchemaContract = ReadonlyMap<string, SqliteTableContract>;
 
-export type PreparedSqliteSchemaContract = {
-  schemaSql: string;
-  tables: SqliteSchemaContract;
-};
-
-export type SqliteTableContractReader = (tableName: string) => SqliteTableContract | undefined;
+export type { SqliteSchemaSource } from "./sqlite-schema-catalog-types.js";
+export {
+  createSqliteTableContractReader,
+  type SqliteTableContractReader,
+} from "./sqlite-schema-catalog.js";
 
 export type CanonicalSqliteNamedIndexContract = {
   definition: string;
@@ -56,70 +60,6 @@ export type CanonicalSqliteNamedIndexContract = {
   unique: boolean;
 };
 
-type ExpectedSchemaContractCache = {
-  pid: number;
-  runtime: {
-    executable: string;
-    nodeVersion: string;
-    bunVersion: string | undefined;
-    library: SqliteLibrarySelection;
-  };
-  contracts: Map<string, SqliteSchemaContract>;
-};
-
-function expectedSchemaContracts(): Map<string, SqliteSchemaContract> {
-  return resolveGlobalSingleton(Symbol.for(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY), () => {
-    const runtime = {
-      executable: process.execPath,
-      nodeVersion: process.versions.node,
-      bunVersion: process.versions.bun,
-      library: ensureSqliteLibrarySelected(),
-    };
-    // SAFETY: The existing worker launcher clones only this owner's versioned envelope.
-    const inherited = getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY) as
-      | ExpectedSchemaContractCache
-      | undefined;
-    const cache: ExpectedSchemaContractCache =
-      inherited?.pid === process.pid &&
-      isDeepStrictEqual(inherited.runtime, runtime) &&
-      inherited.contracts instanceof Map
-        ? inherited
-        : { pid: process.pid, runtime, contracts: new Map() };
-    // The retained supervisor captures this current map for each new descendant.
-    setEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY, cache);
-    return cache.contracts;
-  });
-}
-
-/** Capture only an existing canonical contract; callers must not build it on a host request. */
-export function captureSqliteSchemaContracts(
-  schemaSqls: readonly string[],
-): PreparedSqliteSchemaContract[] {
-  const schemaContractCache = expectedSchemaContracts();
-  return schemaSqls.flatMap((schemaSql) => {
-    const tables = schemaContractCache.get(schemaSql);
-    return tables ? [{ schemaSql, tables }] : [];
-  });
-}
-
-/** Private worker IPC transfers canonical facts under their exact schema SQL cache key. */
-export function adoptSqliteSchemaContracts(
-  contracts: readonly PreparedSqliteSchemaContract[],
-): void {
-  const schemaContractCache = expectedSchemaContracts();
-  for (const contract of contracts) {
-    if (!schemaContractCache.has(contract.schemaSql)) {
-      schemaContractCache.set(contract.schemaSql, contract.tables);
-    }
-  }
-}
-
-/** Reuse actual table facts only within one unchanged read transaction on this connection. */
-export function createSqliteTableContractReader(database: DatabaseSync): SqliteTableContractReader {
-  let tables: SqliteSchemaContract | undefined;
-  return (tableName) => (tables ??= collectSqliteSchemaContract(database)).get(tableName);
-}
-
 /**
  * Require every object from one committed schema while allowing unrelated
  * tables and indexes that do not replace a canonical object.
@@ -127,7 +67,7 @@ export function createSqliteTableContractReader(database: DatabaseSync): SqliteT
 export function assertSqliteSchemaContains(
   database: DatabaseSync,
   databaseLabel: string,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
 ): void {
@@ -140,7 +80,7 @@ export function assertSqliteSchemaContains(
 /** Collect stable, machine-readable differences from one committed schema. */
 export function collectSqliteSchemaIssues(
   database: DatabaseSync,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
 ): SqliteSchemaIssue[] {
@@ -151,12 +91,27 @@ export function collectSqliteSchemaIssues(
 
 function collectSqliteSchemaIssuesInSnapshot(
   database: DatabaseSync,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   compatibility: SqliteSchemaCompatibility,
   readTable: SqliteTableContractReader | undefined,
 ): SqliteSchemaIssue[] {
+  const descriptor =
+    typeof schemaSql === "string" ? readGeneratedSqliteFingerprint(schemaSql) : undefined;
+  const expectedViewNames =
+    descriptor?.viewNames ??
+    getSqliteSchemaContract(schemaSql).catalog.views.map((view) => view.name);
+  const readActualTable =
+    readTable ??
+    createSqliteTableContractReader(
+      database,
+      expectedViewNames,
+      descriptor?.tableNames ??
+        getSqliteSchemaContract(schemaSql).catalog.tables.map((table) => table.name),
+    );
+  if (hasCanonicalSqliteSchemaFingerprint(schemaSql, readActualTable, compatibility)) {
+    return [];
+  }
   const expected = getSqliteSchemaContract(schemaSql);
-  const readActualTable = readTable ?? createSqliteTableContractReader(database);
   const excludedTables = new Set(compatibility.excludedTables ?? []);
   const excludedIndexes = new Set(compatibility.excludedIndexes ?? []);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
@@ -166,7 +121,7 @@ function collectSqliteSchemaIssuesInSnapshot(
   const add = (code: SqliteSchemaIssueCode, objectName: string, message?: string) => {
     issues.push(createSqliteSchemaIssue(code, objectName, message));
   };
-  for (const [tableName, expectedTable] of expected) {
+  for (const [tableName, expectedTable] of expected.tables) {
     if (excludedTables.has(tableName)) {
       continue;
     }
@@ -188,6 +143,20 @@ function collectSqliteSchemaIssuesInSnapshot(
         !allowedMissingTables.has(tableName),
       ),
     );
+    for (const issue of compareTablePragmaFacts(
+      tableName,
+      actualTable,
+      expectedTable,
+      compatibility,
+    )) {
+      if (
+        !issues.some(
+          (existing) => existing.code === issue.code && existing.objectName === issue.objectName,
+        )
+      ) {
+        issues.push(issue);
+      }
+    }
     const actualIndexFingerprints = new Set(
       actualTable.indexes.map((index) => JSON.stringify(index)),
     );
@@ -285,6 +254,31 @@ function collectSqliteSchemaIssuesInSnapshot(
       add("table-options-drift", tableName);
     }
   }
+  const readView =
+    readActualTable.readView ??
+    createSqliteTableContractReader(database, expectedViewNames).readView;
+  for (const expectedView of expected.catalog.views) {
+    const actualView = readView(expectedView.name);
+    if (
+      !actualView ||
+      actualView.sql !== expectedView.sql ||
+      JSON.stringify(normalizeColumns(actualView.columns)) !==
+        JSON.stringify(normalizeColumns(expectedView.columns))
+    ) {
+      add("missing-or-drifted-view", expectedView.name);
+      continue;
+    }
+    for (const trigger of expectedView.triggers) {
+      if (!containsTrigger(actualView.triggers, trigger)) {
+        add("missing-or-drifted-trigger", trigger.name);
+      }
+    }
+    for (const trigger of actualView.triggers) {
+      if (!containsTrigger(expectedView.triggers, trigger)) {
+        add("unexpected-trigger", trigger.name);
+      }
+    }
+  }
   return issues;
 }
 
@@ -292,7 +286,7 @@ function collectSqliteSchemaIssuesInSnapshot(
 export function assertSqliteSchemaTablesPresent(
   database: DatabaseSync,
   databaseLabel: string,
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
   options: { allowedMissingTables?: readonly string[] } = {},
 ): void {
   const allowedMissingTables = new Set(options.allowedMissingTables ?? []);
@@ -329,11 +323,11 @@ export function assertSqliteSchemaTablesPresent(
 
 /** Return every explicit named index owned by one committed schema. */
 export function getCanonicalSqliteNamedIndexContracts(
-  schemaSql: string,
+  schemaSql: SqliteSchemaSource,
 ): CanonicalSqliteNamedIndexContract[] {
   const schema = getSqliteSchemaContract(schemaSql);
   const indexes: CanonicalSqliteNamedIndexContract[] = [];
-  for (const [tableName, table] of schema) {
+  for (const [tableName, table] of schema.tables) {
     for (const fingerprint of table.indexes) {
       if (fingerprint.name === null || fingerprint.sql === null || fingerprint.origin !== "c") {
         continue;
@@ -351,8 +345,86 @@ export function getCanonicalSqliteNamedIndexContracts(
 }
 
 /** Return every table owned by one committed schema. */
-export function getCanonicalSqliteTableNames(schemaSql: string): string[] {
-  return [...getSqliteSchemaContract(schemaSql).keys()];
+export function getCanonicalSqliteTableNames(schemaSql: SqliteSchemaSource): string[] {
+  if (typeof schemaSql === "string") {
+    const descriptor = readGeneratedSqliteFingerprint(schemaSql);
+    if (descriptor) {
+      return [...descriptor.tableNames];
+    }
+  }
+  return [...getSqliteSchemaContract(schemaSql).tables.keys()];
+}
+
+/** Read index membership without materializing diagnostic catalog facts. */
+export function getCanonicalSqliteNamedIndexNames(schemaSql: SqliteSchemaSource): string[] {
+  if (typeof schemaSql === "string") {
+    const descriptor = readGeneratedSqliteFingerprint(schemaSql);
+    if (descriptor) {
+      return [...descriptor.indexNames];
+    }
+  }
+  return getCanonicalSqliteNamedIndexContracts(schemaSql).map((index) => index.name);
+}
+
+/** A matching native catalog needs neither expected DDL execution nor full diagnostic facts. */
+export function hasCanonicalSqliteSchemaFingerprint(
+  schemaSql: SqliteSchemaSource,
+  readTable: SqliteTableContractReader,
+  compatibility: SqliteSchemaCompatibility = {},
+): boolean {
+  const descriptor =
+    typeof schemaSql === "string" ? readGeneratedSqliteFingerprint(schemaSql) : undefined;
+  if (!descriptor || !readTable.readCatalog) {
+    return false;
+  }
+  const catalog = readTable.readCatalog(descriptor.viewNames, descriptor.tableNames);
+  if (fingerprintSqliteSchemaCatalog(catalog, descriptor) !== descriptor.fingerprint) {
+    return false;
+  }
+  for (const group of compatibility.optionalCanonicalTriggerGroups ?? []) {
+    if (
+      !descriptor.tableNames.includes(group.tableName) ||
+      compatibility.excludedTables?.includes(group.tableName)
+    ) {
+      continue;
+    }
+    // The matching fingerprint includes every declared table.
+    const triggers = catalog.tables.find((table) => table.name === group.tableName)!.triggers;
+    const optional =
+      !group.optionalWhenTableMissing ||
+      !catalog.tables.some((table) => table.name === group.optionalWhenTableMissing);
+    if (
+      optional &&
+      !triggers.some((actual) => group.triggers.some((t) => t.name === actual.name))
+    ) {
+      continue;
+    }
+    if (
+      !group.triggers.every((trigger) =>
+        containsTrigger(triggers, {
+          name: trigger.name,
+          sql: normalizeOptionalCanonicalTriggerSql(trigger.sql),
+        }),
+      )
+    ) {
+      return false;
+    }
+  }
+  if (!compatibility.excludedIndexes?.length) {
+    return true;
+  }
+  // Excluding a named unique index makes its actual uniqueness unexpected.
+  return !catalog.tables.some(
+    (table) =>
+      descriptor.tableNames.includes(table.name) &&
+      !compatibility.excludedTables?.includes(table.name) &&
+      table.indexes.some(
+        (index) =>
+          index.origin === "c" &&
+          index.unique === 1 &&
+          compatibility.excludedIndexes?.includes(index.name),
+      ),
+  );
 }
 
 /** Inspect one explicit main-schema index using the canonical schema fingerprint shape. */
@@ -407,119 +479,36 @@ function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
   return normalizeSchemaSql(sql)?.replace(/^(CREATE TRIGGER) main\./iu, "$1 ") ?? null;
 }
 
-function getSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
-  const schemaContractCache = expectedSchemaContracts();
-  let expected = schemaContractCache.get(schemaSql);
+type ExpectedSchemaContract = {
+  catalog: SqliteSchemaCatalog;
+  tables: SqliteSchemaContract;
+};
+
+const expectedContracts = new WeakMap<SqliteSchemaCatalog, ExpectedSchemaContract>();
+const expectedStringContracts = new Map<string, ExpectedSchemaContract>();
+
+function getSqliteSchemaContract(schemaSql: SqliteSchemaSource): ExpectedSchemaContract {
+  if (typeof schemaSql === "string") {
+    const cached = expectedStringContracts.get(schemaSql);
+    if (cached) {
+      return cached;
+    }
+  }
+  const catalog = typeof schemaSql === "string" ? readGeneratedSqliteCatalog(schemaSql) : schemaSql;
+  if (!catalog) {
+    throw new Error(
+      "SQLite schema has no generated catalog; run pnpm db:postgres:gen for its declared schema input.",
+    );
+  }
+  let expected = expectedContracts.get(catalog);
   if (!expected) {
-    expected = buildSqliteSchemaContract(schemaSql);
-    schemaContractCache.set(schemaSql, expected);
+    expected = { catalog, tables: sqliteSchemaContractFromCatalog(catalog) };
+    expectedContracts.set(catalog, expected);
+  }
+  if (typeof schemaSql === "string") {
+    expectedStringContracts.set(schemaSql, expected);
   }
   return expected;
-}
-
-type CanonicalIndexRow = SqliteIndexListRow & {
-  table_name: string;
-  index_seq: number;
-  sql: string | null;
-};
-type CanonicalIndexTermRow = SqliteIndexTermRow & { table_name: string; index_seq: number };
-type CanonicalTriggerRow = SqliteSchemaRow & { tbl_name: string };
-
-function collectSqliteSchemaFacts(database: DatabaseSync) {
-  const tableOptions = database
-    .prepare("PRAGMA table_list")
-    // SAFETY: SQLite table_list defines name, strict, and wr on every native row.
-    .all() as SqliteTableListRow[];
-  // Tables and views can shadow table-valued PRAGMAs, including in temp schemas.
-  if (
-    tableOptions.some((row) => {
-      const name = row.name.toLowerCase();
-      return name === "pragma_index_list" || name === "pragma_index_xinfo";
-    })
-  ) {
-    return undefined;
-  }
-  const indexes = database
-    .prepare(`
-    SELECT t.name AS table_name, i.seq AS index_seq,
-      i.name, i.origin, i.partial, i."unique", d.sql
-    FROM main.sqlite_schema AS t
-    CROSS JOIN pragma_index_list(t.name, 'main') AS i
-    LEFT JOIN main.sqlite_schema AS d ON d.type = 'index' AND d.name = i.name
-    WHERE t.type = 'table' AND t.name NOT LIKE 'sqlite_%'
-  `)
-    // SAFETY: fixed catalog/PRAGMA columns; the left join preserves null DDL for WR primary keys.
-    .all() as CanonicalIndexRow[];
-  const terms = database
-    .prepare(`
-    SELECT t.name AS table_name, i.seq AS index_seq,
-      x.seqno, x.cid, x.name, x."desc", x.coll, x."key"
-    FROM main.sqlite_schema AS t
-    CROSS JOIN pragma_index_list(t.name, 'main') AS i
-    CROSS JOIN pragma_index_xinfo(i.name, 'main') AS x
-    WHERE t.type = 'table' AND t.name NOT LIKE 'sqlite_%'
-    ORDER BY t.name, i.seq, x.seqno
-  `)
-    // SAFETY: index_xinfo supplies all six native term fields; index_list supplies table-local seq keys.
-    .all() as CanonicalIndexTermRow[];
-  const triggers = database
-    .prepare(`
-    SELECT tbl_name, name, sql FROM main.sqlite_schema WHERE type = 'trigger' ORDER BY tbl_name, name
-  `)
-    // SAFETY: canonical trigger catalog rows have text names and nullable text DDL.
-    .all() as CanonicalTriggerRow[];
-  return {
-    tableOptions,
-    indexes: groupCanonicalRows(indexes, (row) => row.table_name),
-    terms: groupCanonicalRows(terms, (row) => row.table_name),
-    triggers: groupCanonicalRows(triggers, (row) => row.tbl_name),
-  };
-}
-
-function groupCanonicalRows<Row, Key extends string | number>(
-  rows: Row[],
-  key: (row: Row) => Key,
-): Map<Key, Row[]> {
-  const groups = new Map<Key, Row[]>();
-  for (const row of rows) {
-    const name = key(row);
-    const group = groups.get(name) ?? [];
-    group.push(row);
-    groups.set(name, group);
-  }
-  return groups;
-}
-
-function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
-  const database = openNodeSqliteDatabase(":memory:");
-  try {
-    database.exec(schemaSql);
-    return collectSqliteSchemaContract(database);
-  } finally {
-    database.close();
-  }
-}
-
-function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContract {
-  // Authorize catalog ownership even when there are no tables to inspect.
-  const rows = database
-    .prepare(
-      `
-        SELECT name, sql, tbl_name
-        FROM main.sqlite_schema
-        WHERE type = 'table'
-          AND name NOT LIKE 'sqlite_%'
-        ORDER BY name
-      `,
-    )
-    .all() as SqliteSchemaRow[];
-  if (rows.length === 0) {
-    return new Map();
-  }
-  const facts = collectSqliteSchemaFacts(database);
-  return new Map(
-    rows.map((table) => [table.name, collectSqliteTableContractFromRow(database, table, facts)]),
-  );
 }
 
 function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
@@ -543,51 +532,96 @@ function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
   return definition;
 }
 
-function collectSqliteTableContractFromRow(
-  database: DatabaseSync,
-  table: SqliteSchemaRow,
-  facts: ReturnType<typeof collectSqliteSchemaFacts>,
-): SqliteTableContract {
-  const tableName = table.name;
-  const quotedTable = facts ? undefined : quoteSqliteIdentifier(tableName);
-  const tableOptions =
-    facts?.tableOptions ??
-    (database.prepare(`PRAGMA main.table_list(${quotedTable})`).all() as SqliteTableListRow[]);
-  const tableList = tableOptions.find(
-    (entry) => entry.schema === "main" && entry.name === tableName,
+function normalizeColumns(columns: readonly SqliteColumnCatalog[]) {
+  return columns
+    .map(({ cid: _cid, name, type, dflt_value, ...column }) => ({
+      ...column,
+      name: normalizeSqlIdentifier(name),
+      type: type.toUpperCase(),
+      dflt_value: dflt_value === null ? null : normalizeSqlWhitespace(dflt_value),
+    }))
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+function normalizeForeignKeys(
+  foreignKeys: readonly SqliteForeignKeyCatalog[],
+  excludedColumns: ReadonlySet<string>,
+) {
+  const groups = new Map<number, Omit<SqliteForeignKeyCatalog, "id">[]>();
+  for (const { id, from, table, to, ...foreignKey } of foreignKeys) {
+    const group = groups.get(id) ?? [];
+    group.push({
+      ...foreignKey,
+      from: normalizeSqlIdentifier(from),
+      table: normalizeSqlIdentifier(table),
+      to: to === null ? null : normalizeSqlIdentifier(to),
+    });
+    groups.set(id, group);
+  }
+  return [...groups.values()]
+    .filter((group) => !group.some((foreignKey) => excludedColumns.has(foreignKey.from)))
+    .map((group) => group.toSorted((left, right) => left.seq - right.seq))
+    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function compareTablePragmaFacts(
+  tableName: string,
+  actual: SqliteTableContract,
+  expected: SqliteTableContract,
+  compatibility: SqliteSchemaCompatibility,
+): SqliteSchemaIssue[] {
+  const issues: SqliteSchemaIssue[] = [];
+  const actualColumns = new Map(
+    normalizeColumns(actual.columns).map((column) => [column.name, column]),
   );
-  if (!tableList) {
-    throw new Error(`Could not inspect SQLite table options for ${tableName}.`);
+  const expectedColumns = normalizeColumns(expected.columns);
+  const excludedForeignKeyColumns = new Set<string>();
+  for (const expectedColumn of expectedColumns) {
+    const columnName = expectedColumn.name;
+    const objectName = `${tableName}.${columnName}`;
+    const actualColumn = actualColumns.get(columnName);
+    if (!actualColumn) {
+      if ((compatibility.allowedMissingColumns ?? []).includes(objectName)) {
+        excludedForeignKeyColumns.add(columnName);
+      } else {
+        issues.push(createSqliteSchemaIssue("missing-column", objectName));
+      }
+      continue;
+    }
+    const actualDefinition = actual.definition?.columns.get(columnName);
+    const allowedDefinitions = compatibility.allowedColumnDefinitions?.[objectName] ?? [];
+    // A supported migration's explicitly allowed declaration also owns its PRAGMA metadata.
+    if (
+      actualDefinition !== undefined &&
+      allowedDefinitions.some(
+        (definition) => normalizeSqlWhitespace(definition) === actualDefinition,
+      )
+    ) {
+      excludedForeignKeyColumns.add(columnName);
+      continue;
+    }
+    if (JSON.stringify(actualColumn) !== JSON.stringify(expectedColumn)) {
+      issues.push(createSqliteSchemaIssue("column-definition-drift", objectName));
+    }
   }
-  let indexes: SqliteIndexContract[];
-  if (facts) {
-    const termsByIndex = groupCanonicalRows(
-      facts.terms.get(tableName) ?? [],
-      (term) => term.index_seq,
-    );
-    indexes = (facts.indexes.get(tableName) ?? []).map((index) =>
-      createSqliteIndexContract(index, index.sql, termsByIndex.get(index.index_seq) ?? []),
-    );
-  } else {
-    indexes = (
-      database.prepare(`PRAGMA main.index_list(${quotedTable})`).all() as SqliteIndexListRow[]
-    ).map((index) => collectSqliteIndexContract(database, index));
+  // Ordinary columns are checked against their full declarations; virtual tables have no such map.
+  if (expected.definition === null) {
+    const expectedNames = new Set(expectedColumns.map((column) => column.name));
+    for (const actualColumn of actualColumns.values()) {
+      if (!expectedNames.has(actualColumn.name)) {
+        issues.push(
+          createSqliteSchemaIssue("unexpected-column", `${tableName}.${actualColumn.name}`),
+        );
+      }
+    }
   }
-  indexes = indexes.toSorted(compareJson);
-  const triggers = facts
-    ? (facts.triggers.get(tableName) ?? [])
-    : (executeWithCachedStatement(
-        database,
-        `
-          SELECT name, sql
-          FROM main.sqlite_schema
-          WHERE type = 'trigger' AND tbl_name = ?
-          ORDER BY name
-        `,
-        [tableName],
-        (statement) => statement.all(tableName),
-      ) as SqliteSchemaRow[]);
-  return createSqliteTableContract(tableName, table, tableList, indexes, triggers);
+  if (
+    JSON.stringify(normalizeForeignKeys(actual.foreignKeys, excludedForeignKeyColumns)) !==
+    JSON.stringify(normalizeForeignKeys(expected.foreignKeys, excludedForeignKeyColumns))
+  ) {
+    issues.push(createSqliteSchemaIssue("table-constraint-drift", tableName));
+  }
+  return issues;
 }
 
 function compareTableDefinitions(
@@ -672,12 +706,8 @@ function collectSqliteIndexContract(
   return createSqliteIndexContract(index, typeof row?.sql === "string" ? row.sql : null, terms);
 }
 
-function containsTrigger(triggers: SqliteSchemaRow[], expected: SqliteSchemaRow): boolean {
+function containsTrigger(triggers: readonly SqliteSchemaRow[], expected: SqliteSchemaRow): boolean {
   return triggers.some((trigger) => trigger.name === expected.name && trigger.sql === expected.sql);
-}
-
-function compareJson(left: unknown, right: unknown): number {
-  return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 export function readSqliteSchemaCookie(database: DatabaseSync) {

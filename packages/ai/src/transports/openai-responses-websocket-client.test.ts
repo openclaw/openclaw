@@ -364,7 +364,18 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   it("observes the dispatched WebSocket service tier and raw terminal downgrade", async () => {
     const completed = completedEvent("resp_tier", "ok");
     transportState.responseBatches.push([
-      message({ ...completed, response: { ...completed.response, service_tier: "default" } }),
+      message({
+        ...completed,
+        response: {
+          ...completed.response,
+          model: "fixture-served",
+          service_tier: "default",
+          usage: {
+            ...completed.response.usage,
+            input_tokens_details: { cached_tokens: 3, cache_write_tokens: 0 },
+          },
+        },
+      }),
     ]);
     const observations: ResponsesServiceTierObservation[] = [];
     const options = {
@@ -383,7 +394,16 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     );
     expect((await stream.result()).stopReason).toBe("stop");
     expect(transportState.websocketRequests[0]?.service_tier).toBe("ultrafast");
-    expect(observations).toEqual([{ requestedTier: "ultrafast", responseTier: "default" }]);
+    expect(observations).toEqual([
+      {
+        requestedTier: "ultrafast",
+        responseTier: "default",
+        responseId: "resp_tier",
+        responseModel: "fixture-served",
+        inputTokens: 5,
+        cachedTokens: 3,
+      },
+    ]);
   });
 
   it.each(["after-output", "registered-hook", "active-hook"] as const)(

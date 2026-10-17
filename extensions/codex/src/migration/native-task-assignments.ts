@@ -359,6 +359,7 @@ async function settleHistoricalDelivery(
 export const codexNativeTaskAssignmentMigration = {
   id: "codex-native-task-assignments",
   label: "Codex native pending assignments",
+  sqliteOnly: { family: "state" },
   collectBackupResources: (params) => [{ path: databasePath(params), kind: "sqlite" }],
   async detectLegacyState(params) {
     return (await inspect(params)).length > 0
@@ -373,7 +374,9 @@ export const codexNativeTaskAssignmentMigration = {
     }
     const { bindingStoreKey, readStoredCodexAppServerBinding } =
       await import("../app-server/session-binding-record.js");
-    const sessionStore = await import("openclaw/plugin-sdk/session-store-runtime");
+    const { getSessionEntry, resolveStorePath } =
+      await import("openclaw/plugin-sdk/session-store-runtime");
+    const sessionStore: AssignmentSessionStore = { getSessionEntry, resolveStorePath };
     let imported = 0;
     let settled = 0;
     const store = params.context.openPluginStateKeyedStore<StoredCodexAppServerBinding>({

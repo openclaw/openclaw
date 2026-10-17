@@ -1,10 +1,14 @@
-import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import type { Overlay } from "../../components/overlay-lifecycle.ts";
+import * as textareaAnchor from "../../components/textarea-token-anchor.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
-import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
+import {
+  createNewSessionComposerTextarea,
+  type NewSessionComposerTextarea,
+} from "../new-session/composer-textarea.ts";
 import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -12,11 +16,12 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
-const controllers: NewSessionComposerTextareaController[] = [];
+const composerTextareas: NewSessionComposerTextarea[] = [];
 const fixtureDisposals: Array<() => void> = [];
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
@@ -26,13 +31,16 @@ afterEach(async () => {
   } else {
     Reflect.deleteProperty(document, "execCommand");
   }
-  controllers.splice(0).forEach((controller) => controller.disconnect());
+  composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
   await resetComposerFixture();
 });
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "update").mockImplementation(() => {});
+  vi.spyOn(textareaAnchor, "createTextareaTokenAnchor").mockReturnValue({
+    updateNative() {},
+    close() {},
+  });
   // jsdom has no editing engine. Exercise the browser command's input contract;
   // native undo itself is covered by the real-browser composer suite.
   Object.defineProperty(document, "execCommand", {
@@ -63,20 +71,20 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     if (native) {
       native.unmount();
     } else {
-      render(nothing, container);
+      disposeComposer(container);
     }
     container.remove();
   });
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
-  const controller = new NewSessionComposerTextareaController();
+  const composerTextarea = createNewSessionComposerTextarea();
   const attachmentDraft = new NewSessionAttachmentDraft(
     () => redraw(),
     () => {},
   );
   const modelControl = new NewSessionModelControl(() => redraw());
-  controllers.push(controller);
+  composerTextareas.push(composerTextarea);
   const props = createComposerProps({
     canSend: !locked,
     getDraft: () => draft,
@@ -84,14 +92,13 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     onDraftChange: (next) => {
       draft = next;
     },
-    onRequestUpdate: () => redraw(),
   });
   function redraw() {
     if (retired) {
       return;
     }
     if (kind === "chat") {
-      render(renderChatComposer({ ...props, draft }), container);
+      renderComposerInto(container, { ...props, draft });
     } else {
       nativeOptions = {
         agentId: "main",
@@ -105,8 +112,8 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
         requiresModifier,
         submitting: false,
         messageLocked: locked,
-        textareaController: controller,
-        requestUpdate: redraw,
+        composerTextarea,
+        onChange: redraw,
         onInput: (next) => {
           draft = next;
           redraw();
@@ -130,6 +137,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     textarea.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
     );
+    flush();
   };
   const key = (keyName: string, extra: KeyboardEventInit = {}) => {
     const event = new KeyboardEvent("keydown", {
@@ -139,6 +147,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       ...extra,
     });
     textarea.dispatchEvent(event);
+    flush();
     return event;
   };
   const colon = () => {
@@ -149,14 +158,15 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       data: ":",
     });
     textarea.dispatchEvent(event);
+    flush();
     return event;
   };
   return { container, textarea, input, key, colon, send, backgroundSend, draft: () => draft };
 }
 
-describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
+describe("chat emoji acceptance", () => {
   it("does not send on held Enter after accepting an emoji, but sends on a fresh press", () => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(":smi");
     f.key("Enter");
     expect(f.draft()).toBe("😄");
@@ -170,10 +180,11 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   });
 
   it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(":smi");
     f.key("Escape");
     f.textarea.dispatchEvent(new Event("select"));
+    flush();
     expect(f.container.querySelector('[role="listbox"]')).toBeNull();
     expect(f.draft()).toBe(":smi");
     f.input(":smil");
@@ -184,6 +195,28 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     expect(f.draft()).toBe("👍");
     expect(f.send).not.toHaveBeenCalled();
   });
+});
+
+describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
+  it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
+    let overlay: Overlay | undefined;
+    vi.mocked(textareaAnchor.createTextareaTokenAnchor).mockReturnValue({
+      updateNative(next) {
+        overlay = next;
+      },
+      close() {
+        overlay?.retire();
+      },
+    });
+    const f = fixture(kind);
+    f.input("Nice :smi");
+    expect(overlay).toBeDefined();
+    f.key("ArrowDown");
+    f.key("ArrowUp");
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    expect(f.draft()).toBe("Nice 😄");
+    expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+  });
 
   it("ignores a queued selection event after focus leaves the composer", () => {
     const f = fixture(kind);
@@ -191,6 +224,7 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     f.textarea.setSelectionRange(4, 4);
     f.textarea.blur();
     f.textarea.dispatchEvent(new Event("select"));
+    flush();
     expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
     expect(f.draft()).toBe(":smi");
   });

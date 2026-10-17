@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as stateDb from "../../state/openclaw-state-db.js";
@@ -18,11 +19,11 @@ import {
   captureSecretStoreExpiryCutoffs,
   purgeExpiredSecretStoreEntriesInDatabase,
 } from "./secret-store-expiry.kernel.js";
+import { listHiddenGitHubSecretRecords } from "./secret-store-hidden-github.js";
 import {
   consumeGitHubSetupHandoff,
   deleteHiddenGitHubSecretRecord,
   deleteSecretStoreEntry,
-  listHiddenGitHubSecretRecordNames,
   listSecretStoreEntries,
   purgeExpiredSecretStoreEntries as purgeStoredSecrets,
   readHiddenGitHubSecretRecord,
@@ -89,7 +90,7 @@ afterEach(async () => {
 });
 
 describe("secret store", () => {
-  it("purges newly deleted entries only after their retention deadline after an idle pass", async () => {
+  it("discovers newly deleted entries after idle and purges overdue entries after restart", async () => {
     vi.useFakeTimers();
     const deletedAtMs = Date.UTC(2026, 0, 1);
     vi.setSystemTime(deletedAtMs);
@@ -104,6 +105,7 @@ describe("secret store", () => {
     expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(1);
 
     vi.setSystemTime(deletedAtMs + 30 * 24 * 60 * 60_000 + 1);
+    await closeOpenClawStateDatabaseAsync();
     await expect(purgeStoredSecrets({ database })).resolves.toBe(1);
     expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(0);
   });
@@ -314,11 +316,11 @@ describe("secret store", () => {
     });
     await write("UNRELATED_SECRET", "keep-value");
 
-    expect(await listHiddenGitHubSecretRecordNames({ prefix: "github-device", database })).toEqual([
-      deviceName,
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device", database })).toEqual([
+      { name: deviceName, value: "device-value" },
     ]);
-    expect(await listHiddenGitHubSecretRecordNames({ prefix: "github-oauth", database })).toEqual([
-      oauthName,
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth", database })).toEqual([
+      { name: oauthName, value: "oauth-value" },
     ]);
     expect(await readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe("device-value");
     expect(await readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
@@ -425,7 +427,9 @@ describe("secret store", () => {
           null,
         );
       }
-      expect(await listHiddenGitHubSecretRecordNames({ prefix, database })).toEqual(
+      expect(
+        (await listHiddenGitHubSecretRecords({ prefix, database })).map(({ name }) => name),
+      ).toEqual(
         fixtures
           .filter((entry) => entry.accept)
           .map((entry) => entry.name)
@@ -689,6 +693,7 @@ describe("secret store", () => {
     });
     before.exec("DROP TABLE secret_store_entries;");
     before.close();
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
 
     expect(await listSecretStoreEntries({ scope: team, database })).toEqual([]);
     expect(

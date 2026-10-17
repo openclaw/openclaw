@@ -289,22 +289,6 @@ vi.mock("./stale-plugin-config.js", () => ({
   },
 }));
 
-vi.mock("./bundled-plugin-load-paths.js", () => ({
-  scanBundledPluginLoadPathMigrations: (cfg: { plugins?: { load?: { paths?: string[] } } }) =>
-    (cfg.plugins?.load?.paths ?? []).map((legacyPath) => ({ legacyPath })),
-  collectBundledPluginLoadPathWarnings: ({
-    doctorFixCommand,
-    hits,
-  }: {
-    doctorFixCommand: string;
-    hits: Array<{ legacyPath: string }>;
-  }) =>
-    hits.map(
-      (hit) =>
-        `plugins.load.paths: legacy bundled plugin path "${hit.legacyPath}". Run "${doctorFixCommand}".`,
-    ),
-}));
-
 // mock-isolation: Script warning output without reading host auth stores.
 vi.mock("./stale-oauth-profile-shadows.js", () => ({
   scanStaleOAuthProfileShadows: () => ({
@@ -626,29 +610,6 @@ describe("doctor preview warnings", () => {
     });
 
     expectSingleWarningContaining(warnings, "channels.openclaw-weixin: dangling channel config");
-  });
-
-  it("includes bundled plugin load path migration warnings", async () => {
-    const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = path.join(packageRoot, "extensions", "feishu");
-    manifestState.plugins = [manifest("feishu")];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: {
-        plugins: {
-          load: {
-            paths: [legacyPath],
-          },
-        },
-      },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    const warning = expectSingleWarningContaining(
-      warnings,
-      `plugins.load.paths: legacy bundled plugin path "${legacyPath}"`,
-    );
-    expect(warning).toContain('Run "openclaw doctor --fix"');
   });
 
   it("warns when a configured external channel plugin is omitted from plugins.allow", async () => {

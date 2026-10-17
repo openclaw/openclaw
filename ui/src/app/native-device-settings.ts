@@ -4,6 +4,7 @@ import {
   type NodePermissionRequest,
 } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   nativeChromeExtensionSetupActionSchema,
   nativeChromeExtensionSetupResultSchema,
@@ -90,7 +91,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
   browser: z
     .object({
       chromeSetupActions: z.array(nativeChromeExtensionSetupActionSchema).optional(),
-      importAvailable: z.boolean().optional(), // local mode with Chrome-family cookies available
+      importAvailable: z.boolean().optional(), // local import action; discovery waits for user intent
       cookieSync: z
         .object({
           available: z.boolean(), // remote mode with an external CLI
@@ -362,8 +363,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   };
   // System Settings can change permissions while the app is backgrounded.
   const refresh = () => void send({ type: "status" });
-  window.addEventListener(CHANGE_EVENT, onChange);
-  window.addEventListener("focus", refresh);
+  const stops = [listen(window, CHANGE_EVENT, onChange), listen(window, "focus", refresh)];
   refresh();
   const legacyChromeRequest = async (
     type: "chrome-extension-status" | "install-chrome-extension",
@@ -387,7 +387,13 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
       throw new Error("This permission belongs to another device");
     }
     // Native revalidates the node identity immediately before requesting access.
-    await post({ type: "resolve-permission", request });
+    try {
+      await post({ type: "resolve-permission", request });
+    } finally {
+      if (isCurrent()) {
+        refresh();
+      }
+    }
   };
   return {
     get snapshot() {
@@ -436,8 +442,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     refresh,
     dispose() {
       disposed = true;
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener("focus", refresh);
+      stops.forEach((stop) => stop());
       listeners.clear();
     },
   };

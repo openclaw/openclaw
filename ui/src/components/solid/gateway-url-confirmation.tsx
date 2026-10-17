@@ -1,12 +1,13 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { Show, createEffect, onCleanup } from "solid-js";
 import {
   isOptionalElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
 } from "../../app/lazy-custom-element.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
 import { LazyElementStateView } from "./lazy-view-error.tsx";
 
@@ -66,7 +67,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
           </div>
         </div>
         <p class="gateway-switch__note">{notes()}</p>
-        <div class="gateway-switch__actions">
+        <openclaw-modal-actions class="gateway-switch__actions">
           <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
             {t("connection.switchGateway.confirm", {
               host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
@@ -75,7 +76,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
           <button type="button" class="btn" onClick={() => props().onCancel()}>
             {t("connection.switchGateway.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );
@@ -85,8 +86,6 @@ export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationPr
   "openclaw-gateway-url-confirmation",
   (props, host) => {
     host.style.display = "contents";
-    const [revision, setRevision] = createSignal(0);
-    let live = true;
     const dialogElement = {
       tagName: "openclaw-modal-dialog",
       get label() {
@@ -94,31 +93,18 @@ export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationPr
       },
       loadModule: () => import("../modal-dialog.ts"),
     };
-    const loader = new LazyCustomElementRequestController(
-      {
-        requestUpdate: () => {
-          if (live) {
-            setRevision((value) => value + 1);
-          }
-        },
-      },
-      () => props.props?.onCancel(),
-    );
+    const loader = createLazyCustomElementRequests({}, () => props.props?.onCancel());
+    const loadingState = projectOwner(loader, (owner) => owner.visibleState);
     createEffect(
       () => Boolean(props.props?.pendingGatewayUrl),
       (active) => loader.requestWhileActive(dialogElement, active),
     );
     onCleanup(() => {
-      live = false;
       loader.requestWhileActive(dialogElement, false);
     });
     const loaded = () => {
-      revision();
+      loadingState.revision();
       return isOptionalElementDefined(dialogElement);
-    };
-    const loadingState = () => {
-      revision();
-      return loader.visibleState;
     };
     return (
       <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
@@ -126,7 +112,7 @@ export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationPr
           <Show
             when={loaded()}
             fallback={
-              <Show when={loadingState()}>
+              <Show when={loadingState.read()}>
                 {(state) => (
                   <LazyElementStateView
                     state={state()}

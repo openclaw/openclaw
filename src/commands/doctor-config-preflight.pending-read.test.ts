@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as pendingMigrations from "../infra/deferred-plugin-migrations.js";
+import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -41,6 +42,8 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       };
       await pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
       await closeOpenClawStateDatabaseAsync();
+      // Exercise snapshot admission; a clean seal intentionally skips this wait.
+      invalidateSqliteDatabaseCleanClose(databasePath);
       const held = createDeferredCore();
       const release = createDeferredCore();
       const prepareSnapshot = snapshotSource.prepareSqliteReadOnlyLocation;

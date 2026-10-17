@@ -1,8 +1,14 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { preserveHumanNotesBlock, renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
+import {
+  decodeWikiPageUtf8,
+  preserveHumanNotesBlock,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+} from "./markdown.js";
 import {
   setImportedSourceEntry,
   type MemoryWikiImportedSourceGroup,
@@ -75,11 +81,17 @@ export async function writeImportedSourcePage(params: {
   const pageStat = await readWikiPageStat(vault, params.pagePath);
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
-  const raw = await fs.readFile(params.sourcePath, "utf8");
+  const bytes = await fs.readFile(params.sourcePath);
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Imported source file must be valid UTF-8: ${params.sourcePath}. Restore the source as valid UTF-8 and retry the sync.`,
+    );
+  }
+  const raw = bytes.toString("utf8");
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat
     ? await readExistingWikiPage(
-        () => vault.readText(params.pagePath),
+        async () => decodeWikiPageUtf8(await vault.readBytes(params.pagePath), params.pagePath),
         (error) =>
           error instanceof FsSafeError && (error.code === "not-file" || error.code === "hardlink"),
       )

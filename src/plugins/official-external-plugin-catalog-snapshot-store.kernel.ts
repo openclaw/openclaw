@@ -1,12 +1,12 @@
 /** Connection-bound hosted catalog snapshot SQL and monotonicity checks. */
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -151,7 +151,7 @@ function rowToSnapshot(
   };
 }
 
-function readHostedCatalogSnapshotRow(db: DatabaseSync, url: string) {
+function readHostedCatalogSnapshotRow(db: EngineConnection, url: string) {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
     db,
@@ -176,24 +176,26 @@ function readHostedCatalogSnapshotRow(db: DatabaseSync, url: string) {
 }
 
 export function readHostedCatalogSnapshotInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   url: string,
 ): HostedOfficialExternalPluginCatalogSnapshot | null {
   return rowToSnapshot(readHostedCatalogSnapshotRow(db, url));
 }
 
-/** The caller owns the write transaction containing the reread and upsert. */
+/** Signed feeds keep their current-row check and upsert in the caller's transaction. */
 export function writeHostedCatalogSnapshotInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   snapshot: HostedOfficialExternalPluginCatalogSnapshot,
   now: number,
 ): void {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
-  assertSignedSnapshotWriteIsMonotonic({
-    candidate: snapshot.monotonic,
-    candidateBody: snapshot.body,
-    current: readHostedCatalogSnapshotRow(db, snapshot.metadata.url),
-  });
+  if (snapshot.monotonic?.mode === "signed-feed") {
+    assertSignedSnapshotWriteIsMonotonic({
+      candidate: snapshot.monotonic,
+      candidateBody: snapshot.body,
+      current: readHostedCatalogSnapshotRow(db, snapshot.metadata.url),
+    });
+  }
   const values = {
     body: snapshot.body,
     status: snapshot.metadata.status,

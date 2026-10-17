@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
+  openUrlPrivately: vi.fn(),
+  detectBrowserOpenSupport: vi.fn(),
   inspectPortUsage: vi.fn(),
   ensureDashboardGatewayReady: vi.fn(),
   waitForControlUiDocument: vi.fn(),
@@ -21,15 +23,21 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("./onboard-helpers.js", () => ({
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   resolveControlUiLinks: mocks.resolveControlUiLinks,
-  detectBrowserOpenSupport: vi.fn(),
+  detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
   openUrl: mocks.openUrl,
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
 }));
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
+}));
+
+vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/browser-handoff.js")>()),
+  openUrlPrivately: mocks.openUrlPrivately,
 }));
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -130,6 +138,8 @@ describe("dashboardCommand bind selection", () => {
       expiresAtMs: 123_456,
     });
     mocks.openUrl.mockClear();
+    mocks.openUrlPrivately.mockReset().mockResolvedValue(true);
+    mocks.detectBrowserOpenSupport.mockReset().mockResolvedValue({ ok: false });
     mocks.inspectPortUsage.mockReset();
     mocks.ensureDashboardGatewayReady.mockReset();
     mocks.ensureDashboardGatewayReady.mockResolvedValue({
@@ -199,7 +209,7 @@ describe("dashboardCommand bind selection", () => {
 
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
-    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(mocks.openUrlPrivately).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
   });
 

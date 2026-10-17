@@ -86,6 +86,34 @@ interrupted and that partially completed actions need checking. A parent waiting
 for its child batch receives the settled results, including children that finished
 before the restart, and decides what work remains.
 
+Detached orphan reads, restored requester wakes, and cleanup share a bounded
+background budget per Gateway. A large retained backlog waits there instead of
+filling the reader task limit needed by reconnecting clients. Queued cleanup stays
+tracked through restart drain and checks its original ownership before proceeding.
+
+Operator-admitted children retain bounded source evidence with their run record.
+Before continuing the requester after restart, the Gateway revalidates the current
+operator profile, role, authentication policy, device identity, and access grant,
+preserving the original scope restrictions. The saved evidence contains no credentials
+and cannot authorize execution by itself. Missing, invalid, or revoked evidence leaves
+the interrupted result available for inspection; recovery never substitutes system
+authority. Start a new authorized requester turn to continue that work.
+
+Legacy completions without saved operator evidence record permanent non-delivery
+once, including requester-settle wakes and yielded runs without a final outcome.
+Recovery clears the unavailable wake while preserving execution results and any
+recorded delivery receipt. Successful settlement does not warn that authority
+restoration failed; later restarts do not attempt to restore the same missing
+authority again. Temporary worker overload,
+unavailable access policy, and failed settlement writes remain retryable.
+
+Visible and private requester-settle completions retain their processing outcome
+across restart. A replay of the same frozen child batch acknowledges an already
+completed requester turn without executing or delivering it again. Unfinished
+main-session turns continue through normal restart recovery with the original
+operator restrictions. If the original authority is unavailable, the task stays
+owed instead of running with broader permissions.
+
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
 saved continuation across restart. Registry recovery waits for that owner instead
@@ -98,6 +126,12 @@ transfers do not retry indefinitely. Registry hydration and startup transfer eac
 run once per attempt. A failed hydration logs its error and can be retried by the
 next registry access; an incomplete startup transfer remains recorded for the
 next activation or restart. Recovery does not keep a separate retry timer.
+Requester recovery selects each retained turn's children without repeatedly
+scanning unrelated run history. Completed children remain in saved batches when
+their delivery receipts are needed to prevent replaying an already delivered result.
+Durably completed cleanup does not replay interrupted child-session effects on restart.
+The saved interruption still rejects late child results, and pending requester wakes
+continue through their existing settlement owner.
 
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
@@ -108,16 +142,20 @@ before cleanup, so retained child sessions do not leave phantom running activity
 If settlement fails, completion remains available for retry.
 
 Recovery remembers live session ownership without retaining saved prompt snapshots.
-Unchanged owned rows skip session reads; ownership release or a published session
-change requests another sweep within one second. Unavailable recovery reads retry
-per row with exponential backoff from one second to one minute. Registry lifecycle
-changes and session publications clear that backoff. Persisted rows without a live
+Unchanged owned rows skip session reads; release of the run context or its admitted
+session work requests another sweep within one second. If admission releases first,
+recovery still waits for the run context to finish cleanup. Unavailable recovery reads
+retry per row with exponential backoff from one second to one minute; other session
+publications are observed on the next bounded retry. Persisted rows without a live
 owner still require a fresh read before recovery can change their state.
 
 Startup session maintenance reports retained run/task owners in one informational
 summary. Those rows remain with registry recovery; the session-only orphan repair
 does not compete for their ownership. Ownership changes during a repair and failed
 ownership checks still produce warnings.
+
+Main-session restart recovery excludes sub-agent sessions before resolving their
+stores; retained child recovery stays with the sub-agent registry owner.
 
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
@@ -192,7 +230,9 @@ finish cleanup bookkeeping, resume, and stop under the authorized requester.
 Legacy Stop cancels the exact task and its registered execution, when available;
 it does not guess which current session or successor to interrupt. OpenClaw
 warns once per Gateway process after registry restore, with a count of unique
-legacy run IDs and a few sample IDs, and suppresses child-session mutations, including
+legacy run IDs with unfinished work and a few sample IDs. Completed cleanup and
+terminal runs with suppressed delivery are excluded unless a requester wake remains.
+OpenClaw suppresses child-session mutations, including
 deletion, reset, and transcript cleanup. Missing historical identity is never
 backfilled. A conflicting recorded identity remains a mismatch, not a legacy exception.
 
@@ -264,3 +304,9 @@ timeout. Those events do not automatically cancel them.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
+
+Subagent lifecycle warnings retain the error name, message, code, and full stack
+in file logs; console output includes the first six stack lines. Direct announce
+and requester-settle retry warnings
+also include the requester and delivery idempotency key so retries can be traced
+without logging message content.

@@ -620,6 +620,9 @@ See [Config hot reload](/gateway/configuration/hot-reload).
 
 Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
 
+Model references are normalized before a mutation is saved. Core agent model references do not require plugin discovery; provider catalog model IDs reuse compatible prepared plugin metadata or load their manifest normalization policies on demand.
+Unrelated edits leave provider catalogs unchanged. Catalog writes and changes to plugin discovery or activation policy normalize provider model IDs before saving.
+
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.

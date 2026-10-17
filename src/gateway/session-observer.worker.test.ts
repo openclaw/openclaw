@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -170,6 +171,18 @@ async function withObserver(
   });
 }
 
+it("does not discover physical stores for unwatched assistant deltas", async () => {
+  await withObserver(async ({ observer, watch }) => {
+    watch(false);
+    await observer.handleEventAsync(event({ stream: "lifecycle", data: { phase: "start" } }));
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    for (const delta of ["Checking ", "the implementation."]) {
+      await observer.handleEventAsync(event({ stream: "assistant", data: { delta } }));
+    }
+    expect(realpath).not.toHaveBeenCalled();
+  });
+});
+
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
   await withObserver(
     async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
@@ -210,8 +223,20 @@ it("moves observer admission, publication, terminal and companion reads off the 
         );
         expect(inventories).toBe(0);
         expect(entries).toBeGreaterThanOrEqual(2);
+        entries = 0;
+        for (const delta of ["Checking ", "the implementation."]) {
+          await observer.handleEventAsync(
+            event({ runId: "worker-run", stream: "assistant", data: { delta } }),
+          );
+        }
+        expect(inventories).toBe(0);
+        expect(entries).toBe(0);
         const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
         expect(snapshot.digest?.headline).toBe("Worker observation");
+        expect(snapshot.notes).toContainEqual({
+          sequence: 1,
+          text: "Assistant: Checking the implementation.",
+        });
         sql.expectIdle();
         sql.restore();
         peer
@@ -395,6 +420,17 @@ it("does not disclose a predecessor digest when the configured store changes wit
     expect(await observer.getCompanionSnapshotAsync(key, "main")).toEqual({
       agentId: "main",
       notes: [],
+    });
+    await observer.handleEventAsync(
+      event({
+        runId: "replacement-run",
+        stream: "item",
+        data: { kind: "preamble", progressText: "Replacement store" },
+      }),
+    );
+    expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toMatchObject({
+      runId: "replacement-run",
+      headline: "Replacement store",
     });
   });
 });

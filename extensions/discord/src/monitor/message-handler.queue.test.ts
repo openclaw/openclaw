@@ -335,14 +335,12 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const params = createDiscordHandlerParams();
     const dispatched: string[][] = [];
     setRuntimeConfigSnapshot(params.cfg, params.cfg);
+    preflightDiscordMessageMock.mockImplementation(async ({ data, precedingMessages = [] }) => {
+      dispatched.push([...precedingMessages, data.message].map((message) => message.id));
+      return null;
+    });
     const handler = createDiscordMessageDispatcher({
       ...params,
-      testing: {
-        preflightDiscordMessage: async ({ data, precedingMessages = [] }) => {
-          dispatched.push([...precedingMessages, data.message].map((message) => message.id));
-          return null;
-        },
-      },
     });
     const publish = (inbound: NonNullable<OpenClawConfig["messages"]>["inbound"]) => {
       const cfg = { ...params.cfg, messages: { inbound } };

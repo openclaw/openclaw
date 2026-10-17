@@ -17,10 +17,8 @@ import * as hydration from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  recordOpenClawAgentDatabaseOpenFailure,
-  clearOpenClawAgentDatabaseOpenFailure,
-} from "../state/openclaw-agent-db.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import { readTalkRealtimeInitialItems } from "./talk/session-history.js";

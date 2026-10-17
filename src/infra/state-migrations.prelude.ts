@@ -204,15 +204,16 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
     env: stateEnv,
     preparedDiscovery: params.agentDatabaseMigrationDiscovery,
   };
-  let preparedTargets: readonly AgentDatabaseMigrationTarget[] | undefined;
+  let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
+    params.mode === "doctor" ? [] : undefined;
   const steps: LegacyStateMigrationStep[] = [];
   if (params.mode === "doctor") {
     steps.push(
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
-          onPreparedTargets: (targets) => {
-            preparedTargets = targets;
+          onPreparedRepairTargets: (targets) => {
+            preparedRepairTargets = targets;
           },
         }),
       ),
@@ -227,6 +228,11 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             apply: true,
             cfg: params.config,
             env: stateEnv,
+            targets: preparedRepairTargets?.map((target) => ({
+              agentId: target.agentId,
+              storePath: target.path,
+              sqlitePath: target.path,
+            })),
           });
           return {
             changes:
@@ -248,7 +254,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
           await import("./state-migrations.transcript-directives.js");
         return await migrateHistoricalTranscriptDirectives({
           ...agentMigrationOptions,
-          preparedTargets,
+          preparedTargets: preparedRepairTargets,
         });
       }),
     );

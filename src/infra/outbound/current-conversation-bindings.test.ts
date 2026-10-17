@@ -7,11 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
@@ -212,7 +212,7 @@ describe("generic current-conversation bindings", () => {
   afterEach(async () => {
     vi.useRealTimers();
     testing.clearPersistedCurrentConversationBindingsForTests();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     if (previousStateDir == null) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -336,7 +336,7 @@ describe("generic current-conversation bindings", () => {
           opaque: { nested: true },
         });
 
-        closeOpenClawStateDatabaseForTest();
+        await closeStateDatabaseForTest();
         expect(resolveWorkspaceConversation("user:inserted")?.targetSessionKey).toBe(
           "agent:codex:acp:inserted-target",
         );

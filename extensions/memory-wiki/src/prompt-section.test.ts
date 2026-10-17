@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledDigestClaim,
@@ -137,7 +136,6 @@ async function seedCompiledDigest(params: {
   await writeMemoryWikiCompiledCache(
     params.config,
     snapshot,
-    resolveMemoryWikiCompiledCacheGeneration(snapshot),
     publicationId,
     parentPublicationId,
     async () => {},

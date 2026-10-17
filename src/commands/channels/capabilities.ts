@@ -68,7 +68,8 @@ async function runChannelCapabilitiesCheck<T>(params: {
   try {
     const result = await awaitWithinDeadline(
       async () => params.run(),
-      Date.now() + params.timeoutMs,
+      performance.now() + params.timeoutMs,
+      () => performance.now(),
     );
     return result === ABSOLUTE_DEADLINE_EXPIRED ? params.failure(undefined, true) : result;
   } catch (error) {

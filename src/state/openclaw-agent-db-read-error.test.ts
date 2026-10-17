@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
@@ -33,7 +33,7 @@ it.each([false, true])("records absent admission tables (fresh-only: %s)", async
     const options = { agentId: "main", env: state.env };
     const owner = openOpenClawAgentDatabase(options);
     owner.db.exec("DROP TABLE session_canonical_validation_pending;");
-    let readDb: DatabaseSync = owner.db;
+    let readDb: EngineConnection = owner.db;
     const nativeOpen = sqlite.openNodeSqliteDatabase;
     const open = vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
       const database = nativeOpen(...args);
@@ -45,7 +45,7 @@ it.each([false, true])("records absent admission tables (fresh-only: %s)", async
     const readOnly = freshOnly
       ? withFreshOpenClawAgentDatabaseReadOnly
       : withOpenClawAgentDatabaseReadOnly;
-    const operation = vi.fn(({ db }: { db: DatabaseSync }) =>
+    const operation = vi.fn(({ db }: { db: EngineConnection }) =>
       db.prepare("SELECT * FROM session_nodes").all(),
     );
     const read = () => readOnly(operation, options);

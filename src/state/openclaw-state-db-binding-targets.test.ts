@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { VERSION } from "../version.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
@@ -30,11 +30,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const migrationPaths = ["runtime open", "doctor repair"] as const;
 const pluginTarget = "plugin-binding:fixture:shared";
 
-function readBindings(database: DatabaseSync) {
+function readBindings(database: EngineConnection) {
   return database.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key").all();
 }
 
-function readMigrationSnapshot(database: DatabaseSync) {
+function readMigrationSnapshot(database: EngineConnection) {
   return {
     version: database.prepare("PRAGMA user_version").get(),
     metadata: database.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get(),

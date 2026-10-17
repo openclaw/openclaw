@@ -27,7 +27,7 @@ import {
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { upsertAuthProfileAsync } from "../agents/auth-profiles.js";
 import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -70,7 +70,14 @@ const WORKER = "SPAWN-FALLBACK-WORKER";
 const SUCCESS = "SPAWN-FALLBACK-SUCCESS";
 const INITIAL_SUCCESS = "SPAWN-INITIAL-SUCCESS";
 type Receipt = { status: string; runId: string; childSessionKey: string };
-type History = { messages: Array<{ role?: string; content?: unknown; stopReason?: string }> };
+type History = {
+  messages: Array<{
+    role?: string;
+    content?: unknown;
+    stopReason?: string;
+    openclawRunError?: { runId: string; summary: string };
+  }>;
+};
 type ProviderRequest = {
   model: string;
   input: Array<{ type?: string; role?: string; call_id?: string; output?: string }>;
@@ -368,7 +375,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             "utf8",
           );
           if (scenario.configuredProfile || scenario.model?.includes("@")) {
-            upsertAuthProfile({
+            await upsertAuthProfileAsync({
               agentDir,
               profileId: PROFILE,
               credential: {
@@ -434,7 +441,8 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           if (!spawn) {
             throw new Error("Parent did not receive the sessions_spawn result");
           }
-          let terminal = await wait(spawn.runId);
+          let settledRunId = spawn.runId;
+          let terminal = await wait(settledRunId);
           let requestOffset = 0;
           let historyOffset = 0;
           if (scenario.directAgent) {
@@ -485,7 +493,8 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             );
             expect(followup.status).toBe("accepted");
             expect(followup.runId).toBe(followupRunId);
-            terminal = await wait(followup.runId);
+            settledRunId = followup.runId;
+            terminal = await wait(settledRunId);
             await withTestTimeout(
               publishedIdle.promise,
               8_000,
@@ -543,7 +552,16 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           } else {
             expect(childRequests.every((request) => request.model === "primary")).toBe(true);
             expect(text).not.toContain(SUCCESS);
-            expect(replies).toContainEqual(expect.objectContaining({ stopReason: "error" }));
+            expect(
+              history.messages.filter(
+                (message) => message.openclawRunError?.runId === settledRunId,
+              ),
+            ).toEqual([
+              expect.objectContaining({
+                role: "custom",
+                openclawRunError: { runId: settledRunId, summary: expect.stringMatching(/\S/) },
+              }),
+            ]);
             expect(entry).toMatchObject({
               modelOverride: "primary",
               providerOverride: "proof-primary",

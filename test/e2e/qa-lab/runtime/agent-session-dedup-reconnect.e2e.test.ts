@@ -25,6 +25,9 @@ type AgentResult = {
     payloads?: Array<{ text?: string }>;
   };
 };
+type GatewayRequestTiming = Parameters<
+  NonNullable<ConstructorParameters<typeof GatewayClient>[0]["onRequestTiming"]>
+>[0];
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -48,6 +51,7 @@ afterEach(async () => {
 async function connectOperator(
   gateway: GatewayHandle,
   displayName: string,
+  onRequestTiming?: (timing: GatewayRequestTiming) => void,
 ): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
@@ -77,6 +81,7 @@ async function connectOperator(
       scopes: ["operator.admin", "operator.read", "operator.write"],
       deviceIdentity: null,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      onRequestTiming,
       onHelloOk: () => finish(),
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
@@ -120,13 +125,26 @@ describe("agent session deduplication across reconnect", () => {
     "replays one accepted run and one terminal transcript without a second provider call",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
+      const startedAt = performance.now();
       let stage = "start-provider";
-      onTestFailed(() => {
-        process.stderr.write(`Session dedup reconnect failed at stage=${stage}\n`);
-      });
       const provider = await startHeldResponsesProvider({
         modelRef: MODEL_REF,
         terminalText: TERMINAL_TEXT,
+      });
+      let gatewayLogs = () => "Gateway startup did not return a ready child.";
+      onTestFailed(() => {
+        process.stderr.write(
+          [
+            "Session dedup reconnect fixture failed",
+            JSON.stringify({
+              stage,
+              elapsedMs: Math.round(performance.now() - startedAt),
+              providerRequests: provider.requests.length,
+            }),
+            gatewayLogs().slice(-12_000),
+            "",
+          ].join("\n"),
+        );
       });
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
@@ -134,12 +152,6 @@ describe("agent session deduplication across reconnect", () => {
       stage = "start-gateway";
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         primaryModel: MODEL_REF,
@@ -152,22 +164,49 @@ describe("agent session deduplication across reconnect", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
-        onListening: () => {
-          stage = "gateway-ready";
+        onListening: ({ logs }) => {
+          gatewayLogs = logs;
+          stage = "gateway-listening";
         },
       });
+      gatewayLogs = gateway.logs;
+      stage = "gateway-ready";
       cleanups.push(async () => provider.release());
 
       stage = "connect-client-a";
-      const clientA = await connectOperator(gateway, "Session dedup client A");
-      cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
-      stage = "accept-original-run";
-      const acceptedA = await clientA.request<AgentResult>("agent", {
-        sessionKey: SESSION_KEY,
-        message: ORIGINAL_MESSAGE,
-        deliver: false,
-        idempotencyKey: IDEMPOTENCY_KEY,
+      let firstAgentSentAfterMs: number | undefined;
+      let firstAgentRequestTiming: GatewayRequestTiming | undefined;
+      const clientA = await connectOperator(gateway, "Session dedup client A", (timing) => {
+        if (timing.method === "agent") {
+          firstAgentRequestTiming = timing;
+        }
       });
+      cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
+      onTestFailed(() => {
+        process.stderr.write(
+          JSON.stringify({
+            firstAgentSentAfterMs,
+            firstAgentRequestTiming,
+            providerRequestCount: provider.requests.length,
+            clientConnected: clientA.connected,
+          }).slice(0, 2_000) + "\n",
+        );
+      });
+      stage = "accept-original-run";
+      const acceptedA = await clientA.request<AgentResult>(
+        "agent",
+        {
+          sessionKey: SESSION_KEY,
+          message: ORIGINAL_MESSAGE,
+          deliver: false,
+          idempotencyKey: IDEMPOTENCY_KEY,
+        },
+        {
+          onSent: () => {
+            firstAgentSentAfterMs = Math.round(performance.now() - startedAt);
+          },
+        },
+      );
       expect(acceptedA).toMatchObject({
         status: "accepted",
         runId: IDEMPOTENCY_KEY,

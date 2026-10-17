@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -14,7 +15,6 @@ import {
   parseUserGitHubConnection,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
-  resolvePersonalGitHubOwnerInDatabase,
   writeUserGitHubConnectionInDatabase,
 } from "./user-github-connections.kernel.js";
 import type {
@@ -30,7 +30,7 @@ import type {
   WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
-function listUserGitHubConnections(db: DatabaseSync): Array<{
+function listUserGitHubConnections(db: EngineConnection): Array<{
   owner: string;
   connection: UserGitHubConnection;
 }> {
@@ -61,6 +61,23 @@ function listUserGitHubConnections(db: DatabaseSync): Array<{
     }
   });
 }
+
+export const userGitHubConnectionReadOperations = {
+  "userGitHubConnections.read": ({ owner }: { owner: string }, db) => ({
+    type: "userGitHubConnections.read" as const,
+    connection: runSqliteReadSnapshotSync(db, () => readUserGitHubConnectionInDatabase(db, owner)),
+  }),
+  "userGitHubConnections.readCanonical": ({ profile }: { profile: string }, db) => ({
+    type: "userGitHubConnections.readCanonical" as const,
+    canonical: runSqliteReadSnapshotSync(db, () =>
+      readCanonicalUserGitHubConnectionInDatabase(db, profile),
+    ),
+  }),
+  "userGitHubConnections.list": (_input: undefined, db) => ({
+    type: "userGitHubConnections.list" as const,
+    connections: listUserGitHubConnections(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function requirePending(
   current: UserGitHubConnection | undefined,
@@ -188,12 +205,6 @@ function mutate<T>(
 }
 
 export const userGitHubConnectionOperations = {
-  "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
-    readUserGitHubConnectionInDatabase(open().db, owner),
-  "userGitHubConnections.resolveOwner": ({ profile }: { profile: string }, { open }) =>
-    resolvePersonalGitHubOwnerInDatabase(profile, open().db),
-  "userGitHubConnections.list": (_input: undefined, { open }) =>
-    listUserGitHubConnections(open().db),
   "userGitHubConnections.mutate": (
     input: { owner: string; mutation: UserGitHubConnectionMutation },
     context,

@@ -32,6 +32,30 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
+function createJwtWithExp(exp: number, marker?: string): string {
+  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
+    "base64url",
+  );
+  return `header.${payload}.signature`;
+}
+
+export function writeCodexAuth(codexHome: string, marker: string): void {
+  const authPath = path.join(codexHome, "auth.json");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
+        refresh_token: `refresh-${marker}-not-real`,
+      },
+    }),
+    "utf8",
+  );
+  const future = new Date(Date.now() + 2_000);
+  fs.utimesSync(authPath, future, future);
+}
+
 const waitTimeoutMs = 30_000;
 
 export function usePreparedCatalogWorkerFixtures(
@@ -39,6 +63,7 @@ export function usePreparedCatalogWorkerFixtures(
 ) {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
+  const workerObservers = new Set<(worker: Worker) => void>();
   const catalogSettlements = new Map<string, (operation: PromiseLike<unknown>) => void>();
   let restoreCatalogWorkerFactory: (() => void) | undefined;
   let restoreWorkerFactory: (() => void) | undefined;
@@ -63,6 +88,9 @@ export function usePreparedCatalogWorkerFixtures(
       // Compiler services also use Worker threads; this fixture owns only catalog computation.
       if (String(args[0]) === catalogWorkerUrl) {
         workers.add(worker);
+        for (const observe of workerObservers) {
+          observe(worker);
+        }
       }
       return worker;
     });
@@ -104,6 +132,7 @@ export function usePreparedCatalogWorkerFixtures(
         restoreWorkerFactory?.();
         restoreWorkerFactory = undefined;
         workers.clear();
+        workerObservers.clear();
         restoreCatalogWorkerFactory?.();
         restoreCatalogWorkerFactory = undefined;
         catalogSettlements.clear();
@@ -119,6 +148,26 @@ export function usePreparedCatalogWorkerFixtures(
   });
   return {
     readCatalogWorkers: (): readonly Worker[] => [...workers],
+    observeWorkers: (onWorker?: (worker: Worker) => void) => {
+      const spawned: Worker[] = [];
+      let peakWorkers = 0;
+      const recordWorker = (worker: Worker) => {
+        spawned.push(worker);
+        onWorker?.(worker);
+        peakWorkers = Math.max(
+          peakWorkers,
+          spawned.filter((entry) => entry.threadId !== -1).length,
+        );
+      };
+      return {
+        spawned,
+        get peakWorkers() {
+          return peakWorkers;
+        },
+        subscribe: () => workerObservers.add(recordWorker),
+        close: () => workerObservers.delete(recordWorker),
+      };
+    },
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
     observeCatalogEntry: (
       receipts: FixtureReceiptChannel,

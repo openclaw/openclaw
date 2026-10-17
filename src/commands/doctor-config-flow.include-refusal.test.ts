@@ -7,7 +7,7 @@ import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../infra/update-requester-authority.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -186,7 +186,9 @@ describe("doctor config persistence", () => {
           );
           await fs.writeFile(includePath, includeRaw);
           const rootRaw = await fs.readFile(configPath, "utf8");
-          expect(recordGatewayBootStart(process.env, 1_800_000_000_000)).toBeDefined();
+          expect(
+            (await beginGatewayBootLifecycle(process.env, 1_800_000_000_000)).id,
+          ).toBeDefined();
           await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           const transform = configModule.transformConfigFile;

@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
+import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
   runCap,
@@ -201,9 +202,9 @@ const mocks = vi.hoisted(() => ({
     entries: [],
   })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-  listWebSearchProviders: vi.fn<typeof import("../web-search/runtime.js").listWebSearchProviders>(
-    () => [],
-  ),
+  listWebSearchProvidersAsync: vi.fn<
+    typeof import("../web-search/runtime.js").listWebSearchProvidersAsync
+  >(async () => []),
   isWebSearchProviderConfigured: vi.fn<
     typeof import("../web-search/runtime.js").isWebSearchProviderConfigured
   >(() => false),
@@ -328,8 +329,12 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: mocks.completeWithPreparedSimpleCompletionModel,
 }));
 
+// mock-isolation: Capability routing uses fixture profiles, never operator credential discovery.
 vi.mock("../agents/auth-profiles.js", () => ({
   loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync: async (
+    ...args: Parameters<typeof mocks.loadAuthProfileStoreForRuntime>
+  ) => mocks.loadAuthProfileStoreForRuntime(...args),
   listProfilesForProvider: mocks.listProfilesForProvider,
 }));
 
@@ -432,8 +437,9 @@ vi.mock("../tts/provider-registry.js", () => ({
   ),
 }));
 
+// mock-isolation: Command routing uses fixture providers without the auth and plugin runtime graph.
 vi.mock("../web-search/runtime.js", () => ({
-  listWebSearchProviders: mocks.listWebSearchProviders,
+  listWebSearchProvidersAsync: mocks.listWebSearchProvidersAsync,
   isWebSearchProviderConfigured: mocks.isWebSearchProviderConfigured,
   runWebSearch: vi.fn(),
 }));
@@ -852,7 +858,7 @@ describe("capability cli", () => {
       const provider = { id: "openai", envVars: ["OPENAI_API_KEY"], requiresCredential: true };
       const search = await import("../web-search/runtime.js");
       const fetch = await import("../web-fetch/runtime.js");
-      vi.mocked(search.listWebSearchProviders).mockReturnValue(
+      vi.mocked(search.listWebSearchProvidersAsync).mockResolvedValue(
         scoped
           ? ([provider] as never)
           : [
@@ -1483,6 +1489,7 @@ describe("capability cli", () => {
         ? undefined
         : await outputFixture(".mp4", "previous-video");
       await generateVideo(...(fixture ? ["--output", fixture.outputBase] : []));
+      expect(firstVideoGenerationCall()?.durationSeconds).toBeUndefined();
       const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
       expect(fetchCalls[0]?.[0]).toBe(url);
       const output = firstJsonOutput();
@@ -1562,48 +1569,63 @@ describe("capability cli", () => {
     expect(runtimeErrorMessages().join("\n")).not.toContain("/private-video.mp4");
   });
 
-  it("passes video generation parameters through to runtime", async () => {
-    mocks.generateVideo.mockResolvedValue({
-      provider: "minimax",
-      model: "MiniMax-Hailuo-2.3",
-      attempts: [],
-      videos: [
-        {
-          buffer: Buffer.from("video-bytes"),
-          mimeType: "video/mp4",
-          fileName: "provider-name.mp4",
-        },
-      ],
-    });
+  it.each([
+    ["2.5", 2.5],
+    ["0.5", 0.5],
+    ["2e0", 2],
+  ] as const)(
+    "passes video duration %s and generation parameters through to runtime",
+    async (duration, expected) => {
+      mocks.generateVideo.mockResolvedValue({
+        provider: "minimax",
+        model: "MiniMax-Hailuo-2.3",
+        attempts: [],
+        ignoredOverrides: [
+          { key: "audio", value: true },
+          { key: "watermark", value: true },
+        ],
+        videos: [
+          {
+            buffer: Buffer.from("video-bytes"),
+            mimeType: "video/mp4",
+            fileName: "provider-name.mp4",
+          },
+        ],
+      });
 
-    await generateVideo(
-      "--model",
-      "minimax/MiniMax-Hailuo-2.3",
-      "--size",
-      "1280x768",
-      "--aspect-ratio",
-      "16:9",
-      "--resolution",
-      "768p",
-      "--duration",
-      "2.5",
-      "--audio",
-      "--watermark",
-      "--timeout-ms",
-      "300000",
-    );
+      await generateVideo(
+        "--model",
+        "minimax/MiniMax-Hailuo-2.3",
+        "--size",
+        "1280x768",
+        "--aspect-ratio",
+        "16:9",
+        "--resolution",
+        "768p",
+        "--duration",
+        duration,
+        "--audio",
+        "--watermark",
+        "--timeout-ms",
+        "300000",
+      );
 
-    const videoCall = firstVideoGenerationCall();
-    expect(videoCall?.prompt).toBe("friendly lobster");
-    expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
-    expect(videoCall?.size).toBe("1280x768");
-    expect(videoCall?.aspectRatio).toBe("16:9");
-    expect(videoCall?.resolution).toBe("768P");
-    expect(videoCall?.durationSeconds).toBe(2.5);
-    expect(videoCall?.audio).toBe(true);
-    expect(videoCall?.watermark).toBe(true);
-    expect(videoCall?.timeoutMs).toBe(300000);
-  });
+      const videoCall = firstVideoGenerationCall();
+      expect(videoCall?.prompt).toBe("friendly lobster");
+      expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
+      expect(videoCall?.size).toBe("1280x768");
+      expect(videoCall?.aspectRatio).toBe("16:9");
+      expect(videoCall?.resolution).toBe("768P");
+      expect(videoCall?.durationSeconds).toBe(expected);
+      expect(videoCall?.audio).toBe(true);
+      expect(videoCall?.watermark).toBe(true);
+      expect(videoCall?.timeoutMs).toBe(300000);
+      expect(firstJsonOutput()?.ignoredOverrides).toEqual([
+        { key: "audio", value: true },
+        { key: "watermark", value: true },
+      ]);
+    },
+  );
 
   it("fails video generate when a provider returns an undeliverable asset", async () => {
     mocks.generateVideo.mockResolvedValue({
@@ -1718,7 +1740,7 @@ describe("capability cli", () => {
       "capability",
       ["video", "generate", "--prompt", "clip", "--duration"],
       "   ",
-      "--duration must be a finite number",
+      "--duration must be a positive duration (1–9007199254740991s after rounding",
     ],
   ] as const)(
     "rejects blank numeric input before %s %j dispatch",
@@ -1732,6 +1754,19 @@ describe("capability cli", () => {
       expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
       expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
       expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
+    "rejects invalid video duration %s before dispatch",
+    async (duration) => {
+      await expect(generateVideo("--duration", duration)).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains(
+        "--duration must be a positive duration (1–9007199254740991s after rounding; e.g. 1, 2.5, 10).",
+      );
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
       expect(mocks.generateVideo).not.toHaveBeenCalled();
     },
   );
@@ -1786,12 +1821,16 @@ describe("capability cli", () => {
       },
     },
     {
-      name: "channel direct provider",
-      config: { channels: { discord: { tts: { openai: { speakerVoice: "nova" } } } } },
+      name: "channel provider",
+      config: {
+        channels: { discord: { tts: { providers: { openai: { speakerVoice: "nova" } } } } },
+      },
       args: ["--channel", "discord"],
       expected: {
         channels: {
-          discord: { tts: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
+          discord: {
+            tts: { providers: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
+          },
         },
       },
     },
@@ -1831,8 +1870,8 @@ describe("capability cli", () => {
       resolved: { providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } } },
     },
     {
-      name: "direct provider",
-      config: { tts: { openai: { apiKey: "config-key" } } },
+      name: "provider map",
+      config: { tts: { providers: { openai: { apiKey: "config-key" } } } },
       args: ["--model", "openai/gpt-4o-mini-tts"],
       resolved: { providerConfigs: {} },
     },
@@ -1935,72 +1974,13 @@ describe("capability cli", () => {
     }
   });
 
-  it("creates embeddings with explicit provider selection", async () => {
-    await runCapability(
-      "embedding",
-      "create",
-      "--text",
-      "hello",
-      "--text",
-      "world",
-      "--model",
-      "openai/text-embedding-3-large",
-      "--json",
-    );
-    expect(firstEmbeddingProviderCall()).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-large",
-      fallback: "none",
-    });
-    expect(firstJsonOutput()).toMatchObject({
-      capability: "embedding.create",
-      provider: "openai",
-      model: "text-embedding-3-small",
-      outputs: [
-        { text: "hello", embedding: [0.1, 0.2] },
-        { text: "world", embedding: [0.1, 0.2] },
-      ],
-    });
-    expect(mocks.embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
-    mocks.embedBatch.mockResolvedValueOnce([
-      [0.1, -0.2],
-      Array.from({ length: 1536 }, (_, index) => index + 1),
-      [],
-    ]);
-
-    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--text", "");
-
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      [
-        "embedding.create via local",
-        "provider: openai",
-        "model: text-embedding-3-small",
-        "outputs: 3",
-        "hello",
-        "dimensions: 2",
-        "embedding: [0.1, -0.2]",
-        "world",
-        "dimensions: 1536",
-        "embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]",
-        "",
-        "dimensions: 0",
-        "embedding: []",
-      ].join("\n"),
-    );
-  });
-
-  it("retries embedding cleanup without masking the primary failure", async () => {
-    closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
-    mocks.embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
-    await expect(runCapability("embedding", "create", "--text", "hello", "--json")).rejects.toThrow(
-      "exit 1",
-    );
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
-    expectRuntimeErrorContains("embedding failed");
+  registerEmbeddingCapabilityCliTests({
+    embedBatch: mocks.embedBatch,
+    closeProvider: closeEmbeddingProviderMock,
+    providerCall: firstEmbeddingProviderCall,
+    jsonOutput: firstJsonOutput,
+    log: mocks.runtime.log,
+    expectError: expectRuntimeErrorContains,
   });
 
   it.each(["populated", "lock-failed"])(

@@ -1,5 +1,11 @@
+import os from "node:os";
+import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tryReadJson } from "../../infra/json-files.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
+import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js";
@@ -7,6 +13,10 @@ import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../../state/openclaw-schema-versions.js";
 import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
@@ -183,4 +193,136 @@ export async function assertUpdateCandidateExecutor(params: {
       "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
     );
   }
+}
+
+/** Staged package metadata owns database support; Git retains its inspected revision facts. */
+export async function admitUpdateCandidateDatabaseMetadata(
+  root: string,
+  installKind: "package" | "git",
+  contexts: readonly { config: OpenClawConfig; env: NodeJS.ProcessEnv }[],
+  previousVersions?: OpenClawSchemaVersions,
+): Promise<OpenClawSchemaVersions | undefined> {
+  if (installKind === "git") {
+    return previousVersions;
+  }
+  const manifest = await tryReadJson<unknown>(path.join(root, "package.json"));
+  const declaration = asNullableRecord(asNullableRecord(manifest)?.openclaw);
+  await assertUpdateDatabaseEngineContexts(
+    contexts,
+    declaration?.databaseEngines,
+    declaration?.postgresFamilies,
+  );
+  return parsePackageOpenClawSchemaVersions(manifest) ?? previousVersions;
+}
+
+/** Candidate proof belongs to the selected source contexts and precedes mutable preparation. */
+export function createUpdateDatabaseFamilyAdmission(
+  execution: Pick<
+    MutableUpdateExecutionParams,
+    | "root"
+    | "updateInstallKind"
+    | "packageUpdateNodeRunner"
+    | "updateStepTimeoutMs"
+    | "channel"
+    | "tag"
+    | "packageInstallSpec"
+    | "packageInstallTarget"
+    | "opts"
+    | "shouldRestart"
+  >,
+) {
+  type Context = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
+  let pending: readonly Context[] = [];
+  let admitted = true;
+  return {
+    selectContexts(contexts: readonly Context[], checks?: readonly string[]) {
+      pending = contexts.filter(
+        ({ config, env }) =>
+          config.database?.families &&
+          !(checks?.includes("database-families") && isCandidateAdmissionContextCovered(env)),
+      );
+      admitted = pending.length === 0;
+      return !admitted;
+    },
+    async validate(candidateRoot: string) {
+      if (!pending.length) {
+        return;
+      }
+      const { runUpdateCandidateAdmission } =
+        await import("../../infra/update-candidate-admission.js");
+      const { resolveUpdateInstallRoot } = await import("../../infra/update-install-root.js");
+      const { readPackageVersion } = await import("../../infra/package-json.js");
+      const { VERSION } = await import("../../version.js");
+      const { detectPackageManager } = await import("../../infra/detect-package-manager.js");
+      const packageManager =
+        execution.packageInstallTarget?.manager ?? (await detectPackageManager(candidateRoot));
+      if (!packageManager) {
+        throw new UpdatePreMutationError(
+          "database-engine-preflight",
+          "Cannot determine the candidate package manager for family admission.",
+        );
+      }
+      const [installedVersion, candidateVersion] = await Promise.all([
+        readPackageVersion(execution.root),
+        readPackageVersion(candidateRoot),
+      ]);
+      for (const { env } of pending) {
+        const result = await runUpdateCandidateAdmission({
+          candidateRoot,
+          nodeRunner: execution.packageUpdateNodeRunner,
+          timeoutMs: execution.updateStepTimeoutMs,
+          env,
+          context: {
+            protocol: 1,
+            installation: {
+              root: execution.root,
+              canonicalRoot: resolveUpdateInstallRoot(execution.root),
+              version: installedVersion,
+              installKind: execution.updateInstallKind,
+              packageManager,
+            },
+            target: {
+              spec: execution.packageInstallSpec ?? execution.tag,
+              version: candidateVersion,
+              source: "artifact",
+              channel: execution.channel,
+              tag: execution.tag,
+            },
+            request: {
+              yes: Boolean(execution.opts.yes),
+              noRestart: !execution.shouldRestart,
+              acceptCapabilities: Boolean(execution.opts.acceptCapabilities),
+              json: Boolean(execution.opts.json),
+              timeoutMs: execution.updateStepTimeoutMs,
+            },
+            run: { id: execution.opts.run?.runId ?? "database-family-admission" },
+            supervisor: { version: VERSION, host: os.hostname(), pid: process.pid },
+          },
+        });
+        if (
+          result.verdict?.verdict !== "admit" ||
+          !result.verdict.facts.checks.some(
+            (check) => check.name === "database-families" && check.status === "ok",
+          )
+        ) {
+          throw new UpdatePreMutationError(
+            "database-engine-preflight",
+            "Update refused: the candidate did not prove support for database.families and the selected PostgreSQL families. Stay on the current version or choose a family-aware candidate. " +
+              (result.verdict?.reasons[0]?.message ??
+                result.warning?.message ??
+                "The candidate omitted its database-families admission check."),
+          );
+        }
+      }
+      admitted = true;
+    },
+    assertAdmitted() {
+      if (!admitted) {
+        throw new UpdatePreMutationError(
+          "database-engine-preflight",
+          "Update refused: the candidate has not proved support for database.families before mutation.",
+        );
+      }
+    },
+  };
 }

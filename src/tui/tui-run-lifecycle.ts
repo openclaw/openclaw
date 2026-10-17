@@ -19,6 +19,8 @@ import type {
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const LOCAL_MODEL_CANCELLATION_NOTICE =
+  "Cancellation requested; the local model may still be finishing.";
 const STREAMING_WATCHDOG_USER_MESSAGE =
   "This response is taking longer than expected. Still waiting for the current run.";
 
@@ -72,6 +74,15 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   let reconnectPendingRunId: string | null = null;
   let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let streamingWatchdogRunId: string | null = null;
+  let cancellationNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearCancellationNotice = () => {
+    clearTimeout(cancellationNoticeTimer);
+    cancellationNoticeTimer = undefined;
+    if (state.activityStatus === LOCAL_MODEL_CANCELLATION_NOTICE) {
+      setActivityStatus("idle");
+    }
+  };
 
   const flushPendingHistoryRefreshIfIdle = () => {
     if (state.activeChatRunId || hasPendingSubmit(state)) {
@@ -105,9 +116,11 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     pendingTerminalLifecycleErrors.clear();
     btw.clear();
     clearStreamingWatchdog();
+    clearCancellationNotice();
   };
 
   const armStreamingWatchdog = (runId: string) => {
+    clearCancellationNotice();
     if (streamingWatchdogMs <= 0) {
       return;
     }
@@ -140,6 +153,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
+    clearCancellationNotice();
     if (!state.activeChatRunId && !hasPendingSubmit(state)) {
       clearTrackedRunState();
     }
@@ -230,7 +244,8 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       reconnectPendingRunId = null;
     }
     state.activeChatRunId = null;
-    if (!hasPendingSubmit(state)) {
+    // Idle confirms cancellation settled; the terminal notice owns its brief expiry.
+    if (!hasPendingSubmit(state) && state.activityStatus !== LOCAL_MODEL_CANCELLATION_NOTICE) {
       state.activityStatus = "idle";
     }
     setActivityStatus(state.activityStatus);
@@ -272,7 +287,12 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const settleRunActivity = (
-    params: { runId: string; wasActiveRun: boolean; status: "idle" | "aborted" | "error" },
+    params: {
+      runId: string;
+      wasActiveRun: boolean;
+      status: "idle" | "aborted" | "error";
+      localModelMayStillBeFinishing?: boolean;
+    },
     reconcileIdle: boolean,
   ) => {
     if (state.activeChatRunId === params.runId) {
@@ -282,8 +302,26 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     flushPendingHistoryRefreshIfIdle();
     if (!promotedRemainingRun) {
       if (params.wasActiveRun) {
+        clearCancellationNotice();
         setActivityStatus(params.status);
         clearStreamingWatchdog();
+        if (params.localModelMayStillBeFinishing && !hasPendingSubmit(state)) {
+          const noticeSessionKey = state.currentSessionKey;
+          setActivityStatus(LOCAL_MODEL_CANCELLATION_NOTICE);
+          cancellationNoticeTimer = setTimeout(() => {
+            cancellationNoticeTimer = undefined;
+            if (
+              state.currentSessionKey === noticeSessionKey &&
+              !state.activeChatRunId &&
+              !hasPendingSubmit(state) &&
+              state.activityStatus === LOCAL_MODEL_CANCELLATION_NOTICE
+            ) {
+              setActivityStatus("aborted");
+              tui.requestRender();
+            }
+          }, 5_000);
+          cancellationNoticeTimer.unref?.();
+        }
       } else {
         if (streamingWatchdogRunId === params.runId) {
           clearStreamingWatchdog();
@@ -301,15 +339,17 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     wasActiveRun: boolean;
     status: "idle" | "error";
     displayedFinal?: boolean;
+    reconcileIdle?: boolean;
   }) => {
     runCoordinator.noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
-    settleRunActivity(params, true);
+    settleRunActivity(params, params.reconcileIdle !== false);
   };
 
   const terminateRun = (params: {
     runId: string;
     wasActiveRun: boolean;
     status: "aborted" | "error";
+    localModelMayStillBeFinishing?: boolean;
   }) => {
     runCoordinator.noteCompletedRun(params.runId);
     runCoordinator.dropSessionRun(params.runId);

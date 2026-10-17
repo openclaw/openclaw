@@ -189,3 +189,57 @@ it("refuses a host grant whose policy preparation crosses the deadline", () => {
     admission.finish();
   }
 });
+
+it("grants a deadline admission while the host thread runs fake timers ahead of the worker clock", () => {
+  // Fake hrtime starts at zero; run it past the real clock the worker used for its deadline.
+  const aheadOfRealClockMs = Number(process.hrtime.bigint() / 1_000_000n) + 60_000;
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(aheadOfRealClockMs);
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      requestSqliteWorkerOperationAdmission({
+        stage: "commit",
+        facts: undefined,
+        deadlineMs: 1_000,
+      }),
+    );
+    expect(admit).toHaveBeenCalledOnce();
+    expect(admission.failure).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    admission.finish();
+  }
+});
+
+it("grants a deadline admission when the host thread clock origin is ahead of the worker's", () => {
+  // Bun starts process.hrtime at zero per thread; a worker spawned after Gateway
+  // startup reads a clock far behind the host that services its admission.
+  let now = process.hrtime.bigint();
+  vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    now += 60_000_000_000n;
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      requestSqliteWorkerOperationAdmission({
+        stage: "transaction",
+        facts: undefined,
+        deadlineMs: 1_000,
+      }),
+    );
+    expect(admit).toHaveBeenCalledOnce();
+    expect(admission.failure).toBeUndefined();
+  } finally {
+    admission.finish();
+  }
+});

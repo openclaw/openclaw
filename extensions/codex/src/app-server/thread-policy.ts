@@ -22,9 +22,9 @@ import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js
 
 /** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
 export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
-  constructor() {
+  constructor(policy = "generic instructions") {
     super(
-      "Codex cannot change generic instructions in a live incognito conversation. No turn was sent and the conversation is preserved. Restore the previous instructions to continue it, or start a new incognito conversation for the changed policy.",
+      `Codex cannot change ${policy} in a live incognito conversation. No turn was sent and the conversation is preserved. Restore the previous settings to continue it, or start a new incognito conversation for the changed policy.`,
     );
     this.name = "CodexIncognitoPolicyChangeError";
   }

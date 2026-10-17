@@ -1,14 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import type { messagingApi } from "@line/bot-sdk";
 import {
   adaptMessagePresentationForChannel,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
+import { createImageCard } from "./flex-templates/basic-cards.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { LINE_PRESENTATION_CAPABILITIES, prepareLineReplyPayload } from "./rich-messages.js";
@@ -20,6 +23,9 @@ type WireMessage = {
   type: string;
   text?: string;
   altText?: string;
+  template?: messagingApi.Template;
+  actions?: messagingApi.ImagemapAction[];
+  video?: messagingApi.ImagemapVideo;
   quickReply?: { items: Array<{ action: { label: string; text?: string; data?: string } }> };
 };
 
@@ -55,6 +61,7 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
 async function listenLoopback(
   requestHandler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
 ): Promise<{ server: Server; port: number; close: () => Promise<void> }> {
+  const claim = await acquireTestPortBlock({ offsets: [0] });
   const server = createServer((request, response) => {
     void requestHandler(request, response).catch((error: unknown) => {
       response.writeHead(500, { "content-type": "text/plain" });
@@ -69,7 +76,7 @@ async function listenLoopback(
   server.on("clientError", (_err, socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(claim.port, "127.0.0.1", () => {
       server.off("error", reject);
       resolve();
     });
@@ -88,6 +95,7 @@ async function listenLoopback(
           socket.destroy();
         }
       });
+      await claim.release();
     },
   };
 }
@@ -252,6 +260,128 @@ describe("Row-overflow table delivery through production outbound adapter over l
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
   });
+
+  it.each(["push", "reply"] as const)(
+    "normalizes action contracts before %s HTTP delivery",
+    async (operation) => {
+      const link = {
+        type: "uri",
+        uri: "https://example.com",
+        altUri: { desktop: "ftp://example.com" },
+      } as const;
+      const postback = {
+        type: "postback",
+        label: "Run",
+        data: "",
+        text: "Legacy",
+        displayText: "Modern",
+        fillInText: "x".repeat(301),
+      } as const;
+      const messages: messagingApi.Message[] = [
+        {
+          type: "text",
+          text: "Choose",
+          quickReply: {
+            items: [
+              { action: { type: "message", label: "Missing text" } },
+              { action: { type: "message", label: "", text: "blank" } },
+              ...Array.from({ length: 14 }, (_, i) => ({
+                action: { type: "message" as const, label: String(i), text: String(i) },
+                imageUrl: "http://example.com/icon.png",
+              })),
+            ],
+          },
+        },
+        { type: "text", text: "No buttons", quickReply: { items: [] } },
+        {
+          type: "flex",
+          altText: "Image",
+          contents: createImageCard("https://example.com/image.png", "Image"),
+        },
+        {
+          type: "template",
+          altText: "Menu",
+          template: {
+            type: "buttons",
+            text: "Choose",
+            defaultAction: link,
+            actions: [
+              { type: "camera", label: "Camera" },
+              postback,
+              {
+                type: "datetimepicker",
+                label: "Date",
+                data: "date",
+                mode: "datetime",
+                initial: "2026-02-30T12:00",
+                min: "2026-06-01T10:00",
+                max: "2026-06-01t09:00",
+              },
+              { type: "clipboard", label: "Copy", clipboardText: "" },
+            ],
+          },
+        },
+        {
+          type: "imagemap",
+          baseUrl: "https://example.com/map",
+          altText: "Map",
+          baseSize: { width: 1040, height: 1040 },
+          actions: [
+            {
+              type: "uri",
+              linkUri: "ftp://example.com",
+              area: { x: 0, y: 0, width: 100, height: 100 },
+            },
+          ],
+          video: {
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.png",
+            area: { x: 0, y: 0, width: 100, height: 100 },
+            externalLink: { linkUri: "https://example.com", label: "" },
+          },
+        },
+      ];
+      if (operation === "push") {
+        await pushMessagesLine("U123", messages, { cfg: LINE_TEST_CFG });
+      } else {
+        await replyMessageLine("reply-token", messages, { cfg: LINE_TEST_CFG });
+      }
+      expect(requests).toHaveLength(1);
+      const request = requests[0]!;
+      expect(request.authorization).toBe("Bearer line-loopback-proof-token");
+      expect(request.path).toBe("/v2/bot/message/" + operation);
+      const [quick, empty, image, menu, map] = request.body.messages;
+      expect(quick?.quickReply?.items).toEqual(
+        Array.from({ length: 13 }, (_, i) => ({
+          type: "action",
+          action: { type: "message", label: String(i), text: String(i) },
+        })),
+      );
+      expect(empty).not.toHaveProperty("quickReply");
+      expect(image).toEqual({
+        type: "flex",
+        altText: "Image",
+        contents: createImageCard("https://example.com/image.png", "Image"),
+      });
+      if (
+        menu?.type !== "template" ||
+        menu.template?.type !== "buttons" ||
+        map?.type !== "imagemap"
+      ) {
+        throw new Error("Expected menu and map");
+      }
+      expect(menu.template).not.toHaveProperty("defaultAction");
+      expect(menu.template.actions).toEqual([
+        { type: "message", label: "Unavailable", text: expect.stringContaining("quick replies") },
+        { type: "postback", label: "Run", data: "", displayText: "Modern" },
+        { type: "datetimepicker", label: "Date", data: "date", mode: "datetime" },
+        { type: "message", label: "Unavailable", text: expect.stringContaining("clipboard") },
+      ]);
+      expect(map.actions).toHaveLength(2);
+      expect(map.actions?.every((action) => action.type === "message")).toBe(true);
+      expect(map.video).not.toHaveProperty("externalLink");
+    },
+  );
 
   it.each([
     { delivery: "reply", card: false },

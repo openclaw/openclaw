@@ -657,7 +657,7 @@ export async function mutateSubagentRunForKill(
         if (!killOwnerCurrent()) {
           return { killed: false, superseded: true };
         }
-        const cleared = runtime.clearSessionLifecycleQueues({
+        runtime.clearSessionLifecycleQueues({
           keys: [childSessionKey, sessionId],
           agentId: resolved.agentId,
           sessionKey: childSessionKey,
@@ -670,11 +670,6 @@ export async function mutateSubagentRunForKill(
             }
           },
         });
-        if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-          logVerbose(
-            `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-          );
-        }
         if (active && !stopAcceptance.accepted) {
           return stillActive();
         }

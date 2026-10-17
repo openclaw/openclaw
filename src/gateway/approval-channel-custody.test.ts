@@ -1,5 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import type { SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareApprovalChannelCustody } from "./approval-channel-custody.js";
 
 const mocks = vi.hoisted(() => ({
@@ -111,6 +116,72 @@ describe("prepareApprovalChannelCustody", () => {
           accountId,
         ).toBe(authorized);
       }
+    }
+  });
+
+  it("invalidates unbound incognito custody after the memory delivery account changes", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-custody";
+    const sessionId = "incognito-custody";
+    const location = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: "/synthetic/approval-channel-custody" },
+      }),
+    };
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const authority = { assertCurrent() {}, authorize() {} };
+    const delivery = (accountId: string): SessionDeliveryState => ({
+      kind: "external",
+      route: { channel: "telegram", accountId },
+      context: { channel: "telegram", accountId },
+      origin: { provider: "telegram", accountId },
+    });
+    const custody = prepareApprovalChannelCustody({
+      cfg: { session: { store: location.path } },
+      approvalKind: "exec",
+      reviewer: reviewer("ops"),
+    });
+    const pending = {
+      ...request({ command: "printf approval" }),
+      request: { command: "printf approval", sessionKey },
+    };
+    try {
+      const storage = expectDefined(actor.storage, "memory actor storage");
+      readSessionActorStorageResult(
+        await storage.mutate(
+          {
+            type: "session.metadata.initialize",
+            input: {
+              scope: { agentId: "main", storePath: location.path, sessionKey, sessionId },
+              entry: { sessionId, updatedAt: 1, incognito: true, delivery: delivery("ops") },
+            },
+          },
+          authority,
+        ),
+      );
+      expect(await custody?.authorizes(pending)).toBe(true);
+      expect(custody?.isCurrent(pending)).toBe(true);
+
+      readSessionActorStorageResult(
+        await storage.mutate(
+          {
+            type: "session.entry.patch",
+            input: { operation: { kind: "fields", patch: { delivery: delivery("default") } } },
+          },
+          authority,
+        ),
+      );
+      expect(custody?.isCurrent(pending)).toBe(false);
+      expect(await custody?.authorizes(pending)).toBe(false);
+    } finally {
+      custody?.[Symbol.dispose]();
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
     }
   });
 

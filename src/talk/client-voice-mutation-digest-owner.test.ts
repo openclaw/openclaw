@@ -75,7 +75,6 @@ describe("client voice mutation digest owner", () => {
       active: 2,
       pending: 62,
       retained: 64,
-      retainedIdentityBytes: 311,
     });
 
     let resolved = 0;
@@ -93,7 +92,6 @@ describe("client voice mutation digest owner", () => {
       active: 0,
       pending: 0,
       retained: 0,
-      retainedIdentityBytes: 0,
     });
     expect(attempts.map((attempt) => attempt.id)).toEqual(
       Array.from({ length: 64 }, (_, index) => `v${index + 1}`),
@@ -244,29 +242,6 @@ describe("client voice mutation digest owner", () => {
       }
       owner.clear();
     }
-  });
-
-  it("rejects an oversized identity atomically", async () => {
-    const warn = vi.fn();
-    const attempt = vi.fn(async () => true);
-    const owner = new ClientVoiceMutationDigestOwner<number>({
-      warn,
-      attempt,
-    });
-
-    owner.record({ agentId: "agent", voiceSessionId: "v".repeat(65_536), context: 1 });
-    await flushMicrotasks();
-
-    expect(owner.snapshot()).toEqual({
-      active: 0,
-      pending: 0,
-      retained: 0,
-      retainedIdentityBytes: 0,
-    });
-    expect(attempt).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "voice mutation digest identity exceeds the retry owner byte limit",
-    );
   });
 
   it("releases queued acceptance on reset but joins active attempts until they settle", async () => {

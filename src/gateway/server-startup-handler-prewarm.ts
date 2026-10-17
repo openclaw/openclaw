@@ -102,7 +102,10 @@ export function scheduleGatewayHandlerPrewarm(params: {
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= items.length) {
+    if (stopped) {
+      return;
+    }
+    if (nextIndex >= items.length) {
       return;
     }
     void (async () => {

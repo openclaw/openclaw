@@ -534,6 +534,13 @@ suite.define(() => {
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             releaseProvider.resolve();
             const settled = await racePromiseWithAbortSignal(changedDelivery.promise, signal);
+            // PR delivery does not reconcile the pane after the fixture's direct database write.
+            await evaluateControlUiContext(page, async (context) => {
+              await context.sessions.refresh({ agentId: "main", force: true });
+            });
+            await expect
+              .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
+              .toBe(replacement.root);
             // A new session incarnation resets the pane-local Details presentation.
             await openDetailsPullRequests(pane);
             await chip
@@ -572,6 +579,13 @@ suite.define(() => {
                 branch: replacement.branch,
                 additions: replacement.additions,
               });
+              // A later roster read must not dismiss Details for the already adopted incarnation.
+              await evaluateControlUiContext(page, async (context) => {
+                await context.sessions.refresh({ agentId: "main", force: true });
+              });
+              await expect
+                .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
+                .toBe(replacement.root);
               await chip.locator(".chat-pr__number").filter({ hasText: "#203" }).waitFor();
               await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
                 sessionKeys: [sessionKey],

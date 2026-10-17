@@ -16,7 +16,7 @@ type TestCustodianPage = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-function createContext(request: ReturnType<typeof vi.fn>) {
+function createContext(request: Parameters<typeof createCustodianContext>[0]) {
   const calls: string[] = [];
   const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
   const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
@@ -81,7 +81,7 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
-  it("does not misreport limited access as an outdated Gateway", async () => {
+  it("explains the missing capability and scope before sending an agent creation request", async () => {
     const request = vi.fn();
     const { context } = createContext(request);
     context.gateway.snapshot.hello = {
@@ -93,7 +93,12 @@ describe("custodian new-agent flow", () => {
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector('[role="alert"]')).toBeNull();
+    const error = page.querySelector('[role="alert"]')?.textContent;
+    expect(error).toContain("openclaw.chat");
+    expect(error).toContain("operator.admin");
+    expect(error).toContain("Pair");
+    expect(error).toContain("reconnect");
+    expect(error).not.toContain("Update the Gateway");
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

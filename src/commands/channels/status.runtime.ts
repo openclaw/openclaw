@@ -10,14 +10,14 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { prepareCliGatewayStateAccess } from "../../cli/gateway-rpc.runtime.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { requireValidConfig } from "../config-validation.js";
+import { requireValidConfigFileSnapshot } from "../config-validation.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -202,10 +202,12 @@ export async function renderChannelsStatusFallback(params: {
         `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
     );
   }
-  const cfg = await requireValidConfig(runtime, { observe: false });
-  if (!cfg) {
+  await prepareCliGatewayStateAccess();
+  const snapshot = await requireValidConfigFileSnapshot(runtime, { observe: false });
+  if (!snapshot) {
     return;
   }
+  const cfg = snapshot.config;
   const { resolvedConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: "channels status",
@@ -213,7 +215,6 @@ export async function renderChannelsStatusFallback(params: {
     mode: "read_only_status",
     runtime,
   });
-  const snapshot = await readConfigFileSnapshot({ observe: false });
   const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
   const requestedChannel = opts.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))

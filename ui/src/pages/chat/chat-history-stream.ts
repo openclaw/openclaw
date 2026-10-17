@@ -8,7 +8,11 @@ import {
 } from "../../lib/chat/message-visibility.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { isChatRunStartupPhase, reconcileChatRunStartup } from "./chat-run-startup.ts";
+import {
+  isChatRunStartupPhase,
+  isChatRunRecoveryStatus,
+  reconcileChatRunStartup,
+} from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
@@ -183,6 +187,7 @@ export function applyHistoryRun(params: {
             : sessionInfo.status === "timeout"
               ? "timeout"
               : "error",
+        suppressErrorNotice: sessionInfo.suppressErrorNotice,
         errorMessage:
           sessionInfo.status === "failed" || sessionInfo.status === "timeout"
             ? (failureMessage ?? sessionInfo.lastRunError)
@@ -270,7 +275,8 @@ export function applyHistoryRun(params: {
   const startupPhase = startup?.data.phase;
   if (
     run.text &&
-    !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+    startupPhase !== "waiting_for_model" &&
+    !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
   } else if (startup && isChatRunStartupPhase(startupPhase)) {
@@ -278,6 +284,9 @@ export function applyHistoryRun(params: {
       state: "status",
       runId: inFlightRunId,
       phase: startupPhase,
+      ...(startupPhase === "waiting_for_model"
+        ? { waitReason: startup.data.reason === "slot" ? ("slot" as const) : ("response" as const) }
+        : {}),
       seq: startup.seq,
     });
   }

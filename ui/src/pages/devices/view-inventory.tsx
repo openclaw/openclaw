@@ -64,13 +64,16 @@ function inventorySummary(
 }
 
 export function DeviceInventory(props: DevicesProps) {
-  const pending = () => props.devicesList?.pending ?? [];
-  const paired = () => props.devicesList?.paired ?? [];
+  // Inventory reads replace their snapshots; config and approval drafts publish independently.
+  const pending = createMemo(() => props.devicesList?.pending ?? []);
+  const paired = createMemo(() => props.devicesList?.paired ?? []);
+  const nodes = createMemo(() => props.nodes);
+  const presenceSnapshot = createMemo(() => props.presence);
   const groups = createMemo(() =>
-    buildDeviceInventory({ paired: paired(), nodes: props.nodes, presence: props.presence }),
+    buildDeviceInventory({ paired: paired(), nodes: nodes(), presence: presenceSnapshot() }),
   );
-  const gatewayPresence = createMemo(() => findGatewayPresence(props.presence));
-  const unpairedPresence = createMemo(() => listUnpairedPresence(props.presence, groups()));
+  const gatewayPresence = createMemo(() => findGatewayPresence(presenceSnapshot()));
+  const unpairedPresence = createMemo(() => listUnpairedPresence(presenceSnapshot(), groups()));
   const stale = createMemo(() => listStaleInventoryEntries(groups()));
   const loading = createMemo(() => props.loading || props.devicesLoading);
   const actions = (

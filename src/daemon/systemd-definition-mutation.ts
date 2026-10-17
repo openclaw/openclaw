@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants, promises as fs, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { resolveStateDir } from "../config/paths.js";
@@ -39,7 +40,7 @@ import {
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
 import { splitSystemdLogicalLines } from "./systemd-unit.js";
 
-type Snapshot = { contents: Buffer; mode: number } | null;
+type Snapshot = { contents: Buffer; mode: number; requiresRegeneration?: boolean } | null;
 type SystemdDefinitionMutation = {
   snapshots: Map<string, Snapshot>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
@@ -96,7 +97,7 @@ async function readStableFile(
         return { sealed: true };
       }
     }
-    return { contents: await handle.readFile() };
+    return { contents: await readFileHandleBounded(handle, Infinity) };
   } finally {
     await handle.close();
   }
@@ -181,7 +182,12 @@ async function inspect(
       if (directory && !actual.isDirectory()) {
         return result({ kind: "unknown", reason: "invalid-artifact", artifact });
       }
-      if (actual.mode & 0o022n) {
+      // Older installers inherited umask for the unit and copied its mode to .bak.
+      // Safe parent authority lets the installer replace these owned regular files;
+      // loaded overrides and generated environment files are not legacy unit outputs.
+      const repairableGeneratedFile = actual.isFile() && (file === unit || file === `${unit}.bak`);
+      const requiresRegeneration = Boolean(actual.mode & 0o022n);
+      if (requiresRegeneration && !repairableGeneratedFile) {
         return result({ kind: "unknown", reason: "unsafe-permissions", artifact });
       }
       if (directory) {
@@ -196,7 +202,11 @@ async function inspect(
       const { contents } = snapshot;
       fingerprint.set(file, identity(stat, contents));
       if (targets.has(file)) {
-        snapshots.set(file, { contents, mode: Number(stat.mode & 0o777n) });
+        snapshots.set(file, {
+          contents,
+          mode: Number(stat.mode & 0o777n),
+          ...(requiresRegeneration ? { requiresRegeneration: true } : {}),
+        });
       }
     }
     return result({ kind: "writable" });

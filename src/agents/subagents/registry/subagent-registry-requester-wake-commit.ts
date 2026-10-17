@@ -5,7 +5,6 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-log.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
@@ -57,7 +56,7 @@ function clearPendingWakeCommit(
     context.options.warn("requester settle wake commit recovered", {
       failures: pending.failures,
       suppressedFailureLogs: suppressed,
-      runIds: pending.entries.map((entry) => maskLifecycleIdentifier(entry.runId, "run")),
+      runIds: pending.entries.map((entry) => entry.runId),
     });
   }
 }
@@ -163,7 +162,6 @@ export function commitRequesterInitialTransfer(
     const result = await mutateSubagentRuns(
       pending.entries.map((entry) => entry.runId),
       (rows) => {
-        params.validateSelection?.();
         const drafts = pending.entries.map((entry) => {
           const current = rows.get(entry.runId);
           if (!current || !isSameSubagentRunOwner(current, entry)) {
@@ -250,7 +248,7 @@ function deferWakeCommit(
       failures: pending.failures,
       retryIntervalMs: REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS,
       suppressingIdenticalFailures: true,
-      runIds: pending.entries.map((entry) => maskLifecycleIdentifier(entry.runId, "run")),
+      runIds: pending.entries.map((entry) => entry.runId),
     });
   }
   // Always a future deadline. The lifecycle owner arms its retry timer from

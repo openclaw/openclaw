@@ -137,7 +137,7 @@ An isolated agent-turn job created from a conversation also captures that conver
   </Accordion>
 </AccordionGroup>
 
-When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
+When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
 
@@ -296,21 +296,19 @@ If an isolated run throws `LiveSessionModelSwitchError`, the scheduler persists 
 
 ### Stale acknowledgement suppression
 
-Isolated automation turns suppress stale acknowledgement-only replies. If the first result is only an interim status update, the scheduler re-prompts once for the real result before delivery. It does not re-prompt when a descendant subagent run is responsible for the eventual answer.
+Isolated automation turns require a final deliverable rather than an interim status update. Recorded pending-descendant work retains ownership of the eventual answer; the scheduler does not infer completion or pending work from acknowledgment prose.
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, a reply that contains only the silent token (`NO_REPLY` or `no_reply`), or ends with a trailing silent token, suppresses direct outbound delivery and the fallback queued summary path. The preceding text is not delivered.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
 ```text
-Nothing actionable found today.
-
 NO_REPLY
 ```
 
-Do not append `NO_REPLY` to a report that should reach the user. Mentioning the token within a sentence, such as `Use NO_REPLY when nothing actionable changed.`, does not trigger this rule. For media payloads, a silent caption can be removed while the media is still delivered.
+A literal leading `NO_REPLY\n` strips that one control line and delivers the rest unchanged. Lowercase `no_reply`, `NO_REPLY.`, quoted or JSON forms, and a trailing `NO_REPLY` after a report are visible text. For media payloads, silent model text can be removed while tool-owned media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
@@ -449,6 +447,10 @@ An unresolved owner does not stop the scheduler: that job is skipped with an exp
 `--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
 
 `list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default. With `--json` it prints the scratch plus revision metadata. Scratch writes return the revision result as JSON by default, and accept `--json` as the explicit machine-output spelling.
+
+If a returned job has no runtime state, human-readable `show` still displays the
+available job details, using `-` for unavailable run fields and `idle` for an
+enabled job with no recorded status.
 
 `automations show` also accepts an exact job name, matched without regard to case.
 Job IDs take precedence. When multiple jobs match the name, including disabled

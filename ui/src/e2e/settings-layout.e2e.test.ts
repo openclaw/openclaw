@@ -28,7 +28,6 @@ const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const introRoutes = [
   "appearance",
   "approvals",
-  "cloud-workers",
   "labs",
   "mcp",
   "secrets",
@@ -51,10 +50,7 @@ const settingsGuidanceLinks: ReadonlyArray<{
   route: string;
   container: string;
   section?: string;
-}> = [
-  { route: "cloud-workers", container: ".page-subtitle" },
-  { route: "mcp", section: "Configured servers", container: ".settings-section__desc" },
-];
+}> = [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
 
 const sectionAlignmentRoutes = [
   "appearance",
@@ -101,14 +97,14 @@ const settingsRowRoutes = [
 const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
 
 const mobileStandaloneSettingsPageRoutes = [
-  "sessions",
-  "worktrees",
   "usage",
   "cron",
   "memory-import",
 ] as const satisfies readonly RouteId[];
 
 const mobileGeometryCases = [
+  { route: "sessions", contentSelector: ".settings-page" },
+  { route: "worktrees", contentSelector: ".settings-page" },
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
@@ -616,7 +612,7 @@ suite.define(() => {
         expect(await pickerTitle.textContent()).toBe("Agent");
         expect(
           await page
-            .locator('.agent-select [part="menu"]')
+            .locator(".agent-select__menu")
             .evaluate((menu) => getComputedStyle(menu).opacity),
         ).toBe("1");
         if (proofEnabled) {
@@ -838,6 +834,11 @@ suite.define(() => {
           await page
             .getByRole("heading", { name: "Defaults for all agents", exact: true })
             .waitFor();
+        }
+
+        if (route === "cloud-workers") {
+          expect(await page.locator(".page-subtitle").count()).toBe(0);
+          await page.locator(".cloud-environments__advanced > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(

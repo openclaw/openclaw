@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -6,7 +6,8 @@ import { renderProviderUsageDetails } from "../../components/solid/provider-usag
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -73,12 +74,15 @@ function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElem
     profileId: props.profileId,
   });
   const refresh = () => void load(scope());
+  // Fetch usage from the Gateway for the currently presented account.
   createEffect(scope, (current) => void load(current));
-  host.addEventListener("model-account-usage-refresh", refresh);
-  onCleanup(() => {
-    host.removeEventListener("model-account-usage-refresh", refresh);
-    request?.abort();
-    request = undefined;
+  onSettled(() => {
+    const stop = listen(host, "model-account-usage-refresh", refresh);
+    return () => {
+      stop();
+      request?.abort();
+      request = undefined;
+    };
   });
   const summary = createMemo(() => {
     const current = state();

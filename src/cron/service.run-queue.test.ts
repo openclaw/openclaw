@@ -25,6 +25,7 @@ import { drainCronRunQueue, stopCronRunQueue, waitForCronRunQueue } from "./serv
 import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
+import * as cronStore from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { createCronScheduledRunId } from "./store/run-request-id.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
@@ -172,19 +173,27 @@ it("keeps owned running work out of recovery and queue database polling", async 
     },
   });
   let completion: Promise<unknown> | undefined;
+  let restoreLoads: (() => void) | undefined;
   try {
     await cron.start();
+    const loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobs");
+    restoreLoads = () => loads.mockRestore();
     completion = cron.run(job.id, "force");
     await withinTest(
       awaitGateBeforeSettlement(entered.promise, completion, "owned run did not start"),
       signal,
     );
+    // Manual admission and queue activation reuse the loaded store and committed postimages.
+    expect(loads).not.toHaveBeenCalled();
     await cron.start();
     const running = await cron.readJob(job.id);
     expect(running).toMatchObject({
       state: { runningAtMs: NOW },
     });
     expect(running?.state.lastError).toBeUndefined();
+    expect(running?.state.runningReceiptId).toEqual(expect.any(String));
+    expect(loads).not.toHaveBeenCalled();
+    loads.mockRestore();
     // Consume the queue's committed publication once, then the loaded owner is current.
     await runCronSchedulerMaintenance(state);
     await drainCronRunQueue(state);
@@ -200,6 +209,7 @@ it("keeps owned running work out of recovery and queue database polling", async 
       writes.mockRestore();
     }
   } finally {
+    restoreLoads?.();
     release.resolve();
     await completion;
     cron.stop();

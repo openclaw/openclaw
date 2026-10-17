@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isAbortError } from "../infra/abort-signal.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { SqliteWalHealth } from "../infra/sqlite-wal-checkpoint.js";
 import {
   registerSqliteWalWorkerMaintenance,
@@ -72,7 +73,7 @@ export function createStateDatabaseWalOwner(
       admission: OpenClawStateDatabaseReadAdmission,
       env: NodeJS.ProcessEnv,
     ): void {
-      if (!isMainThread) {
+      if (!isMainThread || isPostgresSqlConnection(database.db)) {
         return;
       }
       const capturedContext = captureOpenClawStateWorkerContextWithAdmission(

@@ -1,5 +1,6 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { APIVoiceState, Client } from "../internal/discord.js";
@@ -65,7 +66,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
   private readonly botUserId?: string;
   private readonly client: Client;
   private readonly voiceEnabled: boolean;
-  private readonly autoJoinTasks = new Map<string, Promise<VoiceOperationResult | undefined>>();
+  private readonly autoJoinTasks = new Map<string, Promise<void>>();
   private readonly fatalAutoJoinFailures = new Map<
     string,
     { message: string; skipLogged: boolean }
@@ -84,6 +85,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
   // Room watchers outlive individual bot sessions; only unsubscribe/destroy retires them.
   private readonly occupancyWatchers = new Set<{ guildId: string; refresh: () => void }>();
   private destroyed = false;
+  private readonly abort = new AbortController();
 
   constructor(params: {
     scheduler: PluginServiceSchedulerV1;
@@ -157,6 +159,9 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
     });
     this.voiceSessions = new DiscordVoiceSessions({
       ...params,
+      signal: this.abort.signal,
+      isSessionGenerationCurrent: (entry) =>
+        this.guildLifecycles.get(entry.guildId)?.generation === entry.generation,
       botUserId: () => this.botUserId,
       destroyed: () => this.destroyed,
       getTranscripts: this.getTranscripts,
@@ -586,6 +591,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    this.abort.abort(new Error("Discord voice manager stopped"));
     this.occupancyWatchers.clear();
     const followingStopped = this.following.destroy();
     for (const entry of this.sessions.values()) {
@@ -635,17 +641,11 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
     entry: VoiceChannelResidency,
     captureOrigin?: CaptureJoinOrigin,
   ): Promise<VoiceOperationResult | undefined> {
-    const previous = this.autoJoinTasks.get(entry.guildId) ?? Promise.resolve();
-    const task = previous
-      .catch(() => undefined)
-      .then(async () => await this.reconcileAutoJoinEntry(entry, captureOrigin))
-      .finally(() => {
-        if (this.autoJoinTasks.get(entry.guildId) === task) {
-          this.autoJoinTasks.delete(entry.guildId);
-        }
-      });
-    this.autoJoinTasks.set(entry.guildId, task);
-    return task;
+    return enqueueKeyedTask({
+      tails: this.autoJoinTasks,
+      key: entry.guildId,
+      task: () => this.reconcileAutoJoinEntry(entry, captureOrigin),
+    });
   }
 
   private async reconcileAutoJoinEntry(

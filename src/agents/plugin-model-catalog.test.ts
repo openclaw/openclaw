@@ -397,9 +397,12 @@ describe("SQLite-backed plugin model catalogs", () => {
   it("does not create agent state when an empty catalog is already current", async () => {
     const agentDir = createAgentDir();
 
-    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: {} })).toBe(
-      false,
-    );
+    expect(
+      await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: {} }),
+    ).toEqual({
+      changed: false,
+      catalogs: [],
+    });
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
     expect(existsSync(join(agentDir, "plugins"))).toBe(false);
   });
@@ -981,54 +984,69 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(existsSync(sourcePath)).toBe(true);
   });
 
-  it("persists provider-owned catalogs in deterministic SQLite order", async () => {
+  it("preserves SQLite catalog key order in committed receipts", async () => {
     const agentDir = createAgentDir();
-    const zai = catalogContents("zai");
-    const anthropic = catalogContents("anthropic");
-
-    expect(
-      await replacePersistedPluginModelCatalogs({
-        agentDir,
-        pluginCatalogWrites: {
-          [encodePluginModelCatalogRelativePath("zai")]: zai,
-          [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
-        },
-      }),
-    ).toBe(true);
-
-    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
-      { pluginId: "anthropic", contents: anthropic },
-      { pluginId: "zai", contents: zai },
-    ]);
-    expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(true);
-    expect(existsSync(join(agentDir, "plugins"))).toBe(false);
+    const contents = catalogContents("fixture");
+    const ids = ["anthropic", "zai", "\uE000", "𐀀"];
+    const pluginCatalogWrites = Object.fromEntries(
+      ids.toReversed().map((id) => [encodePluginModelCatalogRelativePath(id), contents]),
+    );
+    const catalogs = ids.map((pluginId) => ({ pluginId, contents }));
+    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites })).toEqual({
+      changed: true,
+      catalogs,
+    });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(catalogs);
+    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites })).toEqual({
+      changed: false,
+      catalogs,
+    });
   });
 
   it("recognizes unchanged payloads and atomically removes stale provider rows", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
-    const anthropic = catalogContents("anthropic");
-    const both = {
-      [encodePluginModelCatalogRelativePath("zai")]: zai,
-      [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
-    };
+    const catalogRows = (prefix: string) =>
+      Object.fromEntries(
+        Array.from({ length: 70 }, (_, index) => [
+          encodePluginModelCatalogRelativePath(`${prefix}-${index}`),
+          catalogContents(`${prefix}-${index}`),
+        ]),
+      );
+    const both = { [encodePluginModelCatalogRelativePath("zai")]: zai, ...catalogRows("stale") };
 
-    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
-      true,
-    );
-    expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
-      false,
+    expect(
+      await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both }),
+    ).toMatchObject({ changed: true });
+    expect(
+      await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both }),
+    ).toMatchObject({ changed: false });
+    const unchanged = readCatalogCacheRow(agentDir, "zai");
+    const refreshed = catalogContents("fresh");
+    const next = { [encodePluginModelCatalogRelativePath("zai")]: zai, ...catalogRows("new") };
+    // Exercise both row and payload batch boundaries without changing JSON semantics.
+    next[encodePluginModelCatalogRelativePath("new-35")] += " ".repeat(1024 * 1024);
+    expect(
+      await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: next,
+      }),
+    ).toMatchObject({ changed: true });
+    expect(readCatalogCacheRow(agentDir, "zai")).toEqual(unchanged);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toHaveLength(71);
+    expect(readCatalogCacheRow(agentDir, "new-35").value_json).toBe(
+      next[encodePluginModelCatalogRelativePath("new-35")],
     );
     expect(
       await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
-          [encodePluginModelCatalogRelativePath("zai")]: zai,
+          [encodePluginModelCatalogRelativePath("zai")]: refreshed,
         },
       }),
-    ).toBe(true);
+    ).toEqual({ changed: true, catalogs: [{ pluginId: "zai", contents: refreshed }] });
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
-      { pluginId: "zai", contents: zai },
+      { pluginId: "zai", contents: refreshed },
     ]);
   });
 

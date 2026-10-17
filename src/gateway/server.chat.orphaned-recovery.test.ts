@@ -9,6 +9,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { recoverTerminalSessionEntryForVisibleTurn } from "../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -16,6 +17,21 @@ import { createRestartSafeChatRequest } from "./server-methods/chat-restart-reco
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+it("preserves interrupted recovery custody when reusing a failed session", () => {
+  const entry = {
+    sessionId: "interrupted-session",
+    updatedAt: 1,
+    status: "failed" as const,
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId: "unfinished-cycle", revision: 7, chargedAttempts: 1 },
+    restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-gateway" }],
+    restartRecoveryDeliveryRunId: "interrupted-run",
+    restartRecoveryDeliverySourceRunId: "accepted-input",
+  };
+
+  expect(recoverTerminalSessionEntryForVisibleTurn(entry)).toEqual(entry);
+});
 
 it("chat.send recovers failed and statusless work for new messages and retained retries exactly once", async () => {
   const token = "orphaned-recovery-chat-token";

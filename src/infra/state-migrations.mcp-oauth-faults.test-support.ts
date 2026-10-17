@@ -18,13 +18,20 @@ export function observeLegacyMcpOAuthImport(
   const preload = `
       import { MessagePort, workerData, threadId } from "node:worker_threads";
       const post = MessagePort.prototype.postMessage;
+      // Settlement omits facts already delivered on this operation's FIFO port.
+      const committedByPort = new WeakMap();
       MessagePort.prototype.postMessage = function(message, ...args) {
         const result = Reflect.apply(post, this, [message, ...args]);
+        const commit = message?.kind === "native-commit" && message.committed;
+        if (commit?.facts?.sourceKey === workerData.mcpMigrationSourceKey) {
+          committedByPort.set(this, commit);
+        }
         const deliveryFailure = workerData.mcpMigrationFaultMode === "result-delivery-error";
         const committed = deliveryFailure
           ? message?.kind === "native-settlement" &&
-            message.settlement?.kind === "completed" && message.settlement.committed
-          : message?.kind === "native-commit" && message.committed;
+            message.settlement?.kind === "completed" &&
+            (message.settlement.committed ?? committedByPort.get(this))
+          : commit;
         if (committed?.facts?.sourceKey === workerData.mcpMigrationSourceKey) {
           const exit = new Int32Array(workerData.mcpMigrationExit);
           Atomics.store(exit, 0, 1);

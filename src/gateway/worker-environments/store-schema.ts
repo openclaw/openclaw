@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -12,7 +13,7 @@ import {
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL } from "./session-attachment-store.js";
 
-const ensuredDatabases = new WeakMap<DatabaseSync, SqliteSchemaFacts>();
+const ensuredDatabases = new WeakMap<EngineConnection, SqliteSchemaFacts>();
 const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
   "worker_environment_ssh_fallback_ports",
 );
@@ -33,7 +34,12 @@ export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDataba
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureStoreSchema(db);
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "worker_environment_ssh_fallback_ports");
+        ensureStatePostgresFragment(db, "worker_environment_session_attachments");
+      } else {
+        ensureStoreSchema(db);
+      }
     },
     { database },
     { operationLabel: "worker-environments.companion.schema.ensure" },

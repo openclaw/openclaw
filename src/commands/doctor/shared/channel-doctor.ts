@@ -28,27 +28,6 @@ type ChannelDoctorLookupContext = {
   env?: NodeJS.ProcessEnv;
 };
 
-const channelDoctorFunctionKeys = new Set<keyof ChannelDoctorAdapter>([
-  "normalizeCompatibilityConfig",
-  "collectPreviewWarnings",
-  "collectMutableAllowlistWarnings",
-  "repairConfig",
-  "runConfigSequence",
-  "cleanStaleConfig",
-  "collectEmptyAllowlistExtraWarnings",
-  "shouldSkipDefaultEmptyGroupAllowlistWarning",
-]);
-
-const channelDoctorBooleanKeys = new Set<keyof ChannelDoctorAdapter>([
-  "groupAllowFromFallbackToAllowFrom",
-  "warnOnEmptyGroupSenderAllowlist",
-]);
-
-const channelDoctorEnumValues: Partial<Record<keyof ChannelDoctorAdapter, ReadonlySet<string>>> = {
-  dmAllowFromMode: new Set(["topOnly", "topOrNested", "nestedOnly"]),
-  groupModel: new Set(["sender", "route", "hybrid"]),
-};
-
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: NonNullable<ChannelDoctorAdapter["collectEmptyAllowlistExtraWarnings"]>;
 } & Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">>;
@@ -59,7 +38,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
     skipWhenPluginsDisabled: true,
     excludeExplicitlyDisabled: true,
     sort: "codepoint",
-  }).filter((channelId) => !isChannelDoctorBlockedByConfig(channelId, cfg));
+  });
 }
 
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
@@ -100,41 +79,19 @@ function listReadOnlyChannelDoctorsById(
 function mergeDoctorAdapters(
   adapters: Array<ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorAdapter | undefined {
-  const merged: Partial<Record<keyof ChannelDoctorAdapter, unknown>> = {};
+  const merged: ChannelDoctorAdapter = {};
   for (const adapter of adapters) {
     if (!adapter) {
       continue;
     }
-    for (const [key, value] of Object.entries(adapter) as Array<
-      [keyof ChannelDoctorAdapter, unknown]
-    >) {
+    for (const [key, value] of Object.entries(adapter)) {
       // Earlier adapters win so read-only installed plugins can override bundled fallbacks.
-      if (merged[key] === undefined && isValidChannelDoctorAdapterValue(key, value)) {
-        merged[key] = value;
+      if (value !== undefined && !(key in merged)) {
+        Object.assign(merged, { [key]: value });
       }
     }
   }
-  return Object.keys(merged).length > 0 ? (merged as ChannelDoctorAdapter) : undefined;
-}
-
-function isValidChannelDoctorAdapterValue(
-  key: keyof ChannelDoctorAdapter,
-  value: unknown,
-): boolean {
-  if (channelDoctorFunctionKeys.has(key)) {
-    return typeof value === "function";
-  }
-  if (channelDoctorBooleanKeys.has(key)) {
-    return typeof value === "boolean";
-  }
-  const enumValues = channelDoctorEnumValues[key];
-  if (enumValues) {
-    return typeof value === "string" && enumValues.has(value);
-  }
-  if (key === "legacyConfigRules") {
-    return Array.isArray(value);
-  }
-  return false;
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function listChannelDoctorEntries(

@@ -46,9 +46,13 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
-// mock-isolation: Publication handoff does not discover worker GitHub credentials.
-vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareGitHubPublicationFact: async () => undefined,
+// mock-isolation: Publication handoff clones a local origin without GitHub credentials.
+vi.mock("./worker-environments/repository-github-identity.js", () => ({
+  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
+    token: undefined,
+    assertSelected: assertCurrent,
+    start: async (start: () => Promise<unknown>) => await start(),
+  }),
 }));
 afterEach(() => vi.restoreAllMocks());
 it.each([

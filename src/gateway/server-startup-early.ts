@@ -17,8 +17,6 @@ type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
 type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 
-const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
-
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   scheduler: GatewayScheduler;
@@ -93,7 +91,7 @@ export async function startGatewayEarlyRuntime(params: {
   if (startSideRuntimes) {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, { startCronMaintenance }] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
-        Promise.all([loadRemoteSkillsRuntimeModule(), import("../cron/maintenance.js")]),
+        Promise.all([import("../skills/runtime/remote.js"), import("../cron/maintenance.js")]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
@@ -106,19 +104,10 @@ export async function startGatewayEarlyRuntime(params: {
     ? async () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
-        const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
-        const {
-          closeSkillsWatchers,
-          detachSkillsWatchers,
-          refreshSkillsDiscovery,
-          registerSkillsChangeListener,
-        } = await skillsRuntimePromise;
+        const remoteSkillsRuntimePromise = import("../skills/runtime/remote.js");
+        const { closeSkillsWatchers, detachSkillsWatchers, registerSkillsChangeListener } =
+          await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
-        try {
-          await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
-        } catch (error) {
-          params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
-        }
         const unregister = registerSkillsChangeListener((event) => {
           if (params.isClosing()) {
             return;
@@ -169,7 +158,18 @@ export async function startGatewayEarlyRuntime(params: {
       return null;
     }
     return await measureStartup(params.startupTrace, "post-ready.maintenance", async () => {
-      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const [{ refreshSkillsDiscovery }, { startGatewayMaintenanceTimers }] = await Promise.all([
+        import("../skills/runtime/refresh.js"),
+        import("./server-maintenance.js"),
+      ]);
+      if (params.isClosing()) {
+        return null;
+      }
+      try {
+        await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
+      } catch (error) {
+        params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
+      }
       if (params.isClosing()) {
         return null;
       }

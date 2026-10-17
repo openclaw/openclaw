@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createEmptyPluginRegistry,
@@ -12,6 +9,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -32,7 +30,7 @@ import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import * as sharedClients from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { resolveCodexCommandDeps } from "./command-handler-deps.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRpc from "./command-rpc.js";
 
@@ -67,6 +65,7 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -78,37 +77,30 @@ afterEach(async () => {
 async function fixture(stableAccount = true) {
   const agentDir = path.join(root, "agents", "second", "agent");
   const workspaceDir = path.join(root, "second-workspace");
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          "openai:second": {
-            type: "oauth",
-            provider: "openai",
-            access: stableAccount
-              ? "test-access-token"
-              : `e30.${Buffer.from(
-                  JSON.stringify({
-                    "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
-                  }),
-                ).toString("base64url")}.test-signature`,
-            refresh: "test-refresh-token",
-            expires: Date.now() + 24 * 60 * 60_000,
-            ...(stableAccount ? { accountId: "test-second-account" } : {}),
-          },
-        },
-        order: { openai: ["openai:second"] },
-      },
+  await upsertAuthProfileAsync({
+    agentDir,
+    profileId: "openai:second",
+    credential: {
+      type: "oauth",
+      provider: "openai",
+      access: stableAccount
+        ? "test-access-token"
+        : `e30.${Buffer.from(
+            JSON.stringify({
+              "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
+            }),
+          ).toString("base64url")}.test-signature`,
+      refresh: "test-refresh-token",
+      expires: Date.now() + 24 * 60 * 60_000,
+      ...(stableAccount ? { accountId: "test-second-account" } : {}),
     },
-  ]);
+  });
   const current = {
     enabled: true,
     plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
   };
   const bindingStore = createCodexTestBindingStore();
-  const deps = resolveCodexCommandDeps({
+  const deps = createCodexCommandHost({
     bindingStore,
     codexPluginsManagementIo: {
       readConfig: async () => structuredClone(current),
@@ -184,7 +176,11 @@ describe("Codex plugin command context", () => {
           "https://api.openai.com/auth": { chatgpt_account_id: "test-replacement-account" },
         }),
       ).toString("base64url")}.test-signature`;
-      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: test.agentDir, store }]);
+      await upsertAuthProfileAsync({
+        agentDir: test.agentDir,
+        profileId: "openai:second",
+        credential: profile,
+      });
       return auth;
     });
     await expect(
@@ -279,7 +275,7 @@ describe("Codex plugin command context", () => {
   it("releases a lease acquired after the deadline without sending a startup RPC", async () => {
     const test = await fixture();
     test.request.mockRestore();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let finishAcquisition!: (client: typeof test.harness.client) => void;
     const acquired = new Promise<typeof test.harness.client>((resolve) => {
       finishAcquisition = resolve;
@@ -301,11 +297,11 @@ describe("Codex plugin command context", () => {
     );
     try {
       await acquiring;
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(600_001);
       finishAcquisition(test.harness.client);
       await vi.advanceTimersByTimeAsync(0);
       expect(failure).toBeInstanceOf(Error);
-      expect(String(failure)).toContain("timed out");
+      expect(failure).toMatchObject({ name: "AgentHarnessPreflightError" });
       expect(test.harness.writes).toHaveLength(0);
       expect(run).not.toHaveBeenCalled();
       expect(test.release).toHaveBeenCalledOnce();

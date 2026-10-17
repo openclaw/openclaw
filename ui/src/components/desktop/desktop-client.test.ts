@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { createRoot, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { DesktopClient } from "./desktop-client.ts";
-import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
+import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 
 type RfbConstructor = NonNullable<ConstructorParameters<typeof DesktopClient>[0]>;
 type RfbClient = InstanceType<RfbConstructor>;
@@ -59,11 +60,11 @@ describe("DesktopClient", () => {
         isCurrent: () => true,
       });
       const input = document.createElement("textarea");
-      const keyboard = new DesktopMobileKeyboard({
-        connection: () => handle,
-        controlling: () => true,
-        input: () => input,
-      });
+      const [keyboard, dispose] = createRoot(
+        (disposeRoot) => [createDesktopMobileKeyboard(() => handle), disposeRoot] as const,
+      );
+      flush();
+      keyboard.inputRef(input);
       input.addEventListener("input", (event) => keyboard.handleInput(event as InputEvent));
       const events: string[] = [];
       for (const type of ["keydown", "keyup"]) {
@@ -100,7 +101,7 @@ describe("DesktopClient", () => {
           ...(trusted && !held ? [] : ["keydown:Shift"]),
         ]);
       } finally {
-        keyboard.reset();
+        dispose();
         handle.disconnect();
       }
     },
@@ -125,11 +126,12 @@ describe("DesktopClient", () => {
       let handle = original;
       let controlling = true;
       const input = document.createElement("textarea");
-      const keyboard = new DesktopMobileKeyboard({
-        connection: () => handle,
-        controlling: () => controlling,
-        input: () => input,
-      });
+      const [keyboard, dispose] = createRoot(
+        (disposeRoot) =>
+          [createDesktopMobileKeyboard(() => (controlling ? handle : null)), disposeRoot] as const,
+      );
+      flush();
+      keyboard.inputRef(input);
       input.addEventListener("input", (event) => keyboard.handleInput(event as InputEvent));
       const keys: string[] = [];
       canvas.addEventListener("keydown", (event) => keys.push(event.key));
@@ -157,7 +159,7 @@ describe("DesktopClient", () => {
         input.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", data: "p" }));
         expect(keys).toEqual(transition === "view-only" ? ["Control"] : ["Control", "p"]);
       } finally {
-        keyboard.reset();
+        dispose();
         handle.disconnect();
       }
     },

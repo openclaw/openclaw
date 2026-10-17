@@ -1,3 +1,4 @@
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -10,6 +11,7 @@ import {
   planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
 } from "./run-history.kernel.js";
+import type { CronRunRecord } from "./run-history.types.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
@@ -28,7 +30,11 @@ export function maintainCronRunHistoryInWorker(
   database: OpenClawStateDatabase,
   input: { snapshot: CronRuntimeMutationContracts["cron.maintainHistory"]["snapshot"] },
 ): CronRuntimeWorkerOperations["cron.maintainHistory"]["output"] {
-  const records = readCronRunRecordsInDatabase(database.db);
+  // Planning facts decide this sweep; retained payloads load below only for runs it reconciles,
+  // so a large history is never materialized whole in the heap-limited worker.
+  const records = readCronRunRecordsInDatabase(database.db, undefined, undefined, {
+    planningOnly: true,
+  });
   const jobIds = [
     ...new Set(
       records.flatMap((row) =>
@@ -48,22 +54,68 @@ export function maintainCronRunHistoryInWorker(
       : [];
   const { nowMs, protectedJobIds } = input.snapshot;
   const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
-  const plan = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
+  const plan = planCronRunHistoryMaintenance(
+    withReconciliationPayloads(database.db, records, nowMs, protectedJobs),
+    nowMs,
+    protectedJobs,
+  );
   if (plan.reconciliations.length === 0 && !plan.prune) {
-    return { outcome: { reconciled: 0, pruned: 0 } };
+    return { outcome: { reconciled: 0, pruned: 0, nextSweepAtMs: plan.nextSweepAtMs } };
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => ({
-      outcome: applyCronRunHistoryMaintenanceInDatabase(
-        db,
-        plan,
-        nowMs,
-        prepareCronRunReceiptWriteSchema(db),
-      ),
+      outcome: {
+        ...applyCronRunHistoryMaintenanceInDatabase(
+          db,
+          plan,
+          nowMs,
+          prepareCronRunReceiptWriteSchema(db),
+        ),
+        nextSweepAtMs: plan.nextSweepAtMs,
+      },
     }),
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.history-maintenance" },
   );
+}
+
+/**
+ * Reconciliation copies the reconciled row's own payload, or that of its recovery candidate, which
+ * shares the row's exact job and run identity. Load full payloads for exactly those rows, by task
+ * id, and replan on them; every other row keeps its planning projection.
+ */
+function withReconciliationPayloads(
+  db: EngineConnection,
+  records: readonly CronRunRecord[],
+  nowMs: number,
+  protectedJobs: ReadonlySet<string>,
+): readonly CronRunRecord[] {
+  const draft = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
+  if (draft.reconciliations.length === 0) {
+    return records;
+  }
+  const runKey = (row: CronRunRecord) => JSON.stringify([row.jobId, row.runId]);
+  const reconciledRuns = new Set(
+    draft.reconciliations.flatMap((row) =>
+      row.jobId?.trim() && row.runId?.trim() ? [runKey(row)] : [],
+    ),
+  );
+  const reconciledIds = new Set(draft.reconciliations.map((row) => row.id));
+  const taskIds = records.flatMap((row) =>
+    reconciledIds.has(row.id) || reconciledRuns.has(runKey(row)) ? [row.id] : [],
+  );
+  const payloads = new Map<string, CronRunRecord>();
+  for (let offset = 0; offset < taskIds.length; offset += 500) {
+    for (const row of readCronRunRecordsInDatabase(db, undefined, undefined, {
+      taskIds: taskIds.slice(offset, offset + 500),
+    })) {
+      payloads.set(row.id, row);
+    }
+  }
+  return records.map((row) => {
+    const full = payloads.get(row.id);
+    return full === undefined ? row : { ...row, summary: full.summary, detail: full.detail };
+  });
 }
 
 export function scheduleUnownedCronJobsInWorker(

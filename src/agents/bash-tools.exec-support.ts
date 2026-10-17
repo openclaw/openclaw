@@ -1,10 +1,10 @@
 import type { ExecHost } from "../infra/exec-approvals.js";
-import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type {
   ExecProcessOutcome,
   ExecToolApprovalReview,
@@ -97,10 +97,9 @@ export function resolveExecElevatedMode(
 export function createExecHostResolver(defaults?: ExecToolDefaults) {
   return (params: ExecToolArgs): ExecHost => {
     const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
-    const requestedTarget = requireValidExecTarget(params.host);
     return resolveExecTarget({
       configuredTarget: defaults?.host,
-      requestedTarget,
+      requestedTarget: resolveRequestedExecTarget(params),
       elevatedRequested: elevatedMode !== "off",
       sandboxAvailable: Boolean(defaults?.sandbox),
       sandboxRequired: defaults?.sandboxRequired,

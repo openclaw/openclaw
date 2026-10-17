@@ -22,7 +22,9 @@ never link an installation or resolve workspace packages from another checkout.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
-and installed with `pnpm install --frozen-lockfile` once before rechecking. A stale
+and installed with `pnpm install --frozen-lockfile` once before rechecking. Fetch and
+fast-forward output streams to stderr, without a diffstat, instead of being captured,
+so a root thousands of commits behind refreshes regardless of output size. A stale
 dirty or non-main root cannot refresh; sparse and unrelated roots are always
 refused. The canonical checkout is never refreshed. Keep the selected installation
 intact until the command finishes. This setting applies at both dependency
@@ -39,6 +41,19 @@ counter means renewal occupied the worker; a completed-request counter can expla
 why a negative response budget alone did not fail earlier. Neither extends the
 lease or operation budget. The diagnostics do not change timeout or recovery
 behavior, and a successful retry does not establish the cause of an earlier failure.
+
+## Captured baseline evidence hashes
+
+Read-only baseline evidence hashes pass the already-captured bytes to the selected
+Git executable through a complete, private temporary file. The writer closes before
+a fresh read-only descriptor is opened at offset zero; on the supported POSIX
+host the pathname and directory are removed before Git starts. Write hashes,
+signatures, authority checks, and operation supervision are unchanged.
+
+Temporary storage must accommodate the largest individual captured file. Ordinary
+write, spawn, and Git failures fail closed and clean up owned resources. Unlinking
+is not secure erasure, and abrupt termination before unlink can retain a private
+snapshot under `TMPDIR`; no automatic sweep of another operation's files occurs.
 
 ## Rerun failed CI tests
 
@@ -63,6 +78,8 @@ arguments remain unquoted. Non-Vitest failures show their failed step names and
 “no Vitest rerun; read log” with the job log URL. `--run` executes the selected
 test command with the local runner's default worker behavior. `--json` emits
 `{ run, failures: [{ job, class, files: [{ file, tests }], failedSteps, url, reason }], command }`.
+
+`--run` sets `OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1` so ordinary test failures do not hide later selected files; use the same opt-in with manual `pnpm test` commands, while infrastructure failures still stop scheduling.
 
 After PR CI fails, run `pnpm test:ci-failed <pr>`, fix new failures and investigate
 unknown ones, then run `pnpm test:ci-failed <pr> --run` until those pass locally

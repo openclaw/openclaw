@@ -9,12 +9,27 @@ import { assertRequiredWorkerSelection } from "../../config/required-worker-prof
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { validateSessionDeviceFolderSelection } from "../session-device-folder.js";
 
 export function prepareRequiredWorkerSessionCreate(
   params: SessionsCreateParams,
   config: OpenClawConfig,
 ): { requiredProfile?: string; automaticEmptyWorkspace: boolean; error?: ErrorShape } {
+  const selectionError = validateSessionDeviceFolderSelection(params);
+  if (selectionError) {
+    return { automaticEmptyWorkspace: false, error: selectionError };
+  }
   const requiredProfile = config.cloudWorkers?.requiredProfile;
+  if (requiredProfile && params.deviceFolder) {
+    return {
+      requiredProfile,
+      automaticEmptyWorkspace: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Device folder sessions cannot use a required cloud worker profile.",
+      ),
+    };
+  }
   try {
     assertRequiredWorkerSelection(config, params);
   } catch (error) {

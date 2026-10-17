@@ -71,7 +71,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
       return "ok";
     });
     const verify = () =>
-      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      withSqliteWorkerOperationAdmission(admission, () =>
         executeOpenClawStateLeaseCommand(
           { type: "stateLease.verify", input: { identity } },
           database,

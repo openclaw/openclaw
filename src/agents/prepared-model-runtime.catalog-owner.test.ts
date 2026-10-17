@@ -8,9 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { modelCatalogRouteVariantKey } from "./model-catalog-entry.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
   resolvePublishedModelCatalogOwner,
@@ -444,9 +442,16 @@ describe("prepared build candidate lifetime", () => {
 describe("legacy provider catalog retention", () => {
   const learned = { provider: "custom", id: "learned", name: "Learned" };
   const starter = { provider: "custom", id: "starter", name: "Starter" };
+  const supplemental = { provider: "custom", id: "supplemental", name: "Previous overlay" };
 
   it.each([
     { name: "nonempty legacy inventory", empty: false, expected: [learned] },
+    {
+      name: "last-good configured and supplemental overlays",
+      empty: false,
+      overlay: true,
+      expected: [learned, supplemental],
+    },
     { name: "empty legacy inventory", empty: true, expected: [starter] },
     {
       name: "profile-specific failure",
@@ -457,10 +462,11 @@ describe("legacy provider catalog retention", () => {
     { name: "changed credentials", empty: false, changedKey: true, expected: [starter] },
     { name: "explicit successful empty inventory", empty: true, ready: true, expected: [] },
     { name: "previous failed acquisition", empty: false, failed: true, expected: [starter] },
-  ])("preserves the shipped retention boundary for $name", async (scenario) => {
+  ])("preserves the provider retention boundary for $name", async (scenario) => {
+    const entries = scenario.empty ? [] : [learned, ...(scenario.overlay ? [supplemental] : [])];
     const previous: ModelCatalogSnapshot = {
-      entries: scenario.empty ? [] : [learned],
-      routeVariants: scenario.empty ? [] : [learned],
+      entries,
+      routeVariants: entries,
       ...(scenario.ready
         ? { providerOutcomes: [{ provider: "custom", status: "ready" as const }] }
         : scenario.failed
@@ -468,16 +474,6 @@ describe("legacy provider catalog retention", () => {
           : {}),
     };
     mocks.runPreparedModelCatalogWorker.mockResolvedValue(previous);
-    mocks.catalogHookRows = new Map([
-      [
-        "custom",
-        new Set(
-          previous.entries.map((entry) =>
-            modelCatalogRouteVariantKey(entry, resolveModelCatalogIdentityKey(entry)),
-          ),
-        ),
-      ],
-    ]);
     const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
     const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
       catalogMode: "static",
@@ -493,7 +489,7 @@ describe("legacy provider catalog retention", () => {
     }
 
     const failed: ModelCatalogSnapshot = {
-      entries: [],
+      entries: scenario.overlay ? [{ ...supplemental, name: "Unaccepted refresh overlay" }] : [],
       routeVariants: [],
       staticEntries: [starter],
       providerOutcomes: [
@@ -509,7 +505,6 @@ describe("legacy provider catalog retention", () => {
       });
     }
     mocks.runPreparedModelCatalogWorker.mockResolvedValue(failed);
-    mocks.catalogHookRows = new Map();
     const result = await owner.loadFullModelCatalog!({ refresh: true });
     expect(result.entries.map(({ provider, id, name }) => ({ provider, id, name }))).toEqual(
       scenario.expected,
@@ -519,6 +514,10 @@ describe("legacy provider catalog retention", () => {
     );
     expect(result.providerOutcomes).toEqual(failed.providerOutcomes);
     expect(result.authoritative).toBe(false);
+    if (scenario.overlay) {
+      const repeated = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(repeated.entries).toEqual(result.entries);
+    }
   });
 
   it.each(["failed refresh", "changed auth", "restrictive success"] as const)(

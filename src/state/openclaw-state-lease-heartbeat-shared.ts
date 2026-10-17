@@ -1,4 +1,5 @@
 import type { MessagePort } from "node:worker_threads";
+import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
@@ -45,6 +46,7 @@ export type LeaseHeartbeatLoss = {
 };
 
 export type LeaseHeartbeatWorkerData = {
+  databaseEngineSelection?: DatabaseEngineSelection;
   databaseAdmissionPort: MessagePort;
   path: string;
   expectedIdentity: string;

@@ -2,11 +2,16 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
 import { withSessionToolTestCaller } from "./sessions-tool.test-helpers.js";
@@ -45,6 +50,117 @@ async function createArchiveSession(dir: string, name: string, sessionId = `sess
 }
 
 describe("sessions tool self-archive", () => {
+  it.each(["current", "replaced", "revoked"])(
+    "reports an unconfirmed deferred archive only to its authorized original generation (%s)",
+    async (scenario) => {
+      const replaced = scenario === "replaced";
+      const controller = new AbortController();
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "archive-requester",
+        scopes: ["operator.write"],
+        signal: controller.signal,
+        assertCurrent: () => {},
+      });
+      const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+      client.internal = { ...client.internal, operatorRunAuthority: authority };
+      const dir = sessionDirs.make();
+      const { storePath, sessionKey, sessionId, createTool, beginAdmission } =
+        await createArchiveSession(dir, "archive-failure");
+      const otherKey = "agent:main:other-session";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: otherKey, storePath },
+        { sessionId: "other-session-id", updatedAt: 1 },
+      );
+      const callGateway = vi.fn(async () => {
+        if (replaced) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey, storePath },
+            { sessionId: "replacement-session-id", updatedAt: 2 },
+          );
+        }
+        if (scenario === "revoked") {
+          controller.abort(new Error("archive source revoked"));
+        }
+        throw new Error("Transport failed: Bearer synthetic-private-token /private/session/path");
+      });
+      // Join the real detached continuation without replacing its reporting or storage owner.
+      const continueInGateway = inProcessGateway.runWithGatewayToolContinuationContext;
+      const pending: Promise<unknown>[] = [];
+      const continuation = vi
+        .spyOn(inProcessGateway, "runWithGatewayToolContinuationContext")
+        .mockImplementation(<T>(run: () => Promise<T>) => {
+          const work = continueInGateway(run);
+          pending.push(work);
+          return work;
+        });
+      const admission = await beginAdmission();
+      try {
+        let writerActive = true;
+        const result = await withPluginRuntimeGatewayRequestScope(
+          { client, isWebchatConnect: () => false },
+          () =>
+            withOwnedSessionTranscriptWrites(
+              {
+                sessionTarget: { agentId: "main", storePath, sessionKey, sessionId },
+                assertCommitAllowed: () => {
+                  if (!writerActive) {
+                    throw new Error("model writer settled");
+                  }
+                },
+                withTranscriptWrite: async (run) => await run(),
+              },
+              async () =>
+                await createTool(callGateway as never).execute("archive-failure", {
+                  action: "patch",
+                  archived: true,
+                }),
+            ),
+        );
+        writerActive = false;
+        expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
+        expect(callGateway).not.toHaveBeenCalled();
+        admission.release();
+        await Promise.allSettled(pending);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const events = await loadTranscriptEvents({
+          agentId: "main",
+          storePath,
+          sessionKey,
+          sessionId: replaced ? "replacement-session-id" : sessionId,
+        });
+        if (scenario !== "current") {
+          expect(events).toEqual([]);
+        } else {
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "custom_message",
+              customType: "session-archive-failed",
+              content:
+                "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again.",
+              display: true,
+              excludeFromContext: true,
+              details: { operation: "archive", outcome: "unconfirmed" },
+            }),
+          );
+          expect(JSON.stringify(events)).not.toContain("synthetic-private-token");
+          expect(JSON.stringify(events)).not.toContain("/private/session/path");
+        }
+        expect(
+          await loadTranscriptEvents({
+            agentId: "main",
+            storePath,
+            sessionKey: otherKey,
+            sessionId: "other-session-id",
+          }),
+        ).toEqual([]);
+      } finally {
+        admission.release();
+        continuation.mockRestore();
+      }
+    },
+  );
+
   it("returns success before a detached dynamic-tool self-archive commits", async () => {
     const dir = sessionDirs.make();
     const { storePath, sessionKey, sessionId, createTool, beginAdmission, archiveRequest } =
@@ -298,6 +414,29 @@ it.each([false, true])(
 
 const sessionKey = "agent:main:main";
 describe("sessions tool ownership", () => {
+  it.each(["assignment", "rename", "sandbox"])(
+    "explains archive unavailability as current authority context (%s)",
+    (surface) => {
+      const tool = createSessionsTool({
+        senderIsOwner: false,
+        sandboxSessionRenameOnly: surface === "sandbox",
+        ...(surface === "rename"
+          ? {
+              sessionControlAuthority: createAdmittedRunOperatorAuthority({
+                profileId: "rename-requester",
+                scopes: ["operator.sessions.write"],
+                assertCurrent: () => {},
+              }),
+            }
+          : {}),
+      });
+      expect(tool.description).toContain(
+        "Archive and restore are unavailable in this authority context.",
+      );
+      expect(tool.parameters).not.toHaveProperty("properties.archived");
+    },
+  );
+
   it.each([
     { senderIsOwner: false, controls: true },
     { senderIsOwner: false, controls: false },

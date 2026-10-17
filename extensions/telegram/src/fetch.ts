@@ -107,7 +107,7 @@ type TelegramTransportAttemptHealth = {
   unhealthyUntilMs: number;
 };
 
-type TelegramDnsResultOrder = "ipv4first" | "verbatim";
+type TelegramDnsResultOrder = ReturnType<typeof resolveTelegramDnsResultOrderDecision>["value"];
 
 type LookupCallback =
   | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void)
@@ -429,13 +429,6 @@ export function resolveTelegramTransport(
   const dnsDecision = resolveTelegramDnsResultOrderDecision({
     network: options?.network,
   });
-  for (const [name, decision] of [
-    ["autoSelectFamily", autoSelectDecision],
-    ["dnsResultOrder", dnsDecision],
-  ] as const) {
-    log.debug(`${name}=${decision.value} (${decision.source})`);
-  }
-
   const effectiveProxyFetch =
     proxyFetch ??
     (() => {
@@ -576,9 +569,6 @@ export function resolveTelegramTransport(
     }
 
     if (attemptIndex < stickyAttemptIndex) {
-      log.debug(
-        `fetch fallback: recovered from attempt ${stickyAttemptIndex} to attempt ${attemptIndex}`,
-      );
       stickyAttemptIndex = attemptIndex;
       resetStickyRecoveryProbe();
       return;
@@ -592,7 +582,6 @@ export function resolveTelegramTransport(
     if (stickySuccessCount >= TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD) {
       stickySuccessCount = 0;
       primaryProbeDue = true;
-      log.debug("fetch fallback: scheduling primary dispatcher recovery check");
     }
   };
 
@@ -626,11 +615,6 @@ export function resolveTelegramTransport(
     const startIndex = primaryProbe ? 0 : stickyStartIndex;
     if (primaryProbe) {
       primaryProbeDue = false;
-      log.debug(
-        stickyCooldownError
-          ? "fetch fallback: rechecking primary dispatcher while sticky fallback is cooling down"
-          : "fetch fallback: rechecking primary dispatcher after sticky fallback successes",
-      );
     }
     let err: unknown;
     const captureResponse = (response: Response, fallbackAttempt?: number): void => {

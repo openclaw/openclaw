@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Client } from "pg";
 import { encodeSqliteValue, escapedSqliteText } from "../../snapshot/sqlite-cell-codec.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { decodePostgresRows } from "../postgres-sync/protocol.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
@@ -13,38 +14,55 @@ import {
   withSqliteForeignKeysDisabled,
 } from "../sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
+import { writeSqliteUserVersion } from "../sqlite-user-version.js";
+import {
+  admitDatabasePortDescriptor,
+  DatabasePortDataError,
+  type PortDescriptor,
+  type PortEndpoint,
+  type PortRow,
+  type PortTable,
+} from "./port-descriptor.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
   readPostgresCatalog,
-  type PostgresCatalogFact,
 } from "./postgres-catalog.js";
+export {
+  admitDatabasePortDescriptor,
+  DatabasePortDataError,
+  inspectSqlitePortSchema,
+  type PortDescriptor,
+} from "./port-descriptor.js";
 
-type PortRow = Record<string, SQLInputValue>;
-type PortTable = {
-  name: string;
-  columns: readonly { name: string; type: string }[];
-  pk: readonly string[];
-  identities: readonly { column: string; autoIncrement: boolean }[];
-};
-export type PortDescriptor = {
-  id: string;
-  version: number;
-  minimumPostgresVersion: number;
-  tables: readonly PortTable[];
-  sqlite: string;
-  preData: string;
-  postData: string;
-  expectedCatalog: readonly PostgresCatalogFact[];
-  derive?: Readonly<Record<string, (row: PortRow) => PortRow>>;
-};
 export type PortVerification = {
   tables: Record<string, { rows: number; sha256: string }>;
   allocations: Record<string, { value: string; called: boolean }>;
 };
-type Endpoint =
-  | { engine: "sqlite"; db: DatabaseSync }
-  | { engine: "postgres"; db: Client; namespace: string };
+
+/** The caller owns this private SQLite copy and retains custody through verification. */
+export async function migrateDatabasePortSource(
+  sourcePath: string,
+  descriptor: PortDescriptor,
+  sourceVersion: number,
+  assertCurrent: () => void,
+): Promise<PortVerification> {
+  assertCurrent();
+  await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion, assertCurrent);
+  using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
+  const { tables, allocations: retainedAllocations } = await inspectDatabasePort(
+    { engine: "sqlite", db },
+    descriptor,
+  );
+  return { tables, allocations: retainedAllocations };
+}
+type Endpoint = PortEndpoint;
+const copiedTables = (descriptor: PortDescriptor) =>
+  descriptor.tables.filter(
+    (table) =>
+      !descriptor.projections?.some((projection) => projection.tables.includes(table.name)),
+  );
+
 const MAX_ROWS = 1000,
   MAX_BYTES = 4 * 1024 * 1024;
 const qualified = (endpoint: Endpoint, table: string) =>
@@ -66,7 +84,7 @@ function checkRow(table: PortTable, row: PortRow): number {
       const key = createHash("sha256")
         .update(JSON.stringify(table.pk.map((k) => encodeSqliteValue(row[k]))))
         .digest("hex");
-      throw new Error(
+      throw new DatabasePortDataError(
         `Port refused ${table.name}.${name}: unrepresentable UTF-8 text; key SHA-256 ${key}; byte offset ${Buffer.byteLength(value.slice(0, value.indexOf("\0")))}. Repair through the store owner.`,
       );
     }
@@ -86,12 +104,22 @@ async function* readBatches(
   maxRowBytes: number,
   derive: ((row: PortRow) => PortRow) | undefined,
   normalize: boolean,
+  decode: ((row: PortRow) => PortRow) | undefined,
 ) {
-  if (!table.pk.length) {
-    throw new Error(`Port requires a canonical key: ${table.name}`);
-  }
   const names = table.columns.map((c) => quote(c.name));
-  const keys = table.pk.map(quote).join(",");
+  const keyed = table.pk.length > 0;
+  const orderColumns = keyed ? table.pk : table.columns.map((column) => column.name);
+  const keys = orderColumns
+    .map((name) => `${quote(name)}${keyed ? "" : " ASC NULLS FIRST"}`)
+    .join(",");
+  // Keyless retained tables are tiny; value ordering preserves duplicate rows without inventing identities.
+  const sourceOrder =
+    endpoint.engine === "sqlite"
+      ? orderColumns
+          .map((name) => `${quote(table.name)}.${quote(name)}${keyed ? "" : " ASC NULLS FIRST"}`)
+          .join(",")
+      : keys;
+  let offset = 0;
   const rowBytes = table.columns
     .map((c) =>
       ["text", "bytea"].includes(c.type) ? `coalesce(octet_length(${quote(c.name)}),0)` : "8",
@@ -113,12 +141,12 @@ async function* readBatches(
             ])
             .join(",")
         : names.join(",");
-    const page = `SELECT ${projection} FROM ${qualified(endpoint, table.name)}${where} ORDER BY ${keys} LIMIT ${limit}`;
+    const page = `SELECT ${projection} FROM ${qualified(endpoint, table.name)}${where} ORDER BY ${sourceOrder} LIMIT ${limit}${keyed ? "" : ` OFFSET ${offset}`}`;
     const sql =
       endpoint.engine === "sqlite"
         ? page
         : `WITH page AS (${page}), sized AS (
-      SELECT page.*, sum(${rowBytes}) OVER (ORDER BY ${keys}) AS __port_size,
+      SELECT page.*, sum(${rowBytes}) OVER (ORDER BY ${keys} ROWS UNBOUNDED PRECEDING) AS __port_size,
       row_number() OVER (ORDER BY ${keys}) AS __port_row FROM page)
       SELECT ${names.join(",")} FROM sized WHERE __port_size <= ${MAX_BYTES} OR __port_row = 1 ORDER BY ${keys}`;
     let rows: Iterable<PortRow>;
@@ -127,7 +155,7 @@ async function* readBatches(
       rows = statement.iterate(...params);
     } else {
       const result = await endpoint.db.query(sql, params.map(binding));
-      rows = decodePostgresRows({ ...result, rowCount: result.rowCount ?? 0 }, true);
+      rows = decodePostgresRows(result, true);
     }
     let count = 0,
       bytes = 0;
@@ -141,23 +169,26 @@ async function* readBatches(
           value = JSON.parse(value) as string;
           const original = raw[`__port_bytes_${i}`];
           if (!(original instanceof Uint8Array) || !Buffer.from(value).equals(original)) {
-            throw new Error(`Port refused invalid UTF-8: ${table.name}.${name}`);
+            throw new DatabasePortDataError(`Port refused invalid UTF-8: ${table.name}.${name}`);
           }
         }
         row[name] = value;
       });
+      if (endpoint.engine === "sqlite") {
+        Object.assign(row, decode?.(row));
+      }
       const derived = derive?.(row);
       if (
         !normalize &&
         derived &&
         Object.entries(derived).some(([key, value]) => !isDeepStrictEqual(value, row[key]))
       ) {
-        throw new Error(`Port derived columns differ: ${table.name}`);
+        throw new DatabasePortDataError(`Port derived columns differ: ${table.name}`);
       }
       Object.assign(row, derived);
       const size = checkRow(table, row);
       if (size > maxRowBytes) {
-        throw new Error(
+        throw new DatabasePortDataError(
           `Port row in ${table.name} needs ${size} bytes; increase maxRowBytes explicitly.`,
         );
       }
@@ -169,7 +200,11 @@ async function* readBatches(
       batch.push(row);
       bytes += size;
       count++;
-      cursor = table.pk.map((k) => row[k]!);
+      if (keyed) {
+        cursor = table.pk.map((k) => row[k]!);
+      } else {
+        offset++;
+      }
     }
     if (batch.length) {
       yield batch;
@@ -180,12 +215,12 @@ async function* readBatches(
   }
 }
 
-async function allocations(
+export async function readDatabasePortAllocations(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
 ): Promise<PortVerification["allocations"]> {
   const result: PortVerification["allocations"] = {};
-  for (const table of descriptor.tables) {
+  for (const table of copiedTables(descriptor)) {
     for (const identity of table.identities) {
       const key = `${table.name}.${identity.column}`;
       if (endpoint.engine === "postgres") {
@@ -193,9 +228,10 @@ async function allocations(
           qualified(endpoint, table.name),
           identity.column,
         ]);
+        // Matched backups retain resets and uncalled sequences, even below existing row IDs.
         const row = (
           await endpoint.db.query(
-            `SELECT greatest(last_value, coalesce(retained, last_value))::text AS value, is_called OR coalesce(retained >= last_value, false) AS called FROM ${sequence.rows[0].name} CROSS JOIN (SELECT max(${quote(identity.column)}) AS retained FROM ${qualified(endpoint, table.name)}) m`,
+            `SELECT last_value::text AS value, is_called AS called FROM ${sequence.rows[0].name}`,
           )
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
@@ -221,12 +257,34 @@ async function allocations(
   return result;
 }
 
+/** SQLite follows retained rows; AUTOINCREMENT also retains a called sequence high-watermark. */
+export function sqlitePortAllocations(
+  descriptor: PortDescriptor,
+  physical: PortVerification["allocations"],
+  source: PortVerification["allocations"],
+): PortVerification["allocations"] {
+  const expected = { ...source };
+  for (const table of copiedTables(descriptor)) {
+    for (const identity of table.identities) {
+      const key = `${table.name}.${identity.column}`;
+      if (
+        !identity.autoIncrement ||
+        !source[key]!.called ||
+        BigInt(physical[key]!.value) > BigInt(source[key]!.value)
+      ) {
+        expected[key] = physical[key]!;
+      }
+    }
+  }
+  return expected;
+}
+
 async function restoreAllocations(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
   facts: PortVerification["allocations"],
 ) {
-  for (const table of descriptor.tables) {
+  for (const table of copiedTables(descriptor)) {
     for (const identity of table.identities) {
       const fact = facts[`${table.name}.${identity.column}`]!;
       if (endpoint.engine === "postgres") {
@@ -282,9 +340,10 @@ async function scan(
   maxRowBytes: number,
   destination?: Endpoint,
   assertCurrent = () => {},
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined,
 ) {
   const tables: PortVerification["tables"] = {};
-  for (const table of descriptor.tables) {
+  for (const table of copiedTables(descriptor)) {
     const hash = createHash("sha256").update(JSON.stringify(table.columns) + "\n");
     let rows = 0;
     let pending: Promise<void> | undefined;
@@ -294,6 +353,7 @@ async function scan(
       maxRowBytes,
       descriptor.derive?.[table.name],
       Boolean(destination),
+      descriptor.decodeSqlite?.[table.name],
     );
     try {
       let next = stream.next();
@@ -302,7 +362,13 @@ async function scan(
         if (done) {
           break;
         }
-        for (const row of batch) {
+        const copied = transformRow
+          ? batch.flatMap((row) => {
+              const transformed = transformRow(table.name, row);
+              return transformed ? [transformed] : [];
+            })
+          : batch;
+        for (const row of copied) {
           hash.update(
             JSON.stringify(table.columns.map((c) => encodeSqliteValue(row[c.name]))) + "\n",
           );
@@ -313,8 +379,8 @@ async function scan(
         if (destination?.engine === "sqlite") {
           next = stream.next();
         }
-        if (destination) {
-          pending = insertBatch(destination, table, batch, assertCurrent);
+        if (destination && copied.length) {
+          pending = insertBatch(destination, table, copied, assertCurrent);
           void pending.catch(() => {});
         }
         if (destination?.engine !== "sqlite") {
@@ -333,6 +399,7 @@ async function scan(
 async function catalogEvidence(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
+  sourceProjection = false,
 ) {
   await endpoint.db.query("SELECT set_config('search_path', $1, false)", [
     quote(endpoint.namespace),
@@ -340,46 +407,167 @@ async function catalogEvidence(
   const facts = readPostgresCatalog(
     (await endpoint.db.query(postgresCatalogQuery(endpoint.namespace, true))).rows[0].catalog,
   ).filter((f) => f.table !== "openclaw_schema_meta");
-  assertPostgresCatalog(
-    facts.filter((f) => !f.kind.endsWith("Definition")),
-    descriptor.expectedCatalog,
-  );
+  if (
+    !sourceProjection &&
+    facts.some(
+      (fact) =>
+        fact.kind === "viewDefinition" ||
+        (fact.kind === "triggerDefinition" &&
+          !descriptor.triggers?.some(
+            (trigger) =>
+              fact.value !== null &&
+              typeof fact.value === "object" &&
+              "name" in fact.value &&
+              fact.value.name === trigger.name &&
+              fact.table === trigger.table,
+          )),
+    )
+  ) {
+    throw new DatabasePortDataError(
+      "Unknown PostgreSQL trigger or view; complete descriptor coverage required",
+    );
+  }
+  if (!sourceProjection) {
+    assertPostgresCatalog(
+      facts.filter(
+        (f) =>
+          !f.kind.endsWith("Definition") && !descriptor.postgresDerivedTables?.includes(f.table),
+      ),
+      descriptor.expectedCatalog,
+    );
+  }
   const invalid = await endpoint.db.query(
     `SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND NOT c.convalidated UNION ALL SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND NOT i.indisvalid`,
     [endpoint.namespace],
   );
   if (invalid.rowCount) {
-    throw new Error("Port catalog has unvalidated constraints or invalid indexes");
+    throw new DatabasePortDataError("Port catalog has unvalidated constraints or invalid indexes");
   }
-  return facts
-    .filter((f) => f.kind.endsWith("Definition"))
-    .map((f) => ({
-      table: f.table,
-      kind: f.kind,
-      value: JSON.parse(
-        JSON.stringify(f.value).replaceAll(endpoint.namespace, "__port_schema__"),
-      ) as unknown,
-    }));
+  return facts.map((f) => ({
+    table: f.table,
+    kind: f.kind,
+    value: JSON.parse(
+      JSON.stringify(f.value).replaceAll(endpoint.namespace, "__port_schema__"),
+    ) as unknown,
+  }));
 }
 
 async function referenceCatalog(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
+  source?: Extract<Endpoint, { engine: "postgres" }>,
 ) {
+  const sourcePostData = source && (await descriptor.postgresSourcePostData?.(source));
   const reference = { ...endpoint, namespace: `port_verify_${randomUUID().replaceAll("-", "")}` };
   await endpoint.db.query("BEGIN");
   try {
     await endpoint.db.query(
       `CREATE SCHEMA ${quote(reference.namespace)}; SET LOCAL search_path = ${quote(reference.namespace)}`,
     );
-    await endpoint.db.query(descriptor.preData + "\n" + descriptor.postData);
-    return await catalogEvidence(reference, descriptor);
+    await endpoint.db.query(
+      descriptor.preData +
+        "\n;\n" +
+        descriptor.postData +
+        "\n;\n" +
+        (descriptor.postgresPostData?.(reference.namespace) ?? ""),
+    );
+    const base = await catalogEvidence(reference, descriptor);
+    if (sourcePostData) {
+      await endpoint.db.query(sourcePostData(reference.namespace));
+      return { base, source: await catalogEvidence(reference, descriptor, true) };
+    }
+    return { base, source: undefined };
   } finally {
     await endpoint.db.query("ROLLBACK");
   }
 }
 
-/** Offline worker API: caller owns tracked readBigInts SQLite handles, migrated source, fresh destination, and exclusive custody. No publication. */
+async function assertSourceIdentity(
+  source: Extract<Endpoint, { engine: "postgres" }>,
+  descriptor: PortDescriptor,
+  storeId: string,
+) {
+  const meta = (
+    await source.db.query(
+      `SELECT store, version, store_id FROM ${qualified(source, "openclaw_schema_meta")}`,
+    )
+  ).rows;
+  if (
+    meta.length !== 1 ||
+    meta[0].store !== descriptor.id ||
+    meta[0].store_id !== storeId ||
+    BigInt(meta[0].version) !== BigInt(descriptor.version)
+  ) {
+    throw new DatabasePortDataError("Port source identity or schema version differs");
+  }
+}
+
+/** Offline recovery inspection, never a runtime foreign-writer probe. */
+export async function inspectDatabasePort(
+  source: Endpoint,
+  baseDescriptor: PortDescriptor,
+  storeId?: string,
+  verifyDefinitions = false,
+) {
+  const descriptor = await admitDatabasePortDescriptor(source, baseDescriptor);
+  let definitions: Awaited<ReturnType<typeof referenceCatalog>> | undefined;
+  if (source.engine === "postgres") {
+    await assertSourceIdentity(source, descriptor, storeId ?? "");
+    definitions =
+      verifyDefinitions || descriptor.postgresSourcePostData
+        ? await referenceCatalog(source, descriptor, source)
+        : undefined;
+    await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  } else {
+    source.db.exec("BEGIN");
+  }
+  try {
+    let catalog =
+      source.engine === "postgres"
+        ? await catalogEvidence(source, descriptor, Boolean(definitions?.source))
+        : [];
+    if (definitions) {
+      assertPostgresCatalog(catalog, definitions.source ?? definitions.base);
+      catalog = definitions.base;
+    }
+    return {
+      catalog,
+      tables: await scan(source, descriptor, 64 * 1024 * 1024),
+      allocations: await readDatabasePortAllocations(source, descriptor),
+    };
+  } finally {
+    if (source.engine === "postgres") {
+      await source.db.query("ROLLBACK");
+    } else {
+      source.db.exec("ROLLBACK");
+    }
+  }
+}
+
+/** One capability contract for dry-run evidence and the actual copy session. */
+export async function readPostgresPortCapabilities(
+  db: Client,
+  descriptor: Pick<PortDescriptor, "minimumPostgresVersion">,
+) {
+  const server = (
+    await db.query<{ version: number; encoding: string; client_encoding: string }>(
+      "SELECT current_setting('server_version_num')::int AS version, current_setting('server_encoding') AS encoding, current_setting('client_encoding') AS client_encoding",
+    )
+  ).rows[0];
+  if (
+    !server ||
+    server.version < descriptor.minimumPostgresVersion * 10000 ||
+    server.encoding !== "UTF8" ||
+    server.client_encoding !== "UTF8"
+  ) {
+    throw new DatabasePortDataError(
+      `Observed PostgreSQL ${server?.version}/${server?.encoding}/${server?.client_encoding}; required PostgreSQL >=${descriptor.minimumPostgresVersion} and UTF8 server/client`,
+    );
+  }
+  return { version: server.version, encoding: server.encoding };
+}
+
+/** Offline worker API: caller owns tracked SQLite handles (data statements read BigInts), migrated source, fresh destination, and exclusive custody. No publication. */
 export async function materializeDatabasePort(params: {
   source: Endpoint;
   destination: Endpoint;
@@ -387,39 +575,29 @@ export async function materializeDatabasePort(params: {
   storeId: string;
   assertCurrent: () => void;
   maxRowBytes?: number;
+  sourceAllocations?: PortVerification["allocations"];
+  activeFragments?: readonly string[];
+  /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined;
 }): Promise<PortVerification> {
-  const { source, destination, descriptor, assertCurrent } = params;
+  const { source, destination, assertCurrent } = params;
   if (source.engine === destination.engine) {
-    throw new Error("Port endpoints must use different engines");
+    throw new DatabasePortDataError("Port endpoints must use different engines");
   }
+  const descriptor = await admitDatabasePortDescriptor(
+    source,
+    params.descriptor,
+    params.activeFragments,
+  );
   const maxRowBytes = params.maxRowBytes ?? 64 * 1024 * 1024;
   const postgres = [source, destination].find(
     (endpoint): endpoint is Extract<Endpoint, { engine: "postgres" }> =>
       endpoint.engine === "postgres",
   )!;
-  const server = (
-    await postgres.db.query(
-      "SELECT current_setting('server_version_num')::int AS version, current_setting('server_encoding') AS encoding",
-    )
-  ).rows[0];
-  if (server.version < descriptor.minimumPostgresVersion * 10000 || server.encoding !== "UTF8") {
-    throw new Error("Port requires supported PostgreSQL with UTF8 encoding");
-  }
+  await readPostgresPortCapabilities(postgres.db, descriptor);
   await postgres.db.query("SET row_security = off");
   if (source.engine === "postgres") {
-    const meta = (
-      await source.db.query(
-        `SELECT version, store_id FROM ${qualified(source, "openclaw_schema_meta")} WHERE store = $1`,
-        [descriptor.id],
-      )
-    ).rows;
-    if (
-      meta.length !== 1 ||
-      meta[0].store_id !== params.storeId ||
-      BigInt(meta[0].version) !== BigInt(descriptor.version)
-    ) {
-      throw new Error("Port source identity or schema version differs");
-    }
+    await assertSourceIdentity(source, descriptor, params.storeId);
   }
   if (destination.engine === "sqlite") {
     admitSqliteSchema(destination.db);
@@ -431,13 +609,20 @@ export async function materializeDatabasePort(params: {
       facts.indexes.size ||
       facts.triggers.size
     ) {
-      throw new Error("Port destination must have admitted empty schema facts");
+      throw new DatabasePortDataError("Port destination must have admitted empty schema facts");
     }
   }
   assertCurrent();
-  const definitions = await referenceCatalog(postgres, descriptor);
+  const definitions = await referenceCatalog(
+    postgres,
+    descriptor,
+    source.engine === "postgres" ? source : undefined,
+  );
   if (source.engine === "postgres") {
-    assertPostgresCatalog(await catalogEvidence(source, descriptor), definitions);
+    assertPostgresCatalog(
+      await catalogEvidence(source, descriptor, Boolean(definitions.source)),
+      definitions.source ?? definitions.base,
+    );
   }
   if (source.engine === "postgres") {
     await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -446,22 +631,43 @@ export async function materializeDatabasePort(params: {
   }
   try {
     if (destination.engine === "postgres") {
-      await destination.db.query("SET synchronous_commit = on; SET statement_timeout = '1h'");
+      await destination.db.query(
+        "BEGIN; SET LOCAL synchronous_commit = on; SET LOCAL statement_timeout = '1h'",
+      );
       assertCurrent();
       await destination.db.query(`CREATE SCHEMA ${quote(destination.namespace)}`);
       await destination.db.query(`SET search_path = ${quote(destination.namespace)}`);
       await destination.db.query(descriptor.preData);
     } else {
       withSqliteForeignKeysDisabled(destination.db, () => destination.db.exec(descriptor.sqlite));
+      for (const trigger of descriptor.triggers ?? []) {
+        destination.db.exec(`DROP TRIGGER ${quote(trigger.name)}`);
+      }
     }
-    const facts = await allocations(source, descriptor);
-    const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
+    const facts =
+      params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
+    const tables = await scan(
+      source,
+      descriptor,
+      maxRowBytes,
+      destination,
+      assertCurrent,
+      params.transformRow,
+    );
     assertCurrent();
     await restoreAllocations(destination, descriptor, facts);
+    for (const projection of descriptor.projections ?? []) {
+      assertCurrent();
+      await projection.rebuild(destination);
+    }
     if (destination.engine === "postgres") {
       assertCurrent();
-      await destination.db.query(descriptor.postData);
-      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions);
+      await destination.db.query(
+        descriptor.postData +
+          "\n;\n" +
+          (descriptor.postgresPostData?.(destination.namespace) ?? ""),
+      );
+      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions.base);
       await destination.db.query(
         "CREATE TABLE openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
       );
@@ -471,16 +677,33 @@ export async function materializeDatabasePort(params: {
         params.storeId,
       ]);
     } else {
+      for (const trigger of descriptor.triggers ?? []) {
+        destination.db.exec(trigger.sql);
+      }
+      writeSqliteUserVersion(destination.db, descriptor.version);
       assertSqliteIntegrity(destination.db, "Port SQLite destination");
     }
     const verified = {
       tables: await scan(destination, descriptor, maxRowBytes),
-      allocations: await allocations(destination, descriptor),
+      allocations: await readDatabasePortAllocations(destination, descriptor),
     };
-    if (!isDeepStrictEqual(verified, { tables, allocations: facts })) {
-      throw new Error("Port canonical verification failed");
+    const expected =
+      destination.engine === "sqlite"
+        ? sqlitePortAllocations(descriptor, verified.allocations, facts)
+        : facts;
+    if (!isDeepStrictEqual(verified, { tables, allocations: expected })) {
+      throw new DatabasePortDataError("Port canonical verification failed");
+    }
+    if (destination.engine === "postgres") {
+      assertCurrent();
+      await destination.db.query("COMMIT");
     }
     return verified;
+  } catch (error) {
+    if (destination.engine === "postgres") {
+      await destination.db.query("ROLLBACK").catch(() => {});
+    }
+    throw error;
   } finally {
     if (source.engine === "postgres") {
       await source.db.query("ROLLBACK");

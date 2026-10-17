@@ -31,7 +31,7 @@ import { CommanderError } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
 import { registerRunMainProxyExitTests } from "./run-main.proxy-exit.test-support.js";
-import { waitForCliSignalExit } from "./signal-exit-barrier.js";
+import { registerSignalExitOwner, waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
@@ -180,6 +180,14 @@ describe("runCli exit behavior", () => {
         expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
           resumeStdinIfPaused: false,
         });
+        const owner = vi.fn();
+        const releaseOwner = registerSignalExitOwner(owner);
+        try {
+          handler(new Error("owned failure"));
+          expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
+        } finally {
+          releaseOwner();
+        }
       } finally {
         await waitForCliSignalExit();
         process.exitCode = previousExitCode;

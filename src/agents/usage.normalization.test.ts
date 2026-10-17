@@ -74,6 +74,21 @@ describe("normalizeUsage", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });
 
+  it("keeps interrupted accounting observable without treating provisional counts or cost as complete", () => {
+    expect(
+      normalizeUsage({
+        input: 20,
+        output: 3,
+        total: 23,
+        cost: { total: 0.5 },
+        usageReport: { state: "unavailable" },
+      }),
+    ).toEqual({
+      usageReport: { state: "unavailable" },
+      contextUsage: { state: "unavailable" },
+    });
+  });
+
   it("guards against empty/zero usage overwrites", () => {
     expect(hasNonzeroUsage(undefined)).toBe(false);
     expect(hasNonzeroUsage(null)).toBe(false);
@@ -82,6 +97,13 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage({ reasoningTokens: 1 })).toBe(true);
     expect(hasNonzeroUsage({ input: 1 })).toBe(true);
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
+    expect(
+      hasNonzeroUsage({
+        input: 12,
+        output: 3,
+        usageReport: { state: "unavailable" },
+      }),
+    ).toBe(false);
   });
 
   it("does not clamp derived session total tokens to the context window", () => {

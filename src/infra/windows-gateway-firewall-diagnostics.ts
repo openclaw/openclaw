@@ -412,7 +412,7 @@ function classifyWindowsGatewayFirewallState(
   const diagnostic = (
     code: WindowsGatewayFirewallDiagnosticCode,
     message: string,
-    details: string[] = [],
+    details: string[],
     severity: WindowsGatewayFirewallDiagnostic["severity"] = "warning",
   ): WindowsGatewayFirewallDiagnostic => ({
     applies: true,

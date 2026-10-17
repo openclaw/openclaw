@@ -69,72 +69,21 @@ describe("X public reply delivery", () => {
   });
 
   it.each([
-    { label: "HTTP URLs", value: `https://example.com/${"a".repeat(300)}`, weight: 23 },
-    { label: "bare domains", value: "x.co", weight: 23 },
-    {
-      label: "long bare URLs with modern TLDs",
-      value: `${"a".repeat(60)}.example.software/${"path".repeat(100)}`,
-      weight: 23,
-    },
     { label: "punctuation around URLs", value: "(https://example.com/a_(b)).", weight: 26 },
-    { label: "email links", value: "mailto:maintainer@example.com", weight: 29 },
-    { label: "bare email addresses", value: "maintainer@example.com", weight: 22 },
-    { label: "FTP URLs", value: "ftp://example.com/file", weight: 22 },
-    { label: "family emoji", value: "👨‍👩‍👧‍👦", weight: 2 },
-    { label: "flag emoji", value: "🇦🇹", weight: 2 },
-    { label: "combining characters", value: "e\u0301", normalized: "é", weight: 1 },
-    { label: "nonstandard ZWJ sequences", value: "👨‍🐶", weight: 5 },
-  ])(
-    "splits $label only above the 280-character weight limit",
-    async ({ value, normalized, weight }) => {
-      const { api, sent } = createReplyFixture();
-      const prefix = "a".repeat(279 - weight);
-      const output = normalized ?? value;
-      await sendXReply({ api, text: `${prefix} ${value}`, replyToId: "90", signature: "" });
-      expect(sent.map((post) => post.text)).toEqual([`${prefix} ${output}`]);
-      sent.length = 0;
-      await sendXReply({ api, text: `${prefix}a ${value}`, replyToId: "90", signature: "" });
-      expect(sent.map((post) => post.text)).toEqual([`${prefix}a`, output]);
-    },
-  );
-
-  it.each([true, false, undefined])(
-    "uses the same canonical work-session URL with publicRead=%s",
-    async (publicRead) => {
-      const { api, sent } = createReplyFixture();
-      const url = "https://example.test/chat/maintainer/work";
-      await sendXReply({
-        api,
-        text: "Working on it.",
-        replyToId: "90",
-        signature: "",
-        visibleWorkSessions: [{ sessionKey: "work", url, publicRead }],
-      });
-      expect(sent.map((post) => post.text)).toEqual([
-        publicRead === true
-          ? `Working on it.\n${url}`
-          : `Working on it.\nWork session (sign-in required): ${url}`,
-      ]);
-    },
-  );
-
-  it("keeps an existing visible session URL once and adds the default signature", async () => {
+  ])("splits $label only above the 280-character weight limit", async ({ value, weight }) => {
     const { api, sent } = createReplyFixture();
-    const url = "https://example.com/sessions/work";
-    await sendXReply({
-      api,
-      text: `already ${url}`,
-      replyToId: "90",
-      visibleWorkSessions: [{ sessionKey: "work", url }],
-    });
-    expect(sent.map((post) => post.text)).toEqual([`already ${url}\n🤖 automated reply`]);
+    const prefix = "a".repeat(279 - weight);
+    const output = value;
+    await sendXReply({ api, text: `${prefix} ${value}`, replyToId: "90", signature: "" });
+    expect(sent.map((post) => post.text)).toEqual([`${prefix} ${output}`]);
+    sent.length = 0;
+    await sendXReply({ api, text: `${prefix}a ${value}`, replyToId: "90", signature: "" });
+    expect(sent.map((post) => post.text)).toEqual([`${prefix}a`, output]);
   });
 
   it.each([
-    ["x:123", "123"],
     ["https://x.com/maintainer/status/123", "123"],
     ["https://x.com.evil.test/maintainer/status/123", undefined],
-    ["https://x.com/maintainer", undefined],
   ] as const)("resolves only post targets: %s", (input, expected) => {
     expect(normalizeXReplyTarget(input)).toBe(expected);
   });

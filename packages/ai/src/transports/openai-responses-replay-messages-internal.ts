@@ -16,6 +16,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -40,7 +41,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
-import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import {
+  normalizeOpenAIResponsesReasoningReplayItem,
+  resolveReplayableResponsesMessageId,
+} from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -101,23 +105,6 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   }
   const value = block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY];
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : null;
-}
-
-function normalizeOpenAIResponsesReasoningReplayItem(
-  item: ReplayableResponseReasoningItem,
-  api: Api,
-): ReplayableResponseReasoningItem {
-  if (api === "openai-chatgpt-responses") {
-    return Array.isArray(item.summary) ? item : { ...item, summary: [] };
-  }
-  // Match storage's reasoning privacy shape and order before warm replay too.
-  return {
-    id: item.id,
-    type: "reasoning",
-    summary: [],
-    status: item.status,
-    encrypted_content: item.encrypted_content,
-  };
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(
@@ -344,7 +331,8 @@ function convertResponsesMessagesWithStyle(
       ? transformProviderMessages(source, model, normalizeToolCallId)
       : getAiTransportHost().transformTransportMessages(source, model, normalizeToolCallId, {
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
-          preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
+          preserveUnframedToolResults:
+            replayPlan.preserveUnframedToolResults || preparedRequestSuffix.has(context),
         });
   // Results are durable when jobs finish, but Responses continuation must replay
   // every output fragment before adding results to that response's input suffix.
@@ -464,6 +452,7 @@ function convertResponsesMessagesWithStyle(
       const sourceFragmentId = msg.content.find((block) => block.type === "toolCall")?.id;
       let textFallbackOrdinal = 0;
       let previousReplayItemWasReasoning = false;
+      let seenReplayableReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -503,6 +492,9 @@ function convertResponsesMessagesWithStyle(
             }
             output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
+            seenReplayableReasoning ||=
+              typeof replayableReasoningItem.id === "string" &&
+              replayableReasoningItem.id.startsWith("rs_");
           }
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
@@ -540,8 +532,10 @@ function convertResponsesMessagesWithStyle(
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
+          // Orphan fc_* ids can be rejected; omit them on the wire without rewriting history.
           const itemId =
-            shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
+            shouldReplayResponsesItemIds &&
+            (!itemIdRaw?.startsWith("fc_") || (seenReplayableReasoning && !isDifferentModel))
               ? itemIdRaw
               : undefined;
           output.push({
@@ -582,8 +576,15 @@ function convertResponsesMessagesWithStyle(
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
-      const callId =
+      const rawCallId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
+      const callId = preparedRequestSuffix.has(context)
+        ? preparedRequestSuffix.toolCallId(
+            context,
+            rawCallId,
+            normalizeToolCallId(rawCallId, model, model),
+          )
+        : rawCallId;
       let output: string | ResponseFunctionCallOutputItemList = hasText
         ? textResult
         : (mediaPlaceholder ?? "(no output)");

@@ -7,8 +7,8 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
-import { renderMessageGroup } from "./components/chat-message-group.ts";
-import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
+import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
+import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
 import { agentEvent, createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -75,22 +75,22 @@ it("renders a persisted standalone tool result as a Grant card without expanding
   };
   const [group] = groupMessages([{ kind: "message", key: "capture", message: result }]);
   // SAFETY: this transcript leaf consumes only the native settings owner.
-  const container = createApplicationContextProvider({
-    nativeDeviceSettings,
-  } as ApplicationContext);
+  const container = document.body.appendChild(
+    createApplicationContextProvider({ nativeDeviceSettings } as ApplicationContext),
+  );
+  onTestFinished(() => container.remove());
   if (!group || group.kind !== "group") {
     throw new Error("Expected a tool message group");
   }
-  await renderToolFixture(
-    renderMessageGroup(group, { assistantName: "OpenClaw", showReasoning: false }),
-    container,
-  );
+  const view = createMessageGroupHarness(container);
+  view.render(group, { assistantName: "OpenClaw", showReasoning: false });
+  await settleToolBridges(container);
   expect(container.querySelector(".chat-permission-card")?.textContent).toContain(
     "Grant Screen Recording",
   );
   expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
   const button = container.querySelector<HTMLButtonElement>(".chat-permission-card button");
-  expect(button?.textContent).toBe("Grant Screen Recording");
+  expect(button?.textContent).toBe("Open System Settings");
   button?.click();
   expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request: permissionMissing });
 });

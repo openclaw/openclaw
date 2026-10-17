@@ -1,5 +1,5 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
@@ -178,58 +178,6 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
-      prompt: "queued message",
-      enqueuedAt: Date.now(),
-      run: {
-        ...makeRun(),
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        thinkLevel: "ultra",
-      },
-    });
-
-    refreshQueuedFollowupSession({
-      key: QUEUE_KEY,
-      nextProvider: "openai",
-      nextModel: "gpt-5.6-luna",
-      nextRouteResolution: "resolved",
-      nextThinking: {
-        level: "ultra",
-        catalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
-        agentRuntime: "codex",
-      },
-    });
-
-    expect(queue.items[0]?.run).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      thinkLevel: "ultra",
-      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
-    });
-  });
-
-  it("preserves harness-only Ultra when retargeting queued work", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
-      prompt: "queued message",
-      enqueuedAt: Date.now(),
-      run: { ...makeRun(), thinkLevel: "ultra" },
-    });
-
-    refreshQueuedFollowupSession({
-      key: QUEUE_KEY,
-      nextProvider: "custom",
-      nextModel: "reasoner",
-      nextRouteResolution: "resolved",
-      nextThinking: { level: "ultra", agentRuntime: "openclaw" },
-    });
-
-    expect(queue.items[0]?.run.thinkLevel).toBe("ultra");
-  });
-
   it.each([
     { requested: "off", stored: "high", expected: ["off", "off", "off"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
@@ -271,66 +219,12 @@ describe("refreshQueuedFollowupSession", () => {
     },
   );
 
-  describe.each([undefined] as const)("thinking source %s", (source) => {
-    it.each<{ name: string; config: FollowupRun["run"]["config"]; expected: string }>([
-      {
-        name: "agent",
-        config: {
-          agents: {
-            entries: { main: { thinkingDefault: "low" } },
-            defaults: {
-              thinkingDefault: "off",
-              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
-            },
-          },
-        },
-        expected: "low",
-      },
-      {
-        name: "agent model",
-        config: {
-          agents: {
-            entries: {
-              main: {
-                models: { "openai/gpt-5.6-sol": { params: { thinking: "low" } } },
-              },
-            },
-            defaults: {
-              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
-            },
-          },
-        },
-        expected: "low",
-      },
-    ])("honors the configured $name default when retargeting", ({ config, expected }) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-      const run: FollowupRun["run"] = {
-        ...makeRun(),
-        config,
-        thinkLevel: "medium",
-        thinkLevelOverride: source,
-      };
-      queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
-      refreshQueuedFollowupSession({
-        key: QUEUE_KEY,
-        nextProvider: "openai",
-        nextModel: "gpt-5.6-sol",
-        nextThinking: {
-          level: source === "default" ? "off" : undefined,
-          catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "Sol", reasoning: true }],
-          agentRuntime: "codex",
-        },
-      });
-      expect(run.thinkLevel).toBe(expected);
-    });
-  });
-
   it("recomputes the retargeted model default when the session has no thinking override", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
-      run: { ...makeRun(), thinkLevel: "ultra" },
+      run: { ...makeRun(), thinkLevel: "ultra", thinkingExplicit: true },
     });
 
     refreshQueuedFollowupSession({
@@ -344,10 +238,38 @@ describe("refreshQueuedFollowupSession", () => {
     // Sol's provider default reasoning level is medium (extensions/openai
     // thinking-policy.ts); retargeting without an override adopts it.
     expect(queue.items[0]?.run.thinkLevel).toBe("medium");
+    expect(queue.items[0]?.run.thinkingExplicit).toBe(false);
   });
 });
 
 describe("getFollowupQueue", () => {
+  it("settles evicted summary sources and retains surviving delivery correlations", () => {
+    const sources = Array.from({ length: 4 }, (_, index) => ({
+      prompt: `queued message ${index}`,
+      enqueuedAt: index,
+      run: makeRun(),
+      onQueueDisposition: vi.fn(),
+      deliveryCorrelations: [{ begin: () => undefined }],
+    }));
+    for (const source of sources) {
+      expect(
+        enqueueFollowupRun(QUEUE_KEY, source, {
+          mode: "followup",
+          cap: 1,
+          dropPolicy: "summarize",
+        }),
+      ).toBe(true);
+    }
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
+    expect(sources[0]?.onQueueDisposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+    for (const source of sources.slice(1)) {
+      expect(source.onQueueDisposition).not.toHaveBeenCalled();
+    }
+    expect(queue.summaryElisions[0]?.sources[0]?.deliveryCorrelations).toBe(
+      sources[1]?.deliveryCorrelations,
+    );
+  });
+
   it("aborts work owned by a cleared queue", () => {
     const queuedRun: FollowupRun = {
       prompt: "queued message",

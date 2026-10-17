@@ -88,31 +88,18 @@ describe("GatewayChatClient", () => {
     vi.restoreAllMocks();
   });
 
-  it("preserves availability from the published model catalog", async () => {
-    const models = [
-      {
-        provider: "fixture",
-        id: "waiting",
-        name: "Waiting",
-        available: false,
-        unavailableReason: "cooldown",
-      },
-      { provider: "fixture", id: "unknown", name: "Unknown" },
-    ];
-    const request = mockRequest({ models });
-    const client = createClient();
-    client.hello = hello(["models.list"], undefined, [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG]);
-    expect(await client.listModels({ agentId: "work" })).toEqual(models);
-    expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
-      agentId: "work",
-      includeDetails: true,
-    });
-  });
-
   it("isolates session-scoped catalogs only when the Gateway advertises them", async () => {
     const request = mockRequest()
       .mockResolvedValueOnce({
-        models: [{ provider: "fixture", id: "first", name: "First" }],
+        models: [
+          {
+            provider: "fixture",
+            id: "first",
+            name: "First",
+            available: false,
+            unavailableReason: "cooldown",
+          },
+        ],
       })
       .mockResolvedValueOnce({
         models: [{ provider: "fixture", id: "second", name: "Second" }],
@@ -136,9 +123,15 @@ describe("GatewayChatClient", () => {
       sessionKey: "agent:work:second",
       includeDetails: true,
     });
-    expect(
-      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:first" })?.[0]?.id,
-    ).toBe("first");
+    expect(client.getKnownModels({ agentId: "work", sessionKey: "agent:work:first" })?.[0]).toEqual(
+      {
+        provider: "fixture",
+        id: "first",
+        name: "First",
+        available: false,
+        unavailableReason: "cooldown",
+      },
+    );
     expect(
       client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
     ).toBe("second");

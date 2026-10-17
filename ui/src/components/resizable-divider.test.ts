@@ -318,5 +318,10 @@ describe("resizable-divider", () => {
     expect(resizeEnded).toHaveBeenCalledOnce();
     dispatchPointer(document, "pointerup", 120);
     expect(resizeEnded).toHaveBeenCalledOnce();
+    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    dispatchPointer(divider, "pointerdown", 100);
+    expect(resized).toHaveBeenCalledOnce();
+    expect(resizeEnded).toHaveBeenCalledOnce();
+    expect(divider.classList.contains("dragging")).toBe(false);
   });
 });

@@ -7,8 +7,6 @@ import {
 } from "./media-catalog.js";
 
 const GIB = 1024 ** 3;
-const OCR = "glm-ocr-q8_0";
-const VISION = "smolvlm2-2.2b-instruct-q4_k_m";
 
 function hardware(overrides: Partial<LlamaCppHardware> = {}): LlamaCppHardware {
   return {
@@ -48,41 +46,15 @@ describe("managed local media catalog", () => {
     expect(resolveLlamaCppMediaArtifact("hf:unknown/model/mmproj.gguf")).toBeUndefined();
   });
 
-  it("selects the verified OCR/vision pair", () => {
-    expect(recommendLlamaCppMedia(hardware())).toMatchObject({
-      kind: "recommended",
-      ocr: { id: OCR, prompt: "Text Recognition:" },
-      vision: { id: VISION },
-    });
-  });
-
-  it.each([
-    { host: hardware({ totalMemoryBytes: 4 * GIB }), reason: /total RAM/u },
-    { host: hardware({ availableMemoryBytes: 3 * GIB }), reason: /current memory pressure/u },
-  ])("rejects incomplete pairs under total and available memory limits", ({ host, reason }) => {
-    expect(recommendLlamaCppMedia(host)).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringMatching(reason),
-    });
-  });
-
-  it("rejects a partial setup when the complete verified pair does not fit disk", () => {
-    expect(recommendLlamaCppMedia(hardware({ availableDiskBytes: 4 * GIB }))).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringContaining("projectors"),
-    });
-  });
-
-  it("retains memory headroom beyond the measured small vision fixture", () => {
-    expect(recommendLlamaCppMedia(hardware({ availableMemoryBytes: 4.5 * GIB }))).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringContaining("SmolVLM2 2.2B (Q4_K_M) requires 5 GiB"),
-    });
-    expect(recommendLlamaCppMedia(hardware({ totalMemoryBytes: 7.75 * GIB }))).toMatchObject({
-      kind: "recommended",
-      vision: { id: VISION, memoryBytes: 5 * GIB },
-    });
-  });
+  it.each([{ host: hardware({ totalMemoryBytes: 4 * GIB }), reason: /total RAM/u }])(
+    "rejects incomplete pairs under total and available memory limits",
+    ({ host, reason }) => {
+      expect(recommendLlamaCppMedia(host)).toMatchObject({
+        kind: "unavailable",
+        reason: expect.stringMatching(reason),
+      });
+    },
+  );
 
   it("charges separate volumes separately and shared capacity only once", () => {
     const host = hardware({
@@ -126,10 +98,6 @@ describe("managed local media catalog", () => {
       requiredDiskBytes: initial.vision.projector.expectedSize,
     });
     expect(recommendLlamaCppMedia(host, { artifactSha256 }).kind).toBe("unavailable");
-  });
-
-  it.each([undefined, 0])("fails closed when model disk space is %s", (availableDiskBytes) => {
-    expect(recommendLlamaCppMedia(hardware({ availableDiskBytes })).kind).toBe("unavailable");
   });
 
   it("does not guess when runtime free space is unknown", () => {

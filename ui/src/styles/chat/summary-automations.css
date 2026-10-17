@@ -11,11 +11,11 @@ openclaw-chat-summary-automations {
 
 .chat-summary__automation {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) fit-content(50%);
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
   min-height: 32px;
   gap: 10px;
-  padding: 5px 7px;
+  padding: 8px 0;
   border-radius: 8px;
   color: var(--text);
   text-decoration: none;
@@ -47,6 +47,7 @@ openclaw-chat-summary-automations {
 .chat-summary__automation-title {
   display: block;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-summary__automation-state {
@@ -54,7 +55,8 @@ openclaw-chat-summary-automations {
   color: var(--muted);
   font-size: 11px;
   line-height: 17px;
-  text-align: end;
+  grid-column: 2;
+  text-align: start;
   overflow-wrap: anywhere;
 }
 

@@ -56,8 +56,8 @@ vi.mock(import("../../auto-reply/reply/reply-run-registry.js"), async (importOri
 vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
   emitMessageReceivedHooks: vi.fn(),
 }));
-// mock-isolation: Message-injection orchestration suppresses session writes while asserting delivery behavior.
-vi.mock("../../config/sessions/session-accessor.js", () => ({
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   updateSessionEntry: vi.fn(async () => undefined),
   recordSessionParticipant: vi.fn(async () => null),
 }));
@@ -174,6 +174,8 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       aborted: false,
     });
     const params = makeParams();
+    const entry = Object.freeze({ sessionId: "session-1", updatedAt: 1 });
+    params.session.entry = entry;
     prepareSessionParticipantInput(params.ctx, { type: "profile", id: "profile-steerer" }, 42);
     await finalizeAcceptedChatSendMessageInjection(params);
     expect(recordSessionParticipant).toHaveBeenCalledOnce();
@@ -192,6 +194,8 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       }),
     );
     expect(updateSessionEntry).toHaveBeenCalledOnce();
+    expect(entry.updatedAt).toBe(1);
+    expect(params.session.entry?.updatedAt).toBeGreaterThan(1);
   });
 
   it("reports indeterminate question input without claiming success or falling back", async () => {
@@ -359,13 +363,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       const begin = createChatSendMessageInjectionStarter(params);
 
       if (authority === "refused") {
-        let thrown: unknown;
-        try {
-          await begin();
-        } catch (error) {
-          thrown = error;
-        }
-        expect(thrown).toBe(refusal);
+        await expect(begin()).rejects.toBe(refusal);
         expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
       } else {
         expect(await begin()).toBeUndefined();
@@ -592,6 +590,23 @@ describe("createChatSendMessageInjectionStarter", () => {
     };
   }
 
+  async function expectSteer(
+    params: Parameters<typeof createChatSendMessageInjectionStarter>[0],
+    text: string,
+    options: Record<string, unknown> = { isInboundUserMessage: true },
+  ) {
+    const originalContext = structuredClone(params.turn.ctx);
+    const attempt = await createChatSendMessageInjectionStarter(params)();
+    await expect(attempt?.acceptance).resolves.toBe(true);
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      params.target,
+      text,
+      expect.objectContaining(options),
+    );
+    expect(params.turn.ctx).toEqual(originalContext);
+  }
+
   it.each([
     {
       caption: "see attached",
@@ -620,17 +635,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       ],
       documentContext: { status: "rendered", text: documentText, images: [] },
     });
-    const durableContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledOnce();
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      params.target,
-      expectedText,
-      expect.objectContaining({ isInboundUserMessage: true }),
-    );
-    expect(params.turn.ctx).toEqual(durableContext);
+    await expectSteer(params, expectedText);
   });
 
   it("keeps the attachment note when document rendering fails", async () => {
@@ -639,16 +644,10 @@ describe("createChatSendMessageInjectionStarter", () => {
       media: [{ path: "media://inbound/note.txt", contentType: "text/plain" }],
       documentContext: { status: "failed" },
     });
-    const originalContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      params.target,
+    await expectSteer(
+      params,
       "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
-      expect.objectContaining({ isInboundUserMessage: true }),
     );
-    expect(params.turn.ctx).toEqual(originalContext);
   });
 
   it("keeps the base text untouched when no document context was rendered", async () => {
@@ -684,25 +683,20 @@ describe("createChatSendMessageInjectionStarter", () => {
         ],
       },
     });
-    const durableContext = structuredClone(params.turn.ctx);
-
-    await createChatSendMessageInjectionStarter(params)();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
+    await expectSteer(
+      params,
       "[media attached: 2 files]\n" +
         "[media attached 1/2: media://inbound/photo.png (image/png)]\n" +
         "[media attached 2/2: media://inbound/scan.pdf (application/pdf)]\n\n" +
         "see attached\n\n[PDF content rendered to images]",
-      expect.objectContaining({
+      {
         images: [
           { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
           { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
           { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
         ],
-      }),
+      },
     );
-    expect(params.turn.ctx).toEqual(durableContext);
   });
 
   it("injects extracted page images when the steer carries no inbound images", async () => {

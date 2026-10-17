@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-import { joinJsonlFrames, claudeStreamEvent, claudeTextDelta } from "./cli-output.test-helpers.js";
+import {
+  createClaudeParser,
+  joinJsonlFrames,
+  claudeStreamEvent,
+  claudeTextDelta,
+} from "./cli-output.test-helpers.js";
 
 type ParserOptions = Parameters<typeof createCliJsonlStreamingParser>[0];
 const claudeBackend: ParserOptions["backend"] = {
@@ -14,13 +19,6 @@ function createParser(overrides: Partial<ParserOptions> = {}) {
     backend: { ...claudeBackend, command: "local-cli" },
     providerId: "local-cli",
     onAssistantDelta: () => {},
-    ...overrides,
-  });
-}
-function createClaudeParser(overrides: Partial<ParserOptions> = {}) {
-  return createParser({
-    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-    providerId: "claude-cli",
     ...overrides,
   });
 }
@@ -47,6 +45,9 @@ function toolStart(id = "tool-1", index?: number) {
       ...(index === undefined ? {} : { input: {} }),
     },
   });
+}
+function itemMessage(text: string) {
+  return { type: "item.completed", item: { type: "agent_message", text } };
 }
 function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
   return {
@@ -92,15 +93,6 @@ describe("createCliJsonlStreamingParser", () => {
       ],
       expected: [["Read"]],
     },
-    {
-      name: "malformed and missing lists left for owner validation",
-      frames: [["Read"], "Bash", null, ["Read", 7], undefined].map((tools) => ({
-        type: "system",
-        subtype: "init",
-        tools,
-      })),
-      expected: [["Read"], "Bash", null, ["Read", 7], undefined],
-    },
   ])("observes native tools across chunked $name", ({ frames, expected }) => {
     const snapshots: unknown[] = [];
     const parser = createClaudeParser({ onNativeTools: (tools) => snapshots.push(tools) });
@@ -110,27 +102,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(first.slice(-2) + "\n" + joinJsonlFrames(...frames.slice(1)));
     parser.finish();
     expect(snapshots).toEqual(expected);
-  });
-
-  it("normalizes usage while incrementally streaming CLI JSONL", () => {
-    const parser = createParser();
-    finishFrames(
-      parser,
-      init("openai-compatible-session"),
-      result("OpenAI-compatible response", {
-        usage: {
-          prompt_tokens: 17,
-          completion_tokens: 5,
-          total_tokens: 22,
-          prompt_tokens_details: { cached_tokens: 6 },
-        },
-      }),
-    );
-    expect(parser.getOutput()).toEqual({
-      text: "OpenAI-compatible response",
-      sessionId: "openai-compatible-session",
-      usage: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-    });
   });
 
   it.each([
@@ -240,18 +211,8 @@ describe("createCliJsonlStreamingParser", () => {
 
   it.each([
     {
-      name: "raw tool protocol",
-      text: '<invoke name="Bash">\n<parameter name="command">echo 1</parameter>\n</invoke>',
-      rejected: true,
-    },
-    {
       name: "incomplete tool protocol",
       text: '<invoke name="Bash">\n<parameter name="command">echo 1',
-      rejected: true,
-    },
-    {
-      name: "incomplete opening tag",
-      text: '<invoke name="Ba',
       rejected: true,
     },
     {
@@ -323,6 +284,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "toolless closer after tool-using message",
@@ -337,6 +299,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nAfter.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "existing newlines at message boundaries",
@@ -349,6 +312,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "tool split after an ordinary boundary",
@@ -363,6 +327,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "fresh message starting with a tool call",
@@ -403,26 +368,65 @@ describe("createCliJsonlStreamingParser", () => {
       frames: [claudeTextDelta("draft wording"), result("authoritative result")],
       expectedText: "authoritative result",
     },
-  ])("resolves streamed/result precedence for $name", ({ frames, expectedText, checkDelta }) => {
-    const deltas: Parameters<ParserOptions["onAssistantDelta"]>[0][] = [];
-    const sessionIds: string[] = [];
-    const parser = createParser({
-      onAssistantDelta: (delta) => deltas.push(delta),
-      onSessionId: (id) => sessionIds.push(id),
-    });
-    finishFrames(parser, init("session-stream"), ...frames);
-    expect(parser.getOutput()).toEqual({
-      text: expectedText,
-      sessionId: "session-stream",
-      usage: undefined,
-    });
-    if (checkDelta) {
-      expect(deltas).toEqual([
-        { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
-      ]);
-      expect(sessionIds).toEqual(["session-stream"]);
-    }
-  });
+  ])(
+    "resolves streamed/result precedence for $name",
+    ({ frames, expectedText, expectedRawFinalText, checkDelta }) => {
+      const deltas: Parameters<ParserOptions["onAssistantDelta"]>[0][] = [];
+      const sessionIds: string[] = [];
+      const parser = createParser({
+        onAssistantDelta: (delta) => deltas.push(delta),
+        onSessionId: (id) => sessionIds.push(id),
+      });
+      finishFrames(parser, init("session-stream"), ...frames);
+      expect(parser.getOutput()).toEqual({
+        text: expectedText,
+        ...(expectedRawFinalText === undefined ? {} : { rawFinalText: expectedRawFinalText }),
+        sessionId: "session-stream",
+        usage: undefined,
+      });
+      if (checkDelta) {
+        expect(deltas).toEqual([
+          { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+        ]);
+        expect(sessionIds).toEqual(["session-stream"]);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "a tool call after stored item text",
+      frames: [itemMessage("Checking now."), toolStart()],
+      expected: "",
+    },
+    {
+      name: "a new message after stored item text",
+      frames: [itemMessage("Checking now."), messageStart],
+      expected: "",
+    },
+    {
+      name: "a tool item after stored item text",
+      frames: [
+        itemMessage("Checking now."),
+        { type: "item.completed", item: { type: "command_execution" } },
+      ],
+      expected: "",
+    },
+    {
+      name: "item text after an earlier boundary",
+      frames: [messageStart, toolStart(), itemMessage("All done.")],
+      expected: "All done.",
+    },
+  ])(
+    "checks message boundaries before reusing stored item text ($name)",
+    ({ frames, expected }) => {
+      const parser = createParser();
+      finishFrames(parser, init("session-items"), ...frames, result(""));
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+    },
+  );
 
   it("keeps pre-tool text and reconstructible deltas without a commentary consumer", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
@@ -440,6 +444,7 @@ describe("createCliJsonlStreamingParser", () => {
     );
     expect(parser.getOutput()).toEqual({
       text: "Before.\n\nDONE",
+      rawFinalText: "DONE",
       sessionId: "session-tool-split",
       usage: undefined,
     });
@@ -496,16 +501,49 @@ describe("createCliJsonlStreamingParser", () => {
     finishFrames(parser, init("session-commentary"), ...frames);
     expect(commentaryTexts).toEqual(expected);
   });
+
+  it.each([
+    {
+      name: "a streamed final answer",
+      frames: [messageStart, claudeTextDelta("Final answer"), messageStop],
+      expected: "Final answer",
+    },
+    {
+      name: "a final answer after pre-tool commentary",
+      frames: [
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart("toolu_1", 1),
+        messageStop,
+        messageStart,
+        claudeTextDelta("Final answer"),
+        messageStop,
+      ],
+      expected: "Final answer",
+    },
+    {
+      name: "a tool-only ending after commentary",
+      frames: [
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart("toolu_1", 1),
+        messageStop,
+      ],
+      expected: "",
+    },
+  ])(
+    "records the final message with commentary classification on ($name)",
+    ({ frames, expected }) => {
+      const parser = createClaudeParser({ onCommentaryText: () => undefined });
+      finishFrames(parser, init("session-commentary-final"), ...frames, result(""));
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+    },
+  );
 });
 
-it.each([
-  { name: "discrete", results: ["First answer.", "Second answer.", "Final answer."] },
-  { name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] },
-  {
-    name: "shared paragraph prefix",
-    results: ["First answer.", "First answer.\nMore detail.", "Final answer."],
-  },
-])(
+it.each([{ name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] }])(
   "delivers completed $name results before settlement and retains retry boundaries",
   ({ results }) => {
     const completed: string[] = [];

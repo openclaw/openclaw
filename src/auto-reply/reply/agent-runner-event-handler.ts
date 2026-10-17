@@ -42,6 +42,7 @@ export function createAgentRunEventHandler(params: {
     params.messageToolDeliveryState.completed &&
     params.turn.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
 
+  let modelWaitActive = false;
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
@@ -67,6 +68,26 @@ export function createAgentRunEventHandler(params: {
         await preparation;
       }
       params.notifyAgentRunStart(evt.transcriptStart);
+    }
+    if (evt.stream === "run_status" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const waiting = evt.data.phase === "waiting_for_model";
+      if (waiting || (modelWaitActive && evt.data.phase === "starting_model")) {
+        modelWaitActive = waiting;
+        await params.turn.opts?.onItemEvent?.({
+          itemId: "model-wait",
+          kind: "model-wait",
+          suppressDurableProgress: true,
+          phase: waiting ? "update" : "end",
+          ...(waiting
+            ? {
+                progressText:
+                  evt.data.reason === "slot"
+                    ? "Waiting for a free model slot"
+                    : "Waiting for the local model to respond",
+              }
+            : {}),
+        });
+      }
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";

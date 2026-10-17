@@ -9,6 +9,7 @@ import {
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
 } from "../../test-helpers/devices-view.tsx";
+import type { DevicesProps } from "./view.types.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -148,8 +149,8 @@ describe("devices exec approvals rendering", () => {
     const container = renderDevicesContainer({
       nodes: [
         {
-          id: "windows-node",
-          label: "Windows node",
+          nodeId: "windows-node",
+          displayName: "Windows node",
           commands: ["system.execApprovals.get", "system.execApprovals.set"],
         },
       ],
@@ -326,7 +327,7 @@ describe("devices agent bindings", () => {
     );
     const container = document.createElement("div");
     document.body.append(container);
-    const renderBindings = (inventory: Array<Record<string, unknown>>, unavailable: boolean) => {
+    const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
       renderDevicesInto(
         container,
         createDevicesViewProps({ nodes: inventory, configForm, onBindDefault, onBindAgent }),
@@ -369,7 +370,7 @@ describe("devices agent bindings", () => {
         ]
       : [...nodes, ...competitors];
     renderBindings(initialNodes, scenario.unavailable ?? false);
-    renderBindings([{ ...nodes[0], commands: [] }], true);
+    renderBindings([{ ...expectDefined(nodes[0], "default bound node"), commands: [] }], true);
     renderBindings(nodes, false);
   });
 });

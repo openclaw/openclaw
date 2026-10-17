@@ -8,6 +8,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -33,6 +34,7 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -148,7 +150,10 @@ describe("asynchronous agent database maintenance admission", () => {
             }
           },
           { env: f.env },
-          { schemaSql: "", operationLabel: "maintenance authority regression" },
+          {
+            schemaSql: extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "schema_meta"),
+            operationLabel: "maintenance authority regression",
+          },
         );
       },
     );

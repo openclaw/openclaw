@@ -13,6 +13,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
@@ -24,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   retainAgentDatabase,
@@ -52,7 +54,6 @@ import type {
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
 import { waitForFixtureEntry } from "./openclaw-agent-worker-store.wait.test-support.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -102,7 +103,7 @@ beforeEach(() => {
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 });
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
-  const { db } = openOpenClawAgentDatabase(options);
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
   const execution =
     sourceMode === "captured" ? captureOpenClawAgentDatabaseExecution(options) : undefined;
@@ -120,6 +121,13 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   workers.add(worker);
   return { db, worker };
 }
+
+it("leaves agent worker checkpoints to maintenance instead of foreground commits", async () => {
+  const { worker } = await setup();
+  expect(
+    await worker.execute({ type: "inspect", input: "wal_autocheckpoint" }, () => undefined),
+  ).toBe(0);
+});
 
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();
@@ -208,7 +216,7 @@ it("retains a warm executor through a fallback wait between publication generati
     beginGatewayShutdownCleanup();
     await lifetime.release();
     expect(db.isOpen).toBe(false);
-    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+    expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
   } finally {
     resume.resolve();
     await Promise.allSettled([publication]);
@@ -276,7 +284,7 @@ it.each([false, true])(
       await execution?.release();
       expect(db.isOpen).toBe(false);
       expect(readLeases()).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
     } finally {
       await worker.close();
       await execution?.release();
@@ -311,9 +319,7 @@ it.each([false, true])(
       expect(prepare).not.toHaveBeenCalled();
       // Retirement may change lock policy, but must not run host-thread data SQL.
       expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 0"]]);
-      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(
-        pinned ? 0 : 1,
-      );
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(!pinned);
       resetGatewayWorkAdmission();
       const reopened = openOpenClawAgentDatabase(options);
       expect(reopened.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
@@ -384,10 +390,10 @@ it("records a clean sibling receipt while an admitted worker publication still o
       );
       expect(healthy.db.isOpen).toBe(false);
       expect(readLeases(healthy.path)).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(healthy.path)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(healthy.path)).toBe(true);
       expect(db.isOpen).toBe(true);
       expect(readLeases(heldPath)).toHaveLength(2);
-      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(0);
+      expect(readSqliteDatabaseCleanClose(heldPath)).toBe(false);
       expect(closed).toBe(false);
       expect(captureAgentDatabaseCloseFence(healthy)).toBeDefined();
       const later = { agentId: "late", path: path.join(root, "late.sqlite") };
@@ -418,7 +424,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       await withinTest(closing, signal);
       expect(db.isOpen).toBe(false);
       expect(readLeases(heldPath)).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(heldPath)).toBe(true);
       expect(captureAgentDatabaseCloseFence(healthy)).toBeUndefined();
       expect(openOpenClawAgentDatabase(later).db.isOpen).toBe(true);
     } finally {
@@ -859,13 +865,11 @@ describe("pooled agent publication owner (captured source)", () => {
     const failures: unknown[] = [];
     try {
       const closing = await Promise.allSettled(revokeAgentDatabaseResources(selection));
-      const cleanupErrors = closing.flatMap((result): unknown[] => {
-        if (result.status === "fulfilled") {
-          return [];
-        }
-        const reason: unknown = result.reason;
-        return reason instanceof AggregateError ? reason.errors : [reason];
-      });
+      const causes = (error: unknown): unknown[] =>
+        error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
+      const cleanupErrors = closing.flatMap((result) =>
+        result.status === "rejected" ? causes(result.reason) : [],
+      );
       expect(cleanupErrors.length).toBeGreaterThan(0);
       for (const error of cleanupErrors) {
         expect(error).toMatchObject({ message: "controlled worker lease cleanup failure" });

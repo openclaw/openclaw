@@ -62,6 +62,11 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     ],
   },
   {
+    file: "packages/normalization-core/src/session-key-comparison.ts",
+    kind: "function",
+    names: ["normalizeSessionKeyForComparison"],
+  },
+  {
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
@@ -96,12 +101,15 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asFiniteNumber",
       "asFiniteNumberInRange",
       "asNonNegativeFiniteNumber",
+      "asNonNegativeInteger",
       "asPositiveFiniteNumber",
+      "asPositiveInteger",
       "asPositiveSafeInteger",
       "asSafeIntegerInRange",
       "clampTimerTimeoutMs",
       "clampPositiveTimerTimeoutMs",
       "finiteSecondsToTimerSafeMilliseconds",
+      "floorPositiveFiniteNumber",
       "isFutureDateTimestampMs",
       "nonNegativeSecondsToSafeMilliseconds",
       "parseDateFirstTimestampMs",
@@ -142,8 +150,10 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asOptionalObjectRecord",
       "asOptionalRecord",
       "asRecord",
+      "ensureRecord",
       "filterStringRecord",
       "isRecord",
+      "isStringArray",
       "isStringRecord",
       "readStringField",
     ],
@@ -161,6 +171,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "formatErrorStackWithMessage",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
@@ -196,6 +207,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
 export const CANONICAL_COERCION_MODULES = [
   "packages/normalization-core/src/agent-id.ts",
   "packages/normalization-core/src/string-coerce.ts",
+  "packages/normalization-core/src/session-key-comparison.ts",
   "packages/normalization-core/src/string-normalization.ts",
   "packages/normalization-core/src/number-coercion.ts",
   "packages/normalization-core/src/record-coerce.ts",
@@ -614,7 +626,8 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
+      using retainedSource = parser.createSourceFile(file, source);
+      const exportedNames = findExportedCallableNames(retainedSource.sourceFile);
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -680,11 +693,12 @@ export async function runCoercionHelperDeclarationGuard(
         if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
           continue;
         }
+        using retainedSource = parser.createSourceFile(result.value.file, result.value.source);
         declarations.push(
           ...findBannedCoercionHelperDeclarations(
             result.value.source,
             result.value.file,
-            parser.createSourceFile(result.value.file, result.value.source),
+            retainedSource.sourceFile,
           ),
         );
       }

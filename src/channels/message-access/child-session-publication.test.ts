@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { buildChannelInboundEventContext } from "../inbound-event/context.js";
@@ -81,6 +81,44 @@ async function fixture(kind = "public") {
 }
 
 describe("trusted ingress child publication", () => {
+  it("renews once before admission without renewing later revocation", async () => {
+    let current = true;
+    const context = {};
+    const prepare = vi.fn(async () => () => {
+      if (!current) {
+        throw new Error("revoked after admission");
+      }
+    });
+    bindChildSessionPublication(
+      context,
+      parentKey,
+      () => {
+        throw new Error("stale original snapshot");
+      },
+      prepare,
+    );
+    const admission = prepareChannelRunAdmission({
+      cfg: {},
+      runId: "renewed-publication",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "publication-test",
+      sourceContext: context,
+    });
+    try {
+      const admitted = await admission.admit("embedded");
+      const publication = readChildSessionPublication(admitted.operationalRunInstance);
+      expect(publication).toBeDefined();
+      expect(() => publication?.assertCurrent()).not.toThrow();
+      current = false;
+      await admission.admit("embedded");
+      await publication?.prepare();
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(() => publication?.assertCurrent()).toThrow("revoked after admission");
+    } finally {
+      admission.close();
+    }
+  });
   it("binds through actual channel-run admission and rejects use after it closes", async () => {
     const context = {};
     bindChildSessionPublication(context, parentKey, () => {});

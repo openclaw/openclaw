@@ -11,6 +11,7 @@ import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
@@ -40,7 +41,6 @@ type CronSession = {
 type SessionAccessorModule = typeof import("../../config/sessions/session-accessor.js");
 
 let actualReplaceSessionEntry: SessionAccessorModule["replaceSessionEntry"];
-let actualLoadSessionEntry: SessionAccessorModule["loadSessionEntry"];
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
   const direct = normalizeOptionalString(value);
@@ -85,8 +85,8 @@ const replaceSessionEntryMock = vi.fn();
 export const patchSessionEntryMock = vi.fn();
 export const resolveCronSessionMock = vi.fn();
 export const logWarnMock = vi.fn();
-export const readDescendantExecutionStateMock =
-  vi.fn<typeof import("./run-subagent-registry.runtime.js").readDescendantExecutionState>();
+export const listDescendantRunsForRequesterMock =
+  vi.fn<typeof import("./run-subagent-registry.runtime.js").listDescendantRunsForRequester>();
 export const pickLastNonEmptyTextFromPayloadsMock = vi.fn();
 export const resolveCronPayloadOutcomeMock = vi.fn();
 export const resolveCronDeliveryPlanMock = vi.fn();
@@ -331,8 +331,9 @@ vi.mock("./run-embedded.runtime.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
+// mock-isolation: Supply fixed descendant snapshots without opening the process-wide registry database.
 vi.mock("./run-subagent-registry.runtime.js", () => ({
-  readDescendantExecutionState: readDescendantExecutionStateMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
@@ -359,12 +360,36 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<SessionAccessorModule>(
     "../../config/sessions/session-accessor.js",
   );
-  actualReplaceSessionEntry = actual.replaceSessionEntry;
-  actualLoadSessionEntry = actual.loadSessionEntry;
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
     patchSessionEntryCore: patchSessionEntryMock,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  actualReplaceSessionEntry = actual.replaceSessionEntry;
+  const { projectSessionEntryPatch } =
+    await import("../../config/sessions/session-entry-patch-operation.js");
+  return {
+    ...actual,
+    applySessionEntryOperation: async (
+      ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
+    ) =>
+      patchSessionEntryMock(
+        scope,
+        (writeBase: SessionEntry, context: { existingEntry: SessionEntry | undefined }) =>
+          projectSessionEntryPatch({
+            existing: context.existingEntry,
+            writeBase,
+            sessionKey: scope.sessionKey,
+            operation,
+            replaceEntry: options?.replaceEntry,
+          }) ?? null,
+        options,
+      ),
   };
 });
 
@@ -607,10 +632,7 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
   getCliSessionBindingMock.mockReturnValue(undefined);
-  readDescendantExecutionStateMock.mockReset().mockResolvedValue({
-    hasFreshDescendants: false,
-    hasActiveDescendants: false,
-  });
+  listDescendantRunsForRequesterMock.mockReset().mockResolvedValue([]);
 }
 
 function resetRunOutcomeMocks(): void {
@@ -791,7 +813,7 @@ function installPatchSessionEntryStore(): void {
       const existingEntry =
         rows.get(key) ??
         (usesRealAccessorStore(scope.storePath)
-          ? actualLoadSessionEntry(scope as never)
+          ? await readSessionEntryReadOnlyInWorker(scope)
           : loadSessionEntryMock(scope.storePath, scope.sessionKey));
       const writeBase = existingEntry ?? options.fallbackEntry;
       if (!writeBase) {

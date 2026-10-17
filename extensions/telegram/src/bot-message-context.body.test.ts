@@ -77,6 +77,48 @@ async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
 }
 
 describe("Telegram admitted model input", () => {
+  it("admits shared contacts and preserves their fields in replies", async () => {
+    const bot = await createBot(false, true, config());
+    const contact = {
+      ...textMessage("", false),
+      text: undefined,
+      contact: { first_name: "ContactProbe", last_name: "Q7", phone_number: "+15550100001" },
+    } satisfies NonNullable<Update["message"]>;
+    await receive(bot, contact);
+    expect(harness.replySpy.mock.calls[0]?.[0].BodyForAgent).toBe(
+      "[Shared contact] ContactProbe Q7, +15550100001",
+    );
+    await receive(bot, {
+      ...textMessage("Summarize this contact", false),
+      reply_to_message: { ...contact, reply_to_message: undefined },
+    });
+    expect(harness.replySpy.mock.calls[1]?.[0].ReplyToBody).toBe(
+      "[Shared contact] ContactProbe Q7, +15550100001",
+    );
+  });
+
+  it.each([
+    { name: "@openclaw_bot", pattern: "" },
+    { name: "ContactProbe", pattern: "ContactProbe" },
+    { name: "ContactProbe", pattern: "15550100001" },
+    { name: "@Analyst", pattern: "" },
+  ])("does not activate groups from contact fields $name/$pattern", async ({ name, pattern }) => {
+    const cfg = config();
+    cfg.messages = { groupChat: { mentionPatterns: pattern ? [pattern] : [] } };
+    cfg.agents = { entries: { main: {}, analyst: { identity: { name: "Analyst" } } } };
+    cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
+    cfg.broadcast = { "telegram:-10042001": ["main", "analyst"] };
+    const bot = await createBot(false, true, cfg);
+    await receive(bot, {
+      ...textMessage(""),
+      text: undefined,
+      contact: { first_name: name, phone_number: "+15550100001" },
+    });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await receive(bot, textMessage("@openclaw_bot hello"));
+    expect(harness.replySpy).toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "allowed named account",
@@ -383,6 +425,40 @@ describe("Telegram admitted model input", () => {
     },
   );
 
+  it.each([
+    { emoji: "\u{1F3B2}", value: 4, body: "[Dice \u{1F3B2} = 4]" },
+    { emoji: "\u{1F3B0}", value: 64, body: "[Dice \u{1F3B0} = 64]" },
+  ])("delivers a dice-only $emoji update", async ({ emoji, value, body }) => {
+    await receive(await createBot(false, true, config()), {
+      ...textMessage("", false),
+      text: undefined,
+      dice: { emoji, value },
+    });
+
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]?.BodyForAgent).toBe(body);
+  });
+
+  it("keeps a mention-skipped dice roll in ambient group history", async () => {
+    const received = vi.fn();
+    registerInternalHook("message:received", received);
+    const cfg = config({ requireMention: true, ingest: true });
+    cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
+
+    await receive(await createBot(false, true, cfg), {
+      ...textMessage(""),
+      text: undefined,
+      dice: { emoji: "\u{1F3AF}", value: 3 },
+    });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ content: "[Dice \u{1F3AF} = 3]" }),
+      }),
+    );
+  });
+
   it("renders nested rich-only messages in order and retains sender attribution", async () => {
     const rich = {
       blocks: [
@@ -503,6 +579,7 @@ describe("Telegram admitted model input", () => {
     expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      ChatType: "group",
       MessageThreadId: 99,
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -552,6 +629,7 @@ describe("Telegram admitted model input", () => {
       expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
         OriginatingTo: "telegram:42001",
         AccountId: "atlas",
+        ChatType: "direct",
         MessageThreadId: threadId,
       });
       expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({

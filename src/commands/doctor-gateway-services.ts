@@ -20,7 +20,10 @@ import {
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../daemon/runtime-pin-state.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -281,7 +284,9 @@ export async function maybeRepairGatewayServiceConfig(
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  const pinSnapshot = readDaemonRuntimePin({ kind: "gateway", env: process.env }, command);
+  const pinSnapshot = await withDaemonRuntimePinMigration(process.env, () =>
+    readDaemonRuntimePin({ kind: "gateway", env: process.env }, command),
+  );
   const serviceInstallEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ...(managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
