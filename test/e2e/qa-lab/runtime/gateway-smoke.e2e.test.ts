@@ -46,7 +46,7 @@ describe("gateway-smoke", () => {
         defaultAgentId: "codex",
         durationMs: 3,
         ok: true,
-        sessions: { count: 0, path: "/state/sessions", recent: [] },
+        sessions: {},
         ts: Date.now(),
       },
     };
@@ -58,14 +58,7 @@ describe("gateway-smoke", () => {
       payload: {
         auth: { role: "operator", scopes },
         features: { events: [], methods: ["health"] },
-        policy: {
-          maxBufferedBytes: 1024 * 1024,
-          maxPayload: 256 * 1024,
-          tickIntervalMs: 1000,
-        },
         protocol: 1,
-        server: { connId: "test-conn", version: "dev" },
-        snapshot: {},
         type: "hello-ok",
       },
     };
@@ -97,10 +90,6 @@ describe("gateway-smoke", () => {
           reply(healthResponse());
           return;
         }
-        if (frame.method === "chat.history") {
-          reply({ error: "missing scope: operator.read", ok: false });
-          return;
-        }
         reply({ error: `unexpected method ${frame.method}`, ok: false });
       });
     });
@@ -115,7 +104,7 @@ describe("gateway-smoke", () => {
   }
 
   function createSmokeDeps(
-    responses: Record<string, { error?: string; ok: boolean } & Record<string, unknown>>,
+    responses: Partial<Record<string, { error?: string; ok: boolean } & Record<string, unknown>>>,
     calls: Array<{ method: string; timeout?: number }> = [],
   ) {
     const stdout: string[] = [];
@@ -213,73 +202,50 @@ describe("gateway-smoke", () => {
     expect(stderr).toEqual([]);
   });
 
-  it("closes the websocket client when connect fails", async () => {
-    const fake = createSmokeDeps({ connect: { ok: false, error: "bad token" } });
-    const code = await runGatewaySmoke(smokeOptions, fake.deps);
-
-    expect(code).toBe(2);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls.map((call) => call.method)).toEqual(["connect"]);
-    expect(fake.stderr).toEqual(["connect failed: bad token"]);
-  });
-
-  it("requires connect and health in order", async () => {
-    const fake = createSmokeDeps({
-      connect: connectHelloResponse(),
-      health: healthResponse(),
+  it.each([
+    {
+      name: "closes the client when connect fails",
+      responses: { connect: { ok: false, error: "bad token" } },
+      code: 2,
+      methods: ["connect"],
+      error: "connect failed: bad token",
+    },
+    {
+      name: "requires connect and health in order",
+      responses: { connect: connectHelloResponse(), health: healthResponse() },
+      code: 0,
+      methods: ["connect", "health"],
+      error: undefined,
+    },
+    {
+      name: "rejects missing hello evidence",
+      responses: { connect: { ok: true } },
+      code: 2,
+      methods: ["connect"],
+      error: "connect failed: missing hello-ok payload",
+    },
+    {
+      name: "rejects unpaired iOS operator scopes",
+      responses: { connect: connectHelloResponse(["operator.read"]) },
+      code: 2,
+      methods: ["connect"],
+      error: "connect failed: unpaired iOS smoke unexpectedly received operator scopes",
+    },
+    {
+      name: "rejects missing health summary evidence",
+      responses: { connect: connectHelloResponse(), health: { ok: true } },
+      code: 3,
+      methods: ["connect", "health"],
+      error: "health failed: missing health summary payload",
+    },
+  ])("$name", async ({ responses, code, methods, error }) => {
+    const fake = createSmokeDeps(responses);
+    expect(await runGatewaySmoke(smokeOptions, fake.deps)).toBe(code);
+    expect(fake).toMatchObject({
+      closed: 1,
+      stdout: error ? [] : ["ok: connected + health"],
+      stderr: error ? [error] : [],
     });
-
-    const code = await runGatewaySmoke(smokeOptions, fake.deps);
-
-    expect(code).toBe(0);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls).toEqual([
-      { method: "connect", timeout: undefined },
-      { method: "health", timeout: undefined },
-    ]);
-    expect(fake.stdout).toEqual(["ok: connected + health"]);
-    expect(fake.stderr).toEqual([]);
-  });
-
-  it("fails when connect success is missing hello evidence", async () => {
-    const fake = createSmokeDeps({
-      connect: { ok: true },
-    });
-
-    const code = await runGatewaySmoke(smokeOptions, fake.deps);
-
-    expect(code).toBe(2);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls).toEqual([{ method: "connect", timeout: undefined }]);
-    expect(fake.stdout).toEqual([]);
-    expect(fake.stderr).toEqual(["connect failed: missing hello-ok payload"]);
-  });
-
-  it("fails when the unpaired iOS-shaped connect keeps operator scopes", async () => {
-    const fake = createSmokeDeps({
-      connect: connectHelloResponse(["operator.read"]),
-    });
-
-    const code = await runGatewaySmoke(smokeOptions, fake.deps);
-
-    expect(code).toBe(2);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls).toEqual([{ method: "connect", timeout: undefined }]);
-    expect(fake.stderr).toEqual([
-      "connect failed: unpaired iOS smoke unexpectedly received operator scopes",
-    ]);
-  });
-  it("fails when health success is missing summary evidence", async () => {
-    const fake = createSmokeDeps({
-      connect: connectHelloResponse(),
-      health: { ok: true },
-    });
-
-    const code = await runGatewaySmoke(smokeOptions, fake.deps);
-
-    expect(code).toBe(3);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls.map((call) => call.method)).toEqual(["connect", "health"]);
-    expect(fake.stderr).toEqual(["health failed: missing health summary payload"]);
+    expect(fake.calls).toEqual(methods.map((method) => ({ method, timeout: undefined })));
   });
 });

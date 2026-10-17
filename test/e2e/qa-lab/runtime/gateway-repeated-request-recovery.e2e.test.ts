@@ -4,34 +4,28 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { messageText, resolveRetryableHistoryDelayMs } from "./gateway-recovery.test-support.js";
+import {
+  messageText,
+  pollHistory,
+  sendChat,
+  waitForRun,
+  type GatewayChatRun,
+  type GatewayChatHistory,
+} from "./gateway-recovery.test-support.js";
 
-type StabilityEvent = Partial<
-  Record<
-    | "seq"
-    | "type"
-    | "action"
-    | "reason"
-    | "outcome"
-    | "ageMs"
-    | "durationMs"
-    | "failureKind"
-    | "queueDepth"
-    | "source",
-    unknown
-  >
->;
+type StabilityEvent = {
+  type?: unknown;
+  action?: unknown;
+  reason?: unknown;
+  outcome?: unknown;
+  ageMs?: unknown;
+  queueDepth?: unknown;
+  source?: unknown;
+};
 
 type StabilitySnapshot = {
   lastSeq?: unknown;
   events?: StabilityEvent[];
-};
-
-type GatewayChatRun = Partial<Record<"runId" | "status" | "stopReason" | "endedAt", unknown>>;
-type GatewayChatMessage = Partial<Record<"role" | "content", unknown>>;
-
-type GatewayChatHistory = {
-  messages?: GatewayChatMessage[];
 };
 
 type MockRequestSnapshot = Partial<
@@ -55,15 +49,12 @@ const QUEUED_PROMPT =
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
 const STALL_GUIDANCE_NEEDLE = "previous turn stopped making progress";
-// The opt-in product proof owns the full 360-second production-floor assertion.
-// This always-on state-machine proof uses the same heartbeat path with QA timings.
+// The opt-in proof owns the 360-second floor; this proof uses the same heartbeat with QA timings.
 const QA_RECOVERY_BOUND_MS = 30_000;
 const MODEL_REQUEST_ALLOWANCE_SECONDS = 45;
 const ORDINARY_RESPONSE_PAUSE_MS = 8_000;
-// The stalled fallback starts its response, then holds it open with keepalives,
-// so the client progress deadline (2x the allowance) ends it at 90 seconds.
-// Recovery may act only after the 45-second allowance, leaving a 45-second
-// window that always contains one 30-second diagnostic heartbeat.
+// Keepalives leave a 45-second recovery window before the 90-second progress deadline,
+// guaranteeing at least one 30-second diagnostic heartbeat after the allowance.
 const STALLED_RESPONSE_PAUSE_MS = 90_000;
 const RECOVERY_PROGRESS_INTERVAL_MS = 30_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
@@ -140,44 +131,24 @@ async function waitForQueuedReply(
   gateway: Gateway,
   sessionKey: string,
 ): Promise<GatewayChatHistory> {
-  const startedAt = Date.now();
-  let latestHistory: GatewayChatHistory = {};
-  let lastRetryableError: unknown;
-  while (Date.now() - startedAt < HISTORY_RETRY_TIMEOUT_MS) {
-    let delayMs = HISTORY_RETRY_INTERVAL_MS;
-    try {
-      const history = (await gateway.call(
+  return pollHistory(
+    () =>
+      gateway.call(
         "chat.history",
         { sessionKey, limit: 20 },
         { timeoutMs: 10_000 },
-      )) as GatewayChatHistory;
-      latestHistory = history;
-      lastRetryableError = undefined;
-      if (historyContainsQueuedReply(history)) {
-        return history;
-      }
-    } catch (error) {
-      const retryDelayMs = resolveRetryableHistoryDelayMs(error);
-      if (retryDelayMs === null) {
-        throw error;
-      }
-      lastRetryableError = error;
-      delayMs = retryDelayMs;
-    }
-    const remainingMs = HISTORY_RETRY_TIMEOUT_MS - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    await sleep(Math.min(delayMs, remainingMs));
-  }
-  const observed = (latestHistory.messages ?? []).map((message) => ({
-    role: message.role,
-    text: messageText(message),
-  }));
-  const message = `timed out waiting for queued reply in chat.history after ${HISTORY_RETRY_TIMEOUT_MS}ms: ${JSON.stringify(observed)}`;
-  throw lastRetryableError === undefined
-    ? new Error(message)
-    : new Error(message, { cause: lastRetryableError });
+      ) as Promise<GatewayChatHistory>,
+    historyContainsQueuedReply,
+    HISTORY_RETRY_TIMEOUT_MS,
+    HISTORY_RETRY_INTERVAL_MS,
+    (history) =>
+      `timed out waiting for queued reply in chat.history after ${HISTORY_RETRY_TIMEOUT_MS}ms: ${JSON.stringify(
+        (history?.messages ?? []).map((message) => ({
+          role: message.role,
+          text: messageText(message),
+        })),
+      )}`,
+  );
 }
 
 async function readClassifiedMockRequests(mockBaseUrl: string): Promise<ClassifiedMockRequest[]> {
@@ -294,16 +265,7 @@ it(
     const baseline = await readStability(gateway);
     const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
     const sessionKey = `agent:qa:repeated-request-recovery-${randomUUID()}`;
-    const active = (await gateway.call(
-      "chat.send",
-      {
-        sessionKey,
-        message: RECOVERY_PROMPT,
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      },
-      { timeoutMs: 30_000 },
-    )) as GatewayChatRun;
+    const active = await sendChat(gateway, sessionKey, RECOVERY_PROMPT);
     expect(active).toMatchObject({ status: "started" });
     expect(typeof active.runId).toBe("string");
 
@@ -314,17 +276,7 @@ it(
       100_000,
     );
 
-    const queued = (await gateway.call(
-      "chat.send",
-      {
-        sessionKey,
-        message: QUEUED_PROMPT,
-        queueMode: "followup",
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      },
-      { timeoutMs: 30_000 },
-    )) as GatewayChatRun;
+    const queued = await sendChat(gateway, sessionKey, QUEUED_PROMPT, { queueMode: "followup" });
     expect(queued).toMatchObject({ status: "started" });
     expect(typeof queued.runId).toBe("string");
 
@@ -366,11 +318,7 @@ it(
       events.filter((event) => event.type === "model.call.started").length,
     ).toBeGreaterThanOrEqual(5);
 
-    const activeTerminal = (await gateway.call(
-      "agent.wait",
-      { runId: active.runId, timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
-    )) as GatewayChatRun;
+    const activeTerminal = await waitForRun(gateway, active.runId);
     expect(activeTerminal).toMatchObject({
       status: "error",
       endedAt: expect.any(Number),
@@ -391,11 +339,7 @@ it(
     let queuedTerminal: GatewayChatRun;
     do {
       const remainingMs = Math.max(1, queuedDeadline - Date.now());
-      queuedTerminal = (await gateway.call(
-        "agent.wait",
-        { runId: queued.runId, timeoutMs: remainingMs },
-        { timeoutMs: remainingMs },
-      )) as GatewayChatRun;
+      queuedTerminal = await waitForRun(gateway, queued.runId, remainingMs, remainingMs);
       if (queuedTerminal.status !== "pending") {
         break;
       }
@@ -411,8 +355,7 @@ it(
     // Invisible replay-safe errors exhaust the primary model's retry budget;
     // the diagnostic owner then interrupts the stalled fallback request, and the
     // fallback's own retries fail fast until the run settles.
-    // The mock records its planned response before the delay; lifecycle checks
-    // above prove the actual interruption and completion.
+    // The mock records intent before delay; lifecycle checks above prove actual interruption.
     expect(recoveryRequests).toEqual([
       ...Array.from({ length: 4 }, () =>
         expect.objectContaining({

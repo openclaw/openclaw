@@ -13,6 +13,7 @@ import {
 import { writeOpenAiResponsesSse as writeSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
+import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/gpt-5.6-luna";
@@ -46,7 +47,6 @@ let responseSequence = 0;
 function responseEvents(
   id: string,
   item: Record<string, unknown>,
-  events: SseEvent[],
   inputTokens: number,
 ): SseEvent[] {
   return [
@@ -60,7 +60,14 @@ function responseEvents(
         created_at: Math.floor(Date.now() / 1_000),
       },
     },
-    ...events,
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item:
+        item.type === "message"
+          ? { ...item, content: [], status: "in_progress" }
+          : { ...item, arguments: "" },
+    },
     { type: "response.output_item.done", output_index: 0, item },
     {
       type: "response.completed",
@@ -78,31 +85,14 @@ function responseEvents(
 function buildAssistantEvents(text: string, inputTokens = 20): SseEvent[] {
   const sequence = ++responseSequence;
   const itemId = `msg_qa_timeout_recovery_${sequence}`;
-  const part = { type: "output_text", text, annotations: [] };
   const item = {
     type: "message",
     id: itemId,
     role: "assistant",
     status: "completed",
-    content: [part],
+    content: [{ type: "output_text", text, annotations: [] }],
   };
-  const position = { item_id: itemId, output_index: 0, content_index: 0 };
-  return responseEvents(
-    `resp_qa_timeout_recovery_${sequence}`,
-    item,
-    [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { ...item, content: [], status: "in_progress" },
-      },
-      { type: "response.content_part.added", ...position, part: { ...part, text: "" } },
-      { type: "response.output_text.delta", ...position, delta: text },
-      { type: "response.output_text.done", ...position, text },
-      { type: "response.content_part.done", ...position, part },
-    ],
-    inputTokens,
-  );
+  return responseEvents(`resp_qa_timeout_recovery_${sequence}`, item, inputTokens);
 }
 
 function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): SseEvent[] {
@@ -116,31 +106,7 @@ function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>
     name,
     arguments: argumentsText,
   };
-  return responseEvents(
-    `resp_qa_timeout_recovery_tool_${sequence}`,
-    item,
-    [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { ...item, arguments: "" },
-      },
-      {
-        type: "response.function_call_arguments.delta",
-        item_id: itemId,
-        output_index: 0,
-        delta: argumentsText,
-      },
-      {
-        type: "response.function_call_arguments.done",
-        item_id: itemId,
-        output_index: 0,
-        name,
-        arguments: argumentsText,
-      },
-    ],
-    90_000,
-  );
+  return responseEvents(`resp_qa_timeout_recovery_tool_${sequence}`, item, 90_000);
 }
 
 async function streamAssistantReply(
@@ -153,8 +119,7 @@ async function streamAssistantReply(
   for (const event of buildAssistantEvents(text)) {
     response.write(`data: ${JSON.stringify(event)}\n\n`);
     if (event.type === "response.created") {
-      // Successful requests wait on lifecycle facts. Provider progress keeps
-      // only the deliberately silent parent on the real idle deadline.
+      // Keep successful requests alive; only the silent parent should hit its idle deadline.
       const heartbeat = setInterval(() => {
         response.write(`data: ${JSON.stringify({ ...event, type: "response.in_progress" })}\n\n`);
       }, 500);
@@ -201,8 +166,7 @@ async function startProofProvider() {
         response.writeHead(404).end();
         return;
       }
-      // A distinct configured model identifies child requests without matching
-      // the worker task also present in the parent's tool-call history.
+      // Model identity distinguishes the child from its task in the parent's history.
       if (body.model === CHILD_MODEL.split("/")[1]) {
         if (!childRequestSeen) {
           childRequestSeen = true;
@@ -210,21 +174,18 @@ async function startProofProvider() {
             proof.childReleasedAt = performance.now();
           }
         } else {
-          // Follow-up model calls must not overwrite the original worker's
-          // completion time used to prove the recovery window.
+          // Preserve the original worker's completion time for the overlap proof.
           writeSse(response, buildAssistantEvents(CHILD_MARKER));
         }
         return;
       }
-      // Compaction serializes history into tool-free summary requests; their
-      // quoted tool calls are not a fresh request to spawn another worker.
+      // Tool-free summaries quote old calls; they must not spawn another worker.
       if (!Array.isArray(body.tools) || body.tools.length === 0) {
         // Split-turn context has its own format; the retained suffix owns the pending ask.
         const summary = inputText.includes("This is the PREFIX of a turn")
           ? TURN_PREFIX_SUMMARY
           : COMPACTION_SUMMARY;
-        // Multi-stage compaction can request more summaries. Keep the first
-        // request's overlap evidence paired, just like the original child run.
+        // Multi-stage summaries must preserve the first request's overlap timestamps.
         if (proof.compactionStartedAt !== undefined) {
           writeSse(response, buildAssistantEvents(summary));
           return;
@@ -237,8 +198,7 @@ async function startProofProvider() {
         return;
       }
       if (parentContinuationSeen) {
-        // Compaction changes history representation. Do not interpret missing
-        // tool-output items as a request to spawn again or invent a child reply.
+        // Compacted history must neither respawn the child nor fabricate its completion.
         const hasChildCompletion =
           inputText.includes("Agent steering queue items arrived since your last turn.") &&
           inputText.includes("qa-timeout-recovery-child") &&
@@ -284,16 +244,9 @@ async function startProofProvider() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("proof provider did not bind");
-  }
+  const baseUrl = await listenLoopback(server, "proof provider did not bind");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     compactionStarted: compactionStarted.promise,
     releaseCompaction: () => compactionRelease.resolve(),
     proof,
@@ -302,13 +255,7 @@ async function startProofProvider() {
       compactionRelease.resolve();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
+        server.close((error) => (error ? reject(error) : resolve()));
       });
     },
   };
@@ -322,20 +269,11 @@ function withTimeoutConfig(config: OpenClawConfig): OpenClawConfig {
   // Exercise model silence, not a terminal run deadline or deferred tool discovery.
   provider.timeoutSeconds = 4;
   config.tools = { ...config.tools, codeMode: false, toolSearch: false };
-  config.agents = {
-    ...config.agents,
-    defaults: {
-      ...config.agents?.defaults,
-      // The alternate model identifies the child, not a parent fallback.
-      model: { primary: MODEL },
-      // Leave an older prefix to compact in this tiny synthetic transcript.
-      compaction: { ...config.agents?.defaults?.compaction, keepRecentTokens: 1 },
-    },
-    entries: {
-      ...config.agents?.entries,
-      qa: { ...config.agents?.entries?.qa, model: { primary: MODEL } },
-    },
-  };
+  const agents = (config.agents ??= {});
+  const defaults = (agents.defaults ??= {});
+  defaults.model = { primary: MODEL }; // The alternate model identifies the child, not a fallback.
+  defaults.compaction = { ...defaults.compaction, keepRecentTokens: 1 };
+  agents.entries = { ...agents.entries, qa: { ...agents.entries?.qa, model: { primary: MODEL } } };
   return config;
 }
 
@@ -372,8 +310,7 @@ it("delivers a child completion once while parent timeout recovery is active", a
     readQaSubagentRuns(gateway.runtimeEnv).filter(
       (entry) => entry.label === "qa-timeout-recovery-child",
     );
-  // Mirrors the requester steering lease: a pending payload without an
-  // in-flight announce reservation is what the recovered retry injects.
+  // Only a pending, unclaimed payload can be injected into the recovered retry.
   const readChildHandoff = () =>
     readChildRuns().map((run) => ({
       execution: run.execution.status,
@@ -391,30 +328,19 @@ it("delivers a child completion once while parent timeout recovery is active", a
       senderId: CONVERSATION.id,
       text,
     });
-  // Compaction preserves the latest three turns locally. An older real
-  // conversation prefix is required to exercise model-backed summarization.
+  const outbound = () => state.getSnapshot().messages.filter((m) => m.direction === "outbound");
+  const waitOutbound = (sinceIndex: number, textIncludes: string, timeoutMs = 90_000) =>
+    transport.waitForOutbound({ conversation: CONVERSATION, sinceIndex, textIncludes, timeoutMs });
+  // Four turns leave an older prefix beyond the three retained turns for model compaction.
   for (let turn = 1; turn <= 4; turn += 1) {
-    const before = state.getSnapshot().messages.filter((m) => m.direction === "outbound").length;
+    const before = outbound().length;
     await sendInbound(`Record timeout-recovery setup turn ${turn}. Acknowledge this setup.`);
-    await transport.waitForOutbound({
-      conversation: CONVERSATION,
-      sinceIndex: before,
-      textIncludes: "QA-TIMEOUT-RECOVERY-ANNOUNCE-OK",
-      timeoutMs: 90_000,
-    });
+    await waitOutbound(before, "QA-TIMEOUT-RECOVERY-ANNOUNCE-OK");
   }
-  const sinceIndex = state
-    .getSnapshot()
-    .messages.filter((message) => message.direction === "outbound").length;
+  const sinceIndex = outbound().length;
   await sendInbound(PROMPT);
-  await transport.waitForOutbound({
-    conversation: CONVERSATION,
-    sinceIndex,
-    textIncludes: PARENT_READY,
-    timeoutMs: 90_000,
-  });
-  // Spawning is a committed side effect and cannot be replayed after timeout.
-  // Recover the next turn while the already-started child is still running.
+  await waitOutbound(sinceIndex, PARENT_READY);
+  // Recover the next turn; the committed spawn cannot be replayed.
   await sendInbound(RECOVERY_PROMPT);
   const completionDeadline = performance.now() + 90_000;
   const remainingMs = () => Math.max(1, completionDeadline - performance.now());
@@ -423,20 +349,13 @@ it("delivers a child completion once while parent timeout recovery is active", a
     (async () => {
       await provider.compactionStarted;
       phase = "child completion handoff";
-      // Hold compaction until the delivery owner defers the child's result for
-      // the recovering parent. A terminal row alone races that handoff: once
-      // the retry is active, the completion steers into it instead.
+      // A terminal row races handoff: hold compaction until delivery defers the payload.
       await expect
         .poll(readChildHandoff, { timeout: remainingMs() })
         .toEqual([{ execution: "terminal", outcome: "ok", delivery: "pending", leasable: true }]);
       provider.releaseCompaction();
       phase = "child completion outbound";
-      return await transport.waitForOutbound({
-        conversation: CONVERSATION,
-        sinceIndex,
-        textIncludes: CHILD_MARKER,
-        timeoutMs: remainingMs(),
-      });
+      return await waitOutbound(sinceIndex, CHILD_MARKER, remainingMs());
     })(),
     remainingMs(),
     "Timed out waiting for child completion during parent timeout recovery",
@@ -478,11 +397,8 @@ it("delivers a child completion once while parent timeout recovery is active", a
       delivery: expect.objectContaining({ status: "delivered" }),
     }),
   ]);
-  const matching = state
-    .getSnapshot()
-    .messages.filter(
-      (message) =>
-        message.direction === "outbound" && !message.deleted && message.text.includes(CHILD_MARKER),
-    );
+  const matching = outbound().filter(
+    (message) => !message.deleted && message.text.includes(CHILD_MARKER),
+  );
   expect(matching, JSON.stringify(matching)).toHaveLength(1);
 }, 180_000);
