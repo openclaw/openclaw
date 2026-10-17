@@ -75,9 +75,8 @@ function desktopSshCommand(prepared: PreparedWorkerSsh, argv: readonly string[])
 export function createWorkerDesktopTunnels(deps: {
   runner: WorkerSshRunner;
   registry?: DesktopSessionRegistry;
-  platform?: NodeJS.Platform;
 }) {
-  const platform = deps.platform ?? process.platform;
+  const platform = process.platform;
   const sessions = deps.registry ?? createDesktopSessionRegistry();
   const appLaunches = new Map<string, DesktopAppLaunchEntry>();
 

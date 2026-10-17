@@ -6,6 +6,7 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { withinTest } from "../../../test/helpers/promise.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
@@ -606,7 +607,9 @@ describe("worker desktop tunnels", () => {
 
   it("rejects Windows gateway hosts before spawning SSH", async () => {
     const fake = fakeRunner();
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner, platform: "win32" });
+    const manager = withMockedWindowsPlatform(() =>
+      createWorkerDesktopTunnels({ runner: fake.runner }),
+    );
     await expect(acquire(manager)).rejects.toMatchObject({ code: "unsupported_platform" });
     await expect(acquire(manager)).rejects.toThrow(
       "desktop observe is not supported on Windows gateway hosts",
@@ -702,10 +705,9 @@ describe("worker desktop tunnels", () => {
   });
 
   it("reports unsupported launcher platforms and nonzero launcher exits", async () => {
-    const unsupported = createWorkerDesktopTunnels({
-      runner: fakeRunner().runner,
-      platform: "win32",
-    });
+    const unsupported = withMockedWindowsPlatform(() =>
+      createWorkerDesktopTunnels({ runner: fakeRunner().runner }),
+    );
     await expect(launchApp(unsupported)).rejects.toMatchObject({ code: "unsupported_platform" });
     await expect(launchApp(unsupported)).rejects.toThrow(
       "desktop app launch is not supported on Windows gateway hosts",
