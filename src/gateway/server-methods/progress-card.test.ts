@@ -14,14 +14,11 @@ const defaultSessionKey = "agent:main:main";
 function expectCard(respond: ReturnType<typeof vi.fn>, card: unknown) {
   expect(respond).toHaveBeenCalledWith(true, { card }, undefined);
 }
-function expectError(respond: ReturnType<typeof vi.fn>, message: string, code?: string) {
+function expectError(respond: ReturnType<typeof vi.fn>, message: string, code = "INVALID_REQUEST") {
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,
-    expect.objectContaining({
-      message: expect.stringContaining(message),
-      ...(code ? { code } : {}),
-    }),
+    expect.objectContaining({ message: expect.stringContaining(message), code }),
   );
 }
 function expectBroadcast(broadcast: ReturnType<typeof vi.fn>, revision: number | null) {
@@ -46,7 +43,7 @@ function createHarness() {
     }
     const card = {
       sessionKey,
-      revision: (cards.get(sessionKey)?.revision ?? 0) + 1,
+      revision: (current?.revision ?? 0) + 1,
       updatedAt: Date.now(),
       ...(input.markdown ? { markdown: input.markdown } : {}),
       ...(input.steps ? { steps: input.steps } : {}),
@@ -79,27 +76,14 @@ describe("progress card gateway methods", () => {
     "reports rejected %s without publishing or retrying",
     async (operation) => {
       const harness = createHarness();
-      const release = createDeferredCore();
-      harness.get.mockImplementationOnce(async () => {
-        await release.promise;
-        return null;
-      });
-      harness.put.mockImplementationOnce(async () => {
-        await release.promise;
-        return { card: null };
-      });
+      const release = createDeferredCore<never>();
+      harness[operation].mockImplementationOnce(() => release.promise);
       const respond = vi.fn<RespondFn>();
       const pending = harness.invoke(operation, {}, respond);
       release.reject(new Error("storage unavailable"));
       await pending;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringContaining("storage unavailable"),
-        }),
-      );
+      expectError(respond, "storage unavailable", "UNAVAILABLE");
+      expect(respond).toHaveBeenCalledOnce();
       expect(harness.broadcast).not.toHaveBeenCalled();
       expect(harness[operation]).toHaveBeenCalledOnce();
     },
@@ -114,9 +98,7 @@ describe("progress card gateway methods", () => {
     for (const method of ["get", "put"] as const) {
       expectError(await invoke(method, { agentId }), message, "INVALID_REQUEST");
     }
-    expect(get).not.toHaveBeenCalled();
-    expect(put).not.toHaveBeenCalled();
-    expect(broadcast).not.toHaveBeenCalled();
+    expect([get.mock.calls, put.mock.calls, broadcast.mock.calls]).toEqual([[], [], []]);
   });
 
   it("roundtrips markdown and steps, strips invisible Unicode, and broadcasts the revision", async () => {
@@ -129,18 +111,14 @@ describe("progress card gateway methods", () => {
       { step: "Inspect", status: "completed" },
       { step: "Patch", status: "in_progress" },
     ];
-    const put = await invoke("put", {
-      markdown: "A\u200bB\u202eC",
-      plan,
-    });
-    const get = await invoke("get");
+    const put = await invoke("put", { markdown: "A\u200bB\u202eC", plan });
     const expected = expect.objectContaining({
       markdown: "ABC",
       steps: expectedSteps,
       revision: 1,
     });
     expectCard(put, expected);
-    expectCard(get, expected);
+    expectCard(await invoke("get"), expected);
     expectBroadcast(broadcast, 1);
   });
 
@@ -168,9 +146,7 @@ describe("progress card gateway methods", () => {
 
   it("dismisses only the matching completed revision", async () => {
     const { broadcast, invoke } = createHarness();
-    await invoke("put", {
-      plan: [{ step: "Done", status: "completed" }],
-    });
+    await invoke("put", { plan: [{ step: "Done", status: "completed" }] });
     broadcast.mockClear();
 
     const stale = await invoke("put", { expectedRevision: 2 });

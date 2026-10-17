@@ -27,6 +27,13 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
 
 const validateResult = lazyCompile(PresenceQueryResultSchema);
 const now = 10_000;
+const profile = (profileId: string, displayName: string) => ({
+  profileId,
+  displayName,
+  avatarRevision: "1",
+  hasAvatar: false,
+  updatedAt: 1,
+});
 
 function row(conn: string, overrides: Partial<PresenceEntry> = {}): PresenceEntry {
   return {
@@ -125,10 +132,7 @@ describe("presence.query", () => {
         instanceId: "collision",
         user: { id: "alex", name: "Other Alex" },
       }),
-      row("disconnected", {
-        user: { id: "offline", name: "Offline" },
-        reason: "disconnect",
-      }),
+      row("disconnected", { user: { id: "offline", name: "Offline" }, reason: "disconnect" }),
       { ts: now, reason: "self", host: "Gateway" },
     ]);
     const result = await query();
@@ -161,13 +165,7 @@ describe("presence.query", () => {
 
   it("binds me to the admitted operator and retains activity on its originating device", async () => {
     const native = node("laptop", { lastActiveAtMs: 8_000, presenceActivitySource: "app" });
-    native.client.authenticatedUserProfile = {
-      profileId: "alex",
-      displayName: "Alex",
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    native.client.authenticatedUserProfile = profile("alex", "Alex");
     mocks.presence.mockReturnValue([
       row("tab-a", { deviceId: "desktop", connectionLastActivityAt: 6_000, lastActivityAt: 9_000 }),
       row("tab-b", { deviceId: "desktop", lastActivityAt: 9_000 }),
@@ -211,34 +209,31 @@ describe("presence.query", () => {
       presenceActivitySource: "system",
       remoteIp: "192.0.2.3",
     });
-    shared.client.authenticatedUserProfile = {
-      profileId: GATEWAY_OWNER_PROFILE_ID,
-      displayName: "Owner",
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    const listed = await query({ include: ["devices"] }, { nodes: [shared] });
-    expect(listed.devices).toMatchObject([
-      { id: "device:shared", personIds: [], activity: { source: "system-input" } },
-    ]);
-    const inspected = await query(
+    shared.client.authenticatedUserProfile = profile(GATEWAY_OWNER_PROFILE_ID, "Owner");
+    const inspect = async (params: PresenceQueryParams, expected: object, client = caller()) =>
+      expect(await query(params, { nodes: [shared], client })).toMatchObject(expected);
+    await inspect(
+      { include: ["devices"] },
+      {
+        devices: [{ id: "device:shared", personIds: [], activity: { source: "system-input" } }],
+      },
+    );
+    await inspect(
       { action: "device", deviceId: "device:shared", include: ["network"] },
-      { nodes: [shared] },
+      {
+        devices: [{ nodeId: "shared", connections: [{ network: { ip: "192.0.2.3" } }] }],
+        people: [],
+      },
     );
-    expect(inspected.devices).toMatchObject([
-      { nodeId: "shared", connections: [{ network: { ip: "192.0.2.3" } }] },
-    ]);
-    expect(inspected.people).toEqual([]);
-    const own = await query(
+    await inspect(
       { action: "person", person: "me", include: ["devices"] },
-      { nodes: [shared], client: caller(GATEWAY_OWNER_PROFILE_ID) },
+      {
+        status: "not-found",
+        people: [],
+        devices: [{ id: "device:shared", personIds: [] }],
+      },
+      caller(GATEWAY_OWNER_PROFILE_ID),
     );
-    expect(own).toMatchObject({
-      status: "not-found",
-      people: [],
-      devices: [{ id: "device:shared", personIds: [] }],
-    });
   });
 
   it("reports ambiguity and unavailable requester identity instead of guessing", async () => {
@@ -291,8 +286,6 @@ describe("presence.query", () => {
             ip: "203.0.113.2",
             status: "found",
             city: "Vienna",
-            country: "Austria",
-            attribution: { text: "Example database", url: "https://example.test" },
           },
         ],
       },

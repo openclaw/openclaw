@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -23,6 +24,50 @@ import {
 import * as support from "../worker-environments/service.test-support.js";
 import { portalHandlers } from "./portals.js";
 
+const identity = { agentId: "main", sessionKey: "agent:main:preview", sessionId: "conversation" };
+
+function policyFixture(profileId: string, cfg: OpenClawConfig = {}, locked = false) {
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: {
+      [identity.sessionKey]: {
+        sessionId: identity.sessionId,
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: profileId },
+        ...(locked ? { lifecycleRevision: "incarnation", modelSelectionLocked: true } : {}),
+      },
+    },
+  });
+  const context = bindSessionRowProjection(createContext(), () => projection);
+  const method = "portal.session.open";
+  const handler = vi.fn(portalHandlers[method]!);
+  const methodRegistry = createGatewayMethodRegistry(
+    createCoreGatewayMethodDescriptors({ [method]: handler }),
+  );
+  return {
+    context,
+    handler,
+    async invoke(callerId: string, scope = "operator.sessions.write", environmentId = "attached") {
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: callerId,
+          method,
+          params: { sessionKey: identity.sessionKey, environmentId, port: 3000 },
+        },
+        client: createOperatorClient({ profileId: callerId, scopes: [scope] }),
+        context,
+        methodRegistry,
+        respond,
+        isWebchatConnect: () => false,
+      });
+      return respond;
+    },
+  };
+}
+
 describe("session Portal RPC policy admission", () => {
   it.each(["operator.write", "operator.sessions.write"])(
     "rejects a locked canonical session through the actual router under %s",
@@ -30,40 +75,8 @@ describe("session Portal RPC policy admission", () => {
       withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
-        const sessionKey = "agent:main:preview";
-        const projection = createSessionRowProjectionFixture({
-          cfg: {},
-          store: {
-            [sessionKey]: {
-              sessionId: "conversation",
-              lifecycleRevision: "incarnation",
-              updatedAt: 1,
-              modelSelectionLocked: true,
-              visibility: "shared",
-              createdActor: { type: "human", source: "profile", id: writer.id },
-            },
-          },
-        });
-        const context = bindSessionRowProjection(createContext(), () => projection);
-        const method = "portal.session.open";
-        const handler = vi.fn(portalHandlers[method]!);
-        const methodRegistry = createGatewayMethodRegistry(
-          createCoreGatewayMethodDescriptors({ [method]: handler }),
-        );
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "locked-preview",
-            method,
-            params: { sessionKey, environmentId: "attached", port: 3000 },
-          },
-          client: createOperatorClient({ profileId: writer.id, scopes: [scope] }),
-          context,
-          methodRegistry,
-          respond,
-          isWebchatConnect: () => false,
-        });
+        const { handler, invoke } = policyFixture(writer.id, {}, true);
+        const respond = await invoke(writer.id, scope);
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -87,11 +100,6 @@ describe("session Portal authority through worker dispatch", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", support.testState.root);
     const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
     const unrelated = await ensureCanonicalUserProfileForEmail("portal-unrelated@example.test");
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:preview",
-      sessionId: "conversation",
-    };
     const environmentId = "preview-machine";
     const { store, config } = support.testState;
     await store.createSessionAttachmentIntent(
@@ -134,45 +142,18 @@ describe("session Portal authority through worker dispatch", () => {
     await environments.reconcileOnce(environmentId);
     const qualification = environments.getDedicatedNodeLeaseSignal(environmentId)!;
     expect(qualification.aborted).toBe(false);
-    const projection = createSessionRowProjectionFixture({
-      cfg: config,
-      store: {
-        [identity.sessionKey]: {
-          sessionId: identity.sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: writer.id },
-        },
-      },
-    });
     const portals = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers: [] });
     const open = vi.spyOn(portals, "open");
-    const context = bindSessionRowProjection(createContext(), () => projection);
+    const policy = policyFixture(writer.id, config);
+    const { context } = policy;
     Object.assign(context, {
       workerEnvironmentService: environments,
       portalService: portals,
       getRuntimeConfig: () => config,
       broadcast: vi.fn(),
     });
-    const method = "portal.session.open";
-    const methodRegistry = createGatewayMethodRegistry(
-      createCoreGatewayMethodDescriptors({ [method]: portalHandlers[method]! }),
-    );
     const invoke = async (profileId: string) => {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: profileId,
-          method,
-          params: { sessionKey: identity.sessionKey, environmentId, port: 3000 },
-        },
-        client: createOperatorClient({ profileId, scopes: ["operator.sessions.write"] }),
-        context,
-        methodRegistry,
-        respond,
-        isWebchatConnect: () => false,
-      });
+      const respond = await policy.invoke(profileId, "operator.sessions.write", environmentId);
       return respond.mock.calls[0];
     };
     try {

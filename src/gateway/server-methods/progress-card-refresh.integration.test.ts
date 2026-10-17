@@ -88,15 +88,13 @@ describe("registered progress refresh admission", () => {
       const f = await createFixture({
         active: false,
         preserveContent: true,
-        ...(owner
+        createdActor: owner
           ? {
-              createdActor: {
-                type: "human",
-                source: "profile",
-                id: owner.authenticatedUserProfile!.profileId,
-              },
+              type: "human" as const,
+              source: "profile" as const,
+              id: owner.authenticatedUserProfile!.profileId,
             }
-          : {}),
+          : undefined,
       });
       using _ = caller
         ? { [Symbol.dispose]: (await prepareUserProfileCatalog()).release }
@@ -112,31 +110,31 @@ describe("registered progress refresh admission", () => {
         const handlers = createProgressCardHandlers();
         let readingTerminalCard = false;
         let revoked = false;
+        const originalRefresh = handlers["progressCard.refresh"]!;
+        handlers["progressCard.refresh"] = async (invocation) => {
+          if (caller) {
+            const authorization = invocation.sessionMutationAuthorization!;
+            const assertCurrent = authorization.assertCurrent.bind(authorization);
+            authorization.assertCurrent = () => {
+              assertCurrent();
+              if (readingTerminalCard) {
+                readingTerminalCard = false;
+                // Revoke after the reader's check, before its caller resumes to publish.
+                queueMicrotask(() => {
+                  const { profileId } = caller.authenticatedUserProfile!;
+                  setUserProfileRole(profileId, "view");
+                  invalidateOperatorRolePolicy(profileId);
+                  revoked = true;
+                });
+              }
+            };
+          }
+          await originalRefresh(invocation);
+        };
         const refresh = async (respond: RespondFn) =>
           refreshCard(f, "finishing-refresh", respond, {
             client: caller ?? f.client,
-            extraHandlers: {
-              ...handlers,
-              "progressCard.refresh": async (invocation) => {
-                if (caller) {
-                  const authorization = invocation.sessionMutationAuthorization!;
-                  const assertCurrent = authorization.assertCurrent.bind(authorization);
-                  authorization.assertCurrent = () => {
-                    assertCurrent();
-                    if (readingTerminalCard) {
-                      readingTerminalCard = false;
-                      // Revoke after the reader's check, before its caller resumes to publish.
-                      queueMicrotask(() => {
-                        setUserProfileRole(caller.authenticatedUserProfile!.profileId, "view");
-                        invalidateOperatorRolePolicy(caller.authenticatedUserProfile!.profileId);
-                        revoked = true;
-                      });
-                    }
-                  };
-                }
-                await handlers["progressCard.refresh"]!(invocation);
-              },
-            },
+            extraHandlers: handlers,
           });
         await putCard(f, "Old status");
         const accepted = vi.fn<RespondFn>();

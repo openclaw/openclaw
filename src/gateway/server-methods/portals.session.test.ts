@@ -1,17 +1,8 @@
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createGatewayPortalService,
-  type GatewayPortalService,
-} from "../portals/portal-service.js";
+import { createGatewayPortalService } from "../portals/portal-service.js";
 import { portalHandlers } from "./portals.js";
-
-const services = new Set<GatewayPortalService>();
-afterEach(async () => {
-  await Promise.all([...services].map((service) => service.closeAll()));
-  services.clear();
-});
 
 function fixture() {
   const binding = {
@@ -51,7 +42,7 @@ function fixture() {
   };
   const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers: [] });
   const open = vi.spyOn(service, "open");
-  services.add(service);
+  onTestFinished(() => service.closeAll());
   const access = {
     target: binding,
     sandboxRequired: false,
@@ -91,6 +82,7 @@ function fixture() {
     invoke,
     broadcast,
     revokeActor: () => actor.abort(new Error("actor revoked")),
+    resetSession: () => session.abort(new Error("session reset")),
     replaceAttachment: () => attachment.abort(new Error("attachment replaced")),
     unqualify: () => {
       dedicated = false;
@@ -176,23 +168,19 @@ describe("session-scoped attached worker portals", () => {
   });
 
   it.each([
-    "missing admission",
-    "different environment",
-    "not dedicated",
-    "actor revoked",
-    "session reset",
-    "attachment replaced",
+    ["missing admission", undefined],
+    ["different environment", undefined],
+    ["not dedicated", undefined],
+    ["actor revoked", "revokeActor"],
+    ["session reset", "resetSession"],
+    ["attachment replaced", "replaceAttachment"],
   ] as const)(
     "rejects %s before publishing a portal and releases any prepared carrier",
-    async (reason) => {
+    async (reason, retire) => {
       const f = fixture();
-      const preparing =
-        reason === "actor revoked" ||
-        reason === "session reset" ||
-        reason === "attachment replaced";
       const entered = createDeferred();
       const finish = createDeferred();
-      if (preparing) {
+      if (retire) {
         f.environments.openNodePortal.mockImplementationOnce(async () => {
           entered.resolve();
           await finish.promise;
@@ -209,15 +197,9 @@ describe("session-scoped attached worker portals", () => {
         },
         reason !== "missing admission",
       );
-      if (preparing) {
+      if (retire) {
         await entered.promise;
-        if (reason === "actor revoked") {
-          f.revokeActor();
-        } else if (reason === "session reset") {
-          f.session.abort(new Error("session reset"));
-        } else {
-          f.replaceAttachment();
-        }
+        f[retire]();
         finish.resolve();
       }
       const response = await opening;
@@ -225,9 +207,9 @@ describe("session-scoped attached worker portals", () => {
       if (reason === "session reset") {
         expect(response?.[2]).toMatchObject({ message: "session reset" });
       }
-      expect(f.environments.openNodePortal).toHaveBeenCalledTimes(preparing ? 1 : 0);
-      expect(f.close).toHaveBeenCalledTimes(preparing ? 1 : 0);
-      expect(f.release).toHaveBeenCalledTimes(preparing ? 1 : 0);
+      for (const prepared of [f.environments.openNodePortal, f.close, f.release]) {
+        expect(prepared).toHaveBeenCalledTimes(retire ? 1 : 0);
+      }
       expect(f.service.list()).toEqual([]);
       expect(f.open).not.toHaveBeenCalled();
       expect(f.broadcast).not.toHaveBeenCalled();

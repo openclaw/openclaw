@@ -13,6 +13,7 @@ import {
 } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun, QueueSettings } from "../../auto-reply/reply/queue/types.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
@@ -127,7 +128,6 @@ function fixture(options: { parkSteer?: boolean } = {}) {
     string,
     {
       queued: FollowupRun;
-      adoption: ReturnType<typeof createChatSendTurnAdoptionLifecycle>;
       controller: AbortController;
       parked?: ReturnType<typeof parkSteerCandidate>;
       releaseAdmission: ReturnType<typeof vi.fn>;
@@ -136,16 +136,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
   const runFollowup = createFollowupRunner({
     defaultModel: "test",
     typingMode: "never",
-    typing: {
-      onReplyStart: async () => {},
-      startTypingLoop: async () => {},
-      startTypingOnText: async () => {},
-      refreshTypingTtl: () => {},
-      isActive: () => false,
-      markRunComplete: () => {},
-      markDispatchIdle: () => {},
-      cleanup: () => {},
-    },
+    typing: createMockTypingController(),
   });
   // This bounded admission adapter replays the real Gateway dedupe map. It does
   // not implement queued completion: only the real runner/lifecycle may do that.
@@ -229,7 +220,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
         true,
       );
     }
-    sources.set(runId, { queued, adoption, controller, parked, releaseAdmission });
+    sources.set(runId, { queued, controller, parked, releaseAdmission });
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
       key: `chat:` + runId,
@@ -313,17 +304,12 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     }
   };
   scheduleFollowupDrain(f.sessionKey, runner);
-  cleanups.push(async () => {
+  const finish = async () => {
     releaseExecution.resolve();
     await runnerDone.promise;
-  });
-  return {
-    entered: entered.promise,
-    finish: async () => {
-      releaseExecution.resolve();
-      await runnerDone.promise;
-    },
   };
+  cleanups.push(finish);
+  return { entered: entered.promise, finish };
 }
 
 function expectAccepted(respond: ReturnType<typeof vi.fn<RespondFn>>) {
