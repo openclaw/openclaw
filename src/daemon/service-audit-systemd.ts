@@ -406,4 +406,5 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     detail,
     level: "recommended",
   });
+  return undefined;
 }
