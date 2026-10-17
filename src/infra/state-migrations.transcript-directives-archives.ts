@@ -8,6 +8,7 @@ import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "../state/opencl
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-session-transcript-archive-schema.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
@@ -21,6 +22,7 @@ import {
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "./migration-warning-summary.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
@@ -119,17 +121,13 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
   throw new Error(`${owner} has unsupported transcript archive encoding ${value}`);
 }
 
-function hasArchiveTable(database: DatabaseSync): boolean {
+function hasArchiveTable(database: EngineConnection): boolean {
   // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
-  return Boolean(
-    database
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE),
-  );
+  return tableExists(database, SESSION_TRANSCRIPT_ARCHIVES_TABLE);
 }
 
 async function listArchiveBatch(
-  database: DatabaseSync,
+  database: EngineConnection,
   cursor: ArchiveCursor | undefined,
   transformLine: ArchiveSessionLineTransform,
   options?: {
@@ -218,7 +216,7 @@ async function listArchiveBatch(
 }
 
 export async function transcriptDirectiveArchivesNeedMigration(
-  database: DatabaseSync,
+  database: EngineConnection,
   start: ArchiveCursor,
   transformLine: ArchiveSessionLineTransform = transformArchiveDirectiveLine,
 ): Promise<boolean> {
@@ -248,7 +246,7 @@ export async function transcriptDirectiveArchivesNeedMigration(
   }
 }
 
-export function transcriptDirectiveArchiveRecoveryPending(database: DatabaseSync): boolean {
+export function transcriptDirectiveArchiveRecoveryPending(database: EngineConnection): boolean {
   return readTranscriptArchiveRecoveryJournal(database) !== undefined;
 }
 

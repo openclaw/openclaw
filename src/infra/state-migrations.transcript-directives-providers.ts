@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { MASKED_TRANSCRIPT_PROVIDER } from "./state-migrations.transcript-directives-transform.js";
 
 // Restored providers were all "***", so this row list is the complete undo record.
@@ -26,7 +27,7 @@ export type MaskedProviderResolver = (sessionId: string) => (model: string) => s
  * unmasked provider of trajectory runtime events for that model. A model recorded with
  * more than one provider in the session, or not at all, stays masked.
  */
-export function createMaskedProviderResolver(database: DatabaseSync): MaskedProviderResolver {
+export function createMaskedProviderResolver(database: EngineConnection): MaskedProviderResolver {
   const db =
     getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">>(database);
   const sessions = new Map<string, Map<string, string | null>>();

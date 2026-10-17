@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -24,6 +25,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
@@ -163,6 +165,83 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+
+  it("inspects clean PostgreSQL transcripts and preserves history requiring a file repair backup", async () => {
+    const target = {
+      agentId: "doctor-transcripts",
+      sessionId: "doctor-transcript",
+      sessionKey: "agent:doctor-transcripts:main",
+      storePath: path.join(root, "agents", "doctor-transcripts", "sessions", "sessions.json"),
+    };
+    await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await owners.appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "Keep [[literal]] text." },
+      now: 1,
+    });
+    const database = withEngineStoreAdmission(() =>
+      owners.openOpenClawAgentDatabase({ agentId: target.agentId }),
+    );
+    const inspect = () => {
+      let result: ReturnType<typeof migrateHistoricalTranscriptDirectives> | undefined;
+      withEngineStoreAdmission(() => {
+        result = migrateHistoricalTranscriptDirectives({
+          env: process.env,
+          preparedTargets: [
+            {
+              agentId: target.agentId,
+              path: database.path,
+              realPath: fs.realpathSync.native(database.path),
+              source: "configured",
+            },
+          ],
+        });
+      });
+      return result!;
+    };
+    try {
+      expect(await inspect()).toEqual({ changes: [], warnings: [] });
+      const raw = withEngineStoreAdmission(() => {
+        const row = database.db
+          .prepare(
+            "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
+          )
+          .get();
+        const event = JSON.parse(String(row?.event_json));
+        event.message.content = [{ type: "text", text: "[[reply_to_current]] Legacy reply" }];
+        const next = JSON.stringify(event);
+        owners.runOpenClawAgentWriteTransaction(
+          ({ db }) =>
+            db
+              .prepare(
+                "UPDATE transcript_events SET event_json = ? WHERE message_role = 'assistant'",
+              )
+              .run(next),
+          { agentId: target.agentId },
+        );
+        return next;
+      });
+      const result = await inspect();
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining("PostgreSQL cannot use SQLite repair"),
+      ]);
+      withEngineStoreAdmission(() => {
+        expect(
+          database.db
+            .prepare(
+              "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
+            )
+            .get(),
+        ).toEqual({ event_json: raw });
+      });
+      using anchor = openNodeSqliteDatabase(database.path, { readOnly: true });
+      expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+        { name: "openclaw_engine_anchor" },
+      ]);
+    } finally {
+      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
+    }
+  });
 
   it("scans and repairs legacy Doctor state while retaining opaque PostgreSQL JSON numbers", () => {
     withEngineStoreAdmission(() => {

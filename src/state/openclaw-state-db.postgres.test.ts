@@ -29,17 +29,20 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
+import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseByPathAsync,
+  detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
   prepareOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseIndexesForDoctor,
@@ -121,6 +124,10 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     try {
       namespace = withEngineStoreAdmission(() =>
         runOpenClawStateWriteTransaction(({ db }) => {
+          ensureAgentDatabaseLeaseSchema(db);
+          db.prepare(
+            "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, NULL, ?)",
+          ).run("diagnostic-lease", "main", path.join(directory, "agent.sqlite"), process.pid, 1);
           db.prepare(
             "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
           ).run(stateKey, valueJson, 1);
@@ -146,6 +153,15 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         if (source === "cold") {
           await closeOpenClawStateDatabaseAsync();
         }
+        withEngineStoreAdmission(() => {
+          expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+          expect(
+            readActiveOpenClawAgentDatabaseLeasesReadOnly(
+              options,
+              openDoctorStateSchemaReadAdmission,
+            ).map((row) => row.lease_id),
+          ).toEqual(["diagnostic-lease"]);
+        });
         const reply = await withArtifactPreservingStateReads(() =>
           withOpenClawStateDatabaseReadSnapshot(
             () =>
