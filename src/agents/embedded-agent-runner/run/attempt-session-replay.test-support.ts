@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assert } from "vitest";
 import {
   createFailureMessage,
   appendInterruptedTurnMessage,
@@ -10,7 +11,10 @@ import { persistInternalSourceReply } from "../../../gateway/internal-source-rep
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
+} from "../../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -43,6 +47,13 @@ import {
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export function makeReplayUser(
+  content: string,
+  fields: Partial<PersistedUserTurnMessage> = {},
+): PersistedUserTurnMessage {
+  return { role: "user", content, timestamp: 1, ...fields };
+}
 
 export async function appendCompletedToolWork(
   manager: SessionManager,
@@ -150,15 +161,10 @@ export async function withInterruptedTurn(
     if (options.settledPrefix) {
       // A completed earlier turn that fenced current-turn reads must still see.
       const seed = await SessionManager.openAsync(target, state.workspaceDir);
-      await seed.appendMessageAsync({
-        role: "user",
-        content: "Earlier settled question",
-        timestamp: 1,
-        idempotencyKey: `${runId}:earlier`,
-      } as never);
       await seed.appendMessageAsync(
-        createAssistant(testModel, [{ type: "text", text: "Earlier settled answer" }]),
+        makeReplayUser("Earlier settled question", { idempotencyKey: `${runId}:earlier` }),
       );
+      await seed.appendMessageAsync(createAssistant(testModel, "Earlier settled answer"));
     }
     const previous = makeRecorder();
     await previous.stageApproved!({ runId, assertCurrent: () => {} });
@@ -171,11 +177,7 @@ export async function withInterruptedTurn(
       },
     );
     await previous.withPendingInput!(() =>
-      original.appendMessageAsync({
-        role: "user",
-        content: "Finish this exact turn",
-        timestamp: 1,
-      }),
+      original.appendMessageAsync(makeReplayUser("Finish this exact turn")),
     );
     if (appendOnlyRuntimeContext) {
       const carrier = buildRuntimeContextCustomMessage("Original runtime context")!;
@@ -231,15 +233,9 @@ export async function withInterruptedTurn(
         if (event.type !== "message_end") {
           return;
         }
-        const interrupted = event.message;
-        if (interrupted.role !== "custom") {
-          throw new Error("expected interruption context");
-        }
-        await original.appendCustomMessageEntryAsync(
-          interrupted.customType,
-          interrupted.content,
-          interrupted.display,
-        );
+        assert(event.message.role === "custom", "expected interruption context");
+        const { customType, content, display } = event.message;
+        await original.appendCustomMessageEntryAsync(customType, content, display);
       });
     }
     previous.finishPendingInput!("interrupted");
@@ -252,9 +248,7 @@ export async function withInterruptedTurn(
       recorder.markRuntimePersisted(
         previous.getPersistedMessage?.(),
         previous.getAdmissionReceipt(),
-        {
-          appended: false,
-        },
+        { appended: false },
       );
       await recorder.waitForRuntimePersistence();
     }
@@ -392,7 +386,6 @@ export async function withReplaySession(
       setActiveSessionSystemPrompt: () => {},
     });
     using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
-    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,
@@ -408,7 +401,7 @@ export async function withReplaySession(
         systemPrompt: "",
         toolResultAggregateMaxChars: 8000,
         toolResultMaxChars: 4000,
-        toolResultPromptProjectionState: promptState.toolResults,
+        toolResultPromptProjectionState: promptStateLease.state.toolResults,
         trajectoryRecorder: null,
         transcriptLeafId: prepared.sessionManager.getLeafId(),
         transcriptPrompt: attempt.prompt,

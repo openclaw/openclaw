@@ -94,7 +94,7 @@ describe("transcript replay cohorts", () => {
     await withInterruptedTurn(
       false,
       async (fixture) => {
-        const reload = vi.spyOn(SessionManager.prototype, "reloadPersistedTranscriptAsync");
+        using reload = vi.spyOn(SessionManager.prototype, "reloadPersistedTranscriptAsync");
         let hydrationReads = 0;
         let messagePresenceReads = 0;
         const createReaders = historyReaders.createSessionHistoryWorkerReaders;
@@ -164,20 +164,17 @@ describe("transcript replay cohorts", () => {
           expect(reload).toHaveBeenCalledTimes(
             change === "wrong-hint" || change === "local-navigation" ? 1 : 0,
           );
-          expect(
-            prepared.sessionManager
-              .getBranch()
-              .some(
-                (entry) =>
-                  entry.type === "message" &&
-                  entry.message.role === "user" &&
-                  entry.message.content === fixture.attempt.prompt,
-              ),
-          ).toBe(true);
+          expect(prepared.sessionManager.getBranch()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({ role: "user", content: fixture.attempt.prompt }),
+              }),
+            ]),
+          );
           expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
         } finally {
           observeReads.mockRestore();
-          reload.mockRestore();
         }
       },
       {
@@ -189,17 +186,11 @@ describe("transcript replay cohorts", () => {
     );
   });
 
-  it.each([
-    { phase: "legacy-final", change: "rewrite" },
-    { phase: "legacy-final", change: "close" },
-    { phase: "legacy-final", change: "revoke" },
-    { phase: "selected-initial", change: "rewrite" },
-    { phase: "selected-initial", change: "close" },
-    { phase: "selected-initial", change: "revoke" },
-    { phase: "selected-final", change: "rewrite" },
-    { phase: "selected-final", change: "close" },
-    { phase: "selected-final", change: "revoke" },
-  ] as const)(
+  it.each(
+    (["legacy-final", "selected-initial", "selected-final"] as const).flatMap((phase) =>
+      (["rewrite", "close", "revoke"] as const).map((change) => ({ phase, change })),
+    ),
+  )(
     "refuses $phase replay after $change between worker validation and consumption",
     async ({ phase, change }) => {
       await withInterruptedTurn(
