@@ -1,7 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished as onVitestTestFinished,
+  vi,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
@@ -938,7 +945,7 @@ describe("node worker tunnel manager", () => {
         await import("../../infra/git-worker.js"),
         "runGitWorkerOperation",
       );
-      onTestFinished(() => workerOperations.mockRestore());
+      onVitestTestFinished(() => workerOperations.mockRestore());
       const gatewayReports: WorkspaceComputationHashResult<unknown>[][] = [];
 
       for (let turn = 0; turn < 2; turn += 1) {

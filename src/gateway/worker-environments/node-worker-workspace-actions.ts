@@ -19,6 +19,7 @@ import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerLocalWorkspaceSyncRequest,
   WorkerWorkspaceReconcileRequest,
+  WorkerWorkspaceReconcileResult,
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
   WorkerWorkspaceSyncRequest,
@@ -173,7 +174,9 @@ export function createNodeWorkerWorkspaceActions(params: {
   // keys self-invalidate on change, and without this owner every turn re-hashes
   // the full managed worktree during prepare/apply/verify.
   const placementHashMemo: WorkspaceHashMemo = new Map();
-  const reconcileWorkspace = (request: WorkerWorkspaceReconcileRequest) => {
+  const reconcileWorkspace = (
+    request: WorkerWorkspaceReconcileRequest,
+  ): Promise<WorkerWorkspaceReconcileResult> => {
     if (deviceFolder !== undefined) {
       return Promise.reject(new Error("Device folders cannot be synchronized or reconciled"));
     }
