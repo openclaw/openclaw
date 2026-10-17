@@ -36,8 +36,35 @@ async function advance(sidebar: Awaited<ReturnType<typeof mountSidebar>>["sideba
   await sidebar.updateComplete;
 }
 
+const thread = (name = "Shared session", details: Partial<SessionCatalogSession> = {}) =>
+  catalogList([{ threadId: "thread-1", name, ...details }]);
+const row = (sidebar: Awaited<ReturnType<typeof mountSidebar>>["sidebar"], key = "thread-1") =>
+  sidebar.querySelector(`[data-session-key*="${key}"]`);
+const adoptedKey = "agent:main:adopted-codex";
+const catalogSelector = '[data-session-section="catalog:codex"]';
+
+function expectMethods(request: ReturnType<typeof vi.fn>, methods: string[]) {
+  expect(request.mock.calls.map(([method]) => method)).toEqual(
+    methods.map((method) => `sessions.catalog.${method}`),
+  );
+}
+
+function adopt(agentId = "main") {
+  document.dispatchEvent(
+    new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
+      detail: {
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "thread-1",
+        agentId,
+        sessionKey: `agent:${agentId}:adopted-codex`,
+      },
+    }),
+  );
+}
+
 async function mountWithCatalog(
-  result: SessionsCatalogListResult,
+  result = thread(),
   sessionKeys = ["agent:main:main"],
   request = vi.fn().mockResolvedValue(result),
 ) {
@@ -55,7 +82,7 @@ async function mountWithCatalog(
   sidebar.connected = true;
   await sidebar.updateComplete;
   await advance(sidebar);
-  return { sidebar, context, gateway };
+  return { sidebar, context, gateway, request };
 }
 
 describe("AppSidebar catalog terminal ownership", () => {
@@ -64,28 +91,12 @@ describe("AppSidebar catalog terminal ownership", () => {
   });
   it("opens the catalog terminal menu for the rendered catalog session", async () => {
     const { sidebar, context } = await mountWithCatalog(
-      catalogList([
-        {
-          threadId: "thread-1",
-          name: "Resume me",
-          canOpenTerminal: true,
-          sourceHomeId: "selected-home",
-        },
-      ]),
+      thread("Resume me", { canOpenTerminal: true, sourceHomeId: "selected-home" }),
     );
     sidebar.terminalAvailable = true;
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
+    const onNavigate = (sidebar.onNavigate = vi.fn());
     await sidebar.updateComplete;
-    const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
-    row.dispatchEvent(
-      new MouseEvent("contextmenu", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 20,
-        clientY: 30,
-      }),
-    );
+    row(sidebar)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
     const menu = sidebar.querySelector("openclaw-catalog-session-menu") as HTMLElement & {
       onAction: (action: "viewer" | "terminal") => void;
@@ -105,71 +116,28 @@ describe("AppSidebar catalog terminal ownership", () => {
     });
   });
 
-  it("keeps a selected adopted catalog session as one row", async () => {
-    const { sidebar } = await mountWithCatalog(
-      catalogList([
-        {
-          threadId: "thread-1",
-          name: "Release checklist",
-          sessionKey: "agent:main:adopted-codex",
-        },
-      ]),
-      ["agent:main:main", "agent:main:adopted-codex"],
-    );
-    sidebar.sessionKey = "agent:main:adopted-codex";
+  it.each(["selected", "continued"])("keeps one adopted row when %s", async (source) => {
+    const selected = source === "selected";
+    const result = thread("Release checklist", selected ? { sessionKey: adoptedKey } : {});
+    const { sidebar } = await mountWithCatalog(result, ["agent:main:main", adoptedKey]);
+    if (selected) {
+      sidebar.sessionKey = adoptedKey;
+    } else {
+      expect(sidebar.querySelectorAll(`[data-session-key="${adoptedKey}"]`)).toHaveLength(1);
+      adopt();
+    }
     await settleLitElement(sidebar);
-
-    const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
+    const rows = sidebar.querySelectorAll(`[data-session-key="${adoptedKey}"]`);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
-  });
-
-  it("binds the adopted session immediately on the catalog-continued event", async () => {
-    const { sidebar } = await mountWithCatalog(
-      catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
-      ["agent:main:main", "agent:main:adopted-codex"],
-    );
-    expect(sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')).toHaveLength(
-      1,
-    );
-
-    document.dispatchEvent(
-      new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
-        detail: {
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "thread-1",
-          agentId: "main",
-          sessionKey: "agent:main:adopted-codex",
-        },
-      }),
-    );
-    await settleLitElement(sidebar);
-
-    const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
+    expect(rows[0]?.closest(catalogSelector)).not.toBeNull();
   });
 
   it("ignores a catalog adoption event owned by another agent", async () => {
-    const { sidebar } = await mountWithCatalog(
-      catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
-    );
-
-    document.dispatchEvent(
-      new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
-        detail: {
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "thread-1",
-          agentId: "jarvis",
-          sessionKey: "agent:jarvis:adopted-codex",
-        },
-      }),
-    );
+    const { sidebar } = await mountWithCatalog(thread("Release checklist"));
+    adopt("jarvis");
     await sidebar.updateComplete;
 
-    const catalog = sidebar.querySelector('[data-session-section="catalog:codex"]');
+    const catalog = sidebar.querySelector(catalogSelector);
     expect(catalog?.querySelector('[data-session-key="agent:jarvis:adopted-codex"]')).toBeNull();
     expect(
       catalog?.querySelector(
@@ -183,9 +151,9 @@ async function selectCatalogDelete(
   sidebar: Awaited<ReturnType<typeof mountWithCatalog>>["sidebar"],
   threadId = "thread-1",
 ) {
-  sidebar
-    .querySelector(`[data-session-key*="${threadId}"]`)!
-    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  row(sidebar, threadId)!.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+  );
   await vi.advanceTimersByTimeAsync(0);
   const item = sidebar.querySelector<HTMLButtonElement>(
     'openclaw-catalog-session-menu [data-value="delete"]',
@@ -205,15 +173,12 @@ describe("AppSidebar catalog deletion", () => {
   it.each([true, false])(
     "confirms catalog deletion and refreshes rows (open: %s)",
     async (open) => {
-      const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
-      const request = vi.fn().mockResolvedValue(result);
-      const { sidebar } = await mountWithCatalog(result, undefined, request);
+      const { sidebar, request } = await mountWithCatalog();
       sidebar.sessionKey = open
         ? "agent:main:catalog:codex:gateway%3Alocal:thread-1"
         : "agent:main:main";
       sidebar.activeRouteId = "chat";
-      const onNavigate = vi.fn();
-      sidebar.onNavigate = onNavigate;
+      const onNavigate = (sidebar.onNavigate = vi.fn());
       await sidebar.updateComplete;
       const cancelled = await selectCatalogDelete(sidebar);
       expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
@@ -221,8 +186,7 @@ describe("AppSidebar catalog deletion", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
       await vi.advanceTimersByTimeAsync(50);
-      request.mockClear();
-      request.mockResolvedValue(catalogList([]));
+      request.mockClear().mockResolvedValue(catalogList([]));
       const actions = await selectCatalogDelete(sidebar);
       answerConfirmDialog(actions, "confirm");
       await vi.advanceTimersByTimeAsync(0);
@@ -233,11 +197,8 @@ describe("AppSidebar catalog deletion", () => {
         agentId: "main",
         confirmNoOtherRunner: true,
       });
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "sessions.catalog.archive",
-        "sessions.catalog.list",
-      ]);
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+      expectMethods(request, ["archive", "list"]);
+      expect(row(sidebar)).toBeNull();
       if (open) {
         expect(onNavigate).toHaveBeenCalledWith("chat", {
           pathname: "/chat",
@@ -253,19 +214,18 @@ describe("AppSidebar catalog deletion", () => {
   it.each(["refresh", "page"] as const)(
     "keeps a pending delete hidden through an earlier %s response and requests fresh rows",
     async (source) => {
-      const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
+      const result = thread();
       if (source === "page") {
         result.catalogs[0]!.hosts[0]!.nextCursor = "page-2";
       }
-      const request = vi.fn().mockResolvedValue(result);
-      const { sidebar, gateway } = await mountWithCatalog(result, undefined, request);
+      const { sidebar, gateway, request } = await mountWithCatalog(result);
       await vi.advanceTimersByTimeAsync(50);
       const progressId = request.mock.calls[0]?.[1]?.progressId;
       const staleList = deferred<SessionsCatalogListResult>();
       const archive = deferred<unknown>();
       const freshList = deferred<SessionsCatalogListResult>();
-      request.mockClear();
       request
+        .mockClear()
         .mockReturnValueOnce(staleList.promise)
         .mockReturnValueOnce(archive.promise)
         .mockReturnValueOnce(freshList.promise);
@@ -286,68 +246,55 @@ describe("AppSidebar catalog deletion", () => {
         document.dispatchEvent(new Event("visibilitychange"));
         await vi.advanceTimersByTimeAsync(5_000);
       }
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
+      expectMethods(request, ["list"]);
 
       const actions = await selectCatalogDelete(sidebar);
       answerConfirmDialog(actions, "confirm");
       await vi.advanceTimersByTimeAsync(0);
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "sessions.catalog.list",
-        "sessions.catalog.archive",
-      ]);
+      expectMethods(request, ["list", "archive"]);
       await sidebar.updateComplete;
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
-      staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
+      expect(row(sidebar)).toBeNull();
+      staleList.resolve(thread("Stale deleted session"));
       await advance(sidebar);
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+      expect(row(sidebar)).toBeNull();
       archive.resolve({});
       await vi.advanceTimersByTimeAsync(0);
       gateway.publishEvent("sessions.catalog.host", {
         agentId: "main",
         progressId,
-        catalog: catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]).catalogs[0],
+        catalog: thread("Stale deleted session").catalogs[0],
       });
       await advance(sidebar, 1);
       expect(sidebar.textContent).not.toContain("Stale deleted session");
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "sessions.catalog.list",
-        "sessions.catalog.archive",
-        "sessions.catalog.list",
-      ]);
+      expectMethods(request, ["list", "archive", "list"]);
 
       freshList.resolve(catalogList([]));
       await advance(sidebar);
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+      expect(row(sidebar)).toBeNull();
     },
   );
 
   it("does not apply an old delete to rows loaded after reconnecting", async () => {
-    const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
-    const request = vi.fn().mockResolvedValue(result);
-    const { sidebar, gateway } = await mountWithCatalog(result, undefined, request);
+    const { sidebar, gateway, request } = await mountWithCatalog();
     await vi.advanceTimersByTimeAsync(50);
     const archive = deferred<unknown>();
     request.mockReturnValueOnce(archive.promise);
     answerConfirmDialog(await selectCatalogDelete(sidebar), "confirm");
     await advance(sidebar);
-    expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+    expect(row(sidebar)).toBeNull();
     gateway.publish({ phase: "reconnecting" });
     await sidebar.updateComplete;
-    request.mockResolvedValue(catalogList([{ threadId: "thread-1", name: "Replacement row" }]));
+    request.mockResolvedValue(thread("Replacement row"));
     gateway.publish({ phase: "connected" });
     await sidebar.updateComplete;
     await vi.advanceTimersByTimeAsync(50);
     archive.resolve({});
     await advance(sidebar);
-    expect(sidebar.querySelector('[data-session-key*="thread-1"]')?.textContent).toContain(
-      "Replacement row",
-    );
+    expect(row(sidebar)?.textContent).toContain("Replacement row");
   });
 
   it("does not confirm deletion after changing agents and returning", async () => {
-    const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
-    const request = vi.fn().mockResolvedValue(result);
-    const { sidebar, context } = await mountWithCatalog(result, undefined, request);
+    const { sidebar, context, request } = await mountWithCatalog();
     const actions = await selectCatalogDelete(sidebar);
     for (const agentId of ["other", "main"]) {
       context.agentSelection.set(agentId);
@@ -357,7 +304,7 @@ describe("AppSidebar catalog deletion", () => {
     answerConfirmDialog(actions, "confirm");
     await advance(sidebar);
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
-    expect(sidebar.querySelector('[data-session-key*="thread-1"]')).not.toBeNull();
+    expect(row(sidebar)).not.toBeNull();
   });
 
   it("restores a failed delete without bringing back another deleted row", async () => {
@@ -368,8 +315,7 @@ describe("AppSidebar catalog deletion", () => {
         { threadId: "thread-1", name: "First session" },
         { threadId: "thread-2", name: "Second session" },
       ]);
-      const request = vi.fn().mockResolvedValue(result);
-      const { sidebar } = await mountWithCatalog(result, undefined, request);
+      const { sidebar, request } = await mountWithCatalog(result);
       await vi.advanceTimersByTimeAsync(50);
       const firstArchive = deferred<unknown>();
       const secondArchive = deferred<unknown>();
@@ -381,19 +327,17 @@ describe("AppSidebar catalog deletion", () => {
       });
       answerConfirmDialog(await selectCatalogDelete(sidebar), "confirm");
       await advance(sidebar);
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+      expect(row(sidebar)).toBeNull();
       answerConfirmDialog(await selectCatalogDelete(sidebar, "thread-2"), "confirm");
       await advance(sidebar);
-      expect(sidebar.querySelector('[data-session-key*="thread-2"]')).toBeNull();
+      expect(row(sidebar, "thread-2")).toBeNull();
       firstArchive.resolve({});
       await advance(sidebar);
-      expect(sidebar.querySelector('[data-session-key*="thread-2"]')).toBeNull();
+      expect(row(sidebar, "thread-2")).toBeNull();
       secondArchive.reject(new Error("Delete unavailable"));
       await advance(sidebar);
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
-      expect(sidebar.querySelector('[data-session-key*="thread-2"]')?.textContent).toContain(
-        "Updated second",
-      );
+      expect(row(sidebar)).toBeNull();
+      expect(row(sidebar, "thread-2")?.textContent).toContain("Updated second");
       await toast.updateComplete;
       expect(toast.textContent).toContain("Delete unavailable");
     } finally {

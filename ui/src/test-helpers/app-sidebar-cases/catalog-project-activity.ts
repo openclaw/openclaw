@@ -5,6 +5,9 @@ import { catalogPage, createGateway, createSessions, mountSidebar } from "../app
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
+const collapsedKey = "openclaw:sidebar:sessions:collapsed-sections";
+const collapsed = () => JSON.parse(localStorage.getItem(collapsedKey) ?? "[]");
+
 async function mountCatalog(
   sessions: Array<Pick<SessionCatalogSession, "threadId"> & Partial<SessionCatalogSession>>,
 ) {
@@ -26,55 +29,46 @@ async function mountCatalog(
     await settleLitElement(sidebar);
   };
   await setCatalog();
-  return { sidebar, setCatalog };
+  const group = (key: string) =>
+    sidebar.querySelector<HTMLButtonElement>(`[data-session-catalog-project="${key}"]`);
+  return { sidebar, setCatalog, group };
+}
+
+function expectList(list: Element | null | undefined, label: string) {
+  expect(list?.getAttribute("aria-label")).toBe(label);
+  expect(
+    [...(list?.children ?? [])].every((item) => item.getAttribute("role") === "listitem"),
+  ).toBe(true);
 }
 
 describe("AppSidebar project session activity", () => {
   it("preserves collapsed project sections stored by earlier versions", async () => {
     localStorage.setItem(
-      "openclaw:sidebar:sessions:collapsed-sections",
+      collapsedKey,
       JSON.stringify(["catalog-project:codex:gateway:local:custom:repo"]),
     );
-    const { sidebar } = await mountCatalog([
-      {
-        threadId: "custom-group-thread",
-        name: "Custom group session",
-        customGroup: "repo",
-      },
-      {
-        threadId: "legacy-project-thread",
-        name: "Legacy collapsed project",
-        cwd: "custom:repo",
-      },
+    const { sidebar, group } = await mountCatalog([
+      { threadId: "custom-group-thread", customGroup: "repo" },
+      { threadId: "legacy-project-thread", cwd: "custom:repo" },
     ]);
 
-    const customGroup = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-catalog-project="custom:repo"]',
-    );
-    const project = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-catalog-project="project:custom:repo"]',
-    );
-    expect(customGroup?.getAttribute("aria-expanded")).toBe("false");
-    expect(project?.getAttribute("aria-expanded")).toBe("false");
+    const customGroup = group("custom:repo");
+    const project = group("project:custom:repo");
+    expect([customGroup?.ariaExpanded, project?.ariaExpanded]).toEqual(["false", "false"]);
     expect(sidebar.querySelector('[data-session-key*="custom-group-thread"]')).toBeNull();
     expect(sidebar.querySelector('[data-session-key*="legacy-project-thread"]')).toBeNull();
 
     project?.click();
     await sidebar.updateComplete;
     expect(customGroup?.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
-    ).not.toContain("catalog-project:codex:gateway:local:custom:repo");
+    expect(collapsed()).not.toContain("catalog-project:codex:gateway:local:custom:repo");
 
     project?.click();
     await sidebar.updateComplete;
     customGroup?.click();
     await sidebar.updateComplete;
-    expect(project?.getAttribute("aria-expanded")).toBe("false");
-    expect(customGroup?.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
-    ).toEqual([
+    expect([project?.ariaExpanded, customGroup?.ariaExpanded]).toEqual(["false", "false"]);
+    expect(collapsed()).toEqual([
       "catalog-project:codex:gateway:local:project:custom:repo",
       "catalog-custom:codex:gateway:local:custom:repo",
     ]);
@@ -83,11 +77,8 @@ describe("AppSidebar project session activity", () => {
   it("preserves and migrates collapsed person sections stored by earlier versions", async () => {
     localStorage.setItem("openclaw:sidebar:sessions:catalog-grouping", "person");
     const legacySectionId = "catalog-project:codex:gateway:local:person:profile-ada";
-    localStorage.setItem(
-      "openclaw:sidebar:sessions:collapsed-sections",
-      JSON.stringify([legacySectionId]),
-    );
-    const { sidebar } = await mountCatalog([
+    localStorage.setItem(collapsedKey, JSON.stringify([legacySectionId]));
+    const { sidebar, group } = await mountCatalog([
       {
         threadId: "person-thread",
         name: "Ada's session",
@@ -100,9 +91,7 @@ describe("AppSidebar project session activity", () => {
       },
     ]);
 
-    const person = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-catalog-project="person:profile:profile-ada"]',
-    );
+    const person = group("person:profile:profile-ada");
     expect(person?.getAttribute("aria-expanded")).toBe("false");
     expect(sidebar.querySelector('[data-session-key*="person-thread"]')).toBeNull();
 
@@ -111,9 +100,7 @@ describe("AppSidebar project session activity", () => {
     expect(person?.getAttribute("aria-expanded")).toBe("true");
     person?.click();
     await sidebar.updateComplete;
-    expect(
-      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
-    ).toEqual(["catalog-person:codex:gateway:local:person:profile:profile-ada"]);
+    expect(collapsed()).toEqual(["catalog-person:codex:gateway:local:person:profile:profile-ada"]);
   });
 
   it("preserves catalog menu focus when project groups reorder", async () => {
@@ -135,46 +122,29 @@ describe("AppSidebar project session activity", () => {
   });
 
   it("shows thread-style activity indicators", async () => {
-    const { sidebar } = await mountCatalog([
+    const { sidebar, group } = await mountCatalog([
       {
         threadId: "active-thread",
-        name: "Active session",
         cwd: "/work/openclaw",
         status: "active",
         canContinue: false,
         canArchive: false,
       },
-      {
-        threadId: "idle-thread",
-        name: "Idle session",
-        cwd: "/work/openclaw",
-      },
-      {
-        threadId: "loose-thread",
-        name: "Loose session",
-      },
+      { threadId: "idle-thread", cwd: "/work/openclaw" },
+      { threadId: "loose-thread" },
     ]);
 
-    const project = sidebar.querySelector(
-      '[data-session-catalog-project="project:/work/openclaw"]',
-    );
+    const project = group("project:/work/openclaw");
     const active = sidebar.querySelector('[data-session-key*="active-thread"]');
     const idle = sidebar.querySelector('[data-session-key*="idle-thread"]');
     const loose = sidebar.querySelector('[data-session-key*="loose-thread"]');
     const projectItem = project?.closest(".sidebar-session-catalog-project");
     const hostList = projectItem?.parentElement;
     const projectList = active?.closest('[role="list"]');
-    expect(project).not.toBeNull();
     expect(hostList?.getAttribute("role")).toBe("list");
-    expect(hostList?.getAttribute("aria-label")).toBe("Local Codex");
-    expect(
-      [...(hostList?.children ?? [])].every((item) => item.getAttribute("role") === "listitem"),
-    ).toBe(true);
+    expectList(hostList, "Local Codex");
     expect(projectItem?.getAttribute("role")).toBe("listitem");
-    expect(projectList?.getAttribute("aria-label")).toBe("Local Codex: openclaw");
-    expect(
-      [...(projectList?.children ?? [])].every((item) => item.getAttribute("role") === "listitem"),
-    ).toBe(true);
+    expectList(projectList, "Local Codex: openclaw");
     expect(idle?.closest('[role="list"]')).toBe(projectList);
     expect(loose?.parentElement).toBe(hostList);
     expect(loose?.getAttribute("role")).toBe("listitem");
@@ -184,9 +154,7 @@ describe("AppSidebar project session activity", () => {
       "Active run",
     );
     const idleLead = idle?.querySelector(".sidebar-session-indicator");
-    expect(activeLead).not.toBeNull();
     expect(active?.classList.contains("session-row-host--running")).toBe(true);
-    expect(idleLead).not.toBeNull();
     expect(idleLead?.childElementCount).toBe(0);
     expect(idle?.querySelector(".session-row-state")).toBeNull();
   });
