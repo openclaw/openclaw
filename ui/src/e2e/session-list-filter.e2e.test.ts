@@ -20,6 +20,41 @@ async function openSessionFilters(page: Page) {
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
+async function newPage(recordVideo = false) {
+  const context = await suite.browser.newContext({
+    viewport: { height: 800, width: 1200 },
+    ...(recordVideo ? { recordVideo: { dir: suite.artifactDir } } : {}),
+  });
+  page = await context.newPage();
+  return page;
+}
+function sessionList(
+  sessions: { key: string; kind: string; label: string; updatedAt: number }[],
+  ts = 1,
+) {
+  return {
+    count: sessions.length,
+    defaults: { contextTokens: null, model: null, modelProvider: null },
+    path: "",
+    sessions,
+    ts,
+  };
+}
+const row = (key: string, label: string, updatedAt = 1) => ({
+  key,
+  label,
+  updatedAt,
+  kind: "direct",
+});
+const allAgentsQuery = {
+  configuredAgentsOnly: true,
+  excludeDock: true,
+  includeGlobal: true,
+  includeUnknown: false,
+  limit: 50,
+  rowMode: "compact",
+  source: "sessions-page",
+};
 suite.define(() => {
   afterEach(async () => {
     await page
@@ -32,9 +67,7 @@ suite.define(() => {
   it("refetches instead of showing a row excluded by configured-agent filtering", async () => {
     const visibleLabel = "Visible configured session";
     const hiddenLabel = "Hidden unconfigured session";
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
+    const currentPage = await newPage();
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "unknown",
       methodResponses: {
@@ -44,20 +77,7 @@ suite.define(() => {
           scope: "per-sender",
           agents: [{ id: "main" }, { id: "writer" }],
         },
-        "sessions.list": {
-          count: 1,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          sessions: [
-            {
-              key: "agent:main:visible",
-              kind: "direct",
-              label: visibleLabel,
-              updatedAt: 1,
-            },
-          ],
-          ts: 1,
-        },
+        "sessions.list": sessionList([row("agent:main:visible", visibleLabel)]),
       },
     });
 
@@ -72,15 +92,6 @@ suite.define(() => {
       .locator(".agent-select__option[data-agent-option]")
       .filter({ hasText: "All agents" })
       .evaluate((item) => (item as HTMLElement).click());
-    const allAgentsQuery = {
-      configuredAgentsOnly: true,
-      excludeDock: true,
-      includeGlobal: true,
-      includeUnknown: false,
-      limit: 50,
-      rowMode: "compact",
-      source: "sessions-page",
-    };
     await expect
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).map((request) => request.params),
@@ -109,56 +120,19 @@ suite.define(() => {
     expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual(allAgentsQuery);
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
     await currentPage.clock.resume();
-    await gateway.resolveDeferred("sessions.list", {
-      count: 1,
-      defaults: { contextTokens: null, model: null, modelProvider: null },
-      path: "",
-      sessions: [
-        {
-          key: "agent:main:visible",
-          kind: "direct",
-          label: visibleLabel,
-          updatedAt: 3,
-        },
-      ],
-      ts: 3,
-    });
+    await gateway.resolveDeferred(
+      "sessions.list",
+      sessionList([row("agent:main:visible", visibleLabel, 3)], 3),
+    );
     await visibleRow.waitFor();
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
 
   it("keeps the Sessions page query stable when the startup roster completes", async () => {
     const visibleLabel = "Visible page-owned session";
-    const pageQueryParams = {
-      agentId: "main",
-      configuredAgentsOnly: true,
-      excludeDock: true,
-      includeGlobal: true,
-      includeUnknown: false,
-      limit: 50,
-      rowMode: "compact",
-      source: "sessions-page",
-    };
-    const visibleResponse = {
-      count: 1,
-      defaults: { contextTokens: null, model: null, modelProvider: null },
-      path: "",
-      sessions: [
-        {
-          key: "agent:main:page-owned",
-          kind: "direct",
-          label: visibleLabel,
-          updatedAt: 1,
-        },
-      ],
-      ts: 1,
-    };
-    const context = await suite.browser.newContext({
-      viewport: { height: 800, width: 1200 },
-      ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir } } : {}),
-    });
-    const currentPage = await context.newPage();
-    page = currentPage;
+    const pageQueryParams = { ...allAgentsQuery, agentId: "main" };
+    const visibleResponse = sessionList([row("agent:main:page-owned", visibleLabel)]);
+    const currentPage = await newPage(captureUiProof);
     const gateway = await installMockGateway(currentPage, {
       deferredMethods: ["sessions.list"],
       sessionKey: "agent:main:main",
@@ -167,13 +141,7 @@ suite.define(() => {
           cases: [
             { match: pageQueryParams, response: visibleResponse },
             {
-              response: {
-                count: 0,
-                defaults: visibleResponse.defaults,
-                path: "",
-                sessions: [],
-                ts: 1,
-              },
+              response: sessionList([]),
             },
           ],
         },
@@ -246,23 +214,8 @@ suite.define(() => {
   it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {
     const sessionKey = "agent:main:older-stored";
     const sessionLabel = "Older stored session";
-    const populatedResponse = {
-      count: 1,
-      defaults: { contextTokens: null, model: null, modelProvider: null },
-      path: "",
-      sessions: [
-        {
-          key: sessionKey,
-          kind: "direct",
-          label: sessionLabel,
-          updatedAt: 1,
-        },
-      ],
-      ts: 1,
-    };
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
+    const populatedResponse = sessionList([row(sessionKey, sessionLabel)]);
+    const currentPage = await newPage();
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:main",
       methodResponses: {
@@ -270,13 +223,7 @@ suite.define(() => {
           cases: [
             {
               match: { activeMinutes: 60 },
-              response: {
-                count: 0,
-                defaults: populatedResponse.defaults,
-                path: "",
-                sessions: [],
-                ts: 2,
-              },
+              response: sessionList([], 2),
             },
             { response: populatedResponse },
           ],
@@ -341,19 +288,11 @@ suite.define(() => {
   });
 
   it("omits noncanonical numeric filters from sessions.list requests", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
+    const currentPage = await newPage();
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "unknown",
       methodResponses: {
-        "sessions.list": {
-          count: 0,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          sessions: [],
-          ts: 1,
-        },
+        "sessions.list": sessionList([]),
       },
     });
 

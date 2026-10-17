@@ -9,6 +9,7 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
+  chatMessage,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -113,6 +114,13 @@ suite.define(() => {
   });
   it("docks Details in wide conversations and preserves manual intent, drafts, and independent scrolling", async () => {
     const sessionKey = "agent:main:details-progress";
+    const progressCard = (
+      revision: number,
+      markdown: string,
+      steps: { step: string; status: string }[],
+    ) => ({
+      card: { sessionKey, revision, updatedAt: Date.now(), markdown, steps },
+    });
     await suite.withPage(
       { colorScheme: "light", locale: "en-US", viewport: { width: 1728, height: 1000 } },
       async ({ page }) => {
@@ -133,32 +141,22 @@ suite.define(() => {
             SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           ],
           historyMessages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Put session context and task progress in Details, and remove the duplicate bars.",
-                },
-              ],
-            },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: [
-                    "I am bringing related session information together without mixing it into the conversation.",
-                    "### Session context",
-                    "The worktree, pull requests, people, active helpers, and automations belong to this session. Each entry should keep its existing action and source of truth.",
-                    "### Task progress",
-                    "The checklist describes the job currently underway. It remains independent from session context, with its own disclosure state and display preference.",
-                    "### Verification",
-                    "I will check the Details control, keyboard navigation, updates, and narrow layouts. The final result should leave no duplicate pull request or progress bars above the composer.",
-                  ].join("\n\n"),
-                },
-              ],
-            },
+            chatMessage(
+              "user",
+              "Put session context and task progress in Details, and remove the duplicate bars.",
+            ),
+            chatMessage(
+              "assistant",
+              [
+                "I am bringing related session information together without mixing it into the conversation.",
+                "### Session context",
+                "The worktree, pull requests, people, active helpers, and automations belong to this session. Each entry should keep its existing action and source of truth.",
+                "### Task progress",
+                "The checklist describes the job currently underway. It remains independent from session context, with its own disclosure state and display preference.",
+                "### Verification",
+                "I will check the Details control, keyboard navigation, updates, and narrow layouts. The final result should leave no duplicate pull request or progress bars above the composer.",
+              ].join("\n\n"),
+            ),
           ],
           methodResponses: {
             [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -199,21 +197,16 @@ suite.define(() => {
               hasMore: false,
               nextOffset: null,
             },
-            "progressCard.get": {
-              card: {
-                sessionKey,
-                revision: 1,
-                updatedAt: Date.now(),
-                markdown:
-                  "Integrating task progress into session Details. The UI is ready for focused interaction checks.",
-                steps: [
-                  { step: "Inspect the existing session owners", status: "completed" },
-                  { step: "Integrate Details and task progress", status: "completed" },
-                  { step: "Verify interactions and screenshots", status: "in_progress" },
-                  { step: "Review and land the change", status: "pending" },
-                ],
-              },
-            },
+            "progressCard.get": progressCard(
+              1,
+              "Integrating task progress into session Details. The UI is ready for focused interaction checks.",
+              [
+                { step: "Inspect the existing session owners", status: "completed" },
+                { step: "Integrate Details and task progress", status: "completed" },
+                { step: "Verify interactions and screenshots", status: "in_progress" },
+                { step: "Review and land the change", status: "pending" },
+              ],
+            ),
             "sessions.list": chatSessionListResponse([
               {
                 key: sessionKey,
@@ -400,15 +393,12 @@ suite.define(() => {
         await expect.poll(() => details.isVisible()).toBe(false);
         expect(await trigger.evaluate((el) => el === document.activeElement)).toBe(true);
         expect(await composer.inputValue()).toBe("Keep my draft while I inspect Details.");
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
-            sessionKey,
-            revision: 2,
-            updatedAt: Date.now(),
-            markdown: "The card changed while Details stayed closed.",
-            steps: [{ step: "Verify interactions and screenshots", status: "in_progress" }],
-          },
-        });
+        await gateway.setMethodResponse(
+          "progressCard.get",
+          progressCard(2, "The card changed while Details stayed closed.", [
+            { step: "Verify interactions and screenshots", status: "in_progress" },
+          ]),
+        );
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await trigger.click();
@@ -502,21 +492,20 @@ suite.define(() => {
         await expect.poll(() => details.getAttribute("role")).toBe("complementary");
         await geometry(true);
         await composer.fill("Keep my draft while I inspect Details.");
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
-            sessionKey,
-            revision: 3,
-            updatedAt: Date.now(),
-            markdown: "Long task details must scroll independently from the conversation.",
-            steps: Array.from({ length: 24 }, (_, index) => ({
+        await gateway.setMethodResponse(
+          "progressCard.get",
+          progressCard(
+            3,
+            "Long task details must scroll independently from the conversation.",
+            Array.from({ length: 24 }, (_, index) => ({
               step:
                 "Verification step " +
                 (index + 1) +
                 ": retain readable conversation text and an independently scrolling details rail for long-running work.",
               status: index < 8 ? "completed" : index === 8 ? "in_progress" : "pending",
             })),
-          },
-        });
+          ),
+        );
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 3 });
         await expect.poll(() => progress.textContent()).toContain("Verification step 24");
         await gateway.emitChatFinal({

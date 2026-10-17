@@ -6,7 +6,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
   activateSelfRemovingControl,
@@ -22,6 +21,7 @@ import {
   submitInputDialog,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { withSessionPage } from "./session-page.test-support.ts";
 import {
   chooseSidebarMenuOption,
   closeSidebarMenu,
@@ -33,85 +33,83 @@ const suite = createSessionManagementE2eSuite();
 suite.define(() => {
   it("keeps long group titles on one line and reveals them on hover", async () => {
     const groupName = "OpenClaw Bugfixes / Miscellaneous Product Work and Release Coordination";
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 720, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: [...defaultControlUiFeatureMethods, "sessions.groups.list"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:group-title", "Group title behavior", Date.now(), {
-            category: groupName,
-          }),
-        ]),
-      },
-      sessionGroups: [groupName],
-      sessionKey: "agent:main:group-title",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:group-title"));
-      const group = page.locator(`[data-session-section="category:${groupName}"]`);
-      const header = group.locator(":scope > .sidebar-recent-sessions__head");
-      const label = header.locator(".sidebar-recent-sessions__label-text");
-      await group.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
-        .toContain("linear-gradient");
-      await captureUiProof(suite, page, "sidebar-group-title-resting.png");
-
-      const resting = await label.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return {
-          clientWidth: element.clientWidth,
-          height: element.getBoundingClientRect().height,
-          lineHeight: Number.parseFloat(style.lineHeight),
-          scrollWidth: element.scrollWidth,
-          maskImage: style.maskImage,
-          whiteSpace: style.whiteSpace,
-        };
-      });
-      expect(resting.whiteSpace).toBe("nowrap");
-      expect(resting.maskImage).toContain("linear-gradient");
-      expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
-      expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
-
-      const text = label.locator(".hover-marquee__text");
-      const offset = () =>
-        text.evaluate((element) => {
-          const transform = getComputedStyle(element).transform;
-          return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
+    await withSessionPage(
+      suite,
+      async (page) => {
+        await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "sessions.groups.list"],
+          methodResponses: {
+            "sessions.list": sessionsListResponse([
+              sessionRow("agent:main:group-title", "Group title behavior", Date.now(), {
+                category: groupName,
+              }),
+            ]),
+          },
+          sessionGroups: [groupName],
+          sessionKey: "agent:main:group-title",
         });
-      await header.hover();
-      await expect.poll(offset).toBeLessThan(-2);
-      const firstOffset = await offset();
-      await expect.poll(offset).toBeLessThan(firstOffset - 5);
-      expect(await label.evaluate((element) => getComputedStyle(element).maskImage)).toContain(
-        "linear-gradient",
-      );
-      await captureUiProof(suite, page, "sidebar-group-title-hovered.png");
-    } finally {
-      await context.close();
-    }
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:group-title"));
+        const group = page.locator(`[data-session-section="category:${groupName}"]`);
+        const header = group.locator(":scope > .sidebar-recent-sessions__head");
+        const label = header.locator(".sidebar-recent-sessions__label-text");
+        await group.waitFor({ state: "visible", timeout: 10_000 });
+        await expect
+          .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
+          .toContain("linear-gradient");
+        await captureUiProof(suite, page, "sidebar-group-title-resting.png");
+
+        const resting = await label.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            clientWidth: element.clientWidth,
+            height: element.getBoundingClientRect().height,
+            lineHeight: Number.parseFloat(style.lineHeight),
+            scrollWidth: element.scrollWidth,
+            maskImage: style.maskImage,
+            whiteSpace: style.whiteSpace,
+          };
+        });
+        expect(resting.whiteSpace).toBe("nowrap");
+        expect(resting.maskImage).toContain("linear-gradient");
+        expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
+        expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
+
+        const text = label.locator(".hover-marquee__text");
+        const offset = () =>
+          text.evaluate((element) => {
+            const transform = getComputedStyle(element).transform;
+            return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
+          });
+        await header.hover();
+        await expect.poll(offset).toBeLessThan(-2);
+        const firstOffset = await offset();
+        await expect.poll(offset).toBeLessThan(firstOffset - 5);
+        expect(await label.evaluate((element) => getComputedStyle(element).maskImage)).toContain(
+          "linear-gradient",
+        );
+        await captureUiProof(suite, page, "sidebar-group-title-hovered.png");
+      },
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 720, width: 1280 },
+      },
+    );
   });
 
   it("recovers an empty group catalog after a transient load failure", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.groups.list"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-      },
-      sessionGroups: ["Recovered group"],
-    });
+    await withSessionPage(suite, async (page) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.groups.list"],
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([]),
+        },
+        sessionGroups: ["Recovered group"],
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.groups.list");
       await gateway.rejectDeferred("sessions.groups.list", {
@@ -128,9 +126,7 @@ suite.define(() => {
       await page.locator('[data-session-section="category:Recovered group"]').waitFor({
         state: "visible",
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("manages sessions through the sidebar groups and command palette", async () => {
@@ -367,19 +363,17 @@ suite.define(() => {
   });
 
   it("sorts threads from the keyboard and identifies destructive selection targets", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:alpha", "Alpha thread", 1),
-          sessionRow("agent:main:zulu", "Zulu thread", 2),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
+    await withSessionPage(suite, async (page) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow("agent:main:alpha", "Alpha thread", 1),
+            sessionRow("agent:main:zulu", "Zulu thread", 2),
+          ]),
+        },
+        sessionKey: "agent:main:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const table = page.locator(".sessions-table");
       const rowNames = () =>
@@ -415,31 +409,27 @@ suite.define(() => {
 
       await table.getByRole("checkbox", { name: "Select session: agent:main:alpha" }).waitFor();
       await table.getByRole("checkbox", { name: "Select session: agent:main:zulu" }).waitFor();
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.groups.put"],
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.list",
-        "sessions.groups.put",
-      ],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-      },
-      sessionKey: "agent:main:main",
-    });
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await withSessionPage(suite, async (page) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.groups.put"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.groups.list",
+          "sessions.groups.put",
+        ],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([]),
+        },
+        sessionKey: "agent:main:main",
+      });
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
 
-    try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.getByRole("button", { name: "Filters" }).click();
       await page.locator(".sessions-filter-popover:popover-open").waitFor();
@@ -460,59 +450,55 @@ suite.define(() => {
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
       expect(await field.inputValue()).toBe("X".repeat(513));
       expect(pageErrors).toEqual([]);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("renames, deletes, and toggles sidebar session groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": {
-          cases: [
-            {
-              match: { archived: true },
-              response: sessionsListResponse([
-                sessionRow("agent:main:old-notes", "Old notes", baseTime - 300_000, {
-                  archived: true,
-                  category: "Research",
-                }),
-              ]),
-            },
-            {
-              match: {},
-              response: sessionsListResponse([
-                sessionRow("agent:main:main", "Main", baseTime),
-                sessionRow("agent:main:apps", "Apps", baseTime - 30_000, {
-                  category: "Apps",
-                }),
-                sessionRow("agent:main:paper-a", "Paper A", baseTime - 60_000, {
-                  category: "Research",
-                }),
-                sessionRow("agent:main:paper-b", "Paper B", baseTime - 90_000, {
-                  category: "Research",
-                }),
-              ]),
-            },
-          ],
+    await withSessionPage(suite, async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              {
+                match: { archived: true },
+                response: sessionsListResponse([
+                  sessionRow("agent:main:old-notes", "Old notes", baseTime - 300_000, {
+                    archived: true,
+                    category: "Research",
+                  }),
+                ]),
+              },
+              {
+                match: {},
+                response: sessionsListResponse([
+                  sessionRow("agent:main:main", "Main", baseTime),
+                  sessionRow("agent:main:apps", "Apps", baseTime - 30_000, {
+                    category: "Apps",
+                  }),
+                  sessionRow("agent:main:paper-a", "Paper A", baseTime - 60_000, {
+                    category: "Research",
+                  }),
+                  sessionRow("agent:main:paper-b", "Paper B", baseTime - 90_000, {
+                    category: "Research",
+                  }),
+                ]),
+              },
+            ],
+          },
+          "sessions.patch": {},
         },
-        "sessions.patch": {},
-      },
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.delete",
-        "sessions.groups.list",
-        "sessions.groups.rename",
-      ],
-      sessionKey: "agent:main:main",
-      sessionGroups: ["Apps", "Research"],
-    });
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.groups.delete",
+          "sessions.groups.list",
+          "sessions.groups.rename",
+        ],
+        sessionKey: "agent:main:main",
+        sessionGroups: ["Apps", "Research"],
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       // Categorized rows render as their own sidebar group section.
@@ -621,53 +607,49 @@ suite.define(() => {
       await closeSidebarMenu(page);
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("preserves a collapsed sidebar group when its rename is rejected", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await page.addInitScript(
-      ({ key, value }) => {
-        try {
-          if (localStorage.getItem(key) === null) {
-            localStorage.setItem(key, value);
+    await withSessionPage(suite, async (page) => {
+      await page.addInitScript(
+        ({ key, value }) => {
+          try {
+            if (localStorage.getItem(key) === null) {
+              localStorage.setItem(key, value);
+            }
+          } catch {
+            // The opaque initial document has no storage; the app origin does.
           }
-        } catch {
-          // The opaque initial document has no storage; the app origin does.
-        }
-      },
-      {
-        key: collapsedSessionSectionsStorageKey,
-        value: JSON.stringify(["category:Research"]),
-      },
-    );
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.groups.rename"],
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.list",
-        "sessions.groups.rename",
-      ],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", baseTime),
-          sessionRow("agent:main:paper", "Paper", baseTime - 60_000, {
-            category: "Research",
-          }),
-        ]),
-      },
-      sessionGroups: ["Research"],
-      sessionKey: "agent:main:main",
-    });
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(error.message));
+        },
+        {
+          key: collapsedSessionSectionsStorageKey,
+          value: JSON.stringify(["category:Research"]),
+        },
+      );
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.groups.rename"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.groups.list",
+          "sessions.groups.rename",
+        ],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow("agent:main:main", "Main", baseTime),
+            sessionRow("agent:main:paper", "Paper", baseTime - 60_000, {
+              category: "Research",
+            }),
+          ]),
+        },
+        sessionGroups: ["Research"],
+        sessionKey: "agent:main:main",
+      });
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const researchGroup = page.locator('[data-session-section="category:Research"]');
       await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
@@ -701,38 +683,34 @@ suite.define(() => {
       expect(
         await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),
       ).toBe(JSON.stringify(["category:Research"]));
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("pages sidebar sessions and supports complete drag-managed groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const sessions = Array.from({ length: 13 }, (_, index) =>
-      sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
-        ...(index === 0 ? { category: "Alpha" } : {}),
-        ...(index === 1 ? { category: "Beta" } : {}),
-      }),
-    );
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse(sessions),
-        "sessions.patch": {},
-      },
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.list",
-        "sessions.groups.put",
-        "sessions.patch",
-      ],
-      sessionKey: "agent:main:session-0",
-      sessionGroups: ["Alpha", "Beta"],
-    });
+    await withSessionPage(suite, async (page) => {
+      const sessions = Array.from({ length: 13 }, (_, index) =>
+        sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
+          ...(index === 0 ? { category: "Alpha" } : {}),
+          ...(index === 1 ? { category: "Beta" } : {}),
+        }),
+      );
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse(sessions),
+          "sessions.patch": {},
+        },
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.groups.list",
+          "sessions.groups.put",
+          "sessions.patch",
+        ],
+        sessionKey: "agent:main:session-0",
+        sessionGroups: ["Alpha", "Beta"],
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-0"));
       const sidebarRows = page.locator(".sidebar-recent-session");
       // Category sections page independently: Alpha and Beta stay visible
@@ -849,30 +827,26 @@ suite.define(() => {
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
         .dragTo(flatSection);
       expect((await gateway.getRequests("sessions.patch")).length).toBe(patchCountBeforeFlatDrag);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps a new empty group visible before the first saved session", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-      },
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.list",
-        "sessions.groups.put",
-      ],
-      sessionKey: "agent:main:main",
-      // Stored-but-empty catalog groups stay visible as sections/move targets.
-      sessionGroups: ["First group"],
-    });
+    await withSessionPage(suite, async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([]),
+        },
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.groups.list",
+          "sessions.groups.put",
+        ],
+        sessionKey: "agent:main:main",
+        // Stored-but-empty catalog groups stay visible as sections/move targets.
+        sessionGroups: ["First group"],
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const firstGroup = page.locator('[data-session-section="category:First group"]');
       await firstGroup.waitFor({ state: "visible" });
@@ -889,44 +863,40 @@ suite.define(() => {
       expect(requireRecord(putRequest.params)).toMatchObject({
         names: ["First group", "Second group"],
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps empty gateway groups compact for the selected agent", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      assistantName: "Ivan",
-      defaultAgentId: "ivan",
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
-      methodResponses: {
-        "sessions.list": {
-          cases: [
-            {
-              match: { agentId: "ivan" },
-              response: sessionsListResponse([
-                sessionRow("agent:ivan:main", "Ivan", Date.parse("2026-07-28T18:00:00.000Z")),
-              ]),
-            },
-            {
-              match: { agentId: "main" },
-              response: sessionsListResponse([
-                sessionRow("agent:main:email", "Email intake", 1, { category: "Email intake" }),
-                sessionRow("agent:main:replies", "Customer replies", 1, {
-                  category: "Customer replies",
-                }),
-              ]),
-            },
-          ],
+    await withSessionPage(suite, async (page) => {
+      const gateway = await installMockGateway(page, {
+        assistantName: "Ivan",
+        defaultAgentId: "ivan",
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              {
+                match: { agentId: "ivan" },
+                response: sessionsListResponse([
+                  sessionRow("agent:ivan:main", "Ivan", Date.parse("2026-07-28T18:00:00.000Z")),
+                ]),
+              },
+              {
+                match: { agentId: "main" },
+                response: sessionsListResponse([
+                  sessionRow("agent:main:email", "Email intake", 1, { category: "Email intake" }),
+                  sessionRow("agent:main:replies", "Customer replies", 1, {
+                    category: "Customer replies",
+                  }),
+                ]),
+              },
+            ],
+          },
         },
-      },
-      sessionGroups: ["Email intake", "Customer replies"],
-      sessionKey: "agent:ivan:main",
-    });
+        sessionGroups: ["Email intake", "Customer replies"],
+        sessionKey: "agent:ivan:main",
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect
         .poll(async () =>
@@ -973,8 +943,6 @@ suite.define(() => {
       await expect
         .poll(() => firstEmptyGroup.locator(".sidebar-recent-sessions__list").count())
         .toBe(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });
