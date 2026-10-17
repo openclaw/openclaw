@@ -734,9 +734,13 @@ export function pruneExpiredAuditEventsInDatabase(params: {
   now?: number;
   database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 }): number {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
-    auditEventRetention.delete(db);
-    return Number(deleted.numAffectedRows ?? 0n);
-  }, params.database);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
+      auditEventRetention.delete(db);
+      return Number(deleted.numAffectedRows ?? 0n);
+    },
+    params.database,
+    { singleStatement: true },
+  );
 }
