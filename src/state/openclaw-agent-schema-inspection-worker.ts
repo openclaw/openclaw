@@ -348,11 +348,19 @@ export function createAgentSchemaInspectionWorker() {
         active.child.once("close", onClose);
         signal?.addEventListener("abort", onAbort, { once: true });
         try {
+          // Platform-semantics env is a win32 Proxy and cannot cross the fork's v8
+          // serializer; the child only needs the captured string values.
+          const serializedInput =
+            kind === "agent" && input.env !== undefined
+              ? { ...input, env: { ...input.env } }
+              : input;
           active.child.send(
             {
               type: kind === "state" ? "inspect-state" : "inspect",
               requestId,
-              input: postgresAgentId ? { ...input, agentId: postgresAgentId } : input,
+              input: postgresAgentId
+                ? { ...serializedInput, agentId: postgresAgentId }
+                : serializedInput,
               snapshot,
               ...(kind === "agent" && postgresAgent ? { databaseEngineSelection: selection } : {}),
             },

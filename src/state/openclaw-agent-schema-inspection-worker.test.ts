@@ -149,6 +149,20 @@ it("agentSchemaInspection child retains returned migration failures and their hy
   expect(fs.readFileSync(pathname)).toEqual(before);
 });
 
+it("agentSchemaInspection sends win32 platform-semantics Proxy env across fork IPC", async () => {
+  const pathname = path.join(tempDirs.make("agent-schema-proxy-env-"), "source.sqlite");
+  const database = sqlite.openNodeSqliteDatabase(pathname);
+  database.exec("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
+  database.close();
+  await using reader = createAgentSchemaInspectionWorker();
+  const inspection = await reader.inspect({
+    pathname,
+    supportedVersion: 21,
+    env: new Proxy({ OPENCLAW_STATE_DIR: path.dirname(pathname) }, {}),
+  });
+  expect(inspection?.version).toBe(1);
+});
+
 it.each(["before launch", "during read"])(
   "settles canceled ownership %s after joining its schema reader",
   async (phase) => {
