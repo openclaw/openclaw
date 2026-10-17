@@ -180,6 +180,29 @@ The VM runs in the background; OpenClaw's daemon keeps the gateway running. To c
 ssh youruser@192.168.64.X "openclaw status"
 ```
 
+## 9) Open the dashboard from your Mac
+
+The Gateway listens only on the VM's loopback address, so reach the dashboard
+through an SSH tunnel. On your Mac, start the tunnel and leave it running:
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 youruser@192.168.64.X
+```
+
+In a second terminal, SSH into the VM and ask for a browser pairing link:
+
+```bash
+ssh youruser@192.168.64.X
+openclaw dashboard --json
+```
+
+Open the `browserUrl` value in your Mac's browser while the tunnel is running.
+The link is short-lived and single-use; it pairs that browser so later visits to
+`http://127.0.0.1:18789/` connect without pasting the Gateway token. Treat the
+command output as a secret, because it can also include the shared Gateway
+token. See [Dashboard](/web/dashboard) and [Remote access](/gateway/remote) for
+more options.
+
 ## Bonus: iMessage integration
 
 This is the killer feature of running on macOS. Use [iMessage](/channels/imessage) with `imsg` to add Messages to OpenClaw.
