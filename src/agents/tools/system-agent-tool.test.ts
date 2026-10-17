@@ -64,6 +64,15 @@ describe("openclaw tool", () => {
       expect.anything(),
       expect.objectContaining({ approved: false }),
     );
+
+    // `health` is discoverable in the schema and advertised as a free read.
+    const actionEnum = (
+      tool.parameters as {
+        properties: { action: { enum: string[] } };
+      }
+    ).properties.action.enum;
+    expect(actionEnum).toContain("health");
+    expect(tool.description).toMatch(/Read now:.*health/);
   });
 
   it("preserves an allowed gateway credential reference as an exact proposal", async () => {
