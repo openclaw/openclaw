@@ -16,7 +16,7 @@ describe("skills descriptor formatting", () => {
   });
   afterAll(() => envSnapshot.restore());
 
-  it("strips C1 terminal escapes from table descriptions", async () => {
+  it("keeps C1 tab-separated descriptions in their table cell", async () => {
     const description = "left\x9b31\tmright\x9b0m";
     const workspaceDir = tempDirs.make("tab-spacing-");
     await writeWorkspaceSkills(workspaceDir, [
@@ -37,8 +37,8 @@ describe("skills descriptor formatting", () => {
     const row = stripAnsi(output)
       .split("\n")
       .find((line) => line.includes("tab-spacing"));
-    // The display boundary removes the C1 sequence before layout, so only its text reaches the cell.
-    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("leftright");
+    // The cell keeps the tab spacing the terminal rendered but never the C1 introducer.
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
     expect(output).not.toContain("\x9b");
   });
 
