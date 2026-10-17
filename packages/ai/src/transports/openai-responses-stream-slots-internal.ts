@@ -68,7 +68,7 @@ export function createResponsesOutputTracker(params: {
     const callId = item.call_id ?? item.id;
     return item.type === "function_call" && callId ? `function_call:${callId}` : undefined;
   };
-  const get = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
+  const peek = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
     const key = identity(item);
     const output =
       (outputIndex === undefined ? undefined : outputs.get(outputIndex)) ??
@@ -79,6 +79,13 @@ export function createResponsesOutputTracker(params: {
         output.outputIndex !== undefined &&
         output.outputIndex !== outputIndex)
     ) {
+      return undefined;
+    }
+    return output;
+  };
+  const get = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
+    const output = peek(item, outputIndex);
+    if (!output) {
       return undefined;
     }
     if (
@@ -140,6 +147,8 @@ export function createResponsesOutputTracker(params: {
           !terminalHasRefusal;
       }
     },
+    // Activity observation must not preempt the reducer's identity validators.
+    peek,
     get,
     set(
       item: ResponsesOutputIdentityItem,
