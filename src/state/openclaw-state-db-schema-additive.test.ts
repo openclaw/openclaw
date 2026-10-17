@@ -87,24 +87,21 @@ it.each([
 });
 
 it("installs only the secret-store table and index on first use", () => {
-  const database = new DatabaseSync(":memory:");
-  try {
-    ensureSecretStoreSchema(database);
-    const names = database
-      .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
-      .all()
-      .map((row) => row.name);
+  using database = new DatabaseSync(":memory:");
 
-    expect(names).toEqual(["secret_store_entries", "secret_store_entries_live_idx"]);
-  } finally {
-    database.close();
-  }
+  ensureSecretStoreSchema(database);
+  const names = database
+    .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
+    .all()
+    .map((row) => row.name);
+
+  expect(names).toEqual(["secret_store_entries", "secret_store_entries_live_idx"]);
 });
 
 it("lazily adds allowed_hosts to a v6 secret store without changing user_version", () => {
-  const database = new DatabaseSync(":memory:");
-  try {
-    database.exec(`
+  using database = new DatabaseSync(":memory:");
+
+  database.exec(`
       PRAGMA user_version = 6;
       CREATE TABLE secret_store_entries (
         scope_kind TEXT NOT NULL,
@@ -120,25 +117,20 @@ it("lazily adds allowed_hosts to a v6 secret store without changing user_version
       ) STRICT;
     `);
 
-    ensureSecretStoreSchema(database);
+  ensureSecretStoreSchema(database);
 
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
-    expect(
-      database
-        .prepare(
-          'SELECT name, type, "notnull", dflt_value FROM pragma_table_info(?) WHERE name = ?',
-        )
-        .get("secret_store_entries", "allowed_hosts"),
-    ).toEqual({ name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null });
-  } finally {
-    database.close();
-  }
+  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+  expect(
+    database
+      .prepare('SELECT name, type, "notnull", dflt_value FROM pragma_table_info(?) WHERE name = ?')
+      .get("secret_store_entries", "allowed_hosts"),
+  ).toEqual({ name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null });
 });
 
 it("adds lease provenance without certifying legacy owners or changing their identifiers", () => {
-  const database = new DatabaseSync(":memory:");
-  try {
-    database.exec(`
+  using database = new DatabaseSync(":memory:");
+
+  database.exec(`
       PRAGMA user_version = 6;
       CREATE TABLE agent_database_leases (
         lease_id TEXT PRIMARY KEY,
@@ -150,22 +142,19 @@ it("adds lease provenance without certifying legacy owners or changing their ide
       ) STRICT;
       INSERT INTO agent_database_leases VALUES ('abc-123', 'main', '/agent.sqlite', 123, 456, 789);
     `);
-    const before = database.prepare("SELECT * FROM agent_database_leases").get();
+  const before = database.prepare("SELECT * FROM agent_database_leases").get();
 
-    database.exec("BEGIN");
-    ensureAgentDatabaseLeaseSchema(database);
-    database.exec("ROLLBACK");
-    expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual(before);
+  database.exec("BEGIN");
+  ensureAgentDatabaseLeaseSchema(database);
+  database.exec("ROLLBACK");
+  expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual(before);
 
-    ensureAgentDatabaseLeaseSchema(database);
-    expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual({
-      ...before,
-      provenance: null,
-    });
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
-  } finally {
-    database.close();
-  }
+  ensureAgentDatabaseLeaseSchema(database);
+  expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual({
+    ...before,
+    provenance: null,
+  });
+  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
 });
 
 it("adds the caption retry index to populated same-version state without changing its rows", async () => {
@@ -211,11 +200,10 @@ it("adds the caption retry index to populated same-version state without changin
   ).not.toThrow();
 
   await closeStateDatabaseForTest();
-  const previous = new DatabaseSync(database.path);
-  try {
+  {
+    using previous = new DatabaseSync(database.path);
+
     previous.exec(`DROP INDEX IF EXISTS ${indexName}`);
-  } finally {
-    previous.close();
   }
   const reader = await openExistingOpenClawStateDatabaseReadOnly(options);
   assert(reader);

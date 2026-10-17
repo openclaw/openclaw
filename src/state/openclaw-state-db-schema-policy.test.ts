@@ -59,6 +59,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const previousAppVersion = "synthetic-previous-build";
 
+function queryCount(reads: { queries: string[] }, pattern: RegExp) {
+  return reads.queries.filter((sql) => pattern.test(sql)).length;
+}
+
 function readSchemaState(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
@@ -70,15 +74,12 @@ function readSchemaState(db: EngineConnection) {
 }
 
 function readPersistedSchema(pathname: string) {
-  const db = new DatabaseSync(pathname, { readOnly: true });
-  try {
-    return {
-      ...readSchemaState(db),
-      schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
-    };
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(pathname, { readOnly: true });
+
+  return {
+    ...readSchemaState(db),
+    schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+  };
 }
 
 function createExistingState(mutate?: (db: DatabaseSync) => void) {
@@ -145,13 +146,12 @@ describe("ordinary shared-state reader admission", () => {
       expect({
         coldPublishedVersion: coldVersionReads.length,
         coldContentVersion: coldContentReads.length,
-        warmPublishedVersion: reads.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))
-          .length,
-        warmContentVersion: reads.queries.filter((sql) => /\bconfig_machine_state\b/iu.test(sql))
-          .length,
-        warmFreshness: reads.queries.filter((sql) =>
-          /(?:^PRAGMA data_version\b|\bFROM main\.pragma_data_version\(\))/iu.test(sql),
-        ).length,
+        warmPublishedVersion: queryCount(reads, /^PRAGMA user_version\b/iu),
+        warmContentVersion: queryCount(reads, /\bconfig_machine_state\b/iu),
+        warmFreshness: queryCount(
+          reads,
+          /(?:^PRAGMA data_version\b|\bFROM main\.pragma_data_version\(\))/iu,
+        ),
       }).toEqual({
         coldPublishedVersion: 1,
         coldContentVersion: 1,
@@ -293,12 +293,8 @@ describe("existing shared-state schema admission", () => {
         const database = await open();
         assert(database);
         try {
-          expect(
-            reads.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)),
-          ).toHaveLength(1);
-          expect(
-            reads.queries.filter((sql) => /^PRAGMA foreign_key_check\b/iu.test(sql)),
-          ).toHaveLength(1);
+          expect(queryCount(reads, /^PRAGMA integrity_check\b/iu)).toBe(1);
+          expect(queryCount(reads, /^PRAGMA foreign_key_check\b/iu)).toBe(1);
           expect(readSchemaState(database.db)).toEqual(before);
         } finally {
           database.walMaintenance.close();
@@ -307,11 +303,10 @@ describe("existing shared-state schema admission", () => {
         reads.restore();
       }
 
-      const corrupted = new DatabaseSync(options.path);
-      try {
+      {
+        using corrupted = new DatabaseSync(options.path);
+
         insertForeignKeyCorruption(corrupted);
-      } finally {
-        corrupted.close();
       }
       await expect(open()).rejects.toThrow(/foreign_key_check/i);
     },
@@ -338,15 +333,12 @@ describe("existing shared-state schema admission", () => {
             ),
           );
         const reads = observeSqliteReadSql(StatementSync.prototype);
-        const checkCount = () =>
-          reads.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)).length;
+        const checkCount = () => queryCount(reads, /^PRAGMA integrity_check\b/iu);
         try {
           expect(read()).toEqual(before);
           expect(read()).toEqual(before);
           expect(checkCount()).toBe(1);
-          expect(
-            reads.queries.filter((sql) => /^PRAGMA foreign_key_check\b/iu.test(sql)),
-          ).toHaveLength(1);
+          expect(queryCount(reads, /^PRAGMA foreign_key_check\b/iu)).toBe(1);
           if (change === "schema rollback") {
             const database = openOpenClawStateDatabase(options);
             const cookie = database.db.prepare("PRAGMA schema_version").get();
@@ -417,9 +409,9 @@ describe("existing shared-state schema admission", () => {
             ),
           );
           expect(result).toEqual(before);
-          expect(
-            reads.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)),
-          ).toHaveLength(settlement === "managed commit" ? 1 : 2);
+          expect(queryCount(reads, /^PRAGMA integrity_check\b/iu)).toBe(
+            settlement === "managed commit" ? 1 : 2,
+          );
         } finally {
           reads.restore();
           database.close();
@@ -456,9 +448,7 @@ describe("existing shared-state schema admission", () => {
           expect(read()).toEqual(before);
           expect(read()).toEqual(before);
           expect(Atomics.load(new BigInt64Array(lifetime.revision), 0)).toBe(lifetime.epoch);
-          expect(
-            reads.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)),
-          ).toHaveLength(1);
+          expect(queryCount(reads, /^PRAGMA integrity_check\b/iu)).toBe(1);
           const corruption = Object.assign(new Error("synthetic SQLite corruption"), {
             errcode: 11,
           });
@@ -494,11 +484,10 @@ describe("existing shared-state schema admission", () => {
             ).toThrow(corruption);
           }
           expect(Atomics.load(new BigInt64Array(lifetime.revision), 0)).not.toBe(lifetime.epoch);
-          const db = new DatabaseSync(options.path);
-          try {
+          {
+            using db = new DatabaseSync(options.path);
+
             insertForeignKeyCorruption(db);
-          } finally {
-            db.close();
           }
           expect(read).toThrow(/foreign_key_check/i);
         } finally {
@@ -531,20 +520,17 @@ describe("existing shared-state schema admission", () => {
       warnings: [expect.stringContaining("unsupported agent database registry schema")],
     });
     expect(readPersistedSchema(options.path)).toEqual(before);
-    const preserved = new DatabaseSync(options.path, { readOnly: true });
-    try {
-      expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
-        {
-          agent_id: "main",
-          path: "legacy.sqlite",
-          schema_version: 1,
-          last_seen_at: 10,
-          size_bytes: 20,
-        },
-      ]);
-    } finally {
-      preserved.close();
-    }
+    using preserved = new DatabaseSync(options.path, { readOnly: true });
+
+    expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
+      {
+        agent_id: "main",
+        path: "legacy.sqlite",
+        schema_version: 1,
+        last_seen_at: 10,
+        size_bytes: 20,
+      },
+    ]);
   });
 
   it.each(["transaction", "implicit pin"] as const)(

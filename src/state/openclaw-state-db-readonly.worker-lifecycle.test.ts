@@ -159,6 +159,23 @@ function source() {
   return { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
 }
 
+function read(options: ReturnType<typeof source>) {
+  return executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+}
+
+function startPendingRead() {
+  const started = createDeferredCore();
+  const result = createDeferredCore<OpenClawStateReadOutcome>();
+  const finish = () =>
+    result.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
+  finishProducer = finish;
+  mock.read.mockImplementation(() => {
+    started.resolve();
+    return result.promise;
+  });
+  return { started, finish };
+}
+
 it("closes pending snapshot preparation before joining the read at shutdown", async () => {
   const options = source();
   const started = createDeferredCore();
@@ -170,9 +187,9 @@ it("closes pending snapshot preparation before joining the read at shutdown", as
   });
   mock.closePreparation.mockImplementation(() => preparation.reject(failure));
   finishProducer = () => preparation.reject(failure);
-  const result = withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-  ).catch((error: unknown) => error);
+  const result = withArtifactPreservingStateReads(() => read(options)).catch(
+    (error: unknown) => error,
+  );
   await started.promise;
   await closeOpenClawStateDatabaseByPathAsync(options.path);
   expect(await result).toBe(failure);
@@ -185,12 +202,9 @@ it("releases read ownership when transport construction fails", async () => {
   mock.constructTransport.mockImplementation(() => {
     throw failure;
   });
-  await expect(
-    withOpenClawStateDatabaseReadSnapshot(
-      () => executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-      options,
-    ),
-  ).rejects.toBe(failure);
+  await expect(withOpenClawStateDatabaseReadSnapshot(() => read(options), options)).rejects.toBe(
+    failure,
+  );
   expect(mock.cleanup).toHaveBeenCalledOnce();
   await closeOpenClawStateDatabaseByPathAsync(options.path);
 });
@@ -211,9 +225,9 @@ it("retains the borrowed source through pending preparation and failed published
   mock.cleanup.mockResolvedValueOnce(false).mockResolvedValue(true);
   finishProducer = () =>
     prepared.resolve({ location: "/fixture/prepared.sqlite", cleanupAsync: mock.cleanup });
-  const result = withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-  ).catch((error: unknown) => error);
+  const result = withArtifactPreservingStateReads(() => read(options)).catch(
+    (error: unknown) => error,
+  );
   await started.promise;
   const closing = closeOpenClawStateDatabaseByPathAsync(options.path).catch(
     (error: unknown) => error,
@@ -250,7 +264,7 @@ it.each(["failure", "success"] as const)(
     if (outcome === "failure") {
       mock.read.mockResolvedValue({ error: readFailure, sourceAdmitted: true });
     }
-    await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).rejects.toBe(
+    await expect(read(options)).rejects.toBe(
       outcome === "failure" ? readFailure : observationFailure,
     );
     expect(release).toHaveBeenCalledOnce();
@@ -265,11 +279,10 @@ it("retains ordered cleanup for canonical retry after a read failure", async () 
   mock.close.mockRejectedValueOnce(stopFailure);
   mock.cleanup.mockResolvedValueOnce(false).mockResolvedValue(true);
 
-  await expect(
-    withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-    ),
-  ).rejects.toMatchObject({ cause: readFailure, errors: [readFailure, stopFailure] });
+  await expect(withArtifactPreservingStateReads(() => read(options))).rejects.toMatchObject({
+    cause: readFailure,
+    errors: [readFailure, stopFailure],
+  });
   expect(mock.cleanup).not.toHaveBeenCalled();
   await expect(closeOpenClawStateDatabaseByPathAsync(options.path)).rejects.toThrow(
     "snapshot cleanup failed",
@@ -290,10 +303,7 @@ it("retains an outer snapshot until its child transport acknowledges cleanup", a
   const failure = new Error("child stop not acknowledged");
   mock.close.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure).mockResolvedValue();
   await expect(
-    withOpenClawStateDatabaseReadSnapshot(
-      () => executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-      options,
-    ),
+    withOpenClawStateDatabaseReadSnapshot(() => read(options), options),
   ).rejects.toMatchObject({ cause: failure });
   expect(mock.cleanup).not.toHaveBeenCalled();
   await expect(closeOpenClawStateDatabaseByPathAsync(options.path)).resolves.toBe(false);
@@ -306,7 +316,7 @@ it("keeps a composite snapshot alive when its callback closes the live writer", 
   await withOpenClawStateDatabaseReadSnapshot(async () => {
     await closeOpenClawStateDatabaseByPathAsync(options.path);
     expect(mock.cleanup).not.toHaveBeenCalled();
-    expect(await executeExistingOpenClawStateRead(options, { type: "backup.runs" })).toEqual({
+    expect(await read(options)).toEqual({
       ok: true,
       type: "backup.runs",
       sourceAdmitted: true,
@@ -318,21 +328,10 @@ it("keeps a composite snapshot alive when its callback closes the live writer", 
 
 it("retries transport stop and settles the already-selected query", async () => {
   const options = source();
-  const started = createDeferredCore();
-  const reply = createDeferredCore<OpenClawStateReadOutcome>();
-  finishProducer = () =>
-    reply.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
-  mock.read.mockImplementation(() => {
-    started.resolve();
-    return reply.promise;
-  });
+  const { started, finish } = startPendingRead();
   const failure = new Error("first stop not acknowledged");
-  mock.close.mockRejectedValueOnce(failure).mockImplementation(async () => {
-    reply.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
-  });
-  const observed = withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-  ).then(
+  mock.close.mockRejectedValueOnce(failure).mockImplementation(async () => finish());
+  const observed = withArtifactPreservingStateReads(() => read(options)).then(
     (value) => ({ value }),
     (error: unknown) => ({ error }),
   );
@@ -350,16 +349,9 @@ it("retries transport stop and settles the already-selected query", async () => 
 it("joins maintenance reads and retries their transport before closing scoped handles", async () => {
   const options = source();
   const scope = createOpenClawDatabaseMaintenanceScope();
-  const started = createDeferredCore();
-  const reply = createDeferredCore<OpenClawStateReadOutcome>();
+  const { started } = startPendingRead();
   const events: string[] = [];
   const failure = new Error("transport stop not acknowledged");
-  finishProducer = () =>
-    reply.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
-  mock.read.mockImplementation(() => {
-    started.resolve();
-    return reply.promise;
-  });
   mock.close
     .mockRejectedValueOnce(failure)
     .mockRejectedValueOnce(failure)
@@ -369,9 +361,7 @@ it("joins maintenance reads and retries their transport before closing scoped ha
   scope.own({}, "shared-handles", () => {
     events.push("handle closed");
   });
-  const operation = scope.run(() =>
-    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-  );
+  const operation = scope.run(() => read(options));
   const assertion = expect(operation).rejects.toBe(failure);
   await started.promise;
   const closing = scope.close();
