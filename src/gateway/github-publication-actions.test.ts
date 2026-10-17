@@ -452,6 +452,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     await fs.appendFile(path.join(projection, ".git/config"), "\n[credential]\nhelper = !false\n");
     const { runCommandBuffered } =
       await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const reviewTransferBytes: number[] = [];
     const sandbox = createSandboxTestContext({
       overrides: {
         sessionKey: f.session.sessionKey,
@@ -467,6 +468,9 @@ describe("session PR actions through the agent tool and registered Gateway metho
             throw new Error("Fixture does not expose arbitrary exec");
           },
           runShellCommand: async ({ script, args, stdin, signal }) => {
+            if (stdin) {
+              reviewTransferBytes.push(Buffer.byteLength(stdin));
+            }
             const result = await runCommandBuffered(
               ["sh", "-c", script, "sandbox-fixture", ...(args ?? [])],
               {
@@ -729,7 +733,149 @@ describe("session PR actions through the agent tool and registered Gateway metho
       status: "current",
       review: { mode: "local", base: baseCommit },
     });
-    await f.revoke();
+    // An unchanged source snapshot must not retransmit repository contents.
+    expect(reviewTransferBytes.at(-1)).toBeLessThanOrEqual(64);
+    const runShellCommand = sandbox.backend!.runShellCommand.bind(sandbox.backend);
+    const missingDonor = vi.spyOn(sandbox.backend!, "runShellCommand").mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    missingDonor.mockRestore();
+    const fullTransferBytes = reviewTransferBytes.at(-1);
+    expect(fullTransferBytes).toBeGreaterThan(64);
+
+    // An existing but unadvertised host commit cannot become a guest-chosen donor.
+    const hostOnlyCommit = await local.git(
+      "commit-tree",
+      await local.git("rev-parse", `${baseCommit}^{tree}`),
+      "-m",
+      "Host-only donor",
+    );
+    const mismatchedDonor = vi.spyOn(sandbox.backend!, "runShellCommand").mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.from(hostOnlyCommit),
+      stderr: Buffer.alloc(0),
+    });
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    mismatchedDonor.mockRestore();
+    expect(reviewTransferBytes.at(-1)).toBe(fullTransferBytes);
+
+    // Losing retained objects after the availability probe must recover the full
+    // selected source, including omitted blobs that are not delta bases.
+    const packDirectory = path.join(projection, ".git", "objects", "pack");
+    const packs = (await fs.readdir(packDirectory)).filter((file) => file.endsWith(".pack"));
+    const missingBlob = await guestGit("rev-parse", `${baseCommit}:later-upstream.txt`);
+    const retainedObjects = (
+      await guestGit("rev-list", "--objects", "--no-object-names", `${baseCommit}^{tree}`)
+    )
+      .split("\n")
+      .filter((object) => object !== missingBlob);
+    const incompletePack = await runCommandBuffered(
+      ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
+      {
+        cwd: projection,
+        input: [...retainedObjects, baseCommit, ""].join("\n"),
+        timeoutMs: 10_000,
+      },
+    );
+    expect(incompletePack.code).toBe(0);
+    const installedIncomplete = await runCommandBuffered(["git", "index-pack", "--stdin"], {
+      cwd: projection,
+      input: incompletePack.stdout,
+      timeoutMs: 10_000,
+    });
+    expect(installedIncomplete.code).toBe(0);
+    let removedRetained = false;
+    const donorLoss = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementation(async (command) => {
+        if (command.stdin && !removedRetained) {
+          removedRetained = true;
+          // Keep the original guest snapshot while making the selected review
+          // snapshot incomplete.
+          for (const pack of packs) {
+            const index = pack.replace(/\.pack$/u, ".idx");
+            const objects = await runCommandBuffered(
+              ["git", "verify-pack", "-v", path.join(packDirectory, index)],
+              {
+                cwd: projection,
+                timeoutMs: 10_000,
+              },
+            );
+            if (objects.stdout.toString().includes(guestHead)) {
+              continue;
+            }
+            await fs.rm(path.join(packDirectory, pack));
+            await fs.rm(path.join(packDirectory, index));
+          }
+          const absent = await runCommandBuffered(["git", "cat-file", "-e", missingBlob], {
+            cwd: projection,
+            timeoutMs: 10_000,
+          });
+          expect(absent.code).not.toBe(0);
+          expect(await guestGit("rev-parse", `${baseCommit}^{tree}`)).not.toBe("");
+        }
+        return await runShellCommand(command);
+      });
+    const beforeLoss = reviewTransferBytes.length;
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    donorLoss.mockRestore();
+    expect(removedRetained).toBe(true);
+    expect(reviewTransferBytes.slice(beforeLoss)).toHaveLength(2);
+    expect(reviewTransferBytes.at(-1)).toBeGreaterThan(64);
+    expect(await guestGit("show", `${baseCommit}:later-upstream.txt`)).toBe("later upstream only");
+    expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
+
+    await local.git("checkout", "main");
+    await fs.writeFile(
+      path.join(local.cwd, "retry-upstream.txt"),
+      "upstream before interrupted import\n",
+    );
+    await local.git("add", "retry-upstream.txt");
+    await local.git("commit", "-m", "Advance before interrupted review import");
+    baseCommit = await local.git("rev-parse", "HEAD");
+    await local.git("checkout", first.branch);
+
+    // A lost acknowledgment after real import must reuse the installed target.
+    const importInterruption = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementation(async (command) => {
+        const result = await runShellCommand(command);
+        if (command.stdin) {
+          expect(result.code).toBe(0);
+          throw new Error("interrupted after review-base import");
+        }
+        return result;
+      });
+    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
+      "interrupted after review-base import",
+    );
+    importInterruption.mockRestore();
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    expect(reviewTransferBytes.at(-1)).toBeLessThanOrEqual(64);
+    expect(await guestGit("show", `${baseCommit}:retry-upstream.txt`)).toBe(
+      "upstream before interrupted import",
+    );
+    expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
+    const transfersBeforeRevocation = reviewTransferBytes.length;
+    let revokedAfterProbe = false;
+    const revokeDuringProbe = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementationOnce(async (command) => {
+        expect(command.stdin).toBeUndefined();
+        const result = await runShellCommand(command);
+        expect(result.code).toBe(0);
+        await f.revoke();
+        revokedAfterProbe = true;
+        return result;
+      });
+    await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
+    expect(revokedAfterProbe).toBe(true);
+    expect(revokeDuringProbe).toHaveBeenCalledTimes(1);
+    expect(reviewTransferBytes).toHaveLength(transfersBeforeRevocation);
+    revokeDuringProbe.mockRestore();
     await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
   });
 });

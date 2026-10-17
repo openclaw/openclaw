@@ -9,7 +9,10 @@ import {
   withEngineStoreAdmission,
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  isPostgresSqlConnection,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -323,6 +326,60 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(publishInline(replacement("after-reset"))).toMatchObject({ ok: true });
       expect(keyword("reset")).toEqual([{ path: "memory/after-reset.md" }]);
       expect(rows()).toHaveLength(1);
+    }));
+
+  it("promotes legacy identity and cache atomically without replacing canonical vectors", () =>
+    admitted(() => {
+      const meta = { ...metadata, providerKey: "legacy" };
+      const command = {
+        type: "index.upgradeProviderKey",
+        input: { meta, providerKey: "canonical" },
+      } as const;
+      expect(backend.execute({ type: "index.writeMetadata", input: meta })).toMatchObject({
+        ok: true,
+      });
+      pg().runTransaction(() => {
+        const insert = pg().prepare(`INSERT INTO memory_embedding_cache
+          (provider, model, provider_key, hash, embedding, dims, updated_at)
+          VALUES ('fixture', 'fixture', ?, ?, ?, 2, ?)`);
+        insert.run("legacy", "move", encodeMemoryEmbedding([0.125, -0]), 100);
+        insert.run("legacy", "shared", encodeMemoryEmbedding([1, 0]), 101);
+        insert.run("canonical", "shared", encodeMemoryEmbedding([0, 1]), 102);
+      });
+      const cacheRows = () =>
+        pg().prepare("SELECT * FROM memory_embedding_cache ORDER BY hash, provider_key").all();
+      const before = cacheRows();
+      expect(
+        backend.execute({
+          ...command,
+          input: { ...command.input, meta: { ...meta, chunkTokens: 200 } },
+        }),
+      ).toMatchObject({ ok: true, value: false, facts: { meta } });
+      expect(cacheRows()).toEqual(before);
+
+      denyCommit = true;
+      expect(backend.execute(command)).toMatchObject({
+        ok: false,
+        entered: true,
+        committed: false,
+        error: { message: "publication authority revoked" },
+      });
+      expect(cacheRows()).toEqual(before);
+      expect(backend.execute({ type: "index.facts", input: undefined })).toMatchObject({ meta });
+
+      denyCommit = false;
+      const upgraded = { ...meta, providerKey: "canonical" };
+      expect(backend.execute(command)).toMatchObject({
+        ok: true,
+        value: true,
+        facts: { meta: upgraded },
+      });
+      expect(cacheRows()).toEqual([{ ...before[0], provider_key: "canonical" }, before[1]]);
+      expect(backend.execute(command)).toMatchObject({
+        ok: true,
+        value: false,
+        facts: { meta: upgraded },
+      });
     }));
 
   it("retains a private full reindex across short bindings and rolls back a refused commit", () =>

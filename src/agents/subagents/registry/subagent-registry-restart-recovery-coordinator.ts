@@ -4,7 +4,6 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
@@ -32,30 +31,12 @@ export function createInterruptedRecoveryCoordinator(params: {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   type Attempt = {
-    facts: unknown[];
     delayMs: number;
     retryAt?: number;
     retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   };
-  let attempts = new Map<string, Attempt>();
+  const attempts = new Map<string, Attempt>();
   let warnedRetainedOwners = new WeakSet<object>();
-  let unsubscribe: (() => void) | undefined;
-  const invalidate = (entry: SubagentRunRecord) => {
-    if (attempts.delete(entry.runId)) {
-      params.schedule(1_000);
-    }
-  };
-  const observe = () => {
-    unsubscribe ??= sessionChanges.subscribe((change) => {
-      const entries =
-        "sessionKey" in change
-          ? params.getRunsForChildSession(change.sessionKey, change.agentId)
-          : params.runs.values();
-      for (const entry of entries) {
-        invalidate(entry);
-      }
-    });
-  };
   const recoveryFacts = (entry: SubagentRunRecord) => [
     getSubagentRunRuntimeKey(entry),
     entry.execution.status,
@@ -95,9 +76,7 @@ export function createInterruptedRecoveryCoordinator(params: {
       }
     },
     reset() {
-      unsubscribe?.();
-      unsubscribe = undefined;
-      attempts = new Map();
+      attempts.clear();
       warnedRetainedOwners = new WeakSet();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
@@ -149,22 +128,14 @@ export function createInterruptedRecoveryCoordinator(params: {
           return true;
         }
       }
-      observe();
-      const facts = [lifecycleGeneration, gatewayRuntime, ...recoveryFacts(entry)];
       const previous = attempts.get(entry.runId);
-      const unchanged = previous?.facts.every((fact, index) => fact === facts[index])
-        ? previous
-        : undefined;
-      if (unchanged?.retained?.isCurrent()) {
+      if (previous?.retained?.isCurrent()) {
         return true;
       }
-      if (unchanged && unchanged.retryAt !== undefined && unchanged.retryAt > Date.now()) {
-        params.schedule(unchanged.retryAt - Date.now());
+      if (previous?.retryAt !== undefined && previous.retryAt > Date.now()) {
+        params.schedule(previous.retryAt - Date.now());
         return true;
       }
-      const evaluatedAttempts = attempts;
-      const pending: Attempt = { facts, delayMs: 0 };
-      attempts.set(entry.runId, pending);
       const result = await params.recoverRow({
         runId,
         entry,
@@ -173,34 +144,26 @@ export function createInterruptedRecoveryCoordinator(params: {
         isGatewayCurrent,
         warn: params.warn,
       });
-      if (
-        attempts !== evaluatedAttempts ||
-        !isGatewayCurrent() ||
-        !isSameSubagentRunOwner(params.runs.get(runId), entry)
-      ) {
+      if (!isGatewayCurrent() || !isSameSubagentRunOwner(params.runs.get(runId), entry)) {
         return true;
       }
-      const unchangedDuringRead = attempts.get(entry.runId) === pending;
       attempts.delete(entry.runId);
       if (result.status === "ignored" || result.status === "handled") {
-        if (result.status === "handled" && result.retained && unchangedDuringRead) {
-          const attempt = { facts, delayMs: 0, retained: result.retained };
+        if (result.status === "handled" && result.retained) {
+          const attempt = { delayMs: 0, retained: result.retained };
           attempts.set(entry.runId, attempt);
           void result.retained.released?.then(() => {
             if (attempts.get(entry.runId) === attempt) {
-              invalidate(entry);
+              attempts.delete(entry.runId);
+              params.schedule(1_000);
             }
           });
         }
         return result.status === "handled";
       }
       if (result.status === "deferred") {
-        const delayMs = Math.min(
-          60_000,
-          unchanged && unchangedDuringRead ? Math.max(1_000, unchanged.delayMs * 2) : 1_000,
-        );
+        const delayMs = Math.min(60_000, Math.max(1_000, (previous?.delayMs ?? 0) * 2));
         attempts.set(entry.runId, {
-          facts,
           delayMs,
           retryAt: Date.now() + delayMs,
         });

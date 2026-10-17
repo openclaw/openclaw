@@ -2,7 +2,12 @@ import path from "node:path";
 import type { Page } from "playwright";
 
 /** Capture the idle transcript before interaction, then measure first-open content admission. */
-export async function probeColdLoadOverlays(page: Page, artifactDir: string, run: number) {
+export async function probeColdLoadOverlays(
+  page: Page,
+  artifactDir: string,
+  run: number,
+  overlays?: ReadonlyArray<readonly [string, string, string]>,
+) {
   const cold = await page.evaluate(() => {
     const mutations: Map<string, number> | undefined = Reflect.get(window, "__mutAttr");
     const perf: { loaf: Array<{ dur: number; block: number }>; mutTotal: number } | undefined =
@@ -23,16 +28,17 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
     string,
     { readyMs: number; frameMs: number; renderOpportunityMs: number }
   > = {};
-  for (const [name, triggerQuery, contentQuery] of [
-    ["reaction", "openclaw-message-reaction-picker .trigger", ".chat-reaction-picker .palette"],
-    [
-      "widget",
-      ".chat-tool-card__widget-actions-trigger",
-      ".chat-tool-card__widget-actions .oc-menu-item",
-    ],
-    ["context", ".context-usage summary", ".context-usage__stats"],
-    ["reasoning", ".chat-controls__effort-picker summary", ".chat-controls__reasoning-range"],
-  ] as const) {
+  for (const [name, triggerQuery, contentQuery] of overlays ??
+    ([
+      ["reaction", "openclaw-message-reaction-picker .trigger", ".chat-reaction-picker .palette"],
+      [
+        "widget",
+        ".chat-tool-card__widget-actions-trigger",
+        ".chat-tool-card__widget-actions .oc-menu-item",
+      ],
+      ["context", ".context-usage summary", ".context-usage__stats"],
+      ["reasoning", ".chat-controls__effort-picker summary", ".chat-controls__reasoning-range"],
+    ] as const)) {
     firstOpen[name] = await page.evaluate(
       async ({ triggerSelector, contentSelector }) => {
         const trigger = document.querySelector<HTMLElement>(triggerSelector);
@@ -84,6 +90,7 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
       { triggerSelector: triggerQuery, contentSelector: contentQuery },
     );
     if (run === 0) {
+      await page.locator(contentQuery).first().scrollIntoViewIfNeeded();
       await page.screenshot({
         path: path.join(artifactDir, `overlay-${name}.png`),
         animations: "disabled",

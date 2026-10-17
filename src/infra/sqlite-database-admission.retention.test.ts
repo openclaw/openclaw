@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -16,6 +16,7 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import { readSqliteDatabaseAdmissionFact } from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
   discardSqliteDatabaseTransactionAdmissions,
@@ -616,6 +617,59 @@ it("quarantine invalidates scoped receipts and admission facts with a live handl
 
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
+  "decodes admission values once at publication (%s)",
+  (scope) => {
+    const location = path.join(tempDirs.make("sqlite-admission-decode-"), "proof.sqlite");
+    const database = createDatabase(location);
+    const connection = scope === "postgres-transaction" ? postgresConnection(database) : database;
+    const read = vi.fn((value: unknown) =>
+      typeof value === "string" ? value.toUpperCase() : undefined,
+    );
+    const decodedKey = { name: "test.decoded-fact", read };
+    const publishAndRead = () => {
+      publishSqliteDatabaseAdmission(connection, decodedKey, "first");
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("FIRST");
+      expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("FIRST");
+      expect(read).toHaveBeenCalledTimes(1);
+      publishSqliteDatabaseAdmission(connection, decodedKey, "replacement");
+      expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("REPLACEMENT");
+      expect(read).toHaveBeenCalledTimes(2);
+    };
+    try {
+      if (scope === "native") {
+        const finish = beginSqliteDatabaseAdmissionOperation(database);
+        try {
+          publishAndRead();
+        } finally {
+          finish();
+        }
+        expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBeUndefined();
+      } else {
+        if (scope.endsWith("transaction")) {
+          runSqliteImmediateTransactionSync(connection, publishAndRead);
+        } else {
+          publishAndRead();
+        }
+        expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("REPLACEMENT");
+        expect(getOrLoadSqliteDatabaseAdmissionForPath(location, decodedKey, () => "stale")).toBe(
+          "REPLACEMENT",
+        );
+        expect(read).toHaveBeenCalledTimes(2);
+
+        const transferred = structuredClone(recordsFor(location)[0]!.facts.get(decodedKey.name)!);
+        expect(readSqliteDatabaseAdmissionFact(transferred, decodedKey)).toBe("REPLACEMENT");
+        expect(readSqliteDatabaseAdmissionFact(transferred, decodedKey)).toBe("REPLACEMENT");
+        expect(read).toHaveBeenCalledTimes(3);
+      }
+    } finally {
+      database.close();
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  },
+);
 
 const postgresConnections: PostgresSqlConnection[] = [];
 afterEach(() => {
