@@ -213,12 +213,11 @@ it.each(["local", "data"])(
     const processor = imageOps.createImageProcessor();
     const encode = vi.spyOn(processor, "encode");
     vi.spyOn(imageOps, "createImageProcessor").mockReturnValue(processor);
-    const fixture = avatarFixture("/control");
-    const { workspace, project, request } = fixture;
+    const { workspace, setAvatar, project, request } = avatarFixture("/control");
     const original = png(640, randomBytes(640 * 640 * 4));
     const avatarPath = path.join(workspace, "avatar.png");
     fs.writeFileSync(avatarPath, original);
-    fixture.setAvatar(sourceKind === "local" ? "avatar.png" : encodeDataUrl(original));
+    setAvatar(sourceKind === "local" ? "avatar.png" : encodeDataUrl(original));
     const url = await project();
     expect(url).toMatch(/^\/control\/avatar\/main\?v=[a-f0-9]+$/);
     const first = await request(url);
@@ -227,13 +226,10 @@ it.each(["local", "data"])(
     expect(Buffer.isBuffer(thumbnail)).toBe(true);
     expect(readImageMetadataFromHeader(thumbnail as Buffer)).toEqual({ width: 128, height: 128 });
     expect((thumbnail as Buffer).length).toBeLessThan(original.length / 10);
-    expect(first.setHeader.mock.calls).toEqual(
-      expect.arrayContaining([
-        ["cache-control", "private, max-age=31536000, immutable"],
-        ["vary", "Authorization, Cookie"],
-      ]),
-    );
-    const etag = first.setHeader.mock.calls.find(([name]) => name === "etag")?.[1] as string;
+    const header = first.setHeader;
+    expect(header).toHaveBeenCalledWith("cache-control", "private, max-age=31536000, immutable");
+    expect(header).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+    const etag = header.mock.calls.find(([name]) => name === "etag")?.[1] as string;
     expect(etag).toBeTruthy();
 
     const urls = [url];
@@ -242,7 +238,7 @@ it.each(["local", "data"])(
       const filename = `${agentId}.png`;
       const bytes = png(160, Buffer.alloc(160 * 160 * 4, index * 40));
       fs.writeFileSync(path.join(workspace, filename), bytes);
-      fixture.setAvatar(sourceKind === "local" ? filename : encodeDataUrl(bytes), agentId);
+      setAvatar(sourceKind === "local" ? filename : encodeDataUrl(bytes), agentId);
       urls.push(await project(agentId));
       expect((await request(urls[index]!)).res.statusCode).toBe(200);
     }
@@ -275,7 +271,7 @@ it.each(["local", "data"])(
       fs.writeFileSync(path.join(workspace, "replacement.png"), replacement);
       fs.renameSync(path.join(workspace, "replacement.png"), avatarPath);
     } else {
-      fixture.setAvatar(encodeDataUrl(replacement));
+      setAvatar(encodeDataUrl(replacement));
     }
     const replacedUrl = await project();
     expect(replacedUrl).not.toBe(url);
