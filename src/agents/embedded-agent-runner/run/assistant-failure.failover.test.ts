@@ -9,94 +9,24 @@ import { FailoverError } from "../../failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../failover/user-copy.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { log } from "../logger.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
+import {
+  makeAssistantFailureInput as makeInput,
+  type AssistantFailureInput as Input,
+} from "./assistant-failure.test-support.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 vi.mock("../../../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
 }));
 
-type Input = Parameters<typeof handleEmbeddedAssistantFailure>[0];
-
-function makeInput(
-  errorMessage: string,
-  options: {
-    terminal?: AgentRunAttemptTerminal;
-    fallbackConfigured?: boolean;
-    profileId?: string;
-    provider?: string;
-  } = {},
-): Input {
-  const provider = options.provider ?? "anthropic";
-  const model = "test-model";
-  const assistant = buildEmbeddedRunnerAssistant({
-    provider,
-    model,
-    stopReason: "error",
-    errorMessage,
-    content: [{ type: "text", text: "Partial answer" }],
+function expectProfileFailure(input: Input, reason: string, profileId?: string) {
+  expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+    profileId,
+    reason,
+    modelId: "test-model",
   });
-  const attempt = makeEmbeddedRunnerAttempt({
-    terminal: options.terminal ?? { kind: "ok" },
-    lastAssistant: assistant,
-    currentAttemptAssistant: assistant,
-  });
-  return {
-    runInput: {
-      runParams: {
-        sessionId: "session:assistant-failover",
-        sessionFile: "/tmp/openclaw-assistant-failover-test/session.jsonl",
-        runId: "run:assistant-failover",
-        workspaceDir: "/tmp/openclaw-assistant-failover-test",
-        prompt: "Respond to the user",
-        timeoutMs: 60_000,
-      },
-      fallbackConfigured: options.fallbackConfigured ?? true,
-      suspendForFailure: vi.fn(),
-      agentDir: "/tmp/openclaw-assistant-failover-test",
-      isProbeSession: false,
-    },
-    normalizedAttempt: {
-      attempt,
-      attemptAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-      activeErrorContext: { provider, model },
-    },
-    preparedRuntime: {
-      provider,
-      modelId: model,
-      model: { id: model },
-      attemptedThinking: new Set(["high"]),
-      attemptAuthProfileStore: { version: 1, profiles: {} },
-      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
-    },
-    runtime: {
-      thinkLevel: "high",
-      lastProfileId: options.profileId,
-      pluginHarnessOwnsTransport: false,
-    },
-    providerOwner: undefined,
-    getThinkLevel: () => "low",
-    runtimeAuthRetry: false,
-    failover: {
-      resolveAuthProfileFailureReason: vi.fn(() => null),
-      maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-      advanceAuthProfile: vi.fn(async () => false),
-      transientRetryCount: 0,
-      overloadProfileRotationLimit: 3,
-    },
-    emptyErrorRetries: 0,
-    overloadProfileRotations: 0,
-    previousRetryFailoverReason: null,
-    traceAttempts: [],
-    suspensionSessionId: "session:assistant-failover",
-  };
 }
 
 async function expectFailure(input: Input): Promise<FailoverError> {
@@ -121,7 +51,7 @@ describe("assistant failure recovery", () => {
 
   it("explains retry exhaustion without replacing the raw provider failure", async () => {
     const providerError = "429 rate limit exceeded. Please try again in 221ms.";
-    const input = makeInput(providerError);
+    const input = makeInput({ errorMessage: providerError });
     input.rateLimitRetriesExhausted = 9;
     const failure = await expectFailure(input);
     expect(failure).toMatchObject({
@@ -152,14 +82,7 @@ describe("assistant failure recovery", () => {
     },
   ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
     const run = vi.fn(async () => {
-      const input = makeInput(fields.errorMessage);
-      const assistant = input.normalizedAttempt.attemptAssistant!;
-      Object.assign(assistant, fields, { content: [] });
-      input.normalizedAttempt.attempt.assistantTexts = [];
-      input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt: input.normalizedAttempt.attempt,
-        assistant,
-      });
+      const input = makeInput({ ...fields, content: [] });
       for (;;) {
         const outcome = await handleEmbeddedAssistantFailure(input);
         if (outcome.action !== "retry") {
@@ -189,7 +112,7 @@ describe("assistant failure recovery", () => {
   });
 
   it("selects the next profile before marking failure and retries without waiting for the mark", async () => {
-    const input = makeInput("rate limit exceeded", { profileId: "anthropic:p1" });
+    const input = makeInput({ errorMessage: "rate limit exceeded" }, { profileId: "anthropic:p1" });
     const events: string[] = [];
     const mark = createDeferredCore();
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
@@ -206,53 +129,45 @@ describe("assistant failure recovery", () => {
       const outcome = await handleEmbeddedAssistantFailure(input);
       expect(outcome).toMatchObject({ action: "retry", thinkLevel: "low" });
       expect(events).toEqual(["advance", "mark-start"]);
-      expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
-        profileId: "anthropic:p1",
-        reason: "rate_limit",
-        modelId: "test-model",
-      });
+      expectProfileFailure(input, "rate_limit", "anthropic:p1");
     } finally {
       mark.resolve();
     }
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
   });
 
-  it("records billing failures for profile undefined before surfacing", async () => {
-    const profileId = undefined;
-
-    const input = makeInput("credit balance is too low", { profileId });
-    input.failover.resolveAuthProfileFailureReason = () => "billing";
-    const failure = await expectFailure(input);
-    expect(failure).toMatchObject({ reason: "billing", status: 402 });
-    expect(failure.message).toBe(formatBillingErrorMessage("anthropic", "test-model"));
-    expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
-      profileId,
-      reason: "billing",
-      modelId: "test-model",
-    });
-    expect(input.runInput.suspendForFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "manual" }),
-    );
-  });
-
-  it("preserves the provider failure when profile bookkeeping rejects", async () => {
-    const input = makeInput("credit balance is too low");
-    input.failover.resolveAuthProfileFailureReason = () => "billing";
-    input.failover.maybeMarkAuthProfileFailure = vi.fn(async () => {
-      throw new Error("storage unavailable");
-    });
-    expect(await expectFailure(input)).toMatchObject({ reason: "billing", status: 402 });
-    expect(log.warn).toHaveBeenCalledWith(
-      "profile failure mark failed: Error: storage unavailable",
-    );
-  });
+  it.each([false, true])(
+    "preserves billing failures when bookkeeping rejects=%s",
+    async (rejects) => {
+      const input = makeInput({ errorMessage: "credit balance is too low" });
+      input.failover.resolveAuthProfileFailureReason = () => "billing";
+      if (rejects) {
+        input.failover.maybeMarkAuthProfileFailure = vi.fn(async () => {
+          throw new Error("storage unavailable");
+        });
+      }
+      const failure = await expectFailure(input);
+      expect(failure).toMatchObject({ reason: "billing", status: 402 });
+      if (rejects) {
+        expect(log.warn).toHaveBeenCalledWith(
+          "profile failure mark failed: Error: storage unavailable",
+        );
+      } else {
+        expect(failure.message).toBe(formatBillingErrorMessage("anthropic", "test-model"));
+        expectProfileFailure(input, "billing");
+        expect(input.runInput.suspendForFailure).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "manual" }),
+        );
+      }
+    },
+  );
 
   it.each(["rotation-exhausted", "overload-cap"])(
     "waits for failure bookkeeping before surfacing %s",
     async (path) => {
-      const input = makeInput(
-        path === "overload-cap" ? "529 overloaded" : "credit balance is too low",
-      );
+      const input = makeInput({
+        errorMessage: path === "overload-cap" ? "529 overloaded" : "credit balance is too low",
+      });
       input.overloadProfileRotations = path === "overload-cap" ? 3 : 0;
       input.failover.resolveAuthProfileFailureReason = () =>
         path === "overload-cap" ? "overloaded" : "billing";
@@ -280,7 +195,7 @@ describe("assistant failure recovery", () => {
   );
 
   it("lets a rate-limit rotation error propagate without assistant bookkeeping", async () => {
-    const input = makeInput("rate limit exceeded");
+    const input = makeInput({ errorMessage: "rate limit exceeded" });
     const error = new FailoverError("Rate-limit rotation exhausted", { reason: "rate_limit" });
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
     input.failover.advanceAuthProfile = vi.fn(async () => {
@@ -293,24 +208,21 @@ describe("assistant failure recovery", () => {
   });
 
   it("records timeout rotations against the failed profile without inventing profile ids", async () => {
-    const input = makeInput("request timed out", {
-      terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-    });
+    const input = makeInput(
+      { errorMessage: "request timed out" },
+      {
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+      },
+    );
     input.normalizedAttempt.attempt.cloudCodeAssistFormatError = true;
     input.failover.resolveAuthProfileFailureReason = () => "timeout";
     input.failover.advanceAuthProfile = vi.fn(async () => true);
     expect((await handleEmbeddedAssistantFailure(input)).action).toBe("retry");
-    expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
-      profileId: undefined,
-      reason: "timeout",
-      modelId: "test-model",
-    });
+    expectProfileFailure(input, "timeout");
     expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Profile "));
   });
 
   it("retains provider error details with model fallback=false", async () => {
-    const fallbackConfigured = false;
-
     for (const [message, reason, status] of [
       ['  400 {"error":{"message":"credit balance is too low"}}  ', "billing", 400],
       // An untyped 500 is a provider-side server error; only 408/499/504/522/524 are timeouts.
@@ -325,7 +237,7 @@ describe("assistant failure recovery", () => {
         400,
       ],
     ] as const) {
-      const input = makeInput(message, { fallbackConfigured });
+      const input = makeInput({ errorMessage: message }, { fallbackConfigured: false });
       const failure = await expectFailure(input);
       expect(failure).toMatchObject({
         reason,
@@ -355,44 +267,37 @@ describe("assistant failure recovery", () => {
   ] satisfies Array<readonly [AgentRunAttemptTerminal, object]>)(
     "keeps recorded timeout facts independent of provider status: %s",
     async (terminal, expected) => {
-      const input = makeInput("500 injected provider failure", { terminal });
+      const input = makeInput({ errorMessage: "500 injected provider failure" }, { terminal });
       const failure = await expectFailure(input);
       expect(failure.status).toBe(500);
       expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual(expected);
     },
   );
 
-  it("ignores stale timeout text on a successful assistant", async () => {
-    const errorMessage = "timeout";
-
-    const input = makeInput(errorMessage);
-    if (!input.normalizedAttempt.attemptAssistant) {
-      throw new Error("missing test assistant");
-    }
-    input.normalizedAttempt.attemptAssistant.stopReason = "stop";
-    input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
-      attempt: input.normalizedAttempt.attempt,
-      assistant: input.normalizedAttempt.attemptAssistant,
-    });
-    expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
-    expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-  });
-
-  it("keeps harness-owned timeout handling inside the harness", async () => {
-    const input = makeInput("request timed out");
-    input.runtime.pluginHarnessOwnsTransport = true;
-    expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
-    expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "keeps %s harness-owned or successful timeouts out of failover",
+    async (harnessOwned) => {
+      const input = makeInput({ errorMessage: harnessOwned ? "request timed out" : "timeout" });
+      if (harnessOwned) {
+        input.runtime.pluginHarnessOwnsTransport = true;
+      } else {
+        const assistant = input.normalizedAttempt.attemptAssistant;
+        assistant.stopReason = "stop";
+        input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+          attempt: input.normalizedAttempt.attempt,
+          assistant,
+        });
+      }
+      expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
+      expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps provider Error failures visible to realtime voice", async () => {
     const error = new Error("provider connection failed");
 
     const signal = new AbortController().signal;
-    const input = makeInput(error.message);
-    if (!input.normalizedAttempt.attemptAssistant) {
-      throw new Error("missing test assistant");
-    }
+    const input = makeInput({ errorMessage: error.message });
     Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
     input.normalizedAttempt.attemptAssistant.content = [];
     input.emptyErrorRetries = 3;
