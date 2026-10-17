@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   environment,
   startRequest,
   transport,
+  workspaceCommandPayload,
+  workspaceSnapshot,
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
+import type { NodeWorkerWorkspaceBinding } from "./node-worker-workspace-actions.js";
 
 describe("node worker tunnel source authority", () => {
   it.each(["start", "session-command", "aborted-session-command"] as const)(
@@ -117,4 +122,108 @@ describe("node worker tunnel source authority", () => {
       await manager.stop(record.environmentId, record.ownerEpoch);
     }
   });
+});
+
+const fakeBinding: NodeWorkerWorkspaceBinding = {
+  source: { kind: "local", path: "/tmp" },
+  manifestRef: "ref-1",
+  remoteWorkspaceDir: "/node/workspace",
+};
+
+describe("node worker tunnel workspace command deadline", () => {
+  it.each([300_000, -300_000])(
+    "keeps the workspace command deadline on the monotonic clock across a %i ms wall-clock jump",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const perfSpy = vi.spyOn(performance, "now");
+      const dateSpy = vi.spyOn(Date, "now");
+      let monotonicMs = 0;
+      let wallMs = 0;
+      perfSpy.mockImplementation(() => monotonicMs);
+      dateSpy.mockImplementation(() => wallMs);
+      try {
+        const record = environment();
+        const nodeTransport = transport();
+        let execCount = 0;
+        let secondCallTimeoutMs: number | undefined;
+        const invokeMock = vi.fn(async (request: Parameters<typeof nodeTransport.invoke>[0]) => {
+          if (request.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND) {
+            return { ok: true, payloadJSON: "null" } as const;
+          }
+          const input = request.params as { argv?: string[] };
+          if (input.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
+            return {
+              ok: true,
+              payloadJSON: workspaceCommandPayload("/node/workspace", {
+                stdout: "drained\n",
+              }),
+            } as const;
+          }
+          execCount += 1;
+          if (execCount === 1) {
+            wallMs += wallClockStepMs;
+            return {
+              ok: false,
+              error: { code: "DISCONNECTED", message: "transient" },
+            } as const;
+          }
+          secondCallTimeoutMs = request.timeoutMs;
+          request.onDispatchReady?.("invoke-ready");
+          return {
+            ok: true,
+            payloadJSON: workspaceCommandPayload("/node/workspace", {
+              stdout: "ok\n",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            }),
+          } as const;
+        });
+        nodeTransport.invoke = invokeMock;
+        const transfer = workspaceTransfer({
+          prepareSync: vi.fn(async () => ({
+            snapshot: workspaceSnapshot("/node/workspace"),
+            token: "download-token",
+          })),
+          revoke: vi.fn(async () => {}),
+        });
+        const manager = createNodeWorkerTunnelManager({
+          gatewayDeviceId: "gateway-device-1",
+          getEnvironment: () => record,
+          listEnvironments: () => [record],
+          getTransport: () => nodeTransport,
+          launchNodeWorker: vi.fn(),
+          validateWorkerTurn: () => true,
+          workspaceTransfer: transfer,
+        });
+        manager.bindWorkspaceBindingResolver(async () => fakeBinding);
+
+        const handle = await manager.start(startRequest());
+
+        const result = handle.runWorkspaceCommand({
+          argv: ["pwd"],
+          transportRetry: "idempotent",
+          timeoutMs: 10_000,
+        });
+
+        monotonicMs += 200;
+        await vi.advanceTimersByTimeAsync(200);
+
+        const resolved = await result;
+        expect(resolved.code).toBe(0);
+        expect(execCount).toBe(2);
+        expect(secondCallTimeoutMs).toBeDefined();
+        expect(secondCallTimeoutMs!).toBeGreaterThan(9_000);
+        expect(secondCallTimeoutMs!).toBeLessThanOrEqual(15_000);
+
+        await handle.stop();
+      } finally {
+        dateSpy.mockRestore();
+        perfSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 });
