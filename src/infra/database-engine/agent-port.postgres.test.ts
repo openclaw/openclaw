@@ -138,8 +138,7 @@ describe.skipIf(!connection)("agent database port", () => {
           ? { proisstrict: false, proconfig: null }
           : { proisstrict: true, proconfig: ["search_path=pg_catalog"] },
       ]);
-      await client.query(`INSERT INTO "${namespace}".memory_index_state VALUES (1, 0);
-        INSERT INTO "${namespace}".memory_index_sources (path, source, hash, mtime, size)
+      await client.query(`INSERT INTO "${namespace}".memory_index_sources (path, source, hash, mtime, size)
           VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
       expect(
         (await client.query(`SELECT revision FROM "${namespace}".memory_index_state`)).rows,
@@ -162,8 +161,7 @@ describe.skipIf(!connection)("agent database port", () => {
           ...trajectoryColumns,
         },
       ]);
-      restored.exec(`INSERT INTO memory_index_state VALUES (1, 0);
-        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+      restored.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
       expect(restored.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
         revision: 1,

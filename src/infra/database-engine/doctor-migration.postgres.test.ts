@@ -952,8 +952,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           ).rows,
         ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
         expect(admit(installed, agentPath)?.version).toBe(sourceVersion);
-        await client.query(`INSERT INTO "${agentNamespace}".memory_index_state VALUES (1, 0);
-          INSERT INTO "${agentNamespace}".memory_index_sources (path, source, hash, mtime, size)
+        await client.query(`INSERT INTO "${agentNamespace}".memory_index_sources (path, source, hash, mtime, size)
             VALUES ('restored.md', 'memory', 'hash', 1, 1);`);
         expect(
           (await client.query(`SELECT revision FROM "${agentNamespace}".memory_index_state`)).rows,
