@@ -27,6 +27,15 @@ const strictOptions = {
 };
 afterEach(() => vi.restoreAllMocks());
 
+function trackSettlement<T>(pending: Promise<T>) {
+  const state: { result?: { value: T } | { error: unknown } } = {};
+  const outcome = pending.then(
+    (value) => (state.result = { value }),
+    (error: unknown) => (state.result = { error }),
+  );
+  return { state, outcome };
+}
+
 function pauseObservation() {
   const observe = workerClient.observePluginStateInWorker;
   const paused = pauseWorkerResult();
@@ -83,10 +92,7 @@ describe("persistent dedupe worker", () => {
           expect(await dedupe.claim("shared")).toEqual({ kind: "claimed" });
         }
         const original = phase === "lookup" ? dedupe.claim("shared") : dedupe.commit("shared");
-        const outcome = original.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
+        const { outcome } = trackSettlement(original);
         await ready.promise;
         const failure = new Error("original owner released");
         const forgetting =
@@ -139,11 +145,9 @@ describe("persistent dedupe worker", () => {
       });
       await dedupe.checkAndRecord("first");
       await dedupe.checkAndRecord("second");
-      const outcomes = await Promise.all([
-        dedupe.checkAndRecord("first"),
-        dedupe.forget("unrelated"),
-      ]);
-      expect(outcomes).toEqual([false, false]);
+      await expect(
+        Promise.all([dedupe.checkAndRecord("first"), dedupe.forget("unrelated")]),
+      ).resolves.toEqual([false, false]);
     });
   });
 
@@ -199,21 +203,11 @@ describe("persistent dedupe worker", () => {
         } else {
           pending = guard.forget(event);
         }
-        let settled = false;
-        const outcome = pending.then(
-          (value) => {
-            settled = true;
-            return { value };
-          },
-          (error: unknown) => {
-            settled = true;
-            return { error };
-          },
-        );
+        const { state, outcome } = trackSettlement(pending);
         try {
           await ready.promise;
           await setImmediate();
-          expect(settled).toBe(false);
+          expect(state.result).toBeUndefined();
         } finally {
           gate.resolve();
           await Promise.all([outcome, secondDone.promise]);
@@ -308,9 +302,7 @@ describe("persistent dedupe worker", () => {
       const dedupe = createDedupe();
       const recording = dedupe.checkAndRecord("forgotten", { namespace: "first" });
       await ready.promise;
-      const forgotten = dedupe.forget("forgotten", {
-        namespace: "alias",
-      });
+      const forgotten = dedupe.forget("forgotten", { namespace: "alias" });
       try {
         expect(dedupe.memorySize()).toBe(0);
       } finally {
@@ -354,15 +346,9 @@ describe("persistent dedupe worker", () => {
           ]),
         ).toBe("entered");
         duplicate = dedupe.checkAndRecord("shared");
-        let duplicateResult: boolean | undefined;
-        void duplicate.then(
-          (value) => {
-            duplicateResult = value;
-          },
-          () => {},
-        );
+        const { state } = trackSettlement(duplicate);
         await setImmediate();
-        expect(duplicateResult).toBe(false);
+        expect(state.result).toEqual({ value: false });
         gates[1]!.resolve();
         expect(await replacement).toBe(true);
         expect(await createPersistentDedupe(options).hasRecent("shared")).toBe(true);

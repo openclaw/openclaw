@@ -35,19 +35,11 @@ describe("createPairLoopGuard", () => {
 
     expect(record({ nowMs: 1_000 })).toEqual({ suppressed: false });
     expect(
-      record({
-        senderId: "participant-b",
-        receiverId: "participant-a",
-        nowMs: 1_010,
-      }),
+      record({ senderId: "participant-b", receiverId: "participant-a", nowMs: 1_010 }),
     ).toEqual({ suppressed: false });
     expect(record({ nowMs: 1_020 })).toEqual({ suppressed: false });
 
-    const result = record({
-      senderId: "participant-b",
-      receiverId: "participant-a",
-      nowMs: 1_030,
-    });
+    const result = record({ senderId: "participant-b", receiverId: "participant-a", nowMs: 1_030 });
 
     expect(result).toEqual({ suppressed: true, cooldownUntilMs: 1_030 + settings.cooldownMs });
   });
@@ -59,9 +51,7 @@ describe("createPairLoopGuard", () => {
       record({ nowMs: 1_000 + index });
     }
 
-    expect(record({ conversationId: "conversation-2" })).toEqual({
-      suppressed: false,
-    });
+    expect(record({ conversationId: "conversation-2" })).toEqual({ suppressed: false });
     expect(record({ scopeId: "scope-2" })).toEqual({ suppressed: false });
   });
 
@@ -69,12 +59,8 @@ describe("createPairLoopGuard", () => {
     const strictSettings = { ...settings, maxEventsPerWindow: 1 };
     const { record } = createFixture(strictSettings);
 
-    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({
-      suppressed: false,
-    });
-    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({
-      suppressed: false,
-    });
+    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
+    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
     const second = record({ eventId: "event-2", nowMs: 1_001 });
     expect(second).toEqual({
       suppressed: true,
@@ -87,9 +73,7 @@ describe("createPairLoopGuard", () => {
     const strictSettings = { ...settings, maxEventsPerWindow: 1 };
     const { guard, record } = createFixture(strictSettings);
 
-    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({
-      suppressed: false,
-    });
+    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
     expect(record({ eventId: "event-2", nowMs: 1_001 }).suppressed).toBe(true);
     for (let index = 0; index < 1_000; index += 1) {
       expect(
@@ -112,15 +96,8 @@ describe("createPairLoopGuard", () => {
     const { guard, record } = createFixture();
     const longWindowSettings = { ...settings, windowMs: 120_000 };
 
-    record({
-      settings: longWindowSettings,
-      nowMs: 1_000,
-    });
-    record({
-      senderId: "participant-c",
-      receiverId: "participant-d",
-      nowMs: 61_001,
-    });
+    record({ settings: longWindowSettings, nowMs: 1_000 });
+    record({ senderId: "participant-c", receiverId: "participant-d", nowMs: 61_001 });
 
     expect(guard.snapshot()).toHaveLength(2);
   });
@@ -152,13 +129,9 @@ describe("createPairLoopGuard", () => {
   it("does not track disabled, invalid, or self-pair events", () => {
     const { guard, record } = createFixture();
 
-    expect(record({ settings: { ...settings, enabled: false } })).toEqual({
-      suppressed: false,
-    });
+    expect(record({ settings: { ...settings, enabled: false } })).toEqual({ suppressed: false });
     expect(record({ conversationId: "" })).toEqual({ suppressed: false });
-    expect(record({ receiverId: "participant-a" })).toEqual({
-      suppressed: false,
-    });
+    expect(record({ receiverId: "participant-a" })).toEqual({ suppressed: false });
     expect(guard.snapshot()).toEqual([]);
   });
 });
@@ -188,17 +161,11 @@ describe("resolvePairLoopGuardSettings", () => {
     });
   });
 
-  it("honors enabled=false from either channel or shared defaults", () => {
+  it.each(["channel", "defaults"] as const)("honors enabled=false from %s", (source) => {
     expect(
       resolvePairLoopGuardSettings({
-        config: { enabled: false },
-        defaultsConfig: { enabled: true },
-        defaultEnabled: true,
-      }).enabled,
-    ).toBe(false);
-    expect(
-      resolvePairLoopGuardSettings({
-        defaultsConfig: { enabled: false },
+        config: source === "channel" ? { enabled: false } : undefined,
+        defaultsConfig: { enabled: source === "channel" },
         defaultEnabled: true,
       }).enabled,
     ).toBe(false);

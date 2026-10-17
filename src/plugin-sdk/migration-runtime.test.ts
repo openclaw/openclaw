@@ -40,9 +40,6 @@ describe("withCachedMigrationConfigRuntime", () => {
   it("serves later config mutations from the same cached runtime snapshot", async () => {
     type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
     type RuntimeConfig = MigrationProviderContext["config"];
-    type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
-    type ReplaceConfigFileParams = Parameters<Runtime["config"]["replaceConfigFile"]>[0];
-    type MutateConfigFileResult = Awaited<ReturnType<Runtime["config"]["mutateConfigFile"]>>;
     type ReplaceConfigFileResult = Awaited<ReturnType<Runtime["config"]["replaceConfigFile"]>>;
 
     const modelConfig = (name: string) => ({
@@ -60,29 +57,21 @@ describe("withCachedMigrationConfigRuntime", () => {
     });
     let runtimeConfig: RuntimeConfig = structuredClone(fallbackConfig);
     const current = vi.fn(() => runtimeConfig);
-    const mutateConfigFile = vi.fn(
-      async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
-        const draft = structuredClone(runtimeConfig);
-        const result = await params.mutate(draft, {
-          snapshot: {} as never,
-          previousHash: null,
-        });
-        runtimeConfig = structuredClone(draft);
-        return { ...receipt(), result };
-      },
-    );
-    const replaceConfigFile = vi.fn(
-      async (params: ReplaceConfigFileParams): Promise<ReplaceConfigFileResult> => {
-        runtimeConfig = structuredClone(params.nextConfig);
-        return receipt();
-      },
-    );
+    const mutateConfigFile: Runtime["config"]["mutateConfigFile"] = async (params) => {
+      const draft = structuredClone(runtimeConfig);
+      const result = await params.mutate(draft, {
+        snapshot: {} as never,
+        previousHash: null,
+      });
+      runtimeConfig = structuredClone(draft);
+      return { ...receipt(), result };
+    };
+    const replaceConfigFile: Runtime["config"]["replaceConfigFile"] = async (params) => {
+      runtimeConfig = structuredClone(params.nextConfig);
+      return receipt();
+    };
     const runtime = {
-      config: {
-        current,
-        mutateConfigFile,
-        replaceConfigFile,
-      },
+      config: { current, mutateConfigFile, replaceConfigFile },
     } as unknown as Runtime;
 
     const wrapped = withCachedMigrationConfigRuntime(runtime, fallbackConfig);
@@ -208,16 +197,20 @@ describe("copyMemoryMigrationFileItem", () => {
       summary: summarizeMigrationItems([item]),
       items: [item],
     });
-    expect(bound.items[0]?.details?.sourceSha256).toBe("provider-owned");
-    expect(bound.items[0]?.sourceRevision).toMatchObject({ algorithm: "sha256" });
+    expect(bound.items[0]).toMatchObject({
+      details: { sourceSha256: "provider-owned" },
+      sourceRevision: { algorithm: "sha256" },
+    });
     await writeFile(source, "changed memory");
 
     const result = await copyMemoryMigrationFileItem(bound.items[0]!, path.join(root, "report"), {
       workspaceDir,
     });
 
-    expect(result.status).toBe("error");
-    expect(result.reason).toContain("source changed");
+    expect(result).toMatchObject({
+      status: "error",
+      reason: expect.stringContaining("source changed"),
+    });
     await expect(fs.access(target)).rejects.toThrow();
   });
 
@@ -233,8 +226,10 @@ describe("copyMemoryMigrationFileItem", () => {
 
       const result = await copy();
 
-      expect(result.status).toBe("error");
-      expect(result.reason).toContain("hardlink");
+      expect(result).toMatchObject({
+        status: "error",
+        reason: expect.stringContaining("hardlink"),
+      });
       await expect(fs.access(target)).rejects.toThrow();
     },
   );
@@ -321,55 +316,31 @@ describe("writeMigrationReport", () => {
     const root = tempDirs.make("openclaw-migration-report-");
     const reportDir = path.join(root, "report");
 
+    const mcp = {
+      env: { OPENAI_API_KEY: "short-dev-key", SAFE_FLAG: "visible" },
+      headers: { Authorization: "Bearer short-dev-key", "x-api-key": "another-short-dev-key" },
+    };
+    const item = createMigrationItem({
+      id: "config:mcp-servers",
+      kind: "config",
+      action: "merge",
+      status: "migrated",
+      details: { value: { mcp } },
+    });
     await writeMigrationReport({
       providerId: "hermes",
       source: path.join(root, "hermes"),
-      summary: {
-        total: 1,
-        planned: 0,
-        migrated: 1,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
-      items: [
-        createMigrationItem({
-          id: "config:mcp-servers",
-          kind: "config",
-          action: "merge",
-          status: "migrated",
-          details: {
-            value: {
-              mcp: {
-                env: {
-                  OPENAI_API_KEY: "short-dev-key",
-                  SAFE_FLAG: "visible",
-                },
-                headers: {
-                  Authorization: "Bearer short-dev-key",
-                  "x-api-key": "another-short-dev-key",
-                },
-              },
-            },
-          },
-        }),
-      ],
       reportDir,
+      summary: summarizeMigrationItems([item]),
+      items: [item],
     });
 
     const report = await fs.readFile(path.join(reportDir, "report.json"), "utf8");
     expect(report).not.toContain("short-dev-key");
     expect(report).not.toContain("another-short-dev-key");
     expect(JSON.parse(report).items[0].details.value.mcp).toEqual({
-      env: {
-        OPENAI_API_KEY: "[redacted]",
-        SAFE_FLAG: "visible",
-      },
-      headers: {
-        Authorization: "[redacted]",
-        "x-api-key": "[redacted]",
-      },
+      env: { OPENAI_API_KEY: "[redacted]", SAFE_FLAG: "visible" },
+      headers: { Authorization: "[redacted]", "x-api-key": "[redacted]" },
     });
   });
 });

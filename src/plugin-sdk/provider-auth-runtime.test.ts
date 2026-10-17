@@ -8,7 +8,7 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as providerAuthRuntime from "./provider-auth-runtime.js";
+import * as auth from "./provider-auth-runtime.js";
 
 const callbackListener = vi.hoisted(
   (): { port?: number; servers: import("node:http").Server[] } => ({ servers: [] }),
@@ -59,15 +59,12 @@ afterEach(async () => {
 
 function startCallback(
   params: Partial<
-    Omit<
-    Parameters<typeof providerAuthRuntime.waitForLocalOAuthCallback>[0],
-    "signal" | "port" | "redirectUri"
-    >
+    Omit<Parameters<typeof auth.waitForLocalOAuthCallback>[0], "signal" | "port" | "redirectUri">
   > = {},
   controller = new AbortController(),
 ) {
   const { promise: ready, resolve, reject } = createDeferredCore<number>();
-  const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+  const callback = auth.waitForLocalOAuthCallback({
     expectedState: "state-1",
     timeoutMs: 5_000,
     callbackPath: "/callback",
@@ -123,29 +120,20 @@ describe("plugin-sdk provider-auth-runtime", () => {
   it("resolves non-secret provider auth profile metadata", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-runtime-"));
     const agentDir = path.join(tempRoot, "agent");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            type: "oauth",
-            provider: "openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-            accountId: "acct-openai-workspace",
-          },
-        },
-      },
-      agentDir,
-    );
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-openai-workspace",
+    };
+    saveAuthProfileStore({ version: 1, profiles: { "openai:chatgpt": credential } }, agentDir);
 
     const params = { provider: "openai", profileId: "openai:chatgpt", agentDir };
     const expected = { profileId: "openai:chatgpt", accountId: "acct-openai-workspace" };
-    expect(providerAuthRuntime.resolveProviderAuthProfileMetadata(params)).toEqual(expected);
-    await expect(
-      providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
-    ).resolves.toEqual(expected);
+    expect(auth.resolveProviderAuthProfileMetadata(params)).toEqual(expected);
+    await expect(auth.resolveProviderAuthProfileMetadataAsync(params)).resolves.toEqual(expected);
     await updateAuthProfileStoreWithLock({
       agentDir,
       updater(store) {
@@ -156,17 +144,15 @@ describe("plugin-sdk provider-auth-runtime", () => {
         return true;
       },
     });
-    await expect(
-      providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
-    ).resolves.toEqual({
+    await expect(auth.resolveProviderAuthProfileMetadataAsync(params)).resolves.toEqual({
       profileId: "openai:chatgpt",
       accountId: "acct-updated-workspace",
     });
   });
 
   it("generates random OAuth state tokens", () => {
-    const first = providerAuthRuntime.generateOAuthState();
-    const second = providerAuthRuntime.generateOAuthState();
+    const first = auth.generateOAuthState();
+    const second = auth.generateOAuthState();
 
     expect(first).toMatch(/^[a-f0-9]{64}$/);
     expect(second).toMatch(/^[a-f0-9]{64}$/);
@@ -175,45 +161,59 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
   it("parses OAuth callback URLs and rejects bare codes", () => {
     expect(
-      providerAuthRuntime.parseOAuthCallbackInput(
-        "http://127.0.0.1:3000/callback?code=abc&state=state-1",
-      ),
+      auth.parseOAuthCallbackInput("http://127.0.0.1:3000/callback?code=abc&state=state-1"),
     ).toEqual({ code: "abc", state: "state-1" });
-    expect(providerAuthRuntime.parseOAuthCallbackInput("abc")).toEqual({
+    expect(auth.parseOAuthCallbackInput("abc")).toEqual({
       error: "Paste the full redirect URL, not just the code.",
     });
   });
 
-  it("allows browser IdP pages to probe the localhost callback with CORS", async () => {
-    const { callback, ready } = startCallback({
-      successTitle: `OAuth <complete>&"'`,
-      corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
-    });
-
-    const port = await ready;
-    const probe = await preflight(port, "https://auth.x.ai");
-
-    expect(probe.status).toBe(204);
-    expect(probe.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
-    expect(probe.headers.get("access-control-allow-methods")).toContain("GET");
-    expect(probe.headers.get("access-control-allow-private-network")).toBe("true");
-
-    const response = await finishCallback(port, "https://auth.x.ai");
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
-    await expect(response.text()).resolves.toContain("OAuth &lt;complete&gt;&amp;&quot;&#39;");
-    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
-  });
+  it.each([
+    ["allowlisted", "https://auth.x.ai", ["auth.x.ai", "accounts.x.ai"], undefined],
+    ["rejected", "https://attacker.example", ["auth.x.ai"], "127.0.0.1"],
+    ["legacy", "https://legacy.example", undefined, "127.0.0.1"],
+  ] as const)(
+    "handles %s callback CORS and keeps waiting for login",
+    async (policy, origin, allowlist, hostname) => {
+      const { callback, ready } = startCallback({
+        hostname,
+        corsOriginAllowlist: allowlist,
+        successTitle: `OAuth <complete>&"'`,
+      });
+      const port = await ready;
+      const probe = await preflight(port, origin, policy !== "legacy");
+      expect(probe.status).toBe(204);
+      expect(probe.headers.get("access-control-allow-origin")).toBe(
+        policy === "rejected" ? null : origin,
+      );
+      if (policy === "rejected") {
+        expect(
+          ["methods", "headers", "private-network"].map((name) =>
+            probe.headers.get(`access-control-allow-${name}`),
+          ),
+        ).toEqual([null, null, null]);
+      } else {
+        expect(probe.headers.get("access-control-allow-methods")).toContain("GET");
+        if (policy === "allowlisted") {
+          expect(probe.headers.get("access-control-allow-private-network")).toBe("true");
+        }
+      }
+      const response = await finishCallback(
+        port,
+        policy === "legacy" ? undefined : "https://auth.x.ai",
+      );
+      expect(response.status).toBe(200);
+      if (policy !== "legacy") {
+        expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
+      }
+      await expect(response.text()).resolves.toContain("OAuth &lt;complete&gt;&amp;&quot;&#39;");
+      await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+    },
+  );
 
   it("closes a pending localhost callback when its owner cancels", async () => {
     const controller = new AbortController();
-    const { callback } = startCallback(
-      {
-        hostname: "127.0.0.1",
-      },
-      controller,
-    );
+    const { callback } = startCallback({ hostname: "127.0.0.1" }, controller);
 
     controller.abort();
 
@@ -247,45 +247,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
-  it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {
-    const { callback, ready } = startCallback({
-      hostname: "127.0.0.1",
-      corsOriginAllowlist: ["auth.x.ai"],
-    });
-
-    const port = await ready;
-    const probe = await preflight(port, "https://attacker.example");
-
-    expect(probe.status).toBe(204);
-    expect(probe.headers.get("access-control-allow-origin")).toBeNull();
-    expect(probe.headers.get("access-control-allow-methods")).toBeNull();
-    expect(probe.headers.get("access-control-allow-headers")).toBeNull();
-    expect(probe.headers.get("access-control-allow-private-network")).toBeNull();
-
-    const response = await finishCallback(port, "https://auth.x.ai");
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
-    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
-  });
-
-  it("preserves legacy permissive CORS behavior when no allowlist is passed", async () => {
-    const { callback, ready } = startCallback({
-      hostname: "127.0.0.1",
-    });
-
-    const port = await ready;
-    const probe = await preflight(port, "https://legacy.example", false);
-
-    expect(probe.status).toBe(204);
-    expect(probe.headers.get("access-control-allow-origin")).toBe("https://legacy.example");
-    expect(probe.headers.get("access-control-allow-methods")).toContain("GET");
-
-    const response = await finishCallback(port);
-    expect(response.status).toBe(200);
-    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
-  });
-
   it("clamps oversized OAuth callback timeouts before scheduling", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
@@ -308,18 +269,14 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
 describe("buildOAuthCallbackOriginResolver", () => {
   it("returns a no-op resolver when no allowlist is provided", () => {
-    const noOp = providerAuthRuntime.buildOAuthCallbackOriginResolver(undefined);
-    expect(noOp("https://auth.example.com")).toBeUndefined();
-
-    const empty = providerAuthRuntime.buildOAuthCallbackOriginResolver([]);
-    expect(empty("https://auth.example.com")).toBeUndefined();
-
-    const blank = providerAuthRuntime.buildOAuthCallbackOriginResolver(["", "  "]);
-    expect(blank("https://auth.example.com")).toBeUndefined();
+    const values = [undefined, [], ["", "  "]].map((hosts) =>
+      auth.buildOAuthCallbackOriginResolver(hosts)("https://auth.example.com"),
+    );
+    expect(values).toEqual([undefined, undefined, undefined]);
   });
 
   it("echoes only allowlisted hosts and only over https", () => {
-    const resolver = providerAuthRuntime.buildOAuthCallbackOriginResolver([
+    const resolver = auth.buildOAuthCallbackOriginResolver([
       "auth.example.com",
       "ACCOUNTS.example.com",
     ]);

@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isProviderApiKeyConfigured,
   normalizeGithubCopilotDomain,
-  readClaudeCliCredentialsCached,
+  readClaudeCliCredentialsCached as readClaude,
 } from "./provider-auth.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,15 +23,20 @@ async function writeJson(file: string, value: unknown) {
   await fs.writeFile(file, JSON.stringify(value));
 }
 
+async function writeCredentials(dir: string, prefix: string, subscription?: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, ".credentials.json"),
+    claudeCredentialJson(`${prefix}-access`, `${prefix}-refresh`, subscription),
+  );
+}
+
 function readKeychain(
-  execSyncImpl: typeof execSync,
-  overrides: Omit<
-    NonNullable<Parameters<typeof readClaudeCliCredentialsCached>[0]>,
-    "execSync" | "platform"
-  >,
+  execute: typeof execSync,
+  overrides: Omit<NonNullable<Parameters<typeof readClaude>[0]>, "execSync" | "platform">,
 ) {
-  return readClaudeCliCredentialsCached({
-    execSync: execSyncImpl,
+  return readClaude({
+    execSync: execute,
     platform: "darwin",
     ...overrides,
   });
@@ -62,13 +67,9 @@ describe("provider auth public SDK", () => {
   it("keeps the shipped Claude credential reader functional during its deprecation window", async () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-auth-");
     const credentialsDir = path.join(homeDir, ".claude");
-    await fs.mkdir(credentialsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(credentialsDir, ".credentials.json"),
-      claudeCredentialJson("legacy-access", "legacy-refresh", "max"),
-    );
+    await writeCredentials(credentialsDir, "legacy", "max");
 
-    expect(readClaudeCliCredentialsCached({ homeDir, platform: "linux", ttlMs: 0 })).toEqual({
+    expect(readClaude({ homeDir, platform: "linux", ttlMs: 0 })).toEqual({
       type: "oauth",
       provider: "anthropic",
       access: "legacy-access",
@@ -78,91 +79,65 @@ describe("provider auth public SDK", () => {
     });
   });
 
-  it("reads Claude credentials from CLAUDE_CONFIG_DIR", async () => {
-    const configDir = tempDirs.make("openclaw-sdk-claude-config-");
-    await fs.writeFile(
-      path.join(configDir, ".credentials.json"),
-      claudeCredentialJson("configured-access", "configured-refresh"),
-    );
-    await writeJson(path.join(configDir, ".claude.json"), {
-      oauthAccount: { emailAddress: "configured@example.com" },
-    });
-    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
-
-    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 })).toMatchObject({
-      type: "oauth",
-      access: "configured-access",
-      refresh: "configured-refresh",
-      email: "configured@example.com",
-    });
-  });
-
-  it("does not attach shared config identity to split-store credentials", async () => {
-    const configDir = tempDirs.make("openclaw-sdk-claude-config-split-");
-    const secureStorageDir = tempDirs.make("openclaw-sdk-claude-secure-storage-");
-    await fs.writeFile(
-      path.join(secureStorageDir, ".credentials.json"),
-      claudeCredentialJson("secure-storage-access", "secure-storage-refresh"),
-    );
-    await fs.writeFile(
-      path.join(configDir, ".claude.json"),
-      JSON.stringify({ oauthAccount: { emailAddress: "configured@example.com" } }),
-    );
-    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
-    vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secureStorageDir);
-
-    const credential = readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 });
-    expect(credential).toMatchObject({
-      access: "secure-storage-access",
-      refresh: "secure-storage-refresh",
-    });
-    expect(credential).not.toHaveProperty("email");
-  });
+  it.each([false, true])(
+    "keeps config identity scoped to its credential store (split=%s)",
+    async (split) => {
+      const configDir = tempDirs.make("openclaw-sdk-claude-config-");
+      const storageDir = split ? tempDirs.make("openclaw-sdk-claude-storage-") : configDir;
+      await writeCredentials(storageDir, "configured");
+      await writeJson(path.join(configDir, ".claude.json"), {
+        oauthAccount: { emailAddress: "configured@example.com" },
+      });
+      vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+      if (split) {
+        vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", storageDir);
+      }
+      const credential = readClaude({ platform: "linux", ttlMs: 0 });
+      expect(credential).toMatchObject({
+        type: "oauth",
+        access: "configured-access",
+        refresh: "configured-refresh",
+      });
+      if (split) {
+        expect(credential).not.toHaveProperty("email");
+      } else {
+        expect(credential).toMatchObject({ email: "configured@example.com" });
+      }
+    },
+  );
 
   it("isolates cached config metadata when profiles share secure storage", async () => {
-    const firstConfigDir = tempDirs.make("openclaw-sdk-claude-first-config-");
-    const secondConfigDir = tempDirs.make("openclaw-sdk-claude-second-config-");
-    const secureStorageDir = tempDirs.make("openclaw-sdk-claude-shared-storage-");
-    const firstHelper = "first-profile-helper";
-    const secondHelper = "second-profile-helper";
-    const firstSettingsPath = path.join(firstConfigDir, "settings.json");
-    const secondSettingsPath = path.join(secondConfigDir, "settings.json");
-    await writeJson(firstSettingsPath, { apiKeyHelper: firstHelper });
-    await writeJson(secondSettingsPath, { apiKeyHelper: secondHelper });
+    const profiles = ["first", "second"].map((name) => ({
+      configDir: tempDirs.make(`openclaw-sdk-claude-${name}-`),
+      helper: `${name}-profile-helper`,
+    }));
     const sharedMtime = new Date(1_800_000_000_000);
-    await fs.utimes(firstSettingsPath, sharedMtime, sharedMtime);
-    await fs.utimes(secondSettingsPath, sharedMtime, sharedMtime);
-    vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secureStorageDir);
-
-    vi.stubEnv("CLAUDE_CONFIG_DIR", firstConfigDir);
-    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 60_000 })).toEqual({
-      type: "api_key_helper",
-      provider: "anthropic",
-      helperHash: createHash("sha256").update(firstHelper).digest("hex"),
-    });
-
-    vi.stubEnv("CLAUDE_CONFIG_DIR", secondConfigDir);
-    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 60_000 })).toEqual({
-      type: "api_key_helper",
-      provider: "anthropic",
-      helperHash: createHash("sha256").update(secondHelper).digest("hex"),
-    });
+    for (const { configDir, helper } of profiles) {
+      const settingsPath = path.join(configDir, "settings.json");
+      await writeJson(settingsPath, { apiKeyHelper: helper });
+      await fs.utimes(settingsPath, sharedMtime, sharedMtime);
+    }
+    vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", tempDirs.make("openclaw-sdk-shared-storage-"));
+    for (const { configDir, helper } of profiles) {
+      vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+      expect(readClaude({ platform: "linux", ttlMs: 60_000 })).toEqual({
+        type: "api_key_helper",
+        provider: "anthropic",
+        helperHash: createHash("sha256").update(helper).digest("hex"),
+      });
+    }
   });
 
   it("pins an empty secure-storage override to the default credential store", async () => {
     const osHome = tempDirs.make("openclaw-sdk-claude-default-home-");
     const defaultCredentialsDir = path.join(osHome, ".claude");
     const configDir = tempDirs.make("openclaw-sdk-claude-other-config-");
-    await fs.mkdir(defaultCredentialsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(defaultCredentialsDir, ".credentials.json"),
-      claudeCredentialJson("default-store-access", "default-store-refresh"),
-    );
+    await writeCredentials(defaultCredentialsDir, "default-store");
     vi.stubEnv("HOME", osHome);
     vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "");
 
-    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 })).toMatchObject({
+    expect(readClaude({ platform: "linux", ttlMs: 0 })).toMatchObject({
       access: "default-store-access",
       refresh: "default-store-refresh",
     });
@@ -173,41 +148,29 @@ describe("provider auth public SDK", () => {
     const secondDir = "/tmp/claude-secure-two";
     const serviceFor = (configDir: string) =>
       `Claude Code-credentials-${createHash("sha256").update(configDir).digest("hex").slice(0, 8)}`;
-    const execSyncImpl = vi.fn((command: string, options: { timeout?: number }) => {
+    const execute = vi.fn((command: string, options: { timeout?: number }) => {
       expect(command).toMatch(/^\/usr\/bin\/security find-generic-password /u);
       expect(options).not.toHaveProperty("timeout");
-      return JSON.stringify({
-        claudeAiOauth: {
-          accessToken: command.includes(serviceFor(firstDir)) ? "first-access" : "second-access",
-          refreshToken: "keychain-refresh",
-          expiresAt: 1_800_000_000_000,
-        },
-      });
+      return claudeCredentialJson(
+        command.includes(serviceFor(firstDir)) ? "first-access" : "second-access",
+        "keychain-refresh",
+      );
     }) as unknown as typeof execSync;
 
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", firstDir);
-    expect(
-      readKeychain(execSyncImpl, {
-        ttlMs: 60_000,
-      }),
-    ).toMatchObject({ access: "first-access" });
+    expect(readKeychain(execute, { ttlMs: 60_000 })).toMatchObject({ access: "first-access" });
 
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secondDir);
-    expect(
-      readKeychain(execSyncImpl, {
-        ttlMs: 60_000,
-      }),
-    ).toMatchObject({ access: "second-access" });
-    expect(execSyncImpl).toHaveBeenCalledTimes(2);
-    expect(execSyncImpl).toHaveBeenLastCalledWith(
+    expect(readKeychain(execute, { ttlMs: 60_000 })).toMatchObject({ access: "second-access" });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenLastCalledWith(
       expect.stringContaining(serviceFor(secondDir)),
       expect.any(Object),
     );
-    vi.unstubAllEnvs();
   });
 
   it("keeps explicit no-prompt macOS Keychain reads presence-only", () => {
-    const execSyncImpl = vi.fn((command: string) => {
+    const execute = vi.fn((command: string) => {
       expect(command).toMatch(/^\/usr\/bin\/security find-generic-password /u);
       expect(command).not.toContain(" -w");
       return "keychain metadata";
@@ -215,27 +178,27 @@ describe("provider auth public SDK", () => {
     const onStoredCredentialUnreadable = vi.fn();
 
     expect(
-      readKeychain(execSyncImpl, {
+      readKeychain(execute, {
         allowKeychainPrompt: false,
         tryKeychainWithoutPrompt: true,
         onStoredCredentialUnreadable,
         ttlMs: 0,
       }),
     ).toBeNull();
-    expect(execSyncImpl).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
     expect(onStoredCredentialUnreadable).toHaveBeenCalledOnce();
   });
 
   it("does not reuse a no-prompt Keychain miss for a prompt-enabled read", () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-keychain-cache-");
-    const execSyncImpl = vi.fn((command: string) =>
+    const execute = vi.fn((command: string) =>
       command.includes(" -w")
         ? claudeCredentialJson("prompted-access", "prompted-refresh")
         : "keychain metadata",
     ) as unknown as typeof execSync;
 
     expect(
-      readKeychain(execSyncImpl, {
+      readKeychain(execute, {
         allowKeychainPrompt: false,
         homeDir,
         tryKeychainWithoutPrompt: true,
@@ -243,15 +206,15 @@ describe("provider auth public SDK", () => {
       }),
     ).toBeNull();
     expect(
-      readKeychain(execSyncImpl, {
+      readKeychain(execute, {
         allowKeychainPrompt: true,
         homeDir,
         tryKeychainWithoutPrompt: true,
         ttlMs: 60_000,
       }),
     ).toMatchObject({ type: "oauth", access: "prompted-access" });
-    expect(execSyncImpl).toHaveBeenCalledOnce();
-    expect(execSyncImpl).toHaveBeenCalledWith(expect.stringContaining(" -w"), expect.any(Object));
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.stringContaining(" -w"), expect.any(Object));
   });
 });
 
@@ -268,11 +231,7 @@ describe("provider API-key readiness", () => {
     return {
       models: {
         providers: {
-          [providerId]: {
-            apiKey,
-            baseUrl: "https://media.example.test/v1",
-            models: [],
-          },
+          [providerId]: { apiKey, baseUrl: "https://media.example.test/v1", models: [] },
         },
       },
     } as OpenClawConfig;
@@ -299,8 +258,6 @@ describe("provider API-key readiness", () => {
     {
       label: "API-key profile owned by a different provider",
       credential: { type: "api_key", provider: "unrelated-provider", key: "wrong-provider-key" },
-      profileTypes: ["api_key"],
-      expected: false,
     },
     {
       label: "API-key profile with an unresolved env SecretRef",
@@ -309,38 +266,32 @@ describe("provider API-key readiness", () => {
         provider,
         keyRef: { source: "env", provider: "default", id: "MEDIA_PROFILE_MISSING_SECRET" },
       },
-      profileTypes: ["api_key"],
-      expected: false,
     },
   ] satisfies Array<{
     label: string;
     credential: AuthProfileCredential;
-    profileTypes: AuthProfileCredential["type"][];
-    expected: boolean;
-  }>)(
-    "classifies configured profile references: $label",
-    async ({ credential, expected, profileTypes }) => {
-      vi.stubEnv("MEDIA_PROFILE_MISSING_SECRET", "");
-      const profileId = `${provider}:selected`;
-      const agentDir = tempDirs.make("openclaw-media-profile-binding-");
-      saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
-        filterExternalAuthProfiles: false,
-        syncExternalCli: false,
-      });
+  }>)("classifies configured profile references: $label", async ({ credential }) => {
+    vi.stubEnv("MEDIA_PROFILE_MISSING_SECRET", "");
+    const profileId = `${provider}:selected`;
+    const agentDir = tempDirs.make("openclaw-media-profile-binding-");
+    saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
 
-      expect(
-        isProviderApiKeyConfigured({
-          provider,
-          agentDir,
-          cfg: configuredProvider(profileId),
-          profileTypes,
-        }),
-      ).toBe(expected);
-    },
-  );
+    expect(
+      isProviderApiKeyConfigured({
+        provider,
+        agentDir,
+        cfg: configuredProvider(profileId),
+        profileTypes: ["api_key"],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("provider auth profile helpers", () => {
+  const emptyStore = (): AuthProfileStore => ({ version: 1, profiles: {} });
   async function mockProfileAvailability(
     store: AuthProfileStore,
     loadStore = vi.fn((_agentDir?: string, _options?: { externalCli?: unknown }) => store),
@@ -358,15 +309,12 @@ describe("provider auth profile helpers", () => {
         findPersistedAuthProfileCredentialAsync,
         ensureAuthProfileStore: vi.fn(() => store),
         ensureAuthProfileStoreAsync: vi.fn(async () => store),
-        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
-          version: 1,
-          profiles: {},
-        })),
+        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => emptyStore()),
         loadAuthProfileStoreForRuntimeAsync: vi.fn(async (...args: Parameters<typeof loadStore>) =>
           loadStore(...args),
         ),
         loadAuthProfileStoreForSecretsRuntime: loadStore,
-        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(emptyStore),
       });
     });
   }
@@ -393,9 +341,7 @@ describe("provider auth profile helpers", () => {
     }));
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   afterAll(() => {
     vi.doUnmock("../agents/agent-scope-config.js");
@@ -411,48 +357,39 @@ describe("provider auth profile helpers", () => {
       version: 1,
       profiles: {
         "openai:oauth": oauthProfile(),
-        "openai:key": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-profile",
-        },
+        "openai:key": { type: "api_key", provider: "openai", key: "sk-profile" },
       },
     };
     const resolveApiKeyForProfile = vi.fn(
       async (params: { store: AuthProfileStore; profileId: string }) => {
         const profile = params.store.profiles[params.profileId];
-        if (profile?.type === "oauth") {
-          return {
-            apiKey: profile.access,
-            provider: profile.provider,
-            profileId: params.profileId,
-            profileType: profile.type,
-          };
+        if (!profile) {
+          return null;
         }
-        if (profile?.type === "api_key" && profile.key) {
-          return {
-            apiKey: profile.key,
-            provider: profile.provider,
-            profileId: params.profileId,
-            profileType: profile.type,
-          };
-        }
-        return null;
+        const apiKey =
+          profile.type === "oauth"
+            ? profile.access
+            : profile.type === "api_key"
+              ? profile.key
+              : undefined;
+        return apiKey
+          ? {
+              apiKey,
+              provider: profile.provider,
+              profileId: params.profileId,
+              profileType: profile.type,
+            }
+          : null;
       },
     );
 
-    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
-      resolveApiKeyForProfile,
-    }));
+    vi.doMock("../agents/auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile }));
     await mockProfileAvailability(store);
 
     const { resolveProviderAuthProfileApiKey } = await import("./provider-auth.js");
 
     await expect(
-      resolveProviderAuthProfileApiKey({
-        provider: "openai",
-        profileTypes: ["api_key"],
-      }),
+      resolveProviderAuthProfileApiKey({ provider: "openai", profileTypes: ["api_key"] }),
     ).resolves.toBe("sk-profile");
     expect(resolveApiKeyForProfile).toHaveBeenCalledTimes(1);
     expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
@@ -467,9 +404,7 @@ describe("provider auth profile helpers", () => {
     };
     const externalStore: AuthProfileStore = {
       version: 1,
-      profiles: {
-        "openai:default": oauthProfile(),
-      },
+      profiles: { "openai:default": oauthProfile() },
     };
     const externalCli = { mode: "scoped", providerIds: ["openai"] };
     const loadAuthProfileStoreForSecretsRuntime = vi.fn(
@@ -480,19 +415,14 @@ describe("provider auth profile helpers", () => {
     vi.doMock("../agents/auth-profiles/external-cli-discovery.js", () => ({
       externalCliDiscoveryForProviderAuth: vi.fn(() => externalCli),
     }));
-    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
-      resolveApiKeyForProfile: vi.fn(),
-    }));
+    vi.doMock("../agents/auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile: vi.fn() }));
     await mockProfileAvailability(primaryStore, loadAuthProfileStoreForSecretsRuntime);
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 
     expect(isProviderAuthProfileConfigured({ provider: "openai" })).toBe(false);
     expect(
-      isProviderAuthProfileConfigured({
-        provider: "openai",
-        includeExternalCliAuth: true,
-      }),
+      isProviderAuthProfileConfigured({ provider: "openai", includeExternalCliAuth: true }),
     ).toBe(true);
     expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenNthCalledWith(1, "/tmp/openclaw-agent");
     expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenNthCalledWith(
@@ -505,22 +435,21 @@ describe("provider auth profile helpers", () => {
 
 describe("Copilot domain normalization", () => {
   it("locks the host allowlist to github.com and single-label *.ghe.com tenant roots", () => {
-    // Allowed: public host and single-label data-residency tenant roots.
-    expect(normalizeGithubCopilotDomain("github.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("acme.ghe.com")).toBe("acme.ghe.com");
-
-    // Rejected: derived service hosts under a tenant. GitHub documents these as
-    // `*.SUBDOMAIN.ghe.com` endpoints; storing one would template broken hosts
-    // like `api.api.acme.ghe.com` for the token exchange.
-    expect(normalizeGithubCopilotDomain("api.acme.ghe.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("copilot-api.acme.ghe.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("a.b.ghe.com")).toBe("github.com");
-
-    // Rejected: arbitrary hosts, look-alikes, and the bare non-tenant apex.
-    expect(normalizeGithubCopilotDomain("evil.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("ghe.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("github.com.evil.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("evilghe.com")).toBe("github.com");
-    expect(normalizeGithubCopilotDomain("acme.ghe.com.evil.com")).toBe("github.com");
+    expect(["github.com", "acme.ghe.com"].map(normalizeGithubCopilotDomain)).toEqual([
+      "github.com",
+      "acme.ghe.com",
+    ]);
+    // Service subdomains would produce broken token-exchange hosts such as api.api.acme.ghe.com.
+    const rejected = [
+      "api.acme.ghe.com",
+      "copilot-api.acme.ghe.com",
+      "a.b.ghe.com",
+      "evil.com",
+      "ghe.com",
+      "github.com.evil.com",
+      "evilghe.com",
+      "acme.ghe.com.evil.com",
+    ];
+    expect(rejected.map(normalizeGithubCopilotDomain)).toEqual(rejected.map(() => "github.com"));
   });
 });
