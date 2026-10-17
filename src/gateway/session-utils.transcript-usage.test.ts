@@ -82,13 +82,7 @@ test("selected global rows read transcript usage from the selected agent", async
         sessionId,
         sessionKey: "global",
         storePath,
-        messages: [
-          {
-            role: "assistant",
-            content: "done",
-            usage: { input, output: 2 },
-          },
-        ],
+        messages: [{ role: "assistant", content: "done", usage: { input, output: 2 } }],
       });
     }
 
@@ -119,7 +113,7 @@ test("SQLite unavailable context blocks old totals until a later valid snapshot"
       totalTokensFresh: false,
     };
     seedSessionEntries(storePath, { [sessionKey]: entry });
-    async function appendAndRead(content: string, usage: unknown) {
+    async function appendAndCheck(content: string, usage: unknown, totalTokens?: number) {
       appendTranscriptMessages({
         sessionId,
         sessionKey,
@@ -133,34 +127,35 @@ test("SQLite unavailable context blocks old totals until a later valid snapshot"
         key: sessionKey,
         entry,
       });
-      return [row.totalTokens, row.totalTokensFresh];
+      expect(row, content).toMatchObject({
+        totalTokens,
+        totalTokensFresh: totalTokens !== undefined,
+      });
     }
-    expect(
-      await appendAndRead("old cumulative turn", {
-        input: 128_814,
-        output: 3_000,
-        cacheRead: 992_953,
-        totalTokens: 1_124_767,
-      }),
-    ).toEqual([undefined, false]);
-    expect(
-      await appendAndRead("usage unavailable", {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        contextUsage: { state: "unavailable" },
-      }),
-    ).toEqual([undefined, false]);
-    expect(
-      await appendAndRead("valid later turn", {
+    await appendAndCheck("old cumulative turn", {
+      input: 128_814,
+      output: 3_000,
+      cacheRead: 992_953,
+      totalTokens: 1_124_767,
+    });
+    await appendAndCheck("usage unavailable", {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    });
+    await appendAndCheck(
+      "valid later turn",
+      {
         input: 67_932,
         output: 2_000,
         cacheRead: 18_944,
         totalTokens: 88_876,
         contextUsage: { state: "available", promptTokens: 86_876, totalTokens: 88_876 },
-      }),
-    ).toEqual([86_876, true]);
+      },
+      86_876,
+    );
   });
 });

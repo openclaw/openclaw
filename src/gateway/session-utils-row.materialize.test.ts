@@ -26,7 +26,7 @@ import {
   projectWorkerSessionPlacement,
   readWorkerPlacementIdentity,
 } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
+import { activePlacement } from "./worker-environments/placement-suite.test-support.js";
 
 // Values frozen from d70a7e7300cdc0af4485d10b39f3e4986c3dd155.
 // SHA256 pins wire values; sparse materialization may change top-level property order.
@@ -180,6 +180,16 @@ function fixtures(): RowFixture[] {
       omittedContent: false,
     },
   };
+  const goalFixture = (
+    name: string,
+    suffix: string,
+    totalTokens: number,
+    goal = GOAL,
+  ): RowFixture => ({
+    name,
+    key: `agent:main:dashboard:${suffix}`,
+    entry: { ...BASE_ENTRY, goal, totalTokens, totalTokensFresh: true, totalTokensVersion: 1 },
+  });
   return [
     { name: "missing entry", key: "agent:main:dashboard:missing" },
     {
@@ -201,28 +211,11 @@ function fixtures(): RowFixture[] {
         label: "Private fixture",
       },
     },
-    {
-      name: "goal budget becomes limited at presentation time",
-      key: "agent:main:dashboard:budget",
-      entry: {
-        ...BASE_ENTRY,
-        goal: GOAL,
-        totalTokens: 150,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    },
-    {
-      name: "goal below budget retains committed timestamps",
-      key: "agent:main:dashboard:goal",
-      entry: {
-        ...BASE_ENTRY,
-        goal: { ...GOAL, tokensUsed: 5 },
-        totalTokens: 50,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    },
+    goalFixture("goal budget becomes limited at presentation time", "budget", 150),
+    goalFixture("goal below budget retains committed timestamps", "goal", 50, {
+      ...GOAL,
+      tokensUsed: 5,
+    }),
     ...([-1, 0, 1] as const).map((offset): RowFixture => ({
       name: `observer digest ${offset < 0 ? "older" : offset === 0 ? "equal" : "newer"} than run start`,
       key: `agent:main:dashboard:observer-${offset}`,
@@ -311,18 +304,15 @@ function fixtures(): RowFixture[] {
         lastActivityAt: START,
       },
     },
-    {
-      name: "activity current and active correlated placement",
-      key: "agent:main:dashboard:activity-current",
+    ...(["current", "stale"] as const).map((decoration) => ({
+      name:
+        decoration === "current"
+          ? "activity current and active correlated placement"
+          : "activity stale and uncorrelated placement",
+      key: `agent:main:dashboard:activity-${decoration}`,
       entry: activityEntry,
-      decoration: "current",
-    },
-    {
-      name: "activity stale and uncorrelated placement",
-      key: "agent:main:dashboard:activity-stale",
-      entry: activityEntry,
-      decoration: "stale",
-    },
+      decoration,
+    })),
   ];
 }
 
@@ -331,28 +321,16 @@ function decorate(row: GatewaySessionRow, fixture: RowFixture, cfg: OpenClawConf
     return row;
   }
   const current = fixture.decoration === "current";
-  const placement = {
-    sessionId: BASE_ENTRY.sessionId,
+  const placement = activePlacement(BASE_ENTRY.sessionId, {
     sessionKey: fixture.key,
-    agentId: "main",
-    executionMode: "worker-turn",
-    state: "active",
     generation: 4,
     environmentId: "golden-environment",
     activeOwnerEpoch: 7,
-    workerBundleHash: "a".repeat(64),
     workspaceBaseManifestRef: "golden-manifest",
-    remoteWorkspaceDir: "/workspace",
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
     createdAtMs: START - 1_000,
     updatedAtMs: START,
     stateChangedAtMs: START,
-  } satisfies WorkerSessionPlacementRecord;
+  });
   const identity = readWorkerPlacementIdentity(placement, {
     get: () => ({
       environmentId: "golden-environment",
@@ -503,15 +481,16 @@ test("preserves complete base rows across time and caller presentation fixtures"
       expect(materialized).toStrictEqual(retainedMaterialized);
       expect(materialized.row.snapshotAt).toBeUndefined();
       rows.forEach((row, index) => {
-        expect(row.snapshotAt).toBe(TIMES[index]);
         expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
-        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
-        expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
-        expect(row.sessionModelRevision).toEqual(expect.any(String));
-        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
-        // Assert additive fields separately while preserving the frozen wire-value coverage.
-        expect(row.communication).toBeUndefined();
-        expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
+        expect(row).toMatchObject({
+          snapshotAt: TIMES[index],
+          createdSurface: fixture.entry?.createdSurface,
+          isDock: fixture.expectedIsDock ?? false,
+          sessionModelRevision: expect.any(String),
+          sidebarRoot: fixture.entry?.sidebarRoot === true,
+          communication: undefined,
+          effectiveCommunication: { send: "always", receive: "always" },
+        });
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,

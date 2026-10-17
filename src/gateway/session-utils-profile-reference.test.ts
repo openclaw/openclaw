@@ -15,6 +15,25 @@ import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
 const roots = createTempDirTracker();
+const original = "12345678-a123-4123-8123-123456789abc";
+const other = "12345678-a123-4123-8123-123456789def";
+const prefix = "12345678a123";
+const emptySearch = { search: "no-matching-session" };
+const participant = (id: string) => ({
+  participants: [{ identity: { type: "profile" as const, id } }],
+});
+const creator = (id: string, source: "profile" | "channel" = "profile") => ({
+  type: "human" as const,
+  id,
+  source,
+});
+const visibleTo = (profileId: string) =>
+  createSessionListEntryFilter({
+    client: {
+      connect: { scopes: ["operator.read"] },
+      authenticatedUserProfile: { profileId },
+    } as GatewayClient,
+  });
 let stateRoot: string;
 beforeEach(() => {
   stateRoot = roots.make("activity-profile-reference-");
@@ -62,12 +81,7 @@ function listActivity(
   options: Partial<SessionsListParams> = {},
 ) {
   return listSessions(
-    Object.fromEntries(
-      profileIds.map((id, index) => [
-        `activity-${index}`,
-        { participants: [{ identity: { type: "profile" as const, id } }] },
-      ]),
-    ),
+    Object.fromEntries(profileIds.map((id, index) => [`activity-${index}`, participant(id)])),
     { includePeople: true, involvingProfileId, ...options },
   );
 }
@@ -75,7 +89,6 @@ function listActivity(
 it.each(["owned", "created", "involving"] as const)(
   "resolves %s inventory relationships through profile merges",
   async (relationship) => {
-    const original = "12345678-a123-4123-8123-123456789abc";
     const current = "87654321-c123-4123-8123-123456789abc";
     createProfile(original);
     createProfile(current);
@@ -85,9 +98,9 @@ it.each(["owned", "created", "involving"] as const)(
         {
           "merged-profile": {
             updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: original },
+            createdActor: creator(original),
             owner: { actor: { type: "human", id: original } },
-            participants: [{ identity: { type: "profile", id: original } }],
+            ...participant(original),
           },
         },
         {
@@ -102,47 +115,32 @@ it.each(["owned", "created", "involving"] as const)(
   },
 );
 
-it.each(["12345678-A123-4123-8123-123456789ABC"])(
-  "resolves retained profile %s without a durable row",
-  async (retained) => {
-    for (const reference of [
-      retained,
-      "12345678a123",
-      retained.replaceAll("-", "").toLowerCase(),
-    ]) {
-      const result = await listActivity([retained], reference);
-      expect(result.involvingProfileId, reference).toBe(retained);
-      expect(result.sessions, reference).toHaveLength(1);
-      const empty = await listActivity([retained], reference, { search: "no-matching-session" });
-      expect(empty.involvingProfileId, reference).toBe(retained);
-      expect(empty.sessions, reference).toEqual([]);
-    }
-    expect(fs.existsSync(path.join(stateRoot, "state", "openclaw.sqlite"))).toBe(false);
-    createProfile("12345678-a123-4123-8123-123456789def");
-    await expect(
-      listActivity([retained], "12345678a123", { search: "no-matching-session" }),
-    ).rejects.toThrow("Person link is ambiguous");
-  },
-);
+it("resolves retained profile without a durable row", async () => {
+  const retained = original.toUpperCase();
+  for (const reference of [retained, prefix, retained.replaceAll("-", "").toLowerCase()]) {
+    const result = await listActivity([retained], reference);
+    expect(result.involvingProfileId, reference).toBe(retained);
+    expect(result.sessions, reference).toHaveLength(1);
+    const empty = await listActivity([retained], reference, emptySearch);
+    expect(empty.involvingProfileId, reference).toBe(retained);
+    expect(empty.sessions, reference).toEqual([]);
+  }
+  expect(fs.existsSync(path.join(stateRoot, "state", "openclaw.sqlite"))).toBe(false);
+  createProfile(other);
+  await expect(listActivity([retained], prefix, emptySearch)).rejects.toThrow(
+    "Person link is ambiguous",
+  );
+});
 
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {
-  const retained = "12345678-a123-4123-8123-123456789abc";
   const result = await listSessions(
     {
-      qualified: {
-        createdActor: { type: "human", id: retained, source: "profile" },
-      },
-      legacy: {
-        createdActor: {
-          type: "human",
-          id: "12345678-a123-4123-8123-123456789def",
-          source: "channel",
-        },
-      },
+      qualified: { createdActor: creator(original) },
+      legacy: { createdActor: creator(other, "channel") },
     },
-    { includePeople: true, involvingProfileId: "12345678a123" },
+    { includePeople: true, involvingProfileId: prefix },
   );
-  expect(result.involvingProfileId).toBe(retained);
+  expect(result.involvingProfileId).toBe(original);
   expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:qualified"]);
 });
 
@@ -167,72 +165,55 @@ it.each([
   { hidden: "draft", durable: true },
   { hidden: "incognito", durable: true },
 ])("does not resolve hidden $hidden identities (durable=$durable)", async ({ hidden, durable }) => {
-  const visibleId = "12345678-a123-4123-8123-123456789abc";
-  const hiddenId = "12345678-a123-4123-8123-123456789def";
+  const visibleId = original;
+  const hiddenId = other;
   createProfile(visibleId);
   if (durable) {
     createProfile(hiddenId);
   }
-  const visibility = createSessionListEntryFilter({
-    client: {
-      connect: { scopes: ["operator.read"] },
-      authenticatedUserProfile: { profileId: visibleId },
-    } as GatewayClient,
-  });
-  const entryFilter = vi.fn(visibility);
+  const entryFilter = vi.fn(visibleTo(visibleId));
   const store = {
-    visible: {
-      visibility: "shared",
-      participants: [{ identity: { type: "profile", id: visibleId } }],
-    },
+    visible: { visibility: "shared", ...participant(visibleId) },
     hidden: {
       visibility: hidden === "draft" ? "draft" : "shared",
       incognito: hidden === "incognito" ? true : undefined,
-      participants: [{ identity: { type: "profile", id: hiddenId } }],
+      ...participant(hiddenId),
     },
   } satisfies Record<string, Partial<SessionEntry>>;
-  for (const reference of ["12345678a123", hiddenId, hiddenId.replaceAll("-", "")]) {
+  for (const reference of [prefix, hiddenId, hiddenId.replaceAll("-", "")]) {
     entryFilter.mockClear();
     const result = await listSessions(
       store,
-      { includePeople: true, involvingProfileId: reference, search: "no-matching-session" },
+      { includePeople: true, involvingProfileId: reference, ...emptySearch },
       entryFilter,
     );
-    expect(result.involvingProfileId, reference).toBe(
-      reference === "12345678a123" ? visibleId : undefined,
-    );
-    expect(result.sessions).toEqual([]);
-    expect(result.people).toEqual([]);
+    expect(result, reference).toMatchObject({
+      involvingProfileId: reference === prefix ? visibleId : undefined,
+      sessions: [],
+      people: [],
+    });
     expect(entryFilter).toHaveBeenCalledTimes(2);
   }
 });
 
 it("resolves merge aliases for visible owners without considering hidden profiles", async () => {
-  const source = "12345678-a123-4123-8123-123456789abc";
-  const hidden = "12345678-a123-4123-8123-123456789def";
+  const source = original;
+  const hidden = other;
   const target = "87654321-a123-4123-8123-123456789abc";
   for (const id of [source, hidden, target]) {
     createProfile(id);
   }
   linkEmail(`${source}@activity.test`, target);
-  const entryFilter = createSessionListEntryFilter({
-    client: {
-      connect: { scopes: ["operator.read"] },
-      authenticatedUserProfile: { profileId: target },
-    } as GatewayClient,
-  });
+  const entryFilter = visibleTo(target);
   const result = await listSessions(
     {
       owned: {
         visibility: "shared",
         owner: { actor: { type: "human", id: target } },
       },
-      hidden: {
-        visibility: "draft",
-        participants: [{ identity: { type: "profile", id: hidden } }],
-      },
+      hidden: { visibility: "draft", ...participant(hidden) },
     },
-    { includePeople: true, involvingProfileId: "12345678a123" },
+    { includePeople: true, involvingProfileId: prefix },
     entryFilter,
   );
   expect(result.involvingProfileId).toBe(target);
