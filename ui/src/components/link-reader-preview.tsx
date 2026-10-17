@@ -125,7 +125,7 @@ export function cacheEntryFromDocument(
   });
   return {
     preview,
-    needsPreview: !previous?.preview || previous.needsPreview === true,
+    enrichment: previous?.preview && !previous.enrichment ? undefined : "needed",
     promise: Promise.resolve(preview),
     expiresAt,
     controller: new AbortController(),
@@ -181,7 +181,7 @@ export async function requestReaderPreview(
     }
   }
   // A reader-first entry owns newer header facts, not the plugin's compact projection.
-  const header = cached?.needsPreview ? cached.preview : undefined;
+  const header = cached?.enrichment ? cached.preview : undefined;
   return header
     ? {
         ...preview,
@@ -463,7 +463,7 @@ export function renderPreview(
 }
 
 export type CacheEntry = {
-  needsPreview?: boolean;
+  enrichment?: "needed" | "pending";
   preview?: ControlUiLinkReaderPreview;
   expiresAt: number;
   promise: Promise<ControlUiLinkReaderPreview>;

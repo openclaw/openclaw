@@ -230,8 +230,9 @@ it.each([false, true])(
 
 it("keeps reader facts visible when compact preview enrichment fails", async () => {
   const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
+  let previewResponse = pending.promise;
   const request = vi.fn((method: string) =>
-    method === "github.detail" ? Promise.resolve(merged) : pending.promise,
+    method === "github.detail" ? Promise.resolve(merged) : previewResponse,
   );
   const client = createTestGatewayClient(request);
   const { host, anchor } = makeProvider();
@@ -272,4 +273,13 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   expect(badge()).toBe("Merged");
   expect(anchor.getAttribute("aria-description")).toBe("Merged");
   expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(2);
+  previewResponse = Promise.resolve(open);
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  await vi.advanceTimersByTimeAsync(30_000);
+  await hover(anchor);
+  expect(badge()).toBe("Merged");
+  expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
+  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(3);
 });

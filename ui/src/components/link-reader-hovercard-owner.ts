@@ -699,7 +699,7 @@ export class HovercardOwner {
     const cached = cachedReaderPreview(this.cache, target);
     this.cache.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
-    if (cached && !cached.needsPreview) {
+    if (cached && (cached.enrichment !== "needed" || cached.preview?.stale)) {
       this.cache.set(key, cached);
       return subscribeToSharedRequest(cached, {}, signal);
     }
@@ -707,16 +707,16 @@ export class HovercardOwner {
     const controller = new AbortController();
     const { client, agentId, sessionKey } = this.host;
     const scope = { client, agentId, sessionKey };
-    const context = this.previewContext;
     const isCurrent = () =>
       client !== null &&
       !controller.signal.aborted &&
       client === this.host.client &&
       agentId === this.host.agentId &&
       sessionKey === this.host.sessionKey &&
-      previewContextFor(client, agentId) === context &&
+      previewContextFor(client, agentId) === this.previewContext &&
       this.host.readers.includes(target.reader);
     const entry: CacheEntry = {
+      enrichment: previous?.enrichment ? "pending" : undefined,
       preview: previous?.preview,
       expiresAt: Date.now() + SUCCESS_CACHE_MS,
       controller,
@@ -725,6 +725,7 @@ export class HovercardOwner {
         .then((preview) => {
           if (isCurrent() && this.cache.get(key) === entry) {
             entry.preview = preview;
+            entry.enrichment = preview.stale && previous?.enrichment ? "needed" : undefined;
             entry.expiresAt = Date.now() + (preview.stale ? FAILURE_CACHE_MS : SUCCESS_CACHE_MS);
             this.syncInlineStates();
           }
