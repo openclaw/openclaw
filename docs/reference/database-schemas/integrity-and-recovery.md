@@ -102,6 +102,12 @@ subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
+Worker admission checks current authority after lease cleanup and before opening
+the native agent database. A refusal at that boundary releases its unopened lease
+without revoking an earlier clean-close seal. Once native opening begins, failed
+or uncertain cleanup still invalidates proof. Shutdown cancellation alone is not
+evidence that a previously sealed database needs another full scan.
+
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
 preflight, or integrity verification. It also avoids a post-ready verification
