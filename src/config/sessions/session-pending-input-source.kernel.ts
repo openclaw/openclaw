@@ -4,7 +4,7 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import type {
   PendingInputSourceRead,
   PendingInputSourceSnapshot,
