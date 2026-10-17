@@ -246,6 +246,12 @@ discarding your edits. Switching identities or losing access still clears the
 affected settings. These drafts are not persisted by this behavior: reloading
 or closing the tab can discard them, including entered credentials.
 
+Rejected model-default saves return the pickers to the saved configuration.
+**Retry** keeps the rejected change with the configuration write owner. Model
+edits that have not been sent still survive a temporary disconnect. After
+reconnecting, defaults remain unavailable until the current configuration loads;
+a failed read does not present the previous connection's defaults as current.
+
 Unsent configuration form edits resume autosave after reconnect only when a
 fresh read confirms that their base revision is unchanged. If a submission was
 in flight or the revision changed, autosave stays paused for explicit recovery.

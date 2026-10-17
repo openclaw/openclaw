@@ -558,15 +558,15 @@ export function createModelProviders(
       return;
     }
     const capturedAgentEpoch = agentEpoch;
-    const acknowledged = await runModelProviderDefaultsMutation(context, gateway, {
+    const settled = await runModelProviderDefaultsMutation(context, gateway, {
       defaults,
       busy: Boolean(state.busy.defaults),
       isCurrentAgent: () => agentEpoch === capturedAgentEpoch,
       setBusy: (busy) => setBusy("defaults", busy),
       setMessage: (message) => setMessage("defaults", message),
     });
-    // Global defaults outlive agent selection; only retire the acknowledged draft.
-    if (acknowledged && state.defaultsDraft === defaults) {
+    // Retry retains rejected writes in the config owner; the picker shows saved defaults.
+    if (settled !== null && state.defaultsDraft === defaults) {
       setState("defaultsDraft", null);
     }
   }
@@ -585,7 +585,9 @@ export function createModelProviders(
     // Retained config is presentation only; mutation admission still requires a current snapshot.
     const configObject =
       currentConfigObject(configState) ??
-      (dataClient && dataClient === gatewaySnapshot.client ? configState.configForm : null);
+      (gatewaySnapshot.phase !== "connected" && dataClient && dataClient === gatewaySnapshot.client
+        ? configState.configForm
+        : null);
     const catalog = modelCatalog.readAgentModelCatalog(
       readAccess ? gatewaySnapshot.client : null,
       state.selectedAgentId,

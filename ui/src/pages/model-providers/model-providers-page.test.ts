@@ -219,11 +219,12 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it.each(["rejected", "not dispatched", "offline"] as const)(
-    "keeps defaults until acknowledged when the save is %s",
+    "preserves unsent defaults and restores saved defaults after rejection: %s",
     async (outcome) => {
       const { context, runtimeConfig, publishPhase } = createHarness("main");
       const page = appendPage(context);
       await waitForProviders(page);
+      const savedPrimary = page.view.props.defaultModels.primary;
       if (outcome === "rejected") {
         runtimeConfig.patch.mockRejectedValueOnce(new Error("Synthetic save failure"));
       } else if (outcome === "not dispatched") {
@@ -233,7 +234,9 @@ describe("ModelProvidersPage agent scope", () => {
       }
       page.view.props.onPrimaryChange("openai/draft-model");
       await drainPageUpdates(page);
-      expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
+      expect(page.view.props.defaultModels.primary).toBe(
+        outcome === "rejected" ? savedPrimary : "openai/draft-model",
+      );
       if (outcome === "offline") {
         expect(runtimeConfig.patch).not.toHaveBeenCalled();
       } else {

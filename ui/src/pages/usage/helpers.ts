@@ -65,7 +65,7 @@ export function toggleUsageRangeSelection<T>(
   return mode === "append" ? [...selected, value] : [value];
 }
 
-export function parseToolSummary(content: string) {
+function parseToolSummary(content: string) {
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
   for (const line of content.split("\n")) {

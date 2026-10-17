@@ -78,12 +78,12 @@ export function readModelBehaviorConfig(
  * destructive-array guard rejects such merge patches unless the exact path is
  * confirmed via replacePaths.
  */
-export const DEFAULT_MODELS_REPLACE_PATHS = [
+const DEFAULT_MODELS_REPLACE_PATHS = [
   "agents.defaults.model.fallbacks",
   "agents.defaults.utilityModel.fallbacks",
 ];
 
-export function buildDefaultsPatch(
+function buildDefaultsPatch(
   params: Omit<DefaultModelSelection, "fallbacks"> &
     ModelBehaviorConfig & {
       fallbacks: readonly string[];
@@ -183,7 +183,7 @@ export function runModelProviderDefaultsMutation(
     defaults: DefaultsDraft;
     busy: boolean;
   },
-): Promise<boolean> {
+): Promise<boolean | null> {
   const scope = gateway.capture();
   // Global defaults remain editable when the configured roster is empty.
   if (
@@ -192,7 +192,7 @@ export function runModelProviderDefaultsMutation(
     modelProviderConfigMutationBlockedReason(context) ||
     modelProviderConfigBusy(context)
   ) {
-    return Promise.resolve(false);
+    return Promise.resolve(null);
   }
   return runModelProviderConfigMutation(
     {
@@ -257,18 +257,19 @@ export async function modelProviderMutationWarnings(
 /**
  * The config owner adopts the committed snapshot and reconciles application.
  * Saving ends at its acknowledgement, not at a second read or provider discovery.
+ * Null keeps an undispatched or superseded draft; false reports a settled failure.
  */
 export async function runModelProviderConfigMutation(
   owner: ModelProviderConfigMutationOwner,
   params: ModelProviderConfigMutation,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const { runtimeConfig } = owner;
   owner.setBusy(true);
   owner.setMessage(null);
   try {
     await runtimeConfig.ensureLoaded();
     if (!owner.isCurrentClient()) {
-      return false;
+      return null;
     }
     const patched = await runtimeConfig.patch({
       raw: params.raw,
@@ -276,7 +277,11 @@ export async function runModelProviderConfigMutation(
       ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
     });
     if (!owner.isCurrentClient()) {
-      return false;
+      return null;
+    }
+    // No dispatched write or recorded failure leaves the caller's draft intact.
+    if (!patched && !runtimeConfig.state.lastError) {
+      return null;
     }
     if (!patched && owner.isCurrentAgent()) {
       owner.setMessage({
@@ -286,7 +291,10 @@ export async function runModelProviderConfigMutation(
     }
     return patched;
   } catch (error) {
-    if (owner.isCurrentClient() && owner.isCurrentAgent()) {
+    if (!owner.isCurrentClient()) {
+      return null;
+    }
+    if (owner.isCurrentAgent()) {
       owner.setMessage({ kind: "error", text: modelProviderErrorMessage(error) });
     }
     return false;
