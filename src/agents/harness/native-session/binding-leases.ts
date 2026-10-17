@@ -96,6 +96,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
     },
     assertCurrent?: () => void,
     authorities: readonly NativeSessionBindingAuthority[] = [],
+    deadline = performance.now() + options.lease.waitMs,
   ): Promise<boolean> => {
     const mutations: Awaited<ReturnType<NativeSessionBindingAuthority["prepareMutation"]>>[] = [];
     for (const authority of new Set(authorities)) {
@@ -147,6 +148,11 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (outcome.status !== "conflict") {
         return prepared.next !== undefined;
       }
+      // Repeated refusals spend the same wait budget and retry interval as a busy lease.
+      if (performance.now() >= deadline) {
+        throw options.errors.leaseTimeout(key);
+      }
+      await sleep(options.lease.retryIntervalMs);
       observed = outcome.current;
     }
   };
@@ -209,6 +215,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
         },
         assertOwnerCurrent,
         [authority, owner?.authority].filter((value) => value !== undefined),
+        deadline,
       );
       if (leaseLost) {
         const failure = options.errors.lostLease(key);
