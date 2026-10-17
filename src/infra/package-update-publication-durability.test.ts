@@ -1,10 +1,8 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as durability from "./directory-durability.js";
 import {
   encodePackageActivationLauncher,
@@ -21,12 +19,13 @@ import { interceptPackageFileHashes } from "./package-update-integrity-hasher.te
 import * as integrity from "./package-update-integrity.js";
 import {
   createPublicationTestFixture,
+  withPublicationFence,
+  runPublicationSwap,
   readPublicationText as read,
   readPublicationManifest as manifest,
 } from "./package-update-publication.test-support.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import { interceptStagedFileSync } from "./package-update-sync.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 
 async function prepareFixtureActivation(
@@ -67,14 +66,13 @@ it
     "interrupted",
   ] as const)(
   "reuses the previous digest and trusts freshly prepared candidate contents (%s)",
-  withFixture(async (f, changed) => {
+  withFixture(async (f, changed: string) => {
     const anchor = resolvePackageActivationAnchor(f.packageRoot);
     const previousRoot = path.join(anchor, "previous");
     const candidateRoot = path.join(anchor, "candidate");
     let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
+    await withPublicationFence(f.packageRoot, async (fence) => {
       const prepared = await prepareFixtureActivation(f, fence);
       expect(prepared).toBeDefined();
       if (changed === "interrupted") {
@@ -170,7 +168,7 @@ it.skipIf(process.platform === "win32").each([
   ["publish", "installation"],
 ] as const)(
   "persists both package rename parents before advancing %s (%s failure)",
-  withFixture(async (f, cut, parent) => {
+  withFixture(async (f, cut: "displace" | "publish", parent: string) => {
     const anchor = resolvePackageActivationAnchor(f.packageRoot);
     const previousRoot = path.join(anchor, "previous");
     const candidateRoot = path.join(anchor, "candidate");
@@ -201,8 +199,7 @@ it.skipIf(process.platform === "win32").each([
       }
       return result;
     });
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
+    await withPublicationFence(f.packageRoot, async (fence) => {
       const prepared = await prepareFixtureActivation(f, fence);
       expect(prepared).toBeDefined();
       await expect(
@@ -249,7 +246,7 @@ it.skipIf(process.platform === "win32").each([
 
 it.skipIf(process.platform === "win32").each(["anchor", "installation", "launchers"] as const)(
   "retains recovery copies when restored package %s persistence fails",
-  withFixture(async (f, parent) => {
+  withFixture(async (f, parent: string) => {
     const anchor = resolvePackageActivationAnchor(f.packageRoot);
     const failedParent =
       parent === "anchor"
@@ -261,16 +258,8 @@ it.skipIf(process.platform === "win32").each(["anchor", "installation", "launche
     const failure = Object.assign(new Error("restored directory sync interrupted"), {
       code: "EIO",
     });
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
-      let transaction: PackageUpdateTransaction | undefined;
-      const result = await swapStagedPackageInstall({
-        ...f.params,
-        activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-        onTransaction: (issued) => {
-          transaction = issued;
-        },
-      });
+    await withPublicationFence(f.packageRoot, async (fence) => {
+      const { result, transaction } = await runPublicationSwap(f, fence);
       expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
       const sync = durability.syncDirectory;
       let refused = 0;
@@ -305,53 +294,11 @@ it.skipIf(process.platform === "win32").each([
   ["directory", "EIO"],
 ] as const)(
   "does not acknowledge an unpersisted launcher %s %s and requires durability on recovery",
-  withFixture(async (f, cut, code) => {
+  withFixture(async (f, cut: string, code: string) => {
     const anchor = resolvePackageActivationAnchor(f.packageRoot);
     const failure = Object.assign(new Error("launcher durability interrupted"), { code });
-    const handles: Array<{ fd: number; dev: bigint; ino: bigint }> = [];
+    const probe = interceptStagedFileSync(path.dirname(f.launcher), failure, cut === "file");
     let refused = 0;
-    const open = fsp.open;
-    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      if (cut === "file" && String(args[0]).includes(".openclaw-shim-stage-")) {
-        const identity = await handle.stat({ bigint: true });
-        if (identity.isFile()) {
-          vi.spyOn(handle, "sync").mockImplementation(async () => {
-            handles.push({ fd: handle.fd, dev: identity.dev, ino: identity.ino });
-            refused++;
-            throw failure;
-          });
-        }
-      }
-      return handle;
-    });
-    const fsync = fs.fsyncSync;
-    const fsyncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-      const identity = fs.fstatSync(fd, { bigint: true });
-      // Native fs-safe staging uses raw descriptors, not fs.promises.open.
-      // Bind the fault to an actual file inode in this fixture's private staging.
-      const staged =
-        cut === "file" &&
-        identity.isFile() &&
-        fs
-          .readdirSync(path.dirname(f.launcher))
-          .filter((name) => name.startsWith(".openclaw-shim-stage-"))
-          .some((name) => {
-            const directory = path.join(path.dirname(f.launcher), name);
-            return fs.readdirSync(directory).some((entry) => {
-              const current = fs.lstatSync(path.join(directory, entry), { bigint: true });
-              return (
-                current.isFile() && current.dev === identity.dev && current.ino === identity.ino
-              );
-            });
-          });
-      if (staged) {
-        handles.push({ fd, dev: identity.dev, ino: identity.ino });
-        refused++;
-        throw failure;
-      }
-      fsync(fd);
-    });
     const sync = durability.syncDirectory;
     const syncSpy = vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
       if (
@@ -364,16 +311,15 @@ it.skipIf(process.platform === "win32").each([
       }
       return sync(directory);
     });
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
+    await withPublicationFence(f.packageRoot, async (fence) => {
       const prepared = await prepareFixtureActivation(f, fence);
       expect(prepared).toBeDefined();
       // Exercise the actual publication owner without the outer swap's automatic
       // compensation, leaving the interrupted operation available for recovery.
       await expect(prepared!.publish(false)).rejects.toThrow("launcher durability interrupted");
     });
-    expect(refused).toBeGreaterThan(0);
-    for (const handle of handles) {
+    expect(refused + probe.refused).toBeGreaterThan(0);
+    for (const handle of probe.handles) {
       let current: fs.BigIntStats | undefined;
       try {
         current = fs.fstatSync(handle.fd, { bigint: true });
@@ -384,8 +330,7 @@ it.skipIf(process.platform === "win32").each([
     }
     const journal = openPackageActivationJournal(anchor);
     const pending = journal.read();
-    expect(pending.phase).toBe("publishing");
-    expect(pending.publications).toEqual([]);
+    expect(pending).toMatchObject({ phase: "publishing", publications: [] });
     expect(fs.existsSync(path.join(anchor, "previous"))).toBe(true);
     if (cut === "directory") {
       expect(pending.intent).toMatchObject({ kind: "launcher", name: "openclaw" });
@@ -398,11 +343,10 @@ it.skipIf(process.platform === "win32").each([
       expect(journal.read()).toEqual(pending);
     } else {
       expect(read(f.launcher)).toBe("old launcher\n");
-      expect(handles.length).toBeGreaterThan(0);
+      expect(probe.handles.length).toBeGreaterThan(0);
     }
     // The same recorded operation can finish only once the persistence boundary works.
-    fsyncSpy.mockRestore();
-    openSpy.mockRestore();
+    probe.restore();
     syncSpy.mockRestore();
     await expect(
       runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
@@ -429,8 +373,7 @@ it.skipIf(process.platform === "win32")(
       const onPrepared = vi.fn();
       let outcome: { value: unknown } | { error: unknown } | undefined;
       try {
-        await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-          const fence = await executor.enter(f.packageRoot);
+        await withPublicationFence(f.packageRoot, async (fence) => {
           original = fence.assertCurrent.bind(fence);
           vi.spyOn(capability, "supportsPostCoreExecutor").mockImplementation(async () => {
             await Promise.resolve();
@@ -472,15 +415,11 @@ it.skipIf(process.platform === "win32")(
               outcome = { error };
             },
           );
-          const preparationSettled = preparing.then(
-            () => {
-              throw new Error("Preparation completed before the integrity pause.");
-            },
-            (error: unknown) => {
-              throw new Error("Preparation failed before the integrity pause.", { cause: error });
-            },
+          await awaitGateBeforeSettlement(
+            inspecting,
+            preparing,
+            "Preparation settled before the integrity pause.",
           );
-          await Promise.race([inspecting, preparationSettled]);
           // Deliberately end the genuine executor scope while the admitted preparation
           // is paused. The test still owns and joins that escaped operation below.
         });

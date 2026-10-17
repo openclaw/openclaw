@@ -14,6 +14,7 @@ import {
   removePackagePath,
   restoreNpmPackageRoot,
 } from "./package-update-filesystem.js";
+import { interceptStagedFileSync } from "./package-update-sync.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -214,48 +215,11 @@ it("keeps the live launcher intact when its replacement copy is interrupted", as
 it("keeps the live launcher intact when an ordinary copy cannot sync its staged file", async () => {
   await writeLaunchers("replacement launcher\n", "live launcher\n");
   const failure = errno("staged launcher sync failed", "EIO");
-  let refused = 0;
-  const refuseStagedFileSync = (fd: number) => {
-    const identity = fsSync.fstatSync(fd, { bigint: true });
-    if (!identity.isFile()) {
-      return;
-    }
-    const staged = fsSync
-      .readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith(".openclaw-shim-stage-"))
-      .some((directory) =>
-        fsSync.readdirSync(path.join(root, directory.name)).some((entry) => {
-          const current = fsSync.lstatSync(path.join(root, directory.name, entry), {
-            bigint: true,
-          });
-          return current.isFile() && current.dev === identity.dev && current.ino === identity.ino;
-        }),
-      );
-    if (staged) {
-      refused++;
-      throw failure;
-    }
-  };
-  const open = fs.open;
-  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    const sync = handle.sync.bind(handle);
-    vi.spyOn(handle, "sync").mockImplementation(async () => {
-      refuseStagedFileSync(handle.fd);
-      await sync();
-    });
-    return handle;
-  });
-  // Native fs-safe copies flush raw descriptors; the fallback uses FileHandle.sync.
-  const fsync = fsSync.fsyncSync;
-  vi.spyOn(fsSync, "fsyncSync").mockImplementation((fd) => {
-    refuseStagedFileSync(fd);
-    fsync(fd);
-  });
+  const probe = interceptStagedFileSync(root, failure);
 
   await expect(copyEntry()).rejects.toHaveProperty("cause", failure);
 
-  expect(refused).toBe(1);
+  expect(probe.refused).toBe(1);
   await expectFile(source, "replacement launcher\n");
   await expectFile(destination, "live launcher\n");
   await expectEntries(root, ["destination", "source"]);
@@ -552,57 +516,51 @@ it("does not compensate a root rename after its original owner refused once", as
   await expectFile(path.join(backupRoot, "marker.txt"), "original");
 });
 
-it.each([
-  {
-    name: "an undefined copy failure before a cleanup failure",
-    copyFailure: { error: undefined },
-    cleanupFailure: { error: new Error("cleanup failed after copy refusal") },
-  },
-  {
-    name: "a sole undefined cleanup failure",
-    copyFailure: undefined,
-    cleanupFailure: { error: undefined },
-  },
-])("retains $name through private copy cleanup", async ({ copyFailure, cleanupFailure }) => {
-  await writeLaunchers();
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
-  const copy = prototype.copyIn;
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
-  const remove = prototype.remove;
-  let staging = "";
-  let cleanupAttempts = 0;
-  const copySpy = vi.spyOn(prototype, "copyIn").mockImplementationOnce(function (
-    this: Root,
-    ...args
-  ) {
-    staging = this.rootReal;
-    if (copyFailure) {
-      // oxlint-disable-next-line typescript/only-throw-error -- Undefined must remain the original copy failure.
-      throw copyFailure.error;
-    }
-    return copy.call(this, ...args);
-  });
-  vi.spyOn(prototype, "remove").mockImplementation(function (this: Root, relativePath, options) {
-    if (path.basename(relativePath).startsWith(".openclaw-shim-stage-")) {
-      cleanupAttempts += 1;
-      // oxlint-disable-next-line typescript/only-throw-error -- An undefined cleanup failure must remain a failure.
-      throw cleanupFailure.error;
-    }
-    return remove.call(this, relativePath, options);
-  });
-  const rename = vi.spyOn(fs, "rename");
+it.each(["copy", "cleanup"] as const)(
+  "retains an undefined %s failure through private copy cleanup",
+  async (phase) => {
+    const copyFailure = phase === "copy";
+    const cleanupFailure = copyFailure ? new Error("cleanup failed after copy refusal") : undefined;
+    await writeLaunchers();
+    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+    const copy = prototype.copyIn;
+    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+    const remove = prototype.remove;
+    let staging = "";
+    let cleanupAttempts = 0;
+    const copySpy = vi.spyOn(prototype, "copyIn").mockImplementationOnce(function (
+      this: Root,
+      ...args
+    ) {
+      staging = this.rootReal;
+      if (copyFailure) {
+        // oxlint-disable-next-line typescript/only-throw-error -- Undefined must remain the original copy failure.
+        throw undefined;
+      }
+      return copy.call(this, ...args);
+    });
+    vi.spyOn(prototype, "remove").mockImplementation(function (this: Root, relativePath, options) {
+      if (path.basename(relativePath).startsWith(".openclaw-shim-stage-")) {
+        cleanupAttempts += 1;
+        // oxlint-disable-next-line typescript/only-throw-error -- An undefined cleanup failure must remain a failure.
+        throw cleanupFailure;
+      }
+      return remove.call(this, relativePath, options);
+    });
+    const rename = vi.spyOn(fs, "rename");
 
-  await expect(copyEntry()).rejects.toBe((copyFailure ?? cleanupFailure).error);
-  expect(copySpy).toHaveBeenCalledOnce();
-  expect(cleanupAttempts).toBe(1);
-  expect(staging).not.toBe("");
-  expect(rename.mock.calls.filter(([, to]) => String(to) === destination)).toHaveLength(
-    copyFailure ? 0 : 1,
-  );
-  await expectFile(source, "replacement");
-  await expectFile(destination, copyFailure ? "live" : "replacement");
-  expect(await fs.readdir(staging)).toEqual([]);
-});
+    await expect(copyEntry()).rejects.toBe(undefined);
+    expect(copySpy).toHaveBeenCalledOnce();
+    expect(cleanupAttempts).toBe(1);
+    expect(staging).not.toBe("");
+    expect(rename.mock.calls.filter(([, to]) => String(to) === destination)).toHaveLength(
+      copyFailure ? 0 : 1,
+    );
+    await expectFile(source, "replacement");
+    await expectFile(destination, copyFailure ? "live" : "replacement");
+    expect(await fs.readdir(staging)).toEqual([]);
+  },
+);
 
 it.each(["publish", "revoke", "replace"] as const)(
   "preserves live ownership through the journal publication hook: %s",
