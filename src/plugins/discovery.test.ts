@@ -104,18 +104,18 @@ function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value), "utf-8");
 }
 
-function writePluginPackageManifest({
-  packageDir,
-  packageName,
-  ...openclaw
-}: {
-  packageDir: string;
-  packageName: string;
+type PackageEntries = {
   extensions: string[];
   runtimeExtensions?: string[];
   setupEntry?: string;
   runtimeSetupEntry?: string;
-}) {
+};
+
+function writePluginPackageManifest(
+  packageDir: string,
+  packageName: string,
+  openclaw: PackageEntries,
+) {
   writeJson(path.join(packageDir, "package.json"), { name: packageName, openclaw });
 }
 
@@ -158,7 +158,7 @@ function createPackagePluginWithEntry(
   pluginId?: string,
   entryPath = "src/index.ts",
 ) {
-  writePluginPackageManifest({ packageDir, packageName, extensions: [`./${entryPath}`] });
+  writePluginPackageManifest(packageDir, packageName, { extensions: [`./${entryPath}`] });
   if (pluginId) {
     writePluginManifest({ pluginDir: packageDir, id: pluginId });
   }
@@ -166,6 +166,32 @@ function createPackagePluginWithEntry(
   if (entryPath === "src/index.ts") {
     writePluginEntry(path.join(packageDir, "dist/index.js"));
   }
+}
+
+function packageFixture(id: string, entries: PackageEntries, files: string[], manifest = false) {
+  const stateDir = makeTempDir();
+  const pluginDir = path.join(stateDir, "extensions", id);
+  writePluginPackageManifest(pluginDir, `@openclaw/${id}`, entries);
+  if (manifest) {
+    writePluginManifest({ pluginDir, id });
+  }
+  for (const file of files) {
+    writePluginEntry(path.join(pluginDir, file));
+  }
+  return { stateDir, pluginDir };
+}
+
+function bundledFixture(id: string, installed = false) {
+  const stateDir = makeTempDir();
+  const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+  const bundledDir = installed
+    ? path.join(packageRoot, "dist", "extensions")
+    : path.join(stateDir, "bundled");
+  const pluginDir = path.join(bundledDir, id);
+  const env = buildDiscoveryEnvWithOverrides(stateDir, {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+  });
+  return { stateDir, packageRoot, bundledDir, pluginDir, env };
 }
 
 function expectCandidateIds(
@@ -210,24 +236,11 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
   );
 }
 
-type DiagnosticFilter = {
-  diagnostics: ReturnType<typeof discoverOpenClawPlugins>["diagnostics"];
-  messageIncludes: string;
-  level?: string;
-  pluginId?: string;
-  source?: string;
-};
-
-function expectDiagnostic({ diagnostics, messageIncludes, ...fields }: DiagnosticFilter) {
-  expect(diagnostics).toContainEqual(
-    expect.objectContaining({ ...fields, message: expect.stringContaining(messageIncludes) }),
-  );
-}
-
-function expectNoDiagnostic({ diagnostics, messageIncludes, ...fields }: DiagnosticFilter) {
-  expect(diagnostics).not.toContainEqual(
-    expect.objectContaining({ ...fields, message: expect.stringContaining(messageIncludes) }),
-  );
+function matchingDiagnostic(
+  message: string,
+  fields: { level?: string; pluginId?: string; source?: string } = {},
+) {
+  return expect.objectContaining({ ...fields, message: expect.stringContaining(message) });
 }
 
 function expectCandidateFields(candidate: object | undefined, expected: Record<string, unknown>) {
@@ -418,28 +431,21 @@ describe("discoverOpenClawPlugins", () => {
       source: fs.realpathSync(bundledEntryPath),
     });
     expect(diagnostics).toHaveLength(1);
-    expectDiagnostic({
-      diagnostics,
-      level: "warn",
-      source: sourcePluginDir,
-      messageIncludes: "bind-mounted bundled plugin source overlay",
-    });
+    expect(diagnostics).toContainEqual(
+      matchingDiagnostic("bind-mounted bundled plugin source overlay", {
+        level: "warn",
+        source: sourcePluginDir,
+      }),
+    );
   });
 
   it("rejects pack entries whose basenames collide on the same derived id", () => {
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions", "pack");
-
-    writePluginPackageManifest({
-      packageDir: globalExt,
-      packageName: "pack",
-      extensions: ["./src/a/index.ts", "./src/b/index.ts"],
-    });
-    writePluginManifest({ pluginDir: globalExt, id: "pack" });
-    writePluginEntry(path.join(globalExt, "src", "a", "index.ts"));
-    writePluginEntry(path.join(globalExt, "src", "b", "index.ts"));
-    writePluginEntry(path.join(globalExt, "dist", "a", "index.js"));
-    writePluginEntry(path.join(globalExt, "dist", "b", "index.js"));
+    const { stateDir } = packageFixture(
+      "pack",
+      { extensions: ["./src/a/index.ts", "./src/b/index.ts"] },
+      ["src/a/index.ts", "src/b/index.ts", "dist/a/index.js", "dist/b/index.js"],
+      true,
+    );
 
     const discovery = discoverWithStateDir(stateDir, {});
     // Neither colliding entry may silently win the shared id.
@@ -451,18 +457,12 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("allows linked local install records to point at TypeScript source entries", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "linked-source-pack");
-
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/linked-source-pack",
-      extensions: ["./src/index.ts"],
-      setupEntry: "./src/setup-entry.ts",
-    });
-    writePluginManifest({ pluginDir, id: "linked-source-pack" });
-    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
-    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+    const { stateDir, pluginDir } = packageFixture(
+      "linked-source-pack",
+      { extensions: ["./src/index.ts"], setupEntry: "./src/setup-entry.ts" },
+      ["src/index.ts", "src/setup-entry.ts"],
+      true,
+    );
 
     const installRecords = {
       "linked-source-pack": {
@@ -482,11 +482,11 @@ describe("discoverOpenClawPlugins", () => {
       setupSource: fs.realpathSync(path.join(pluginDir, "src", "setup-entry.ts")),
       installOwner: "linked-source-pack",
     });
-    expectNoDiagnostic({
-      diagnostics: result.diagnostics,
-      pluginId: "linked-source-pack",
-      messageIncludes: "requires compiled runtime output",
-    });
+    expect(result.diagnostics).not.toContainEqual(
+      matchingDiagnostic("requires compiled runtime output", {
+        pluginId: "linked-source-pack",
+      }),
+    );
   });
 
   it.runIf(process.platform !== "win32" && canCreateDirectorySymlinks)(
@@ -510,10 +510,9 @@ describe("discoverOpenClawPlugins", () => {
       });
       expect(result.candidates.map((candidate) => candidate.idHint)).toEqual(["index", "second"]);
       expect(isPluginCandidateInstallOwnerAmbiguous(result.candidates[0]!)).toBe(true);
-      expectDiagnostic({
-        diagnostics: result.diagnostics,
-        messageIncludes: "multiple plugin install records claim the same package path",
-      });
+      expect(result.diagnostics).toContainEqual(
+        matchingDiagnostic("multiple plugin install records claim the same package path"),
+      );
     },
   );
 
@@ -536,14 +535,10 @@ describe("discoverOpenClawPlugins", () => {
     ambiguous: boolean;
     trusted: true | undefined;
   }>)("preserves $name ownership through configured aliases (external package)", (scenario) => {
-    const stateDir = makeTempDir();
-    const bundledDir = path.join(stateDir, "bundled");
-    const pluginDir = path.join(bundledDir, "diffs");
+    const { stateDir, pluginDir } = bundledFixture("diffs");
     const aliasDir = path.join(stateDir, "diffs-link");
 
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/diffs",
+    writePluginPackageManifest(pluginDir, "@openclaw/diffs", {
       extensions: ["./two.js", "./one.js"],
     });
     writePluginManifest({ pluginDir, id: "diffs" });
@@ -658,9 +653,7 @@ describe("discoverOpenClawPlugins", () => {
         const sourcePath = path.join(globalExt, "source-path-pack");
         const actualSource = linked ? path.join(stateDir, "checkout") : sourcePath;
         const installPath = path.join(stateDir, "installed", "source-path-pack");
-        writePluginPackageManifest({
-          packageDir: actualSource,
-          packageName: "@openclaw/source-path-pack",
+        writePluginPackageManifest(actualSource, "@openclaw/source-path-pack", {
           extensions: ["./src/index.ts"],
         });
         writePluginEntry(path.join(actualSource, "src/index.ts"));
@@ -686,23 +679,17 @@ describe("discoverOpenClawPlugins", () => {
   }
 
   it("adds managed ownership to bundled candidates deduplicated in the shared scan", () => {
-    const stateDir = makeTempDir();
-    const bundledDir = path.join(stateDir, "bundled");
+    const { bundledDir, env } = bundledFixture("unused");
     const plainDir = path.join(bundledDir, "plain");
     const packageDir = path.join(bundledDir, "package");
 
     writePluginManifest({ pluginDir: plainDir, id: "plain" });
     writePluginEntry(path.join(plainDir, "index.js"));
-    writePluginPackageManifest({
-      packageDir,
-      packageName: "@openclaw/package",
+    writePluginPackageManifest(packageDir, "@openclaw/package", {
       extensions: ["./index.js"],
     });
     writePluginManifest({ pluginDir: packageDir, id: "package" });
     writePluginEntry(path.join(packageDir, "index.js"));
-    const env = buildDiscoveryEnvWithOverrides(stateDir, {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-    });
     const installRecords = {
       "plain-owner": { source: "path", installPath: plainDir },
       "package-owner": { source: "path", installPath: packageDir },
@@ -736,29 +723,24 @@ describe("discoverOpenClawPlugins", () => {
       installOwner: undefined,
       installOwnerAmbiguous: true,
     });
-    expectDiagnostic({
-      diagnostics: ambiguous.diagnostics,
-      level: "error",
-      messageIncludes: "multiple plugin install records claim the same package path",
-    });
+    expect(ambiguous.diagnostics).toContainEqual(
+      matchingDiagnostic("multiple plugin install records claim the same package path", {
+        level: "error",
+      }),
+    );
   });
 
   it("uses explicit runtime extension entries for installed package plugins", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "runtime-pack");
-
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/runtime-pack",
-      extensions: ["./src/index.ts"],
-      runtimeExtensions: ["./dist/index.js"],
-      setupEntry: "./src/setup-entry.ts",
-      runtimeSetupEntry: "./dist/setup-entry.js",
-    });
-    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
-    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
-    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
-    writePluginEntry(path.join(pluginDir, "dist", "setup-entry.js"));
+    const { stateDir, pluginDir } = packageFixture(
+      "runtime-pack",
+      {
+        extensions: ["./src/index.ts"],
+        runtimeExtensions: ["./dist/index.js"],
+        setupEntry: "./src/setup-entry.ts",
+        runtimeSetupEntry: "./dist/setup-entry.js",
+      },
+      ["src/index.ts", "src/setup-entry.ts", "dist/index.js", "dist/setup-entry.js"],
+    );
 
     const { candidates } = discoverWithStateDir(stateDir, {});
     const candidate = findCandidateById(candidates, "runtime-pack");
@@ -771,18 +753,15 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("rejects missing explicit runtime setup entries for installed package plugins", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "missing-runtime-setup-pack");
-
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/missing-runtime-setup-pack",
-      extensions: ["./dist/index.js"],
-      setupEntry: "./src/setup-entry.ts",
-      runtimeSetupEntry: "./dist/setup-entry.js",
-    });
-    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
-    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+    const { stateDir } = packageFixture(
+      "missing-runtime-setup-pack",
+      {
+        extensions: ["./dist/index.js"],
+        setupEntry: "./src/setup-entry.ts",
+        runtimeSetupEntry: "./dist/setup-entry.js",
+      },
+      ["dist/index.js", "src/setup-entry.ts"],
+    );
 
     const result = discoverWithStateDir(stateDir, {});
     const candidate = requireCandidateById(result.candidates, "missing-runtime-setup-pack");
@@ -838,18 +817,11 @@ describe("discoverOpenClawPlugins", () => {
   );
 
   it("rejects package runtimeExtensions that do not match extension entries", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "runtime-mismatch-pack");
-
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/runtime-mismatch-pack",
-      extensions: ["./src/one.ts", "./src/two.ts"],
-      runtimeExtensions: ["./dist/one.js"],
-    });
-    writePluginEntry(path.join(pluginDir, "src", "one.ts"));
-    writePluginEntry(path.join(pluginDir, "src", "two.ts"));
-    writePluginEntry(path.join(pluginDir, "dist", "one.js"));
+    const { stateDir } = packageFixture(
+      "runtime-mismatch-pack",
+      { extensions: ["./src/one.ts", "./src/two.ts"], runtimeExtensions: ["./dist/one.js"] },
+      ["src/one.ts", "src/two.ts", "dist/one.js"],
+    );
 
     const result = discoverWithStateDir(stateDir, {});
 
@@ -865,17 +837,11 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("rejects blank package runtimeExtensions before falling back to inferred entries", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "runtime-blank-pack");
-
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/runtime-blank-pack",
-      extensions: ["./src/index.ts"],
-      runtimeExtensions: [" "],
-    });
-    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
-    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+    const { stateDir } = packageFixture(
+      "runtime-blank-pack",
+      { extensions: ["./src/index.ts"], runtimeExtensions: [" "] },
+      ["src/index.ts", "dist/index.js"],
+    );
 
     const result = discoverWithStateDir(stateDir, {});
 
@@ -1036,17 +1002,12 @@ describe("discoverOpenClawPlugins", () => {
       expect(result.diagnostics).toContainEqual(
         expect.objectContaining({ level: "warn", pluginId: expectedOwner }),
       );
-      expectNoDiagnostic({
-        diagnostics: result.diagnostics,
-        messageIncludes: "openclaw.extensions",
-      });
+      expect(result.diagnostics).not.toContainEqual(matchingDiagnostic("openclaw.extensions"));
     },
   );
 
   it("keeps trusted bundled package fallback from missing TypeScript metadata to JavaScript", () => {
-    const stateDir = makeTempDir();
-    const bundledDir = path.join(stateDir, "bundled");
-    const pluginDir = path.join(bundledDir, "downloadable");
+    const { pluginDir, env } = bundledFixture("downloadable");
 
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/downloadable",
@@ -1058,11 +1019,7 @@ describe("discoverOpenClawPlugins", () => {
     writePluginManifest({ pluginDir, id: "downloadable" });
     writePluginEntry(path.join(pluginDir, "index.js"));
 
-    const { candidates, diagnostics } = discoverOpenClawPlugins({
-      env: buildDiscoveryEnvWithOverrides(stateDir, {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      }),
-    });
+    const { candidates, diagnostics } = discoverOpenClawPlugins({ env });
 
     expectCandidateSource(
       candidates,
@@ -1230,9 +1187,7 @@ describe("discoverOpenClawPlugins", () => {
     }
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "pack");
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/pack",
+    writePluginPackageManifest(pluginDir, "@openclaw/pack", {
       extensions: [scenario.entry],
       ...(scenario.runtime ? { runtimeExtensions: [scenario.runtime] } : {}),
     });
@@ -1267,18 +1222,15 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("blocks escaping setup entries before explicit runtime setup entries", () => {
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions", "escape-pack");
-
-    writePluginPackageManifest({
-      packageDir: globalExt,
-      packageName: "@openclaw/escape-pack",
-      extensions: ["./dist/index.js"],
-      setupEntry: "../src/setup-entry.ts",
-      runtimeSetupEntry: "./dist/setup-entry.js",
-    });
-    writePluginEntry(path.join(globalExt, "dist", "index.js"), "export default {}");
-    writePluginEntry(path.join(globalExt, "dist", "setup-entry.js"), "export default {}");
+    const { stateDir } = packageFixture(
+      "escape-pack",
+      {
+        extensions: ["./dist/index.js"],
+        setupEntry: "../src/setup-entry.ts",
+        runtimeSetupEntry: "./dist/setup-entry.js",
+      },
+      ["dist/index.js", "dist/setup-entry.js"],
+    );
 
     const result = discoverWithStateDir(stateDir, {});
     const candidate = requireCandidateById(result.candidates, "escape-pack");
@@ -1320,10 +1272,7 @@ describe("discoverOpenClawPlugins", () => {
   it.runIf(process.platform !== "win32").each(["configured", "automatic"] as const)(
     "repairs a world-writable bundled plugin without blocked warnings via %s discovery",
     (selection) => {
-      const stateDir = makeTempDir();
-      const packageRoot = path.join(stateDir, "node_modules", "openclaw");
-      const bundledDir = path.join(packageRoot, "dist", "extensions");
-      const pluginDir = path.join(bundledDir, "repairable");
+      const { stateDir, packageRoot, bundledDir, pluginDir } = bundledFixture("repairable", true);
       createPackagePluginWithEntry(pluginDir, "repairable", undefined, "index.js");
       fs.chmodSync(pluginDir, 0o777);
       const result = withOpenClawPackageArgv(packageRoot, () =>
@@ -1345,25 +1294,19 @@ describe("discoverOpenClawPlugins", () => {
   it.runIf(canCreateDirectorySymlinks)(
     "does not grant bundled provenance to an outside package symlink",
     () => {
-      const stateDir = makeTempDir();
-      const bundledDir = path.join(stateDir, "bundled");
+      const { stateDir, bundledDir, env } = bundledFixture("unused");
       const outsideDir = path.join(stateDir, "outside");
       mkdirSafe(bundledDir);
       createPackagePluginWithEntry(outsideDir, "@openclaw/codex", "codex", "index.js");
       symlinkDirectory(outsideDir, path.join(bundledDir, "codex"));
       for (const extraPaths of [[], [outsideDir]]) {
         const result = discoverOpenClawPlugins({
-          env: buildDiscoveryEnvWithOverrides(stateDir, {
-            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-          }),
+          env,
           extraPaths,
         });
         expect(result.candidates).toHaveLength(extraPaths.length);
         expect(result.candidates.every((candidate) => candidate.origin === "config")).toBe(true);
-        expectDiagnostic({
-          diagnostics: result.diagnostics,
-          messageIncludes: "escapes bundled root",
-        });
+        expect(result.diagnostics).toContainEqual(matchingDiagnostic("escapes bundled root"));
       }
     },
   );
@@ -1387,11 +1330,9 @@ describe("discoverOpenClawPlugins", () => {
       );
       expect(hasSuspiciousOwnershipDiagnostic).toBe(shouldBlockForMismatch);
       if (shouldBlockForMismatch) {
-        expectDiagnostic({
-          diagnostics: result.diagnostics,
-          pluginId: "owner-mismatch",
-          messageIncludes: "suspicious ownership",
-        });
+        expect(result.diagnostics).toContainEqual(
+          matchingDiagnostic("suspicious ownership", { pluginId: "owner-mismatch" }),
+        );
       }
     },
   );
@@ -1409,12 +1350,12 @@ describe("discoverOpenClawPlugins", () => {
       try {
         const result = discoverWithStateDir(stateDir, { extraPaths: [pluginDir] });
         expect(result.candidates).toHaveLength(0);
-        expectDiagnostic({
-          diagnostics: result.diagnostics,
-          pluginId: "actual-id",
-          source: pluginDir,
-          messageIncludes: "blocked plugin candidate: world-writable path",
-        });
+        expect(result.diagnostics).toContainEqual(
+          matchingDiagnostic("blocked plugin candidate: world-writable path", {
+            pluginId: "actual-id",
+            source: pluginDir,
+          }),
+        );
       } finally {
         fs.chmodSync(pluginDir, 0o755);
       }
@@ -1422,13 +1363,8 @@ describe("discoverOpenClawPlugins", () => {
   );
 
   it("refreshes same-size bundled package manifests when plugin metadata is reloaded", () => {
-    const stateDir = makeTempDir();
-    const bundledDir = path.join(stateDir, "bundled");
-    const pluginDir = path.join(bundledDir, "cached-bundle");
+    const { stateDir, pluginDir, env } = bundledFixture("cached-bundle");
     createPackagePluginWithEntry(pluginDir, "@openclaw/cache-one", "cached-bundle", "index.js");
-    const env = buildDiscoveryEnvWithOverrides(stateDir, {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-    });
     const packageManifestPath = path.join(pluginDir, "package.json");
     const unchangedTimestamp = new Date("2025-01-01T00:00:00.000Z");
     fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
@@ -1440,9 +1376,7 @@ describe("discoverOpenClawPlugins", () => {
       "@openclaw/cache-one",
     );
     const originalStat = fs.statSync(packageManifestPath);
-    writePluginPackageManifest({
-      packageDir: pluginDir,
-      packageName: "@openclaw/cache-two",
+    writePluginPackageManifest(pluginDir, "@openclaw/cache-two", {
       extensions: ["./index.js"],
     });
     fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
@@ -1464,10 +1398,12 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("keeps configured selection and installed ownership isolated across workspace scans", () => {
-    const stateDir = makeTempDir();
-    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
-    const bundledDir = path.join(packageRoot, "dist", "extensions");
-    const bundledPlugin = path.join(bundledDir, "shared-plugin");
+    const {
+      stateDir,
+      packageRoot,
+      pluginDir: bundledPlugin,
+      env,
+    } = bundledFixture("shared-plugin", true);
     const installedPlugin = path.join(stateDir, "installed", "shared-plugin");
     for (const packageDir of [bundledPlugin, installedPlugin]) {
       createPackagePluginWithEntry(
@@ -1477,9 +1413,6 @@ describe("discoverOpenClawPlugins", () => {
         "index.js",
       );
     }
-    const env = buildDiscoveryEnvWithOverrides(stateDir, {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-    });
     const installRecords: Record<string, PluginInstallRecord> = {
       "installed-owner": {
         source: "path",

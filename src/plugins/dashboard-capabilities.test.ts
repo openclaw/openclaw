@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveBoardWidgetContentKindResourceUrls } from "./board-widget-content-kinds.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,6 +13,7 @@ import {
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
+beforeEach(useNoBundledPlugins);
 
 function updateDashboardManifest(plugin: TempPlugin, dashboard: Record<string, unknown>): void {
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
@@ -79,11 +80,49 @@ function writeDashboardPlugin(
   return plugin;
 }
 
+function writeCapabilityPlugin(
+  id: string,
+  kind: "dataBindings" | "actionVerbs",
+  capabilityId: string,
+  method: string,
+  scope: "operator.read" | "operator.write" = kind === "dataBindings"
+    ? "operator.read"
+    : "operator.write",
+  registeredMethod = method,
+) {
+  return writeDashboardPlugin(
+    id,
+    { [registeredMethod]: scope },
+    {
+      [kind]: [{ id: capabilityId, method, description: "Fixture capability" }],
+    },
+  );
+}
+
+function expectRejected(
+  plugin: TempPlugin,
+  message: string,
+  surface: "boardWidgetContentKinds" | "dashboardDataBindings" | "dashboardActionVerbs",
+  diagnostic = true,
+) {
+  const registry = loadFixture(plugin);
+  expect(registry.plugins.find((entry) => entry.id === plugin.id)).toMatchObject({
+    status: "error",
+    failurePhase: "register",
+    error: expect.stringContaining(message),
+  });
+  expect(registry[surface].size).toBe(0);
+  if (diagnostic) {
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({ pluginId: plugin.id, code: "dashboard-declaration-invalid" }),
+    );
+  }
+}
+
 describe("plugin dashboard declarations", () => {
   it("publishes encoded private renderer paths through their capability", () => {
     const resourcePath = "/renderer/app.js?v=1#asset";
     const resolvedPath = "/renderer/app.js%3Fv=1%23asset";
-    useNoBundledPlugins();
     const plugin = writeWidgetPlugin({ id: "diagram", resourcePath });
 
     const registry = loadFixture(plugin);
@@ -105,7 +144,6 @@ describe("plugin dashboard declarations", () => {
   });
 
   it("fails plugin load atomically for invalid board widget content kinds", () => {
-    useNoBundledPlugins();
     const plugin = writeWidgetPlugin({
       id: "invalid-widget-kind",
       kind: "html",
@@ -113,24 +151,12 @@ describe("plugin dashboard declarations", () => {
       resourcePath: "/__openclaw__/invalid/app.js",
     });
 
-    const registry = loadFixture(plugin);
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-
-    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-    expect(record?.error).toContain('kind "html" is invalid or reserved');
-    expect(registry.boardWidgetContentKinds.size).toBe(0);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId: plugin.id,
-        code: "dashboard-declaration-invalid",
-      }),
-    );
+    expectRejected(plugin, 'kind "html" is invalid or reserved', "boardWidgetContentKinds");
   });
 
   it.each(["/mcp-app-sandbox", "/renderer/../app.js"])(
     "rejects an unservable public resource path %s",
     (resourcePath) => {
-      useNoBundledPlugins();
       const plugin = writeWidgetPlugin({
         id: "invalid-renderer-path",
         surface: "renderer",
@@ -138,11 +164,7 @@ describe("plugin dashboard declarations", () => {
         publicReader: true,
       });
 
-      const registry = loadFixture(plugin);
-      const record = registry.plugins.find((entry) => entry.id === plugin.id);
-      expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-      expect(record?.error).toContain("resource path");
-      expect(registry.boardWidgetContentKinds.size).toBe(0);
+      expectRejected(plugin, "resource path", "boardWidgetContentKinds", false);
     },
   );
 
@@ -154,7 +176,6 @@ describe("plugin dashboard declarations", () => {
   ])(
     "enforces resource path ownership (firstPublic=$firstPublic, secondPublic=$secondPublic, sharedPath=$sharedPath)",
     ({ firstPublic, secondPublic, sharedPath }) => {
-      useNoBundledPlugins();
       const createRenderer = (isPublic: boolean, kind: "first" | "second") => {
         const resourceName = kind === "first" || sharedPath ? "shared" : "other";
         return writeWidgetPlugin({
@@ -182,126 +203,55 @@ describe("plugin dashboard declarations", () => {
   );
 
   it("rejects gateway methods owned outside the declaring plugin", () => {
-    useNoBundledPlugins();
-    const plugin = writeDashboardPlugin(
-      "dashboard-foreign-method",
-      { "dashboard-foreign-method.read": "operator.read" },
-      {
-        dataBindings: [{ id: "foreign", method: "sessions.list", description: "Foreign method" }],
-      },
+    const plugin = writeCapabilityPlugin(
+      "foreign",
+      "dataBindings",
+      "foreign",
+      "sessions.list",
+      "operator.read",
+      "foreign.read",
     );
-
-    const registry = loadFixture(plugin);
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-    expect(record?.error).toContain("must be registered by the declaring plugin");
-    expect(registry.dashboardDataBindings.size).toBe(0);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId: plugin.id,
-        code: "dashboard-declaration-invalid",
-      }),
-    );
+    expectRejected(plugin, "must be registered by the declaring plugin", "dashboardDataBindings");
   });
 
   it("rejects dashboard data bindings registered with the wrong scope", () => {
-    useNoBundledPlugins();
-    const plugin = writeDashboardPlugin(
-      "dashboard-wrong-scope",
-      { "dashboard-wrong-scope.read": "operator.write" },
-      {
-        dataBindings: [
-          {
-            id: "read",
-            method: "dashboard-wrong-scope.read",
-            description: "Wrong-scope method",
-          },
-        ],
-      },
+    const plugin = writeCapabilityPlugin(
+      "wrong-scope",
+      "dataBindings",
+      "read",
+      "wrong-scope.read",
+      "operator.write",
     );
-
-    const registry = loadFixture(plugin);
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-    expect(record?.error).toContain("must use operator.read, got operator.write");
-    expect(registry.dashboardDataBindings.size).toBe(0);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId: plugin.id,
-        code: "dashboard-declaration-invalid",
-      }),
-    );
+    expectRejected(plugin, "must use operator.read, got operator.write", "dashboardDataBindings");
   });
 
   it("rejects action verbs that collide with core data-binding grants", () => {
-    useNoBundledPlugins();
-    const plugin = writeDashboardPlugin(
-      "sessions",
-      { "sessions.pluginWrite": "operator.write" },
-      {
-        actionVerbs: [
-          {
-            id: "list",
-            method: "sessions.pluginWrite",
-            description: "Colliding write action",
-          },
-        ],
-      },
-    );
-
-    const registry = loadFixture(plugin);
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-    expect(record?.error).toContain('capability id "sessions.list" is reserved by core');
-    expect(registry.dashboardActionVerbs.size).toBe(0);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId: plugin.id,
-        code: "dashboard-declaration-invalid",
-      }),
+    const plugin = writeCapabilityPlugin("sessions", "actionVerbs", "list", "sessions.pluginWrite");
+    expectRejected(
+      plugin,
+      'capability id "sessions.list" is reserved by core',
+      "dashboardActionVerbs",
     );
   });
 
   it("keeps dotted plugin owners and literal escape markers distinct", () => {
-    useNoBundledPlugins();
-    const dataPlugin = writeDashboardPlugin(
+    const dataPlugin = writeCapabilityPlugin(
       "dashboard",
-      { "dashboard.items": "operator.read" },
-      {
-        dataBindings: [
-          {
-            id: "segmented.refresh",
-            method: "dashboard.items",
-            description: "Read segmented items",
-          },
-        ],
-      },
+      "dataBindings",
+      "segmented.refresh",
+      "dashboard.items",
     );
-    const actionPlugin = writeDashboardPlugin(
+    const actionPlugin = writeCapabilityPlugin(
       "dashboard.segmented",
-      { "dashboard.segmented.refresh": "operator.write" },
-      {
-        actionVerbs: [
-          {
-            id: "refresh",
-            method: "dashboard.segmented.refresh",
-            description: "Refresh segmented items",
-          },
-        ],
-      },
+      "actionVerbs",
+      "refresh",
+      "dashboard.segmented.refresh",
     );
-    const literalEscapePlugin = writeDashboardPlugin(
+    const literalEscapePlugin = writeCapabilityPlugin(
       "dashboard%2Esegmented",
-      { "dashboard.literal-escape.items": "operator.read" },
-      {
-        dataBindings: [
-          {
-            id: "refresh",
-            method: "dashboard.literal-escape.items",
-            description: "Read literal-escape items",
-          },
-        ],
-      },
+      "dataBindings",
+      "refresh",
+      "dashboard.literal-escape.items",
     );
 
     const registry = loadFixture(dataPlugin, actionPlugin, literalEscapePlugin);
@@ -313,16 +263,15 @@ describe("plugin dashboard declarations", () => {
   });
 
   it("publishes validated dashboard bindings and action verbs", () => {
-    useNoBundledPlugins();
     const plugin = writeDashboardPlugin(
-      "dashboard-valid",
-      { "dashboard-valid.items": "operator.read", "dashboard-valid.refresh": "operator.write" },
+      "valid",
+      { "valid.items": "operator.read", "valid.refresh": "operator.write" },
       {
-        dataBindings: [{ id: "items", method: "dashboard-valid.items", description: "List items" }],
+        dataBindings: [{ id: "items", method: "valid.items", description: "List items" }],
         actionVerbs: [
           {
             id: "refresh",
-            method: "dashboard-valid.refresh",
+            method: "valid.refresh",
             description: "Refresh items",
             paramShape: { type: "object", additionalProperties: false },
           },
@@ -332,13 +281,13 @@ describe("plugin dashboard declarations", () => {
 
     const registry = loadFixture(plugin);
     expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
-    expect(registry.dashboardDataBindings.get("dashboard-valid.items")).toMatchObject({
+    expect(registry.dashboardDataBindings.get("valid.items")).toMatchObject({
       pluginId: plugin.id,
-      method: "dashboard-valid.items",
+      method: "valid.items",
     });
-    expect(registry.dashboardActionVerbs.get("dashboard-valid.refresh")).toMatchObject({
+    expect(registry.dashboardActionVerbs.get("valid.refresh")).toMatchObject({
       pluginId: plugin.id,
-      method: "dashboard-valid.refresh",
+      method: "valid.refresh",
     });
   });
 });

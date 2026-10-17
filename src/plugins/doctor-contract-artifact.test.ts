@@ -15,6 +15,10 @@ import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function writeJson(root: string, filename: string, value: unknown): void {
+  fs.writeFileSync(path.join(root, filename), JSON.stringify(value));
+}
+
 function contract(marker: string, extension: string): string {
   const rules = JSON.stringify([{ path: ["doctor-fixture"], message: marker }]);
   const migrations = `[{ id: "fixture-state", label: "Fixture state", detectLegacyState() { return { preview: [${JSON.stringify(marker)}] }; }, migrateLegacyState() { return { changes: [${JSON.stringify(marker)}], warnings: [] }; } }]`;
@@ -92,99 +96,45 @@ describe("Doctor artifact hash and loading agreement", () => {
       }
     }
     // The same compiled bytes run from real source/dist locations. No host-mode override.
+    const source = "extensions/demo/doctor-contract-api.ts";
+    const built = "dist/extensions/demo/doctor-contract-api.js";
+    const staged = "dist-runtime/extensions/demo/doctor-contract-api.js";
+    const local = "extensions/demo/dist/doctor-contract-api.js";
     const rows = [
-      { name: "source host", mode: "source", expected: "extensions/demo/doctor-contract-api.ts" },
-      {
-        name: "built ESM",
-        extension: ".js",
-        expected: "dist/extensions/demo/doctor-contract-api.js",
-      },
-      {
-        name: "built MJS",
-        extension: ".mjs",
-        expected: "dist/extensions/demo/doctor-contract-api.mjs",
-      },
-      {
-        name: "built CJS",
-        extension: ".cjs",
-        expected: "dist/extensions/demo/doctor-contract-api.cjs",
-      },
-      {
-        name: "canonical replaces staging",
-        staging: true,
-        expected: "dist/extensions/demo/doctor-contract-api.js",
-      },
-      {
-        name: "staging link to canonical",
-        staging: true,
-        stagingSymlink: true,
-        expected: "dist/extensions/demo/doctor-contract-api.js",
-      },
+      { name: "source host", expected: source, mode: "source" },
+      { name: "built ESM", expected: built, extension: ".js" },
+      { name: "built MJS", expected: built.replace(".js", ".mjs"), extension: ".mjs" },
+      { name: "built CJS", expected: built.replace(".js", ".cjs"), extension: ".cjs" },
+      { name: "canonical replaces staging", expected: built, staging: true },
+      { name: "staging link to canonical", expected: built, staging: true, stagingSymlink: true },
       {
         name: "canonical directory link",
+        expected: built,
         staging: true,
         canonicalDirectorySymlink: true,
-        expected: "dist/extensions/demo/doctor-contract-api.js",
       },
       {
         name: "staging file and canonical directory links",
+        expected: built,
         staging: true,
         stagingSymlink: true,
         canonicalDirectorySymlink: true,
-        expected: "dist/extensions/demo/doctor-contract-api.js",
       },
-      {
-        name: "staging without canonical",
-        staging: true,
-        noCanonical: true,
-        expected: "dist-runtime/extensions/demo/doctor-contract-api.js",
-      },
+      { name: "staging without canonical", expected: staged, staging: true, noCanonical: true },
       {
         name: "partial canonical build",
+        expected: staged,
         staging: true,
         noCanonical: true,
         partialCanonical: true,
-        expected: "dist-runtime/extensions/demo/doctor-contract-api.js",
       },
-      {
-        name: "configured source",
-        sourcePreferred: true,
-        expected: "extensions/demo/doctor-contract-api.ts",
-      },
-      {
-        name: "local MTS order",
-        sourceExtension: ".mts",
-        local: true,
-        expected: "extensions/demo/dist/doctor-contract-api.js",
-      },
-      {
-        name: "source external",
-        bundledDist: false,
-        local: true,
-        expected: "dist/extensions/demo/doctor-contract-api.js",
-      },
-      {
-        name: "no root anchor",
-        bundledDist: false,
-        local: true,
-        noAnchor: true,
-        expected: "extensions/demo/dist/doctor-contract-api.js",
-      },
-      {
-        name: "external install",
-        origin: "global",
-        expected: "state/extensions/demo/doctor-contract-api.ts",
-      },
-      {
-        name: "missing emitted metadata",
-        noMetadata: true,
-        expected: "extensions/demo/doctor-contract-api.ts",
-      },
-      {
-        name: "ambiguous emitted format",
-        ambiguous: true,
-        expected: "extensions/demo/doctor-contract-api.ts",
-      },
+      { name: "configured source", expected: source, sourcePreferred: true },
+      { name: "local MTS order", expected: local, sourceExtension: ".mts", local: true },
+      { name: "source external", expected: built, bundledDist: false, local: true },
+      { name: "no root anchor", expected: local, bundledDist: false, local: true, noAnchor: true },
+      { name: "external install", expected: `state/${source}`, origin: "global" },
+      { name: "missing emitted metadata", expected: source, noMetadata: true },
+      { name: "ambiguous emitted format", expected: source, ambiguous: true },
     ];
     const fixtures = rows.map((row, ordinal) => {
       const fixtureRoot = path.join(root, `fixture-${ordinal}`);
@@ -209,22 +159,20 @@ describe("Doctor artifact hash and loading agreement", () => {
       ]) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(
-        path.join(pluginRoot, "package.json"),
-        JSON.stringify({ name: "doctor-fixture", type: "module", openclaw: packageManifest }),
-      );
+      writeJson(pluginRoot, "package.json", {
+        name: "doctor-fixture",
+        type: "module",
+        openclaw: packageManifest,
+      });
       fs.writeFileSync(
         path.join(pluginRoot, "index.ts"),
         'throw new Error("runtime must remain unloaded");\n',
       );
-      fs.writeFileSync(
-        path.join(pluginRoot, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "demo",
-          configSchema: { type: "object" },
-          doctorContract: { configRepair: true, stateMigrations: [{ id: "fixture-state" }] },
-        }),
-      );
+      writeJson(pluginRoot, "openclaw.plugin.json", {
+        id: "demo",
+        configSchema: { type: "object" },
+        doctorContract: { configRepair: true, stateMigrations: [{ id: "fixture-state" }] },
+      });
       const contents = new Map<string, string>();
       if (!row.noAnchor) {
         contents.set(
@@ -245,10 +193,10 @@ describe("Doctor artifact hash and loading agreement", () => {
             contract("staging", extension),
           );
         }
-        fs.writeFileSync(
-          path.join(stagingRoot, "package.json"),
-          JSON.stringify({ type: "module", openclaw: { extensions: [`./index${extension}`] } }),
-        );
+        writeJson(stagingRoot, "package.json", {
+          type: "module",
+          openclaw: { extensions: [`./index${extension}`] },
+        });
       }
       // A broader contract must never replace the selected Doctor basename.
       contents.set(`${relativePluginRoot}/contract-api.js`, contract("broad", ".js"));
@@ -271,15 +219,12 @@ describe("Doctor artifact hash and loading agreement", () => {
         );
       }
       if (!row.noMetadata && !row.noCanonical) {
-        fs.writeFileSync(
-          path.join(builtRoot, "package.json"),
-          JSON.stringify({
-            type: "module",
-            openclaw: {
-              extensions: row.ambiguous ? ["./index.js", "./other.cjs"] : [`./index${extension}`],
-            },
-          }),
-        );
+        writeJson(builtRoot, "package.json", {
+          type: "module",
+          openclaw: {
+            extensions: row.ambiguous ? ["./index.js", "./other.cjs"] : [`./index${extension}`],
+          },
+        });
       }
       if (row.canonicalDirectorySymlink) {
         const outputRoot = path.join(fixtureRoot, "outputs");

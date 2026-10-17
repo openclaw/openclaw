@@ -16,41 +16,66 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
+function makeDir(prefix: string) {
+  return fs.realpathSync(makeTrackedTempDir(prefix, tempDirs));
+}
+
+function writePlugin(root: string, id: string, extension: string) {
+  fs.mkdirSync(root, { recursive: true });
+  const files = {
+    "package.json": JSON.stringify({
+      name: `@openclaw/${id}`,
+      openclaw: { extensions: [`./index.${extension}`] },
+    }),
+    "openclaw.plugin.json": JSON.stringify({ id, configSchema: { type: "object" } }),
+    [`index.${extension}`]: "export default {};\n",
+  };
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(root, name), content);
+  }
+}
+
+function aliasPath(root: string, stateDir: string, alias: string) {
+  const selected = alias.startsWith("symlink") ? path.join(stateDir, "linked-plugin") : root;
+  if (selected !== root) {
+    fs.symlinkSync(root, selected, process.platform === "win32" ? "junction" : "dir");
+  }
+  return alias.endsWith("directory") ? selected : path.join(selected, "index.ts");
+}
+
+function discoveryEnv(stateDir: string, bundledDir: string | undefined, trust = "0") {
+  return {
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_DEV_SOURCE_ROOT: checkout,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: trust,
+  };
+}
+
+function registryFor(params: Parameters<typeof discoverOpenClawPlugins>[0]) {
+  const discovery = discoverOpenClawPlugins(params);
+  const registry = loadPluginManifestRegistryCore({ ...params, candidates: discovery.candidates });
+  return { discovery, registry };
+}
+
 describe("running checkout discovery", () => {
   it.each(["default", "source"])(
     "selects the checkout %s tree over a tracked local copy without trusting unrelated plugins",
     (tree) => {
-      const stateDir = fs.realpathSync(makeTrackedTempDir("openclaw-checkout-shadow", tempDirs));
+      const stateDir = makeDir("openclaw-checkout-shadow");
       const installRecords = Object.fromEntries(
         ["codex", "diffs", "unrelated"].map((id) => {
           const pluginDir = path.join(stateDir, "extensions", id);
-          fs.mkdirSync(pluginDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(pluginDir, "package.json"),
-            JSON.stringify({ name: `@openclaw/${id}`, openclaw: { extensions: ["./index.js"] } }),
-          );
-          fs.writeFileSync(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({ id, configSchema: { type: "object" } }),
-          );
-          fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
+          writePlugin(pluginDir, id, "js");
           return [id, { source: "path" as const, installPath: pluginDir, sourcePath: pluginDir }];
         }),
       );
-      const env = {
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_DEV_SOURCE_ROOT: checkout,
-        OPENCLAW_BUNDLED_PLUGINS_DIR:
-          tree === "source" ? path.join(checkout, "extensions") : undefined,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "0",
-      };
+      const env = discoveryEnv(
+        stateDir,
+        tree === "source" ? path.join(checkout, "extensions") : undefined,
+      );
       withPluginCache(createPluginCache(), () => {
-        const discovery = discoverOpenClawPlugins({ env, installRecords });
-        const registry = loadPluginManifestRegistryCore({
-          env,
-          candidates: discovery.candidates,
-          installRecords,
-        });
+        const { registry } = registryFor({ env, installRecords });
         const expectedRoot = path.join(resolveBundledPluginsDir(env)!, "codex");
         const selected = registry.plugins.find((plugin) => plugin.id === "codex");
         expect(selected).toMatchObject({
@@ -96,31 +121,15 @@ describe("running checkout discovery", () => {
   it.each(["direct file", "symlink file", "direct directory", "symlink directory"])(
     "retains host provenance for a %s configured alias of a bundled entry",
     (alias) => {
-      const stateDir = fs.realpathSync(makeTrackedTempDir("openclaw-checkout", tempDirs));
+      const stateDir = makeDir("openclaw-checkout");
       const sourceRoot = path.join(checkout, "extensions");
       const pluginRoot = path.join(sourceRoot, "codex");
-      let selectedRoot = pluginRoot;
-      if (alias.startsWith("symlink")) {
-        selectedRoot = path.join(stateDir, "linked-plugin");
-        fs.symlinkSync(pluginRoot, selectedRoot, process.platform === "win32" ? "junction" : "dir");
-      }
-      const env = {
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: sourceRoot,
-        OPENCLAW_DEV_SOURCE_ROOT: checkout,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "0",
-      };
+      const selectedPath = aliasPath(pluginRoot, stateDir, alias);
+      const env = discoveryEnv(stateDir, sourceRoot);
       withPluginCache(createPluginCache(), () => {
-        const discovery = discoverOpenClawPlugins({
+        const { registry } = registryFor({
           env,
-          extraPaths: [
-            alias.endsWith("directory") ? selectedRoot : path.join(selectedRoot, "index.ts"),
-          ],
-          installRecords: {},
-        });
-        const registry = loadPluginManifestRegistryCore({
-          env,
-          candidates: discovery.candidates,
+          extraPaths: [selectedPath],
           installRecords: {},
         });
         // Never keyed on whether the checkout happens to be built: the alias must
@@ -154,28 +163,16 @@ describe("host provenance across bundled build states", () => {
   )(
     "keeps $selection $alias aliases bundled in a $label bundled tree",
     ({ built, alias, selection }) => {
-      const stateDir = fs.realpathSync(makeTrackedTempDir("openclaw-host-provenance", tempDirs));
-      const bundledDir = fs.realpathSync(makeTrackedTempDir("openclaw-bundled-tree", tempDirs));
+      const stateDir = makeDir("openclaw-host-provenance");
+      const bundledDir = makeDir("openclaw-bundled-tree");
       const pluginRoot = path.join(bundledDir, "hosted");
-      fs.mkdirSync(pluginRoot, { recursive: true });
-      fs.writeFileSync(
-        path.join(pluginRoot, "package.json"),
-        JSON.stringify({ name: "@openclaw/hosted", openclaw: { extensions: ["./index.ts"] } }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "openclaw.plugin.json"),
-        JSON.stringify({ id: "hosted", configSchema: { type: "object" } }),
-      );
-      fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export default {};\n");
+      writePlugin(pluginRoot, "hosted", "ts");
       if (built) {
         fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
         fs.writeFileSync(path.join(pluginRoot, "dist", "index.js"), "export default {};\n");
       }
-      let aliasRoot = pluginRoot;
-      if (alias.startsWith("symlink")) {
-        aliasRoot = path.join(stateDir, "linked-hosted");
-        fs.symlinkSync(pluginRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
-      }
+      const selectedPath = aliasPath(pluginRoot, stateDir, alias);
+      const aliasRoot = alias.endsWith("directory") ? selectedPath : path.dirname(selectedPath);
       const env = {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
@@ -184,19 +181,14 @@ describe("host provenance across bundled build states", () => {
       withPluginCache(createPluginCache(), () => {
         const discovery = discoverOpenClawPlugins({
           env,
-          extraPaths:
-            selection === "configured"
-              ? [alias.endsWith("directory") ? aliasRoot : path.join(aliasRoot, "index.ts")]
-              : [],
+          extraPaths: selection === "configured" ? [selectedPath] : [],
           installRecords:
             selection === "installed"
               ? {
                   hosted: {
                     source: "path",
                     sourcePath: aliasRoot,
-                    installPath: alias.endsWith("directory")
-                      ? aliasRoot
-                      : path.join(aliasRoot, "index.ts"),
+                    installPath: selectedPath,
                   },
                 }
               : {},

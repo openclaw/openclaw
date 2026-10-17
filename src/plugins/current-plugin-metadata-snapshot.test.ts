@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -36,6 +35,14 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearCurrentPluginMetadataSnapshot();
+  resetPluginRuntimeStateForTest();
+});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSnapshot(
   params: {
@@ -74,6 +81,19 @@ function createSnapshot(
   };
 }
 
+function expectSnapshot(
+  expected: PluginMetadataSnapshot | undefined,
+  params: Parameters<typeof getCurrentPluginMetadataSnapshot>[0] = {},
+) {
+  expect(getCurrentPluginMetadataSnapshot(params)).toBe(expected);
+}
+
+function scopedFixture(id: string) {
+  const config = { plugins: { allow: [id] } };
+  const workspaceDir = `/workspace/${id}`;
+  return { config, workspaceDir, snapshot: createSnapshot({ config, workspaceDir }) };
+}
+
 describe("current plugin metadata snapshot", () => {
   it("carries prepared metadata and registry across nested agent workspaces", async () => {
     const config = { plugins: { allow: ["scoped"] } };
@@ -91,44 +111,29 @@ describe("current plugin metadata snapshot", () => {
       installedPluginIndexPolicy,
       "resolveInstalledPluginIndexPolicyHash",
     );
-    try {
-      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
-        await Promise.resolve();
-        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir })).toBe(
-          metadataSnapshot,
-        );
-        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: pluginWorkspaceDir })).toBe(
-          metadataSnapshot,
-        );
-        expect(
-          getCurrentPluginMetadataSnapshot({
-            config: { plugins: { allow: ["derived-run-policy"] } },
-            env: { OPENCLAW_BUNDLED_PLUGINS_DIR: "/plugins/redirected-run" },
-            workspaceDir: agentWorkspaceDir,
-          }),
-        ).toBe(metadataSnapshot);
-        expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(true);
-        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+    await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
+      await Promise.resolve();
+      expectSnapshot(metadataSnapshot, { config, workspaceDir: agentWorkspaceDir });
+      expectSnapshot(metadataSnapshot, { config, workspaceDir: pluginWorkspaceDir });
+      expectSnapshot(metadataSnapshot, {
+        config: { plugins: { allow: ["derived-run-policy"] } },
+        env: { OPENCLAW_BUNDLED_PLUGINS_DIR: "/plugins/redirected-run" },
+        workspaceDir: agentWorkspaceDir,
       });
+      expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(true);
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+    });
 
-      expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(false);
-      expect(
-        getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir }),
-      ).toBeUndefined();
-      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-      expect(controlPlaneFingerprint).not.toHaveBeenCalled();
-      expect(policyHash).not.toHaveBeenCalled();
-    } finally {
-      controlPlaneFingerprint.mockRestore();
-      policyHash.mockRestore();
-    }
+    expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(false);
+    expectSnapshot(undefined, { config, workspaceDir: agentWorkspaceDir });
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    expect(controlPlaneFingerprint).not.toHaveBeenCalled();
+    expect(policyHash).not.toHaveBeenCalled();
   });
 
   it("isolates a registry-less nested generation and restores the outer generation on rejection", async () => {
-    const outerConfig = { plugins: { allow: ["outer"] } };
-    const innerConfig = { plugins: { allow: ["inner"] } };
-    const outerSnapshot = createSnapshot({ config: outerConfig, workspaceDir: "/workspace/outer" });
-    const innerSnapshot = createSnapshot({ config: innerConfig, workspaceDir: "/workspace/inner" });
+    const outer = scopedFixture("outer");
+    const inner = scopedFixture("inner");
     const outerRegistry = createEmptyPluginRegistry();
     outerRegistry.providers.push({
       pluginId: "outer",
@@ -149,70 +154,52 @@ describe("current plugin metadata snapshot", () => {
     ];
     setActivePluginRegistry(outerRegistry, "outer-generation", "default", "/workspace/outer");
 
-    try {
-      await withPluginRuntimeGenerationScope(
-        {
-          metadataSnapshot: outerSnapshot,
-          pluginRegistry: outerRegistry,
-        },
-        async () => {
-          await expect(
-            withPluginRuntimeGenerationScope(
-              {
-                metadataSnapshot: innerSnapshot,
-              },
-              async () => {
-                await Promise.resolve();
-                expect(
-                  getCurrentPluginMetadataSnapshot({
-                    config: innerConfig,
-                    workspaceDir: "/workspace/inner",
-                  }),
-                ).toBe(innerSnapshot);
-                expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).not.toBe(
-                  outerRegistry,
-                );
-                expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.providers).toEqual(
-                  [],
-                );
-                expect(resolveProviderRuntimePlugin({ provider: "outer" })).toBeUndefined();
-                expect(
-                  classifyProviderFailoverSignalWithPlugin({
-                    provider: "outer",
-                    context: { provider: "outer", errorMessage: "fixture failure" },
-                  }),
-                ).toBeUndefined();
-                expect(getGlobalHookRunnerRegistry()?.trustedToolPolicies).toEqual([]);
-                throw new Error("inner generation failed");
-              },
-            ),
-          ).rejects.toThrow("inner generation failed");
+    await withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: outer.snapshot,
+        pluginRegistry: outerRegistry,
+      },
+      async () => {
+        await expect(
+          withPluginRuntimeGenerationScope(
+            {
+              metadataSnapshot: inner.snapshot,
+            },
+            async () => {
+              await Promise.resolve();
+              expectSnapshot(inner.snapshot, inner);
+              expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).not.toBe(outerRegistry);
+              expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.providers).toEqual([]);
+              expect(resolveProviderRuntimePlugin({ provider: "outer" })).toBeUndefined();
+              expect(
+                classifyProviderFailoverSignalWithPlugin({
+                  provider: "outer",
+                  context: { provider: "outer", errorMessage: "fixture failure" },
+                }),
+              ).toBeUndefined();
+              expect(getGlobalHookRunnerRegistry()?.trustedToolPolicies).toEqual([]);
+              throw new Error("inner generation failed");
+            },
+          ),
+        ).rejects.toThrow("inner generation failed");
 
-          expect(
-            getCurrentPluginMetadataSnapshot({
-              config: outerConfig,
-              workspaceDir: "/workspace/outer",
-            }),
-          ).toBe(outerSnapshot);
-          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(outerRegistry);
-          expect(resolveProviderRuntimePlugin({ provider: "outer" })?.id).toBe("outer");
-          expect(
-            classifyProviderFailoverSignalWithPlugin({
-              provider: "outer",
-              context: { provider: "outer", errorMessage: "fixture failure" },
-            }),
-          ).toBe("billing");
-          expect(
-            getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
-          ).toEqual(["outer-policy"]);
-        },
-      );
+        expectSnapshot(outer.snapshot, outer);
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(outerRegistry);
+        expect(resolveProviderRuntimePlugin({ provider: "outer" })?.id).toBe("outer");
+        expect(
+          classifyProviderFailoverSignalWithPlugin({
+            provider: "outer",
+            context: { provider: "outer", errorMessage: "fixture failure" },
+          }),
+        ).toBe("billing");
+        expect(
+          getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
+        ).toEqual(["outer-policy"]);
+      },
+    );
 
-      expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
-      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
+    expectSnapshot(undefined);
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
   it("lets configless nested readers inherit explicit owner discovery context", () => {
@@ -228,92 +215,56 @@ describe("current plugin metadata snapshot", () => {
     withPluginMetadataSnapshotScope(
       snapshot,
       () => {
-        expect(
-          getCurrentPluginMetadataSnapshot({
-            requireDefaultDiscoveryContext: true,
-          }),
-        ).toBe(snapshot);
-        expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+        expectSnapshot(snapshot, { requireDefaultDiscoveryContext: true });
+        expectSnapshot(snapshot, { config });
       },
       { config },
     );
 
-    expect(
-      getCurrentPluginMetadataSnapshot({
-        allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
-      }),
-    ).toBeUndefined();
+    expectSnapshot(undefined, {
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
   });
 
   it("isolates concurrent owner-prepared metadata scopes", async () => {
-    const firstConfig = { plugins: { allow: ["first"] } };
-    const secondConfig = { plugins: { allow: ["second"] } };
-    const first = createSnapshot({ config: firstConfig, workspaceDir: "/workspace/first" });
-    const second = createSnapshot({ config: secondConfig, workspaceDir: "/workspace/second" });
-
-    const [firstResult, secondResult] = await Promise.all([
-      withPluginMetadataSnapshotScope(
-        first,
-        async () => {
-          await Promise.resolve();
-          return getCurrentPluginMetadataSnapshot({
-            config: firstConfig,
-            workspaceDir: "/workspace/first",
-          });
-        },
-        { config: firstConfig },
+    const fixtures = [scopedFixture("first"), scopedFixture("second")];
+    const results = await Promise.all(
+      fixtures.map((fixture) =>
+        withPluginMetadataSnapshotScope(
+          fixture.snapshot,
+          async () => {
+            await Promise.resolve();
+            return getCurrentPluginMetadataSnapshot(fixture);
+          },
+          { config: fixture.config },
+        ),
       ),
-      withPluginMetadataSnapshotScope(
-        second,
-        async () => {
-          await Promise.resolve();
-          return getCurrentPluginMetadataSnapshot({
-            config: secondConfig,
-            workspaceDir: "/workspace/second",
-          });
-        },
-        { config: secondConfig },
-      ),
-    ]);
-
-    expect(firstResult).toBe(first);
-    expect(secondResult).toBe(second);
+    );
+    results.forEach((result, index) => expect(result).toBe(fixtures[index]?.snapshot));
   });
 
   it("falls through nested scopes and restores the parent after rejection", async () => {
-    const outerConfig = { plugins: { allow: ["outer"] } };
-    const innerConfig = { plugins: { allow: ["inner"] } };
-    const outer = createSnapshot({ config: outerConfig, workspaceDir: "/workspace/outer" });
-    const inner = createSnapshot({ config: innerConfig, workspaceDir: "/workspace/inner" });
+    const outer = scopedFixture("outer");
+    const inner = scopedFixture("inner");
     setCurrentPluginMetadataSnapshot(undefined);
 
     await withPluginMetadataSnapshotScope(
-      outer,
+      outer.snapshot,
       async () => {
         await expect(
           withPluginMetadataSnapshotScope(
-            inner,
+            inner.snapshot,
             async () => {
-              expect(
-                getCurrentPluginMetadataSnapshot({
-                  config: outerConfig,
-                  workspaceDir: "/workspace/outer",
-                }),
-              ).toBe(outer);
+              expectSnapshot(outer.snapshot, outer);
               throw new Error("scope failed");
             },
-            { config: innerConfig },
+            { config: inner.config },
           ),
         ).rejects.toThrow("scope failed");
-        expect(
-          getCurrentPluginMetadataSnapshot({
-            config: outerConfig,
-            workspaceDir: "/workspace/outer",
-          }),
-        ).toBe(outer);
+        expectSnapshot(outer.snapshot, outer);
       },
-      { config: outerConfig },
+      { config: outer.config },
     );
   });
 
@@ -328,8 +279,8 @@ describe("current plugin metadata snapshot", () => {
       withPluginMetadataSnapshotScope(
         snapshot,
         () => {
-          expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
-          expect(getCurrentPluginMetadataSnapshot({ config: compatible })).toBe(snapshot);
+          expectSnapshot(snapshot, { config });
+          expectSnapshot(snapshot, { config: compatible });
         },
         { config, compatibleConfigs: [compatible] },
       );
@@ -363,7 +314,7 @@ describe("current plugin metadata snapshot", () => {
     withPluginMetadataSnapshotScope(
       snapshot,
       () => {
-        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+        expectSnapshot(undefined, { config, workspaceDir });
       },
       { config },
     );
@@ -375,20 +326,16 @@ describe("current plugin metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot(snapshot, { config });
     const launchCwd = process.cwd();
     const cwd = vi.spyOn(process, "cwd");
-    try {
-      cwd.mockImplementation(() => {
-        throw new Error("ENOENT: uv_cwd");
-      });
-      expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
-      withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
-        expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
-      });
+    cwd.mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+    expectSnapshot(undefined, { config });
+    withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
+      expectSnapshot(snapshot, { config });
+    });
 
-      cwd.mockReturnValue(launchCwd);
-      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
-    } finally {
-      cwd.mockRestore();
-    }
+    cwd.mockReturnValue(launchCwd);
+    expectSnapshot(snapshot, { config });
   });
 
   it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
@@ -396,64 +343,45 @@ describe("current plugin metadata snapshot", () => {
     const snapshot = createSnapshot({ config, normalizationAlias: "scoped" });
     setCurrentPluginMetadataSnapshot(snapshot, { config });
 
-    try {
-      expect(
-        getCurrentPluginMetadataSnapshot({
-          allowWorkspaceScopedSnapshot: true,
-          requireDefaultDiscoveryContext: true,
-        }),
-      ).toBeUndefined();
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+    expectSnapshot(undefined, {
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
 
-      withPluginMetadataSnapshotScope(createSnapshot({ normalizationAlias: "temporary" }), () => {
-        expect(getCurrentPluginMetadataSnapshot()).toBeDefined();
-        expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
-      });
+    withPluginMetadataSnapshotScope(createSnapshot({ normalizationAlias: "temporary" }), () => {
+      expect(getCurrentPluginMetadataSnapshot()).toBeDefined();
       expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
-    } finally {
-      clearCurrentPluginMetadataSnapshot();
-    }
+    });
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
   });
 
   it.each(["supplied", "ambient"] as const)(
     "rejects configless default-discovery reuse when %s bundled-directory trust changes",
     (trustSource) => {
-      const overrideRoot = fs.realpathSync(
-        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-metadata-bundled-trust-")),
-      );
-      const originalTrust = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      const overrideRoot = fs.realpathSync(tempDirs.make("openclaw-metadata-bundled-trust-"));
       const env: NodeJS.ProcessEnv = {
         VITEST: "true",
         OPENCLAW_BUNDLED_PLUGINS_DIR: overrideRoot,
       };
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", undefined);
 
-      try {
-        const snapshot = createSnapshot();
-        const originalRoot = resolveBundledPluginsDir(env);
-        expect(originalRoot).toBeDefined();
-        expect(originalRoot).not.toBe(overrideRoot);
-        setCurrentPluginMetadataSnapshot(snapshot, { env });
-        const request = { env, requireDefaultDiscoveryContext: true };
-        expect(getCurrentPluginMetadataSnapshot(request)).toBe(snapshot);
+      const snapshot = createSnapshot();
+      const originalRoot = resolveBundledPluginsDir(env);
+      expect(originalRoot).toBeDefined();
+      expect(originalRoot).not.toBe(overrideRoot);
+      setCurrentPluginMetadataSnapshot(snapshot, { env });
+      const request = { env, requireDefaultDiscoveryContext: true };
+      expectSnapshot(snapshot, request);
 
-        withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
-          const trustEnv = trustSource === "supplied" ? env : process.env;
-          trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-          expect(resolveBundledPluginsDir(env)).toBe(overrideRoot);
-          expect(getCurrentPluginMetadataSnapshot(request)).toBe(snapshot);
-        });
+      withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
+        const trustEnv = trustSource === "supplied" ? env : process.env;
+        trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+        expect(resolveBundledPluginsDir(env)).toBe(overrideRoot);
+        expectSnapshot(snapshot, request);
+      });
 
-        expect(getCurrentPluginMetadataSnapshot(request)).toBeUndefined();
-      } finally {
-        clearCurrentPluginMetadataSnapshot();
-        if (originalTrust === undefined) {
-          delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-        } else {
-          process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrust;
-        }
-        fs.rmSync(overrideRoot, { recursive: true, force: true });
-      }
+      expectSnapshot(undefined, request);
     },
   );
 
@@ -462,15 +390,15 @@ describe("current plugin metadata snapshot", () => {
     const unscoped = createSnapshot({ config });
     setCurrentPluginMetadataSnapshot(unscoped, { config });
 
-    expect(getCurrentPluginMetadataSnapshot({ config, pluginIds: ["demo"] })).toBeUndefined();
+    expectSnapshot(undefined, { config, pluginIds: ["demo"] });
 
     const scoped = createSnapshot({ config, pluginIds: ["other", "demo"] });
     setCurrentPluginMetadataSnapshot(scoped, { config });
 
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
-    expect(getCurrentPluginMetadataSnapshot({ config, allowScopedSnapshot: true })).toBe(scoped);
-    expect(getCurrentPluginMetadataSnapshot({ config, pluginIds: ["demo", "other"] })).toBe(scoped);
-    expect(getCurrentPluginMetadataSnapshot({ config, pluginIds: ["demo"] })).toBeUndefined();
+    expectSnapshot(undefined, { config });
+    expectSnapshot(scoped, { config, allowScopedSnapshot: true });
+    expectSnapshot(scoped, { config, pluginIds: ["demo", "other"] });
+    expectSnapshot(undefined, { config, pluginIds: ["demo"] });
   });
 
   it("requires exact plugin scope when the caller derives scope from the current index", () => {
@@ -481,12 +409,12 @@ describe("current plugin metadata snapshot", () => {
     const unscoped = createSnapshot({ config });
     setCurrentPluginMetadataSnapshot(unscoped, { config });
 
-    expect(getCurrentPluginMetadataSnapshot({ config, pluginIdScope })).toBeUndefined();
+    expectSnapshot(undefined, { config, pluginIdScope });
 
     const scoped = createSnapshot({ config, pluginIds: ["other", "demo"] });
     setCurrentPluginMetadataSnapshot(scoped, { config });
 
-    expect(getCurrentPluginMetadataSnapshot({ config, pluginIdScope })).toBe(scoped);
+    expectSnapshot(scoped, { config, pluginIdScope });
   });
 
   it("keeps ordinary metadata within its captured pinned install roots", () => {
@@ -500,13 +428,13 @@ describe("current plugin metadata snapshot", () => {
     };
     withPluginInstallRoots(roots, () => {
       setCurrentPluginMetadataSnapshot(snapshot, { config });
-      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+      expectSnapshot(snapshot, { config });
       withPluginInstallRoots({ ...roots, npmDir: "/plugins/replacement/npm" }, () => {
-        expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+        expectSnapshot(undefined, { config });
       });
-      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+      expectSnapshot(snapshot, { config });
     });
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    expectSnapshot(undefined, { config });
   });
 
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
@@ -518,15 +446,15 @@ describe("current plugin metadata snapshot", () => {
     const snapshot = createSnapshot({ config: sourceConfig });
     setCurrentPluginMetadataSnapshot(snapshot, { config: autoEnabledConfig });
 
-    expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig })).toBe(snapshot);
-    expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
+    expectSnapshot(snapshot, { config: sourceConfig });
+    expectSnapshot(undefined, { config: autoEnabledConfig });
   });
 
   it("clearPluginMetadataLifecycleCaches preserves an admitted runtime generation", () => {
     const snapshot = createSnapshot();
     withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
       clearPluginMetadataLifecycleCaches();
-      expect(getCurrentPluginMetadataSnapshot()).toBe(snapshot);
+      expectSnapshot(snapshot);
     });
   });
 
@@ -535,22 +463,18 @@ describe("current plugin metadata snapshot", () => {
     const scoped = createSnapshot();
     const next = createSnapshot();
     setGatewayPluginMetadataSnapshot(original);
-    try {
-      await expect(
-        withPluginMetadataSnapshotScope(scoped, async () => {
-          await Promise.resolve();
-          runOutsidePluginMetadataSnapshotScope(() => setGatewayPluginMetadataSnapshot(next));
-          expect(getCurrentPluginMetadataSnapshot()).toBe(scoped);
-          expect(
-            runOutsidePluginMetadataSnapshotScope(() => getCurrentPluginMetadataSnapshot()),
-          ).toBe(next);
-          throw new Error("scoped operation failed");
-        }),
-      ).rejects.toThrow("scoped operation failed");
-      expect(getCurrentPluginMetadataSnapshot()).toBe(next);
-    } finally {
-      clearCurrentPluginMetadataSnapshot();
-    }
+    await expect(
+      withPluginMetadataSnapshotScope(scoped, async () => {
+        await Promise.resolve();
+        runOutsidePluginMetadataSnapshotScope(() => setGatewayPluginMetadataSnapshot(next));
+        expectSnapshot(scoped);
+        expect(
+          runOutsidePluginMetadataSnapshotScope(() => getCurrentPluginMetadataSnapshot()),
+        ).toBe(next);
+        throw new Error("scoped operation failed");
+      }),
+    ).rejects.toThrow("scoped operation failed");
+    expectSnapshot(next);
   });
 
   it("publishes prepared model policies without enumerating declarations", () => {
@@ -580,36 +504,28 @@ describe("current plugin metadata snapshot", () => {
     } as NodeJS.ProcessEnv;
     enumerate.mockClear();
 
-    try {
-      setCurrentPluginMetadataSnapshot(original, { env });
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
+    setCurrentPluginMetadataSnapshot(original, { env });
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
 
-      const publishTemporary = prepareGatewayPluginMetadataSnapshotPublication(temporary);
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
-      publishTemporary();
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
-      const publishEmpty = prepareGatewayPluginMetadataSnapshotPublication(empty);
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
-      publishEmpty();
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
-      clearCurrentPluginMetadataSnapshot();
-      expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
-      expect(enumerate).not.toHaveBeenCalled();
-    } finally {
-      clearCurrentPluginMetadataSnapshot();
-    }
+    const publishTemporary = prepareGatewayPluginMetadataSnapshotPublication(temporary);
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("original");
+    publishTemporary();
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+    const publishEmpty = prepareGatewayPluginMetadataSnapshotPublication(empty);
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("temporary");
+    publishEmpty();
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+    clearCurrentPluginMetadataSnapshot();
+    expect(normalizeConfiguredProviderCatalogModelId("fixture", "raw")).toBe("raw");
+    expect(enumerate).not.toHaveBeenCalled();
   });
 
   it("clears the current snapshot when the persisted installed index changes", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-metadata-"));
-    try {
-      setCurrentPluginMetadataSnapshot(createSnapshot());
+    const tempDir = tempDirs.make("openclaw-plugin-metadata-");
+    setCurrentPluginMetadataSnapshot(createSnapshot());
 
-      await writePersistedInstalledPluginIndex(createSnapshot().index, { stateDir: tempDir });
+    await writePersistedInstalledPluginIndex(createSnapshot().index, { stateDir: tempDir });
 
-      expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expectSnapshot(undefined);
   });
 });
