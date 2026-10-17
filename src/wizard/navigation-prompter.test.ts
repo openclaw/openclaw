@@ -1,4 +1,4 @@
-// Prompt navigation tests cover setup history replay and forward acceptance.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
@@ -26,12 +26,8 @@ function scriptedSelect(...steps: Array<[string, string | WizardNavigationError]
   }) as unknown as WizardPrompter["select"];
 }
 
-function selectParamsAt(select: ReturnType<typeof vi.fn>, index: number): WizardSelectParams {
-  const params = select.mock.calls[index]?.[0];
-  if (!params || typeof params !== "object") {
-    throw new Error(`missing select call ${index}`);
-  }
-  return params as WizardSelectParams;
+function selectParamsAt(select: WizardPrompter["select"], index: number) {
+  return expectDefined(vi.mocked(select).mock.calls[index]?.[0], `missing select call ${index}`);
 }
 
 describe("runWizardWithPromptNavigation", () => {
@@ -51,7 +47,7 @@ describe("runWizardWithPromptNavigation", () => {
     });
     expect(result).toEqual({ first: "beta", second: "two" });
     expect(select).toHaveBeenCalledTimes(4);
-    expect([2, 3].map((index) => selectParamsAt(vi.mocked(select), index).navigation)).toEqual([
+    expect([2, 3].map((index) => selectParamsAt(select, index).navigation)).toEqual([
       { canGoBack: false, canGoForward: true },
       { canGoBack: true, canGoForward: false },
     ]);
@@ -78,7 +74,7 @@ describe("runWizardWithPromptNavigation", () => {
     });
     expect(result).toEqual({ first: "alpha", second: "two", third: "final" });
     expect(select).toHaveBeenCalledTimes(5);
-    const secondReplayParams = selectParamsAt(vi.mocked(select), 3);
+    const secondReplayParams = selectParamsAt(select, 3);
     expect(secondReplayParams).toMatchObject({
       message: "Second",
       initialValue: "two",
@@ -92,14 +88,7 @@ describe("runWizardWithPromptNavigation", () => {
   });
 
   it("does not cache sensitive text answers for forward navigation", async () => {
-    let thirdPromptCalls = 0;
-    const select = vi.fn(async () => {
-      thirdPromptCalls++;
-      if (thirdPromptCalls === 1) {
-        throw new WizardNavigationError("back");
-      }
-      return "done";
-    }) as unknown as WizardPrompter["select"];
+    const select = scriptedSelect(["Done", new WizardNavigationError("back")], ["Done", "done"]);
     const text = vi
       .fn<WizardPrompter["text"]>()
       .mockResolvedValueOnce("secret-one")
@@ -133,7 +122,7 @@ describe("runWizardWithPromptNavigation", () => {
       }),
     ).rejects.toMatchObject({ direction: "back" });
     expect(select).toHaveBeenCalledTimes(2);
-    expect(selectParamsAt(vi.mocked(select), 1).navigation).toEqual({
+    expect(selectParamsAt(select, 1).navigation).toEqual({
       canGoBack: false,
       canGoForward: false,
     });
@@ -155,7 +144,7 @@ describe("runWizardWithPromptNavigationScope", () => {
       });
     });
     expect(outcome).toEqual({ status: "back" });
-    expect(selectParamsAt(vi.mocked(select), 0).navigation).toEqual({
+    expect(selectParamsAt(select, 0).navigation).toEqual({
       canGoBack: true,
       canGoForward: false,
     });
