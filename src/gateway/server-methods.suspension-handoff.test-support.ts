@@ -31,17 +31,43 @@ function expectFailure(respond: unknown, fields: Record<string, unknown>) {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
 }
 
+function expectHandoff(host: ReturnType<typeof createGatewayHostLifecycle>, value: boolean) {
+  expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
+    ok: true,
+    value,
+  });
+}
+
+function createHost(options: Partial<Parameters<typeof createGatewayHostLifecycle>[0]> = {}) {
+  return createGatewayHostLifecycle({
+    processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
+    isCurrent: () => true,
+    isServing: () => true,
+    acceptStop: () => {},
+    ...options,
+  });
+}
+
+function prepare(
+  requestId: string,
+  options: Partial<Parameters<typeof prepareGatewaySuspend>[0]> = {},
+) {
+  return prepareGatewaySuspend({
+    requestId,
+    pauseScheduling: () => {},
+    resumeScheduling: () => {},
+    ...options,
+  });
+}
+
 /** Register host handoff contracts under the caller's shared admission reset hooks. */
 export function registerSuspensionHandoffLifecycleTests() {
   it.each(["resume", "expiry", "replacement"] as const)(
     "reports held custody immediately and observes the lease after %s",
     async (change) => {
       vi.useFakeTimers();
-      const prepared = prepareGatewaySuspend({
-        requestId: "settling-writes",
+      const prepared = prepare("settling-writes", {
         drain: true,
-        pauseScheduling: () => {},
-        resumeScheduling: () => {},
         inspect: { getTerminalPersistence: () => 1 },
       });
       if (prepared.status !== "draining") {
@@ -51,17 +77,18 @@ export function registerSuspensionHandoffLifecycleTests() {
         if (change === "expiry") {
           await vi.advanceTimersByTimeAsync(40_000);
         }
-        const status = () =>
-          dispatch({
+        const status = async () => {
+          const result = dispatch({
             method: "gateway.suspend.status",
             requestParams: { suspensionId: prepared.suspensionId },
             scope: "operator.read",
             core: true,
             handler: suspendHandlers["gateway.suspend.status"]!,
           });
-        const initial = status();
-        await initial.request;
-        expectStatus(initial.respond, {
+          await result.request;
+          return result.respond;
+        };
+        expectStatus(await status(), {
           status: "draining",
           activeCount: 1,
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],
@@ -69,24 +96,19 @@ export function registerSuspensionHandoffLifecycleTests() {
         if (change !== "expiry") {
           resumeGatewaySuspend(prepared.suspensionId);
           if (change === "replacement") {
-            prepareGatewaySuspend({
-              requestId: "replacement",
-              pauseScheduling: () => {},
-              resumeScheduling: () => {},
-            });
+            prepare("replacement");
           }
         }
         if (change === "expiry") {
           await vi.advanceTimersByTimeAsync(5_000);
         }
-        const current = status();
-        await current.request;
+        const current = await status();
         if (change === "replacement") {
-          expectFailure(current.respond, {
+          expectFailure(current, {
             details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
           });
         } else {
-          expect(current.respond).toHaveBeenCalledWith(true, { status: "running" });
+          expect(current).toHaveBeenCalledWith(true, { status: "running" });
         }
       } finally {
         resetGatewaySuspendCoordinatorForLifecycleRestart();
@@ -108,12 +130,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         resumeScheduling: vi.fn(),
         getSuspensionBlockerCount: () => 0,
       };
-      const host = createGatewayHostLifecycle({
-        processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
-        isCurrent: () => true,
-        isServing: () => true,
-        acceptStop: () => {},
-      });
+      const host = createHost();
       const context = {
         getRuntimeConfig: () => ({}),
         cron,
@@ -122,7 +139,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
-      const rpc = async (method: keyof typeof suspendHandlers, requestParams: unknown) => {
+      const request = async (method: keyof typeof suspendHandlers, requestParams: unknown) => {
         const result = dispatch({
           method,
           requestParams,
@@ -135,7 +152,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         return result.respond;
       };
       try {
-        const prepared = await rpc("gateway.suspend.prepare", {
+        const prepared = await request("gateway.suspend.prepare", {
           requestId: "release-update",
           terminalPolicy: "terminate",
           drain: true,
@@ -145,7 +162,12 @@ export function registerSuspensionHandoffLifecycleTests() {
           prepared.mock.calls[0],
           "suspension prepare response",
         )[1] as { suspensionId: string };
-        const draining = await rpc("gateway.suspend.status", { suspensionId });
+        const status = (includeLifecycle = false) =>
+          request("gateway.suspend.status", {
+            suspensionId,
+            ...(includeLifecycle ? { includeLifecycle } : {}),
+          });
+        const draining = await status();
         expectStatus(draining, { status: "draining", activeCount: 200 });
         const blocked = Promise.allSettled(
           Array.from({ length: 200 }, () => beginGatewayRootWorkAdmissionWhenOpen()),
@@ -160,28 +182,25 @@ export function registerSuspensionHandoffLifecycleTests() {
           },
         });
         await writing.promise;
-        expectStatus(await rpc("gateway.suspend.status", { suspensionId }), {
+        expectStatus(await status(), {
           status: "draining",
           activeCount: 201,
           writeCustody: [{ phase: "session-mutation", count: 1 }],
         });
         written.resolve();
         await mutation;
-        expectStatus(await rpc("gateway.suspend.status", { suspensionId }), {
+        expectStatus(await status(), {
           status: "draining",
           activeCount: 200,
           writeCustody: [],
         });
         if (restart === "handoff") {
-          const armed = await rpc("gateway.suspend.handoff", {
+          const armed = await request("gateway.suspend.handoff", {
             suspensionId,
             target: { pid: process.pid, processInstanceId: getGatewayProcessInstanceId() },
           });
           expectStatus(armed, { status: "armed" });
-          expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
-            ok: true,
-            value: true,
-          });
+          expectHandoff(host, true);
         }
         await host.retire();
         markGatewayRestartDraining(
@@ -190,52 +209,36 @@ export function registerSuspensionHandoffLifecycleTests() {
             : "restart (SIGUSR2: gateway.installation_replaced)",
         );
         expect((await blocked).every((result) => result.status === "rejected")).toBe(true);
-        const owned = await rpc("gateway.suspend.status", { suspensionId });
-        expectStatus(owned, {
-          status: "draining",
-          activeCount: 200,
-        });
+        const owned = await status();
+        expectStatus(owned, { status: "draining", activeCount: 200 });
         const legacy = expectDefined(owned.mock.calls[0], "legacy suspension status response")[1];
         expect(legacy).not.toHaveProperty("ownerId");
         expect(legacy).not.toHaveProperty("phase");
-        const lifecycle = await rpc("gateway.suspend.status", {
-          suspensionId,
-          includeLifecycle: true,
-        });
+        const lifecycle = await status(true);
         expectStatus(lifecycle, {
           status: "draining",
           ownerId: "release-update",
           phase: "interrupting",
         });
-        expect(
-          validateGatewaySuspendStatusResult(
-            expectDefined(owned.mock.calls[0], "owned suspension status response")[1],
-          ),
-        ).toBe(true);
+        expect(validateGatewaySuspendStatusResult(legacy)).toBe(true);
         // Expiry cannot reopen a committed shutdown, even after all old roots settle.
         for (const root of roots) {
           root?.release();
         }
         await vi.advanceTimersByTimeAsync(120_000);
-        const settled = await rpc("gateway.suspend.status", {
-          suspensionId,
-          includeLifecycle: true,
-        });
+        const settled = await status(true);
         expectStatus(settled, { phase: "interrupting", activeCount: 0, status: "draining" });
-        const foreign = await rpc("gateway.suspend.status", { suspensionId: "foreign" });
+        const foreign = await request("gateway.suspend.status", { suspensionId: "foreign" });
         expectFailure(foreign, {
           details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
         });
         expect(cron.resumeScheduling).not.toHaveBeenCalled();
-        const resumed = await rpc("gateway.suspend.resume", { suspensionId });
+        const resumed = await request("gateway.suspend.resume", { suspensionId });
         expectFailure(resumed, {
           code: "UNAVAILABLE",
           message: "gateway shutdown is committed",
         });
-        expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
-          ok: true,
-          value: false,
-        });
+        expectHandoff(host, false);
         markGatewaySuspendExiting();
         expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
           status: "draining",
@@ -269,11 +272,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
     "new-process-same-pid",
     "retired-host",
   ])("binds an external handoff to the authenticated live owner: %s", async (mode) => {
-    const host = createGatewayHostLifecycle({
-      processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
-      isCurrent: () => true,
-      isServing: () => true,
-      acceptStop: () => {},
+    const host = createHost({
       commitExternalStop:
         mode === "committed"
           ? () => {
@@ -285,11 +284,8 @@ export function registerSuspensionHandoffAuthorizationTests() {
             }
           : undefined,
     });
-    const lease = prepareGatewaySuspend({
-      requestId: "handoff-route",
+    const lease = prepare("handoff-route", {
       drain: true,
-      pauseScheduling: () => {},
-      resumeScheduling: () => {},
       inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
     });
     if (lease.status !== "draining") {
@@ -300,7 +296,6 @@ export function registerSuspensionHandoffAuthorizationTests() {
         method: "gateway.suspend.handoff",
         scope: "operator.admin",
         core: true,
-        clientScopes: [mode === "read-scope" ? "operator.read" : "operator.admin"],
         handler: suspendHandlers["gateway.suspend.handoff"]!,
         requestParams: {
           suspensionId: lease.suspensionId,
@@ -311,6 +306,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
               mode === "new-process-same-pid" ? "different-process" : getGatewayProcessInstanceId(),
           },
         },
+        clientScopes: [mode === "read-scope" ? "operator.read" : "operator.admin"],
         context: {
           getRuntimeConfig: () => ({}),
           hostLifecycle: host.capability,
@@ -330,27 +326,15 @@ export function registerSuspensionHandoffAuthorizationTests() {
           expiresAtMs: lease.expiresAtMs,
         });
       }
-      if (mode === "armed") {
-        expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
-          ok: true,
-          value: true,
-        });
-      } else if (mode === "committed") {
+      if (mode === "committed") {
         expect(resumeGatewaySuspend(lease.suspensionId)).toEqual({
           ok: false,
           reason: "gateway-restarting",
         });
-        expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
-          ok: true,
-          value: false,
-        });
-      } else {
+      } else if (mode !== "armed") {
         expect(result.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-        expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
-          ok: true,
-          value: false,
-        });
       }
+      expectHandoff(host, mode === "armed");
     } finally {
       await host.retire();
       resumeGatewaySuspend(lease.suspensionId);

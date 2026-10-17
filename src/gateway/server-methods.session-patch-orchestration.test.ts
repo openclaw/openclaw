@@ -18,6 +18,12 @@ const seedEntry = (sessionKey: string, sessionId: string, lifecycleRevision?: st
     { sessionId, updatedAt: 1, ...(lifecycleRevision ? { lifecycleRevision } : {}) },
   );
 
+const unavailableError = {
+  code: "UNAVAILABLE",
+  message: "Session patch failed unexpectedly. Retry the request.",
+  retryable: true,
+};
+
 async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const prefix = batch ? "session-alias-race" : "session-single-alias-race";
@@ -100,19 +106,14 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     }
     await writer;
     await request;
-    const error = {
-      code: "UNAVAILABLE",
-      message: "Session patch failed unexpectedly. Retry the request.",
-      retryable: true,
-    };
     if (batch) {
       expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
         { ok: true, key: siblings[0] },
-        { ok: false, key: conflictingAlias, error },
+        { ok: false, key: conflictingAlias, error: unavailableError },
         { ok: true, key: siblings[1] },
       ]);
     } else {
-      expect(respond).toHaveBeenCalledWith(false, undefined, error);
+      expect(respond).toHaveBeenCalledWith(false, undefined, unavailableError);
     }
     const unchangedField = batch ? "lastReadAt" : "pinnedAt";
     expect(readEntry(canonicalKey)).toMatchObject({ sessionId: `${prefix}-canonical` });
@@ -395,11 +396,7 @@ describe("sessions.patchMany orchestration", () => {
             {
               ok: false,
               key: "agent:main:throw-1",
-              error: {
-                code: "UNAVAILABLE",
-                message: "Session patch failed unexpectedly. Retry the request.",
-                retryable: true,
-              },
+              error: unavailableError,
             },
             { ok: true, key: "agent:main:throw-2" },
           ],
