@@ -8,7 +8,7 @@ import {
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../api.js";
+import type { PluginRuntime, ReplyPayload } from "../api.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
 import { createImageCard } from "./flex-templates/basic-cards.js";
@@ -161,6 +161,24 @@ function collectAllWireMessages(requests: RecordedLineApiRequest[]): WireMessage
   return requests.flatMap((r) => r.body.messages);
 }
 
+function wireText(messages: WireMessage[]) {
+  return messages
+    .filter((message) => message.type === "text")
+    .map((message) => message.text)
+    .join(" ");
+}
+
+function sendPayload(to: string, text: string, extra: Partial<ReplyPayload> = {}) {
+  return lineOutboundAdapter.sendPayload!({
+    to: `line:user:${to}`,
+    text,
+    payload: { text, ...extra },
+    cfg: LINE_TEST_CFG,
+  });
+}
+
+const continueReply = { items: [{ action: { label: "Continue", text: "Continue" } }] };
+
 describe("Row-overflow table delivery through production outbound adapter over loopback LINE HTTP transport", () => {
   let loopback: Awaited<ReturnType<typeof listenLoopback>>;
   let requests: RecordedLineApiRequest[];
@@ -219,7 +237,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
 
     originalFetch = globalThis.fetch;
     const loopbackOrigin = `http://127.0.0.1:${loopback.port}`;
-    const realFetch = originalFetch;
 
     loopbackFetch = async function fetchLoopback(
       input: RequestInfo | URL,
@@ -234,10 +251,10 @@ describe("Row-overflow table delivery through production outbound adapter over l
 
       if (url.hostname === "api.line.me") {
         const redirectedUrl = new URL(`${url.pathname}${url.search}`, loopbackOrigin);
-        return realFetch(redirectedUrl.toString(), init);
+        return originalFetch(redirectedUrl.toString(), init);
       }
 
-      return realFetch(input, init);
+      return originalFetch(input, init);
     } as typeof globalThis.fetch & { mock?: object };
 
     loopbackFetch.mock = {};
@@ -452,10 +469,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
     }
 
     const messages = collectAllWireMessages(requests);
-    const text = messages
-      .filter((message) => message.type === "text")
-      .map((message) => message.text)
-      .join("\n");
+    const text = wireText(messages);
     const options = selects.flatMap((select) => select.options);
     const controls = messages.flatMap((message) => message.quickReply?.items ?? []);
     expect(requests.length).toBeGreaterThan(1);
@@ -485,12 +499,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
     const overflowTable = `| Name | Price |\n|---|---|\n${bigRows}`;
     const markdown = `Header\n\n${keptTable}\n\nBetween\n\n${overflowTable}\n\nFooter`;
 
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestMixed",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
+    await sendPayload("UtestMixed", markdown);
 
     const allMessages = collectAllWireMessages(requests);
     const flexIndices = allMessages
@@ -502,14 +511,8 @@ describe("Row-overflow table delivery through production outbound adapter over l
     const beforeFlex = allMessages.slice(0, firstFlexIdx);
     const afterFlex = allMessages.slice(firstFlexIdx + 1);
 
-    const beforeText = beforeFlex
-      .filter((m) => m.type === "text")
-      .map((m) => m.text)
-      .join(" ");
-    const afterText = afterFlex
-      .filter((m) => m.type === "text")
-      .map((m) => m.text)
-      .join(" ");
+    const beforeText = wireText(beforeFlex);
+    const afterText = wireText(afterFlex);
 
     expect(beforeText).toContain("Header");
     expect(afterText).toContain("Big1");
@@ -519,10 +522,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
     expect(beforeText).not.toContain("Big1");
     expect(afterText).not.toContain("Header");
 
-    const allText = allMessages
-      .filter((m) => m.type === "text" && m.text)
-      .map((m) => m.text!)
-      .join(" ");
+    const allText = wireText(allMessages);
     for (let i = 1; i <= 13; i++) {
       expect(allText).toContain(`Big${i}`);
     }
@@ -536,18 +536,10 @@ describe("Row-overflow table delivery through production outbound adapter over l
     const markdown = `Header\n\n\`\`\`ts\n${code}\n\`\`\`\n\nFooter`;
     expect(code.length).toBeGreaterThan(2000);
 
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestCodeOverflow",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
+    await sendPayload("UtestCodeOverflow", markdown);
 
     const allMessages = collectAllWireMessages(requests);
-    const allText = allMessages
-      .filter((message) => message.type === "text" && message.text)
-      .map((message) => message.text!)
-      .join(" ");
+    const allText = wireText(allMessages);
 
     for (const line of [0, 60, 119]) {
       expect(allText).toContain(`const line${line} = ${line};`);
@@ -563,15 +555,9 @@ describe("Row-overflow table delivery through production outbound adapter over l
   it("keeps rendered-code quick replies on final media on the actual LINE HTTP wire", async () => {
     const markdown = "```js\nfirst()\n```";
 
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestRichMedia",
-      text: markdown,
-      payload: {
-        text: markdown,
-        mediaUrl: "https://example.com/image.jpg",
-        channelData: { line: { quickReplies: ["Continue"] } },
-      },
-      cfg: LINE_TEST_CFG,
+    await sendPayload("UtestRichMedia", markdown, {
+      mediaUrl: "https://example.com/image.jpg",
+      channelData: { line: { quickReplies: ["Continue"] } },
     });
 
     expect(requests).toHaveLength(1);
@@ -580,7 +566,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
       {
         type: "image",
         originalContentUrl: "https://example.com/image.jpg",
-        quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
+        quickReply: continueReply,
       },
     ]);
   });
@@ -612,7 +598,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
           {
             type: "flex",
             altText: "Code",
-            quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
+            quickReply: continueReply,
           },
         ],
       },
@@ -625,7 +611,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
           {
             type: "text",
             text: "Choose one",
-            quickReply: { items: [{ action: { label: "Continue", text: "Continue" } }] },
+            quickReply: continueReply,
           },
         ],
       },

@@ -203,27 +203,12 @@ describe("registered LINE send handoff", () => {
       replyToId: payload.replyToId,
       assertDirectAdapterHandoff,
     };
-    switch (route) {
-      case "message-text":
-        return expectDefined(plugin.message?.send?.text, "message text send")(context);
-      case "message-media":
-        return expectDefined(
-          plugin.message?.send?.media,
-          "message media send",
-        )({
-          ...context,
-          mediaUrl,
-        });
-      case "outbound-media":
-        return expectDefined(
-          plugin.outbound?.sendMedia,
-          "outbound media send",
-        )({
-          ...context,
-          mediaUrl,
-        });
+    if (route === "message-text") {
+      return expectDefined(plugin.message?.send?.text, "message text send")(context);
     }
-    throw new Error("Unexpected LINE test route");
+    const sendMedia =
+      route === "message-media" ? plugin.message?.send?.media : plugin.outbound?.sendMedia;
+    return expectDefined(sendMedia, route)({ ...context, mediaUrl });
   }
 
   it.each(mediaRoutes)(
