@@ -5,19 +5,19 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { readExistingAgentSchemaMeta } from "../../state/openclaw-agent-db-metadata.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase as openDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolveSessionWorkStartError } from "./lifecycle.js";
+import { resolveSessionWorkStartError as workStartError } from "./lifecycle.js";
 import {
   compareSessionProviderReview,
-  readSessionProviderReview,
-  type SessionProviderReviewTarget,
+  readSessionProviderReview as readReview,
+  type SessionProviderReviewTarget as Target,
 } from "./provider-review-store.js";
 import type { SessionProviderReview } from "./provider-review.types.js";
 import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
+  readExactSessionEntryRow as readRow,
+  writeSessionEntry as writeEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -35,7 +35,7 @@ const review: SessionProviderReview = {
   model: "test-model",
   runtimeId: "codex",
 };
-const assertCurrent = () => {};
+const assertAuthority = () => {};
 const original = {
   sessionId: target.sessionId,
   lifecycleRevision: target.lifecycleRevision,
@@ -43,43 +43,45 @@ const original = {
 };
 
 function compare(
-  selected: SessionProviderReviewTarget,
+  selected: Target,
   nextReview: SessionProviderReview | undefined,
   expectedReview: SessionProviderReview | undefined = undefined,
-  authority = assertCurrent,
+  assertCurrent = assertAuthority,
 ) {
-  return compareSessionProviderReview(selected, {
-    expectedReview,
-    nextReview,
-    assertCurrent: authority,
-  });
+  return compareSessionProviderReview(selected, { expectedReview, nextReview, assertCurrent });
 }
 
 function pauseError(entry: SessionEntry | undefined) {
-  return resolveSessionWorkStartError(target.sessionKey, entry, {
-    expectedSessionId: target.sessionId,
+  return workStartError(target.sessionKey, entry, { expectedSessionId: target.sessionId });
+}
+
+function withStore(
+  options: { entry?: SessionEntry; shared?: boolean },
+  run: (db: ReturnType<typeof openDatabase>, selected: Target) => Promise<void>,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openDatabase({
+      agentId: target.agentId,
+      ...(options.shared ? { path: state.statePath("shared-review.sqlite") } : {}),
+    });
+    writeEntry(database, target.sessionKey, options.entry ?? original, {
+      providerReviewMutation: Boolean(options.entry?.providerReview),
+    });
+    await run(database, { ...target, storePath: database.path });
   });
 }
 
 it("reopens an existing session and preserves its provider pause without a schema migration", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-    const selectedTarget = { ...target, storePath: database.path };
-    const existingEntry = {
-      ...original,
-      label: "Existing session",
-      lastRunId: "previous-run",
-    };
-    writeSessionEntry(database, target.sessionKey, existingEntry);
+  const existingEntry = { ...original, label: "Existing session", lastRunId: "previous-run" };
+  await withStore({ entry: existingEntry }, async (database, selectedTarget) => {
     const schema = readExistingAgentSchemaMeta(database.db);
     expect(schema?.schemaVersion).toEqual(expect.any(Number));
     await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
     expect(database.db.isOpen).toBe(false);
 
-    const existing = await readSessionProviderReview(selectedTarget, assertCurrent);
+    const existing = await readReview(selectedTarget, assertAuthority);
     expect(existing).toMatchObject(existingEntry);
-    expect(existing?.providerReview).toBeUndefined();
-    expect(pauseError(existing)).toBeUndefined();
+    expect([existing?.providerReview, pauseError(existing)]).toEqual([undefined, undefined]);
 
     const retainedReview: SessionProviderReview = {
       ...review,
@@ -95,13 +97,10 @@ it("reopens an existing session and preserves its provider pause without a schem
     await compare(selectedTarget, retainedReview);
     await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
 
-    const reopened = openOpenClawAgentDatabase({
-      agentId: target.agentId,
-      path: database.path,
-    });
+    const reopened = openDatabase({ agentId: target.agentId, path: database.path });
     expect(reopened.db.isOpen).toBe(true);
     expect(readExistingAgentSchemaMeta(reopened.db)).toEqual(schema);
-    const persisted = await readSessionProviderReview(selectedTarget, assertCurrent);
+    const persisted = await readReview(selectedTarget, assertAuthority);
     expect(persisted).toMatchObject(existingEntry);
     expect(persisted?.providerReview).toEqual(retainedReview);
     expect(pauseError(persisted)).toContain("paused as a precaution");
@@ -111,13 +110,7 @@ it("reopens an existing session and preserves its provider pause without a schem
 it.each(["default", "shared"] as const)(
   "publishes %s review admission facts without caller-thread SQLite",
   async (store) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: target.agentId,
-        ...(store === "shared" ? { path: state.statePath("shared-review.sqlite") } : {}),
-      });
-      const selectedTarget = { ...target, storePath: database.path };
-      writeSessionEntry(database, target.sessionKey, original);
+    await withStore({ shared: store === "shared" }, async (database, selectedTarget) => {
       const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
       if (typeof databaseIdentity !== "string") {
         throw new Error("Expected a durable provider-review store");
@@ -128,84 +121,59 @@ it.each(["default", "shared"] as const)(
         entry: original,
         membership: new Set(),
       });
-      const statementPrototype: StatementSync = Object.getPrototypeOf(
-        database.db.prepare("SELECT 1"),
-      );
-      const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
+      const entry = () => sharing.readCurrent()?.entry;
+      const statement: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+      const db: DatabaseSync = Object.getPrototypeOf(database.db);
       const methods = [
-        vi.spyOn(statementPrototype, "all"),
-        vi.spyOn(statementPrototype, "get"),
-        vi.spyOn(statementPrototype, "iterate"),
-        vi.spyOn(statementPrototype, "run"),
-        vi.spyOn(databasePrototype, "exec"),
+        ...(["all", "get", "iterate", "run"] as const).map((method) => vi.spyOn(statement, method)),
+        vi.spyOn(db, "exec"),
       ];
       try {
-        expect(await readSessionProviderReview(selectedTarget, assertCurrent)).toMatchObject(
-          original,
-        );
+        expect(await readReview(selectedTarget, assertAuthority)).toMatchObject(original);
         expect(await compare(selectedTarget, review)).toMatchObject({
           ...original,
           providerReview: review,
         });
-        expect(sharing.readCurrent()?.entry?.providerReview).toEqual(review);
-        expect(pauseError(sharing.readCurrent()?.entry)).toContain("paused as a precaution");
+        expect(entry()?.providerReview).toEqual(review);
+        expect(pauseError(entry())).toContain("paused as a precaution");
         const newer = { ...review, id: "review-2" };
         await compare(selectedTarget, newer, review);
-        expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
-        for (const stale of [review, { ...newer, runId: "changed-run" }]) {
-          await expect(compare(selectedTarget, undefined, stale)).rejects.toThrow(
+        expect(entry()?.providerReview).toEqual(newer);
+        const rejectStale = async (selected: Target, stale = newer) => {
+          await expect(compare(selected, undefined, stale)).rejects.toThrow(
             "Provider review changed",
           );
-          expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
+          expect(entry()?.providerReview).toEqual(newer);
+        };
+        for (const stale of [review, { ...newer, runId: "changed-run" }]) {
+          await rejectStale(selectedTarget, stale);
         }
         for (const staleTarget of [
           { ...selectedTarget, sessionId: "old-session" },
           { ...selectedTarget, lifecycleRevision: "old-generation" },
           { ...selectedTarget, lifecycleRevision: undefined },
         ]) {
-          expect(await readSessionProviderReview(staleTarget, assertCurrent)).toBeUndefined();
-          await expect(compare(staleTarget, undefined, newer)).rejects.toThrow(
-            "Provider review changed",
-          );
-          expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
+          expect(await readReview(staleTarget, assertAuthority)).toBeUndefined();
+          await rejectStale(staleTarget);
         }
-        expect(
-          (await readSessionProviderReview(selectedTarget, assertCurrent))?.providerReview,
-        ).toEqual(newer);
+        expect((await readReview(selectedTarget, assertAuthority))?.providerReview).toEqual(newer);
         expect((await compare(selectedTarget, undefined, newer)).providerReview).toBeUndefined();
-        expect(sharing.readCurrent()?.entry).toMatchObject(original);
-        expect(sharing.readCurrent()?.entry?.providerReview).toBeUndefined();
-        expect(pauseError(sharing.readCurrent()?.entry)).toBeUndefined();
-        for (const method of methods) {
-          expect(method).not.toHaveBeenCalled();
-        }
+        expect(entry()).toMatchObject(original);
+        expect([entry()?.providerReview, pauseError(entry())]).toEqual([undefined, undefined]);
+        methods.forEach((method) => expect(method).not.toHaveBeenCalled());
       } finally {
         sharing.release();
-        for (const method of methods) {
-          method.mockRestore();
-        }
+        methods.forEach((method) => method.mockRestore());
       }
     });
   },
 );
 
 it("rolls back a clear when current authority is revoked at commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-    writeSessionEntry(
-      database,
-      target.sessionKey,
-      {
-        ...original,
-        providerReview: review,
-      },
-      { providerReviewMutation: true },
-    );
+  await withStore({ entry: { ...original, providerReview: review } }, async (database) => {
     let current = true;
     const admitted = probe.admission(admission, (request, grant, callback) => {
-      if (request.stage === "commit") {
-        current = false;
-      }
+      current = current && request.stage !== "commit";
       return callback(request, grant);
     });
     try {
@@ -217,9 +185,7 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
         }),
       ).rejects.toThrow("Review authority revoked");
       expect(current).toBe(false);
-      expect(readExactSessionEntryRow(database, target.sessionKey)?.entry.providerReview).toEqual(
-        review,
-      );
+      expect(readRow(database, target.sessionKey)?.entry.providerReview).toEqual(review);
     } finally {
       admitted.mockRestore();
     }
@@ -227,20 +193,11 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
 });
 
 it("preserves a current review through stale bookkeeping and drops it on lifecycle replacement", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-    writeSessionEntry(
-      database,
-      target.sessionKey,
-      { ...original, providerReview: review },
-      {
-        providerReviewMutation: true,
-      },
-    );
+  await withStore({ entry: { ...original, providerReview: review } }, async (database) => {
     const stale = { ...original, updatedAt: 2, providerReview: undefined };
-    expect(writeSessionEntry(database, target.sessionKey, stale).providerReview).toEqual(review);
+    expect(writeEntry(database, target.sessionKey, stale).providerReview).toEqual(review);
     expect(
-      writeSessionEntry(database, target.sessionKey, {
+      writeEntry(database, target.sessionKey, {
         ...original,
         lifecycleRevision: "generation-2",
         providerReview: review,

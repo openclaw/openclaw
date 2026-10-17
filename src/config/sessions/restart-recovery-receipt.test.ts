@@ -4,12 +4,22 @@ import {
   beginRestartRecoveryTerminalDelivery as begin,
   cancelRestartRecoveryTerminalDelivery as cancel,
   completeRestartRecoveryTerminalDelivery as complete,
-  resolveRestartRecoverySteeringBlockReason,
+  resolveRestartRecoverySteeringBlockReason as blockReason,
 } from "./restart-recovery-receipt.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
+
+const claim = {
+  restartRecoveryDeliveryRunId: "recovery-1",
+  restartRecoveryDeliverySourceRunId: "source-1",
+} as const;
+const entry = (fields: Partial<SessionEntry>): SessionEntry => ({
+  sessionId: "session-1",
+  updatedAt: 1,
+  ...fields,
+});
 
 // mock-isolation: Receipt command counts exclude fixture-seeding maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -26,12 +36,7 @@ describe("restart recovery terminal delivery receipt", () => {
     toolCallId: "message-call-1",
   });
   const read = () => loadSessionEntry(scope());
-  const seed = (fields: Partial<SessionEntry>) =>
-    replaceSessionEntry(scope(), { sessionId: "session-1", updatedAt: 1, ...fields });
-  const claim = {
-    restartRecoveryDeliveryRunId: "recovery-1",
-    restartRecoveryDeliverySourceRunId: "source-1",
-  } as const;
+  const seed = (fields: Partial<SessionEntry>) => replaceSessionEntry(scope(), entry(fields));
 
   it.each(["success", "non-delivery"] as const)(
     "persists pending and blocks repeat sends until provider %s",
@@ -47,30 +52,25 @@ describe("restart recovery terminal delivery receipt", () => {
         await expect(complete(scope())).resolves.toBe("recorded");
         await expect(complete(scope())).resolves.toBe("recorded");
         await expect(cancel(scope())).resolves.toBe("stale");
-        expect(read()?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
-        expect(read()?.restartRecoveryDeliveryToolCallId).toBe("message-call-1");
       } else {
         await expect(cancel(scope())).resolves.toBe("cleared");
-        expect(read()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
-        expect(read()?.restartRecoveryDeliveryToolCallId).toBeUndefined();
       }
+      const result = read();
+      expect([
+        result?.restartRecoveryDeliveryReceiptState,
+        result?.restartRecoveryDeliveryToolCallId,
+      ]).toEqual(
+        outcome === "success" ? ["delivered-terminal", "message-call-1"] : [undefined, undefined],
+      );
     },
   );
 
-  it.each<{
-    name: string;
-    fields: Partial<SessionEntry>;
-    expected: string;
-  }>([
-    { name: "claimless live turn", fields: { status: undefined }, expected: "not-applicable" },
-    { name: "claimless done turn", fields: { status: "done" }, expected: "not-applicable" },
-    { name: "replaced claimless session", fields: { sessionId: "session-2" }, expected: "stale" },
-    {
-      name: "completed source with cleared claim",
-      fields: { restartRecoveryTerminalRunIds: ["source-1"] },
-      expected: "already-delivered",
-    },
-  ])("does not arm a receipt for $name", async ({ fields, expected }) => {
+  it.each<[string, Partial<SessionEntry>, string]>([
+    ["claimless live turn", { status: undefined }, "not-applicable"],
+    ["claimless done turn", { status: "done" }, "not-applicable"],
+    ["replaced claimless session", { sessionId: "session-2" }, "stale"],
+    ["completed source", { restartRecoveryTerminalRunIds: ["source-1"] }, "already-delivered"],
+  ])("does not arm a receipt for %s", async (_name, fields, expected) => {
     await seed(fields);
     await expect(begin(scope())).resolves.toBe(expected);
     expect(read()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
@@ -176,63 +176,28 @@ describe("restart recovery terminal delivery receipt", () => {
 });
 
 describe("restart recovery steering block reasons", () => {
-  const claim: Partial<SessionEntry> = {
-    status: undefined,
-    restartRecoveryDeliveryRunId: "recovery-1",
-    restartRecoveryDeliverySourceRunId: "source-1",
-  };
-
   const receipt = (state: SessionEntry["restartRecoveryDeliveryReceiptState"]) => ({
     ...claim,
     restartRecoveryDeliveryReceiptState: state,
     restartRecoveryDeliveryToolCallId: "message-call-1",
   });
-  const tombstone = (source: string) => ({
-    status: undefined,
-    restartRecoveryTerminalRunIds: [source],
-  });
-  type Reason = ReturnType<typeof resolveRestartRecoverySteeringBlockReason>;
-  const row = (
-    name: string,
-    fields: Partial<SessionEntry> | undefined,
-    reason?: Reason,
-    sourceTurnId = "source-1",
-  ) => ({ name, fields, sourceTurnId, reason });
-  it.each([
-    row("terminal-pending receipt", receipt("terminal-pending"), "terminal-pending"),
-    row("delivered-terminal receipt", receipt("delivered-terminal"), "delivered-terminal"),
-    row(
-      "unresolved terminal tool-call id",
-      { ...claim, restartRecoveryDeliveryToolCallId: "message-call-2" },
-      "unresolved-terminal-tool",
+  const tombstone = (source: string) => ({ restartRecoveryTerminalRunIds: [source] });
+  type Reason = ReturnType<typeof blockReason>;
+  it.each<[Partial<SessionEntry> | undefined, Reason?, string?]>([
+    [receipt("terminal-pending"), "terminal-pending"],
+    [receipt("delivered-terminal"), "delivered-terminal"],
+    [{ ...claim, restartRecoveryDeliveryToolCallId: "message-call-2" }, "unresolved-terminal-tool"],
+    [tombstone("source-1"), "already-delivered"],
+    [tombstone("source-old")],
+    [tombstone("source-old"), "unknown-source-with-terminal-history", ""],
+    [{ ...claim, status: "done", restartRecoveryDeliverySourceRunId: "source-2" }, "stale-claim"],
+    [{ ...tombstone("source-1"), sessionId: "session-2" }, "stale-claim"],
+    [{ status: undefined }, undefined, ""],
+    ...([undefined, "done", "interrupted"] as const).map(
+      (status) => [{ ...claim, status }] satisfies [Partial<SessionEntry>],
     ),
-    row(
-      "terminal-source tombstone on the active source",
-      tombstone("source-1"),
-      "already-delivered",
-    ),
-    row("claimless entry with an unrelated tombstone", tombstone("source-old")),
-    row(
-      "claimless entry with tombstones and an unknown active source",
-      tombstone("source-old"),
-      "unknown-source-with-terminal-history",
-      "",
-    ),
-    row(
-      "stale claim",
-      { ...claim, status: "done", restartRecoveryDeliverySourceRunId: "source-2" },
-      "stale-claim",
-    ),
-    row("replaced session", { ...tombstone("source-1"), sessionId: "session-2" }, "stale-claim"),
-    row("claimless fresh entry", { status: undefined }, undefined, ""),
-    ...([undefined, "done", "interrupted"] as const).map((status) =>
-      row(`exact source claim with outcome ${status}`, { ...claim, status }),
-    ),
-    row("missing entry", undefined),
-  ])("classifies $name", ({ fields, sourceTurnId, reason }) => {
-    const entry = fields ? { sessionId: "session-1", updatedAt: 1, ...fields } : undefined;
-    expect(resolveRestartRecoverySteeringBlockReason(entry, "session-1", sourceTurnId)).toBe(
-      reason,
-    );
+    [undefined],
+  ])("classifies %j as %s", (fields, reason, sourceTurnId = "source-1") => {
+    expect(blockReason(fields && entry(fields), "session-1", sourceTurnId)).toBe(reason);
   });
 });
