@@ -21,10 +21,10 @@ import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   BUILD,
+  createManager,
   environment,
   startRequest,
   transport,
-  workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkerWorkspaceBinding } from "./node-worker-workspace-actions.js";
 
@@ -75,14 +75,9 @@ async function fixture(
   };
   const managers: ReturnType<typeof createNodeWorkerTunnelManager>[] = [];
   const manager = (binding?: NodeWorkerWorkspaceBinding) => {
-    const value = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
+    const value = createManager(record, {
       getTransport: () => nodeTransport,
       launchNodeWorker,
-      validateWorkerTurn: () => true,
-      workspaceTransfer: workspaceTransfer(),
     });
     if (binding) {
       value.bindWorkspaceBindingResolver(async () => binding);
@@ -98,6 +93,11 @@ async function fixture(
     nodeTransport,
     manager,
     request: { ...startRequest(), executionMode: "remote-exec" as const },
+    sync: (folderPath = canonicalFolder, deviceId = "node-1") => ({
+      sessionId: "session-1",
+      generation: 1,
+      source: { kind: "device-folder" as const, deviceId, path: folderPath },
+    }),
     async close() {
       for (const value of managers) {
         await value.stop("environment-1");
@@ -139,10 +139,8 @@ describe("device-folder tunnel", () => {
     try {
       const handle = await test.manager().start({ ...test.request, executionMode: "worker-turn" });
       await handle.syncWorkspace({
-        sessionId: "session-1",
+        ...test.sync(),
         sessionKey: "agent:main:folder-turn",
-        generation: 1,
-        source: { kind: "device-folder", deviceId: "node-1", path: test.folder },
       });
       const plan = parseWorkerLaunchPlan({
         version: 4,
@@ -194,10 +192,8 @@ describe("device-folder tunnel", () => {
       const first = test.manager();
       const handle = await first.start(test.request);
       const synced = await handle.syncWorkspace({
-        sessionId: "session-1",
+        ...test.sync(),
         sessionKey: "agent:main:device-folder-test",
-        generation: 1,
-        source: { kind: "device-folder", deviceId: "node-1", path: test.folder },
       });
       expect(synced).toEqual({
         mode: "device-folder",
@@ -267,13 +263,7 @@ describe("device-folder tunnel", () => {
     const test = await fixture();
     try {
       const handle = await test.manager().start(test.request);
-      await expect(
-        handle.syncWorkspace({
-          sessionId: "session-1",
-          generation: 1,
-          source: { kind: "device-folder", deviceId: "node-1", path: test.alias },
-        }),
-      ).rejects.toThrow("target changed");
+      await expect(handle.syncWorkspace(test.sync(test.alias))).rejects.toThrow("target changed");
       expect(await fs.readdir(test.folder)).toEqual(["existing.txt"]);
     } finally {
       await test.close();
@@ -284,11 +274,7 @@ describe("device-folder tunnel", () => {
     const test = await fixture();
     try {
       const handle = await test.manager().start(test.request);
-      const request = {
-        sessionId: "session-1",
-        generation: 1,
-        source: { kind: "device-folder" as const, deviceId: "node-1", path: test.folder },
-      };
+      const request = test.sync();
       await handle.syncWorkspace(request);
       const calls = test.commands.length;
       await expect(
@@ -333,22 +319,14 @@ describe("device-folder tunnel", () => {
     const test = await fixture();
     try {
       const handle = await test.manager().start(test.request);
-      await expect(
-        handle.syncWorkspace({
-          sessionId: "session-1",
-          generation: 1,
-          source: { kind: "device-folder", deviceId: "another-node", path: test.folder },
-        }),
-      ).rejects.toThrow("does not belong");
+      await expect(handle.syncWorkspace(test.sync(test.folder, "another-node"))).rejects.toThrow(
+        "does not belong",
+      );
       const unsupported = transport();
       test.nodeTransport.listCurrentNodes = () => unsupported.listCurrentNodes();
-      await expect(
-        handle.syncWorkspace({
-          sessionId: "session-1",
-          generation: 1,
-          source: { kind: "device-folder", deviceId: "node-1", path: test.folder },
-        }),
-      ).rejects.toThrow("Device folder support is unavailable");
+      await expect(handle.syncWorkspace(test.sync())).rejects.toThrow(
+        "Device folder support is unavailable",
+      );
       expect(test.commands).toHaveLength(0);
     } finally {
       await test.close();

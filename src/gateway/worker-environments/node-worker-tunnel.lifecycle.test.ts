@@ -35,7 +35,6 @@ import {
   measureNodeWorkerLaunchBytes,
 } from "./node-launch-adapter.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
-import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   BUILD,
   createManager,
@@ -54,6 +53,46 @@ type TerminalReceipt = Extract<
   NodeWorkerSupervisorReceipt,
   { state: "completed" | "failed" | "interrupted" | "cancelled" }
 >;
+
+function cancelledReceipt({ input }: Parameters<NodeWorkerLaunch>[0]): TerminalReceipt {
+  return {
+    launchId: input.launchId,
+    planHash: "b".repeat(64),
+    environmentId: input.descriptor.admission.environmentId,
+    sessionId: input.descriptor.admission.sessionId,
+    ownerEpoch: input.descriptor.admission.ownerEpoch,
+    placementGeneration: input.placementGeneration,
+    runId: input.descriptor.assignment.runId,
+    state: "cancelled",
+    errorText: "node worker cancelled",
+  };
+}
+
+function workspaceTransport(
+  workspace: NodeWorkerWorkspaceRuntime,
+  onCommand: (request: Parameters<NodeWorkerSupervisorTransport["invoke"]>[0]) => void,
+) {
+  const nodeTransport = transport();
+  nodeTransport.invoke = async (request) => {
+    onCommand(request);
+    if (request.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+      await workspace.processes.stopEnvironment(
+        parseNodeWorkerEnvironmentStopInput(JSON.stringify(request.params)),
+      );
+      return { ok: true, payloadJSON: "null" };
+    }
+    return {
+      ok: true,
+      payloadJSON: JSON.stringify(
+        await workspace.exec(
+          parseNodeWorkerWorkspaceExecInput(JSON.stringify(request.params)),
+          request.signal,
+        ),
+      ),
+    };
+  };
+  return nodeTransport;
+}
 
 function plan() {
   return parseWorkerLaunchPlan({
@@ -234,17 +273,7 @@ describe("node worker tunnel lifetime", () => {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
         authorizations.push(request.isDispatchAuthorized());
         launchSizes.push(measureNodeWorkerLaunchBytes(request.deviceId, request.input));
-        return {
-          launchId: request.input.launchId,
-          planHash: "b".repeat(64),
-          environmentId: request.input.descriptor.admission.environmentId,
-          sessionId: request.input.descriptor.admission.sessionId,
-          ownerEpoch: request.input.descriptor.admission.ownerEpoch,
-          placementGeneration: request.input.placementGeneration,
-          runId: request.input.descriptor.assignment.runId,
-          state: "cancelled",
-          errorText: "test launch finished",
-        };
+        return { ...cancelledReceipt(request), errorText: "test launch finished" };
       }),
       validateWorkerTurn: (claim) => sameWorkerSessionTurnClaim(claim, currentClaim),
     });
@@ -607,17 +636,7 @@ describe("node worker tunnel lifetime", () => {
           "abort",
           () => {
             void releaseLaunch.promise.then(() => {
-              resolve({
-                launchId: request.input.launchId,
-                planHash: "b".repeat(64),
-                environmentId: request.input.descriptor.admission.environmentId,
-                sessionId: request.input.descriptor.admission.sessionId,
-                ownerEpoch: request.input.descriptor.admission.ownerEpoch,
-                placementGeneration: request.input.placementGeneration,
-                runId: request.input.descriptor.assignment.runId,
-                state: "cancelled",
-                errorText: "node worker cancelled",
-              });
+              resolve(cancelledReceipt(request));
             });
           },
           { once: true },
@@ -663,17 +682,7 @@ describe("node worker tunnel lifetime", () => {
           "abort",
           () => {
             cancellationWasAuthorized = request.isCancellationAuthorized();
-            resolve({
-              launchId: request.input.launchId,
-              planHash: "b".repeat(64),
-              environmentId: request.input.descriptor.admission.environmentId,
-              sessionId: request.input.descriptor.admission.sessionId,
-              ownerEpoch: request.input.descriptor.admission.ownerEpoch,
-              placementGeneration: request.input.placementGeneration,
-              runId: request.input.descriptor.assignment.runId,
-              state: "cancelled",
-              errorText: "node worker cancelled",
-            });
+            resolve(cancelledReceipt(request));
           },
           { once: true },
         );
@@ -721,23 +730,15 @@ describe("attached app process lifetime", () => {
       generation: record.ownerEpoch,
     };
     const drainReached = createDeferred();
-    const nodeTransport = transport();
-    nodeTransport.invoke = async (request) => {
-      if (request.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
-        await workspace.processes.stopEnvironment(
-          parseNodeWorkerEnvironmentStopInput(JSON.stringify(request.params)),
-        );
-        return { ok: true, payloadJSON: "null" };
-      }
-      const input = parseNodeWorkerWorkspaceExecInput(JSON.stringify(request.params));
-      if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
+    const nodeTransport = workspaceTransport(workspace, (request) => {
+      if (
+        request.command !== NODE_WORKER_ENVIRONMENT_STOP_COMMAND &&
+        parseNodeWorkerWorkspaceExecInput(JSON.stringify(request.params)).argv[0] ===
+          NODE_WORKSPACE_DRAIN_COMMAND
+      ) {
         drainReached.resolve();
       }
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify(await workspace.exec(input, request.signal)),
-      };
-    };
+    });
     const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: { ...workspaceTransfer(), closeAll: vi.fn(async () => {}) },
@@ -793,33 +794,13 @@ describe("attached app process lifetime", () => {
       sessionKey: "agent:main:conversation-1",
     };
     const gatewayDeviceId = "gateway-device-1";
-    const nodeTransport = transport();
-    nodeTransport.invoke = async (request) => {
+    const nodeTransport = workspaceTransport(workspace, (request) => {
       expect(request.isDispatchAuthorized()).toBe(true);
       request.onDispatchReady?.("attached-command");
-      if (request.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
-        await workspace.processes.stopEnvironment(
-          parseNodeWorkerEnvironmentStopInput(JSON.stringify(request.params)),
-        );
-        return { ok: true, payloadJSON: "null" };
-      }
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify(
-          await workspace.exec(
-            parseNodeWorkerWorkspaceExecInput(JSON.stringify(request.params)),
-            request.signal,
-          ),
-        ),
-      };
-    };
+    });
     const createAttachedManager = () =>
-      createNodeWorkerTunnelManager({
-        gatewayDeviceId,
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
+      createManager(record, {
         getTransport: () => nodeTransport,
-        launchNodeWorker: vi.fn(),
         validateWorkerTurn: () => false,
         workspaceTransfer: { ...workspaceTransfer(), closeAll: vi.fn(async () => {}) },
       });

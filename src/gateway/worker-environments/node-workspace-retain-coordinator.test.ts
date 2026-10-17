@@ -6,6 +6,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
+  type NodeWorkerWorkspaceRetainResult,
 } from "../../worker/node-workspace-retain-protocol.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -47,57 +48,83 @@ function receipt(bundleHash: string, openclawVersion = "2026.8.9") {
 function environment(overrides: Record<string, unknown> = {}) {
   return {
     environmentId: "environment-1",
-    providerId: "device",
-    profileId: "device:node-1",
     profileSnapshot: { install: "bundle", settings: { device: "node-1" } },
-    provisionOperationId: "provision-1",
-    nodeSetupId: null,
     nodeDeviceId: "node-1",
-    sharedHost: true,
-    desktop: null,
     bootstrapReceipt: null,
     ownerEpoch: 7,
-    teardownTerminalState: null,
     attachedSessionIds: ["session-1"],
-    lastError: null,
     createdAtMs: 1,
-    updatedAtMs: 2,
-    stateChangedAtMs: 2,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
     state: "attached",
-    leaseId: "device-lease",
-    sshEndpoint: null,
-    desktopAvailable: false,
-    desktopApps: [],
-    tunnelStatus: "connected",
     ...overrides,
   };
 }
 
+const retainResult = (
+  overrides: Partial<NodeWorkerWorkspaceRetainResult> = {},
+): NodeWorkerWorkspaceRetainResult => ({
+  applied: true,
+  deleted: 0,
+  hasMore: false,
+  ...overrides,
+});
+
+function expectManifests(
+  invoke: ReturnType<typeof createHarness>["invoke"],
+  manifestRefs: string[] | null,
+  index = 0,
+) {
+  expect(invoke.mock.calls[index]?.[0].params).toMatchObject({
+    retain: [expect.objectContaining({ manifestRefs })],
+  });
+}
+
+const retainEntry = {
+  environmentId: "environment-1",
+  sessionId: "session-1",
+  generation: 7,
+  manifestRefs: [`sha256:${"a".repeat(64)}`],
+};
+
 function placement(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "session-1",
-    agentId: "main",
-    sessionKey: "agent:main:session-1",
     generation: 3,
     turnClaim: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
-    stateChangedAtMs: 2,
     state: "active",
     environmentId: "environment-1",
     activeOwnerEpoch: 7,
     workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
-    remoteWorkspaceDir: "/node/workspace",
     workerBundleHash: "b".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
     ...overrides,
   };
+}
+
+function boundedInventory(attachedCount: number, statusOnlyOverflow = false) {
+  const padding = (index: number, full: number) =>
+    !statusOnlyOverflow || index < attachedCount - 1 ? full : index === attachedCount - 1 ? 31 : 0;
+  const environments = Array.from({ length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES }, (_, index) => {
+    const suffix = index.toString(16).padStart(8, "0");
+    return environment({
+      environmentId: `environment-${"e".repeat(padding(index, 220))}-${suffix}`,
+      attachedSessionIds:
+        index < attachedCount ? [`session-${"s".repeat(padding(index, 224))}-${suffix}`] : [],
+      createdAtMs:
+        statusOnlyOverflow && index === NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1 ? 10 : 1,
+      bootstrapReceipt: receipt(
+        index.toString(16).padStart(64, "0"),
+        statusOnlyOverflow ? "2026.8.9" : "2026.8.1",
+      ),
+    });
+  });
+  const placements = environments.slice(0, attachedCount).map((entry, index) =>
+    placement({
+      sessionId: entry.attachedSessionIds[0],
+      environmentId: entry.environmentId,
+      workerBundleHash: index.toString(16).padStart(64, "0"),
+    }),
+  );
+  return { environments, placements };
 }
 
 function createHarness(
@@ -108,13 +135,7 @@ function createHarness(
       ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>
     >;
     prepareResultAuthority?: () => () => void;
-    results?: Array<{
-      applied: boolean;
-      deleted: number;
-      hasMore: boolean;
-      bundleGeneration?: number;
-      bundleStatus?: { bundleHash: string; status: "installed" | "missing" };
-    }>;
+    results?: NodeWorkerWorkspaceRetainResult[];
     node?: NodeWorkerSupervisorNodeProof;
     currentBundleStatus?: NodeWorkerBundleStatusObservation;
     bundleRetention?: Parameters<typeof createNodeWorkspaceRetainCoordinator>[0]["bundleRetention"];
@@ -126,7 +147,7 @@ function createHarness(
     onInvoke?: (index: number) => void;
   } = {},
 ) {
-  const results = [...(params.results ?? [{ applied: true, deleted: 0, hasMore: false }])];
+  const results = [...(params.results ?? [retainResult()])];
   let invokeIndex = 0;
   const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {
     params.onInvoke?.(invokeIndex++);
@@ -135,7 +156,7 @@ function createHarness(
     }
     return {
       ok: true,
-      payloadJSON: JSON.stringify(results.shift() ?? { applied: true, deleted: 0, hasMore: false }),
+      payloadJSON: JSON.stringify(results.shift() ?? retainResult()),
     };
   });
   let currentBundleStatus = params.currentBundleStatus;
@@ -261,12 +282,9 @@ describe("node workspace retain coordinator", () => {
           nodeId: "node-1",
           connId: "connection-1",
           ok: true,
-          payloadJSON: JSON.stringify({
-            applied: true,
-            deleted: 0,
-            hasMore: false,
-            bundleStatus: { bundleHash, status: "installed" },
-          }),
+          payloadJSON: JSON.stringify(
+            retainResult({ bundleStatus: { bundleHash, status: "installed" } }),
+          ),
         }),
       ).toBe(true);
       await publishing;
@@ -306,14 +324,7 @@ describe("node workspace retain coordinator", () => {
         controllerId: expect.any(String),
         sequence: 1,
         bundleHashes: ["b".repeat(64)],
-        retain: [
-          {
-            environmentId: "environment-1",
-            sessionId: "session-1",
-            generation: 7,
-            manifestRefs: [`sha256:${"a".repeat(64)}`],
-          },
-        ],
+        retain: [retainEntry],
       },
     });
     await coordinator.stop();
@@ -355,13 +366,7 @@ describe("node workspace retain coordinator", () => {
         }),
       ],
       results: [
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleGeneration: 3,
-          bundleStatus: { bundleHash, status: "installed" },
-        },
+        retainResult({ bundleGeneration: 3, bundleStatus: { bundleHash, status: "installed" } }),
       ],
     });
 
@@ -388,24 +393,13 @@ describe("node workspace retain coordinator", () => {
         }),
       ],
       results: [
-        {
-          applied: true,
+        retainResult({
           deleted: 1,
           hasMore: true,
           bundleStatus: { bundleHash, status: "installed" },
-        },
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleStatus: { bundleHash, status: "missing" },
-        },
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleStatus: { bundleHash, status: "installed" },
-        },
+        }),
+        retainResult({ bundleStatus: { bundleHash, status: "missing" } }),
+        retainResult({ bundleStatus: { bundleHash, status: "installed" } }),
       ],
     });
 
@@ -459,12 +453,7 @@ describe("node workspace retain coordinator", () => {
         }),
       ],
       results: [
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleStatus: { bundleHash: "c".repeat(64), status: "installed" },
-        },
+        retainResult({ bundleStatus: { bundleHash: "c".repeat(64), status: "installed" } }),
       ],
     });
 
@@ -497,14 +486,7 @@ describe("node workspace retain coordinator", () => {
         gatewayNamespace: "gateway-test",
         controllerId: expect.any(String),
         sequence: 1,
-        retain: [
-          {
-            environmentId: "environment-1",
-            sessionId: "session-1",
-            generation: 7,
-            manifestRefs: [`sha256:${"a".repeat(64)}`],
-          },
-        ],
+        retain: [retainEntry],
       });
       expect(warn).not.toHaveBeenCalled();
     } finally {
@@ -519,7 +501,7 @@ describe("node workspace retain coordinator", () => {
         environment({ nodeSetupId: "cloud-setup", bootstrapReceipt: receipt("b".repeat(64)) }),
       ],
       bundleRetention: { currentBuild, isEnvironmentOwnedNode: () => true },
-      results: [{ applied: true, deleted: 0, hasMore: false, bundleGeneration: 7 }],
+      results: [retainResult({ bundleGeneration: 7 })],
     });
 
     try {
@@ -530,14 +512,7 @@ describe("node workspace retain coordinator", () => {
       expect(invoke).toHaveBeenCalledTimes(2);
       const input = invoke.mock.calls[1]?.[0].params;
       expect(input).toMatchObject({
-        retain: [
-          {
-            environmentId: "environment-1",
-            sessionId: "session-1",
-            generation: 7,
-            manifestRefs: [`sha256:${"a".repeat(64)}`],
-          },
-        ],
+        retain: [retainEntry],
       });
       expect(input).not.toHaveProperty("bundleHashes");
       expect(input).not.toHaveProperty("acknowledgedBundleGeneration");
@@ -572,32 +547,7 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("keeps bounded bundle retention when only the status query exceeds one MiB", async () => {
-    const attachedCount = 1_241;
-    const environments = Array.from(
-      { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES },
-      (_, index) => {
-        const suffix = index.toString(16).padStart(8, "0");
-        const attached = index < attachedCount;
-        const environmentPadding =
-          index < attachedCount - 1 ? 220 : index === attachedCount - 1 ? 31 : 0;
-        const sessionPadding =
-          index < attachedCount - 1 ? 224 : index === attachedCount - 1 ? 31 : 0;
-        return environment({
-          environmentId: `environment-${"e".repeat(environmentPadding)}-${suffix}`,
-          attachedSessionIds: attached ? [`session-${"s".repeat(sessionPadding)}-${suffix}`] : [],
-          createdAtMs: index === NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1 ? 10 : 1,
-          bootstrapReceipt: receipt(index.toString(16).padStart(64, "0")),
-        });
-      },
-    );
-    const placements = environments.slice(0, attachedCount).map((entry, index) =>
-      placement({
-        sessionId: entry.attachedSessionIds[0],
-        environmentId: entry.environmentId,
-        workerBundleHash: index.toString(16).padStart(64, "0"),
-      }),
-    );
-    const { coordinator, invoke, warn } = createHarness({ environments, placements });
+    const { coordinator, invoke, warn } = createHarness(boundedInventory(1_241, true));
 
     await coordinator.start();
 
@@ -623,26 +573,7 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("omits bundle hashes when the combined maintenance request exceeds one MiB", async () => {
-    const environments = Array.from(
-      { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES },
-      (_, index) => {
-        const suffix = index.toString(16).padStart(8, "0");
-        const attached = index < 1_500;
-        return environment({
-          environmentId: `environment-${"e".repeat(220)}-${suffix}`,
-          attachedSessionIds: attached ? [`session-${"s".repeat(224)}-${suffix}`] : [],
-          bootstrapReceipt: receipt(index.toString(16).padStart(64, "0"), "2026.8.1"),
-        });
-      },
-    );
-    const placements = environments.slice(0, 1_500).map((entry, index) =>
-      placement({
-        sessionId: entry.attachedSessionIds[0],
-        environmentId: entry.environmentId,
-        workerBundleHash: index.toString(16).padStart(64, "0"),
-      }),
-    );
-    const { coordinator, invoke, warn } = createHarness({ environments, placements });
+    const { coordinator, invoke, warn } = createHarness(boundedInventory(1_500));
 
     await coordinator.start();
 
@@ -668,9 +599,7 @@ describe("node workspace retain coordinator", () => {
 
       await coordinator.start();
 
-      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-        retain: [expect.objectContaining({ manifestRefs: null })],
-      });
+      expectManifests(invoke, null);
       await coordinator.stop();
     },
   );
@@ -712,13 +641,7 @@ describe("node workspace retain coordinator", () => {
               ],
       });
       await coordinator.start();
-      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-        retain: [
-          expect.objectContaining({
-            manifestRefs: state === "stale-pending" ? [`sha256:${"a".repeat(64)}`] : null,
-          }),
-        ],
-      });
+      expectManifests(invoke, state === "stale-pending" ? [`sha256:${"a".repeat(64)}`] : null);
       await coordinator.stop();
     },
   );
@@ -737,9 +660,7 @@ describe("node workspace retain coordinator", () => {
     const { coordinator, invoke } = createHarness(options);
     try {
       await coordinator.start();
-      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-        retain: [expect.objectContaining({ manifestRefs: [baseManifest, firstManifest] })],
-      });
+      expectManifests(invoke, [baseManifest, firstManifest]);
 
       placements[0] = placement({ workspaceBaseManifestRef: latestManifest });
       options.node = { ...node, connId: "connection-2" };
@@ -780,9 +701,7 @@ describe("node workspace retain coordinator", () => {
       try {
         await coordinator.start();
         expect(invoke).toHaveBeenCalledOnce();
-        expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-          retain: [expect.objectContaining({ manifestRefs: [rows[0]!.workspaceBaseManifestRef] })],
-        });
+        expectManifests(invoke, [rows[0]!.workspaceBaseManifestRef]);
         expect(warn).not.toHaveBeenCalled();
       } finally {
         await coordinator.stop();
@@ -877,25 +796,16 @@ describe("node workspace retain coordinator", () => {
         return;
       }
       expect(invoke).toHaveBeenCalledOnce();
-      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-        retain: [
-          expect.objectContaining({
-            manifestRefs: ["current", "placement", "result"].includes(change)
-              ? [baseManifest, `sha256:${"a".repeat(64)}`]
-              : null,
-          }),
-        ],
-      });
+      expectManifests(
+        invoke,
+        ["current", "placement", "result"].includes(change)
+          ? [baseManifest, `sha256:${"a".repeat(64)}`]
+          : null,
+      );
       if (change === "placement") {
         await coordinator.schedule("node-1");
         expect(invoke).toHaveBeenCalledTimes(2);
-        expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
-          retain: [
-            expect.objectContaining({
-              manifestRefs: [baseManifest, `sha256:${"a".repeat(64)}`],
-            }),
-          ],
-        });
+        expectManifests(invoke, [baseManifest, `sha256:${"a".repeat(64)}`], 1);
       }
     } finally {
       release.resolve();
@@ -918,9 +828,9 @@ describe("node workspace retain coordinator", () => {
         isEnvironmentOwnedNode: () => false,
       },
       results: [
-        { applied: true, deleted: 0, hasMore: false, bundleGeneration: 1 },
-        { applied: true, deleted: 0, hasMore: false, bundleGeneration: 1 },
-        { applied: true, deleted: 1, hasMore: false, bundleGeneration: 1 },
+        retainResult({ bundleGeneration: 1 }),
+        retainResult({ bundleGeneration: 1 }),
+        retainResult({ deleted: 1, bundleGeneration: 1 }),
       ],
     };
     const { coordinator, invoke } = createHarness(input);
@@ -988,7 +898,7 @@ describe("node workspace retain coordinator", () => {
       }
       return {
         ok: true,
-        payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+        payloadJSON: JSON.stringify(retainResult()),
       };
     });
     const transport: NodeWorkerSupervisorTransport = {

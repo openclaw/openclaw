@@ -25,6 +25,23 @@ function spawnResult(stdout = "", code = 0): SpawnResult {
   return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
 }
 
+const syncResult = {
+  mode: "git" as const,
+  remoteWorkspaceDir: REMOTE_WORKSPACE,
+  manifestRef: MANIFEST_REF,
+};
+const syncRequest = (localPath: string) => ({ localPath, sessionId: "session-1", generation: 1 });
+const remoteResult = (stdout = "", code = 0) => ({
+  ...spawnResult(stdout, code),
+  workspaceDir: REMOTE_WORKSPACE,
+});
+const seedStoreCommand = {
+  argv: ["openclaw-internal-workspace-seed"],
+  seed: { action: "store", key: SEED_KEY, maxAgeMs: 6 * 60 * 60 * 1000 },
+  timeoutMs: 180_000,
+  transportRetry: "never",
+};
+
 function cleanWorkspace(): string {
   const root = tempDirs.make("node-worker-origin-workspace-");
   runCommandWithTimeout.mockReset();
@@ -64,23 +81,18 @@ describe("node worker workspace origin fallback", () => {
           current = false;
           throw closed;
         }
-        return {
-          ...spawnResult(
-            seed?.action === "apply"
-              ? "absent\n"
-              : argv.includes("rev-parse")
-                ? COMMIT
-                : MANIFEST_REF,
-          ),
-          workspaceDir: REMOTE_WORKSPACE,
-        };
+        return remoteResult(
+          seed?.action === "apply"
+            ? "absent\n"
+            : argv.includes("rev-parse")
+              ? COMMIT
+              : MANIFEST_REF,
+        );
       });
       await expect(
         createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
           {
-            localPath,
-            sessionId: "session-1",
-            generation: 1,
+            ...syncRequest(localPath),
             authorize: () => {
               if (!current) {
                 throw closed;
@@ -99,8 +111,8 @@ describe("node worker workspace origin fallback", () => {
 
   it("clones a clean commit without requiring it to be an advertised ref tip", async () => {
     const localPath = cleanWorkspace();
-    const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => ({
-      ...spawnResult(
+    const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) =>
+      remoteResult(
         seed?.action === "apply"
           ? "absent\n"
           : argv[0] === "node" && !argv.includes("--")
@@ -109,18 +121,17 @@ describe("node worker workspace origin fallback", () => {
               ? COMMIT
               : "",
       ),
-      workspaceDir: REMOTE_WORKSPACE,
-    }));
+    );
 
     await expect(
       createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
-        { localPath, sessionId: "session-1", generation: 1 },
+        syncRequest(localPath),
         MANIFEST_REF,
       ),
     ).resolves.toEqual({
       kind: "synced",
       seeded: false,
-      result: { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
+      result: syncResult,
     });
 
     expect(exec.mock.calls.map(([command]) => command.argv)).toEqual([
@@ -132,12 +143,7 @@ describe("node worker workspace origin fallback", () => {
       expect.arrayContaining(["node", REMOTE_WORKSPACE, COMMIT]),
       ["openclaw-internal-workspace-seed"],
     ]);
-    expect(exec.mock.calls.at(-1)?.[0]).toEqual({
-      argv: ["openclaw-internal-workspace-seed"],
-      seed: { action: "store", key: SEED_KEY, maxAgeMs: 6 * 60 * 60 * 1000 },
-      timeoutMs: 180_000,
-      transportRetry: "never",
-    });
+    expect(exec.mock.calls.at(-1)?.[0]).toEqual(seedStoreCommand);
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       expect.arrayContaining(["ls-remote"]),
       expect.anything(),
@@ -188,24 +194,21 @@ describe("node worker workspace origin fallback", () => {
         } else if (argv.includes("rev-parse")) {
           stdout = COMMIT;
         }
-        return {
-          ...spawnResult(
-            stdout,
-            !cloned && failure === "fetch-failed" && argv.includes("fetch") ? 1 : 0,
-          ),
-          workspaceDir: REMOTE_WORKSPACE,
-        };
+        return remoteResult(
+          stdout,
+          !cloned && failure === "fetch-failed" && argv.includes("fetch") ? 1 : 0,
+        );
       });
 
       await expect(
         createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
-          { localPath, sessionId: "session-1", generation: 1 },
+          syncRequest(localPath),
           MANIFEST_REF,
         ),
       ).resolves.toEqual({
         kind: "synced",
         seeded: failure === "none",
-        result: { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
+        result: syncResult,
       });
       expect(exec.mock.calls[0]?.[0]).toEqual({
         argv: ["openclaw-internal-workspace-seed"],
@@ -233,12 +236,7 @@ describe("node worker workspace origin fallback", () => {
         );
       }
       expect(commands.filter((command) => command.seed?.action === "store")).toEqual([
-        {
-          argv: ["openclaw-internal-workspace-seed"],
-          seed: { action: "store", key: SEED_KEY, maxAgeMs: 6 * 60 * 60 * 1000 },
-          timeoutMs: 180_000,
-          transportRetry: "never",
-        },
+        seedStoreCommand,
       ]);
     },
   );
@@ -255,21 +253,18 @@ describe("node worker workspace origin fallback", () => {
         await stored.promise;
         throw new Error("seed cache is full");
       }
-      return {
-        ...spawnResult(
-          seed?.action === "apply"
-            ? "absent\n"
-            : argv[0] === "node" && !argv.includes("--")
-              ? MANIFEST_REF
-              : argv.includes("rev-parse")
-                ? COMMIT
-                : "",
-        ),
-        workspaceDir: REMOTE_WORKSPACE,
-      };
+      return remoteResult(
+        seed?.action === "apply"
+          ? "absent\n"
+          : argv[0] === "node" && !argv.includes("--")
+            ? MANIFEST_REF
+            : argv.includes("rev-parse")
+              ? COMMIT
+              : "",
+      );
     });
     const syncing = createNodeWorkerWorkspaceFallback(exec)
-      .trySyncWorkspace({ localPath, sessionId: "session-1", generation: 1 }, MANIFEST_REF)
+      .trySyncWorkspace(syncRequest(localPath), MANIFEST_REF)
       .then((outcome) => {
         events.push("synced");
         return outcome;
@@ -310,22 +305,14 @@ describe("node worker workspace origin fallback", () => {
     "projects $label into a materialized Git workspace",
     async ({ gitAuthor, expected, lookups }) => {
       const localPath = cleanWorkspace();
-      const exec = vi.fn<WorkspaceExec>(async () => ({
-        ...spawnResult(),
-        workspaceDir: REMOTE_WORKSPACE,
-      }));
-      const result = {
-        mode: "git" as const,
-        remoteWorkspaceDir: REMOTE_WORKSPACE,
-        manifestRef: MANIFEST_REF,
-      };
+      const exec = vi.fn<WorkspaceExec>(async () => remoteResult());
 
       await expect(
         createNodeWorkerWorkspaceFallback(exec).finalizeSync(
-          { localPath, sessionId: "session-1", generation: 1, ...(gitAuthor ? { gitAuthor } : {}) },
-          result,
+          { ...syncRequest(localPath), ...(gitAuthor ? { gitAuthor } : {}) },
+          syncResult,
         ),
-      ).resolves.toEqual(result);
+      ).resolves.toEqual(syncResult);
       expect(
         exec.mock.calls
           .filter(([command]) => command.argv.includes("config"))
@@ -356,19 +343,14 @@ describe("node worker workspace origin fallback", () => {
   ])("forwards only credential-free supported source origins (%s)", async (source, expected) => {
     const localPath = cleanWorkspace();
     runCommandWithTimeout.mockResolvedValue(spawnResult(source));
-    const exec = vi.fn<WorkspaceExec>(async () => ({
-      ...spawnResult(),
-      workspaceDir: REMOTE_WORKSPACE,
-    }));
+    const exec = vi.fn<WorkspaceExec>(async () => remoteResult());
 
     await createNodeWorkerWorkspaceFallback(exec).finalizeSync(
       {
-        localPath,
-        sessionId: "session-1",
-        generation: 1,
+        ...syncRequest(localPath),
         gitAuthor: { name: "Fixture", email: "fixture@example.invalid" },
       },
-      { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
+      syncResult,
     );
 
     expect(
@@ -381,16 +363,12 @@ describe("node worker workspace origin fallback", () => {
   it("fails closed when a node rejects its Gateway Git author", async () => {
     const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>(async () => ({
-      ...spawnResult("", 1),
+      ...remoteResult("", 1),
       stderr: "node Git config rejected the author",
-      workspaceDir: REMOTE_WORKSPACE,
     }));
 
     await expect(
-      createNodeWorkerWorkspaceFallback(exec).finalizeSync(
-        { localPath, sessionId: "session-1", generation: 1 },
-        { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
-      ),
+      createNodeWorkerWorkspaceFallback(exec).finalizeSync(syncRequest(localPath), syncResult),
     ).rejects.toThrow("Worker workspace sync failed: node Git config rejected the author");
   });
 
@@ -417,7 +395,7 @@ describe("node worker workspace origin fallback", () => {
 
     await expect(
       createNodeWorkerWorkspaceFallback(vi.fn<WorkspaceExec>()).trySyncWorkspace(
-        { localPath, sessionId: "session-1", generation: 1, gitAuthor: { name: "invalid\nname" } },
+        { ...syncRequest(localPath), gitAuthor: { name: "invalid\nname" } },
         MANIFEST_REF,
       ),
     ).rejects.toThrow("Worker workspace Git author metadata is invalid");
