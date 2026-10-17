@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { shouldIncludeCronInspectLink } from "../cron/inspect-links.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
@@ -217,10 +218,12 @@ function appendCronFailureAlertDetails(
       text += `\nRun started: ${timestamp}`;
     }
   }
-  const inspectUrl = resolveControlUiAutomationRunUrl(config, {
-    jobId,
-    runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
-  });
+  const inspectUrl = shouldIncludeCronInspectLink(config, "error")
+    ? resolveControlUiAutomationRunUrl(config, {
+        jobId,
+        runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
+      })
+    : undefined;
   return inspectUrl ? `${text}\nInspect: ${inspectUrl}` : text;
 }
 

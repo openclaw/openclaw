@@ -19,6 +19,21 @@ describe("config schema regressions", () => {
     );
   });
 
+  it.each(["always", "errors", "never"] as const)(
+    "accepts cron.announce.inspectLinks=%s",
+    (inspectLinks) => {
+      expect(OpenClawSchema.parse({ cron: { announce: { inspectLinks } } }).cron).toEqual({
+        announce: { inspectLinks },
+      });
+    },
+  );
+
+  it("rejects an invalid cron.announce.inspectLinks mode", () => {
+    expect(
+      OpenClawSchema.safeParse({ cron: { announce: { inspectLinks: "sometimes" } } }).success,
+    ).toBe(false);
+  });
+
   it("round-trips desktop host config and rejects unsafe or unknown fields", () => {
     const host = { enabled: true, managed: true, port: 5901, passwordFile: "/run/vnc/passwd" };
     expect(OpenClawSchema.parse({ desktop: { host } }).desktop).toStrictEqual({ host });

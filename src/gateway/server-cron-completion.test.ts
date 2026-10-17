@@ -336,6 +336,23 @@ async function withCompletionFixture(
 describe("completion announcement", () => {
   const kind = "script";
 
+  it.each(["errors", "never"] as const)(
+    "omits the inspection link for successful announcements when mode is %s",
+    async (inspectLinks) => {
+      await withCompletionFixture("command", async (fixture) => {
+        fixture.cfg.cron = { announce: { inspectLinks } };
+        await expect(fixture.finalize()).resolves.toMatchObject({ delivered: true });
+        expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: fixture.text }),
+        );
+        await expect(fixture.messages(fixture.destination)).resolves.toEqual([
+          expect.objectContaining({ content: [{ type: "text", text: fixture.text }] }),
+        ]);
+        await fixture.assertNoOtherResults();
+      });
+    },
+  );
+
   it("commits the effective post-hook payload shown to the recipient", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const registry = captureActivePluginRegistrySnapshot();
