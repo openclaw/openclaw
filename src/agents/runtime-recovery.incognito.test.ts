@@ -94,10 +94,14 @@ async function create(name: string, patch: Partial<SessionEntry> = {}, owner = a
     agentId: owner.agentId,
     path: owner.path,
   });
+  await writeEntry(handle, entry);
+  return { agentId: "main", sessionKey, sessionId: entry.sessionId, storePath: owner.path };
+}
+
+async function writeEntry(handle: SessionActorStorageBinding["actor"], entry: SessionEntry) {
   expect(
     await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
   ).toMatchObject({ kind: "committed" });
-  return { agentId: "main", sessionKey, sessionId: entry.sessionId, storePath: owner.path };
 }
 
 function recoveryRuntime(
@@ -115,30 +119,50 @@ function recoveryRuntime(
   };
 }
 
+type Target = Awaited<ReturnType<typeof create>>;
+const configFor = (stateDir = env.OPENCLAW_STATE_DIR!) => ({
+  session: { store: path.join(stateDir, "sessions.json") },
+});
+function recover(target: Target, runtime = recoveryRuntime()) {
+  return withMemory(target, () =>
+    retryRestartAbortedMainSessionRecovery({
+      ...target,
+      expectedSessionId: target.sessionId,
+      gatewayRuntime: runtime,
+    }),
+  );
+}
+function registerRun(target: Target, runId: string, abort: () => void) {
+  setActiveEmbeddedRun(
+    target.sessionId,
+    createEmbeddedRunHandle({ runId, abort }),
+    target.sessionKey,
+    undefined,
+    "main",
+  );
+}
+
 it("resolves partial markers and store/SID targets within the selected physical actor", async () => {
-  const config = { session: { store: path.join(env.OPENCLAW_STATE_DIR!, "sessions.json") } };
+  const config = configFor();
   const target = await create("partial-target");
   await create("different-key", { sessionId: target.sessionId }, sibling);
   await withMemory(target, async () => {
+    const resolve = (partial: Partial<Parameters<typeof resolveAgentRunSessionTarget>[0]>) =>
+      resolveAgentRunSessionTarget({
+        config,
+        sessionId: target.sessionId,
+        missingSessionKey: "resolve-existing",
+        ...partial,
+      });
     for (const partial of [
       { sessionFile: formatSqliteSessionFileMarker(target) },
       { sessionTarget: { agentId: "main", storePath: actor.path, sessionId: target.sessionId } },
     ]) {
-      await expect(
-        resolveAgentRunSessionTarget({
-          ...partial,
-          config,
-          sessionId: target.sessionId,
-          missingSessionKey: "resolve-existing",
-        }),
-      ).resolves.toMatchObject(target);
+      await expect(resolve(partial)).resolves.toMatchObject(target);
     }
     await expect(
-      resolveAgentRunSessionTarget({
-        config,
+      resolve({
         sessionFile: formatSqliteSessionFileMarker({ ...target, storePath: sibling.path }),
-        sessionId: target.sessionId,
-        missingSessionKey: "resolve-existing",
       }),
     ).rejects.toThrow("Session storage owner belongs to another state root");
   });
@@ -147,29 +171,27 @@ it("resolves partial markers and store/SID targets within the selected physical 
 it("keeps selected absence missing without discovering a durable or successor owner", async () => {
   const absentEnv = { OPENCLAW_STATE_DIR: tempDirs.make("runtime-recovery-absent-") };
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: absentEnv });
-  {
-    await expect(
-      resolveAgentRunSessionTarget({
-        config: { session: { store: path.join(absentEnv.OPENCLAW_STATE_DIR, "sessions.json") } },
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "missing",
-          storePath,
-        }),
-        sessionId: "missing",
-        missingSessionKey: "resolve-existing",
-      }),
-    ).rejects.toThrow("Cannot resolve a session key");
-    await expect(
-      retryRestartAbortedMainSessionRecovery({
+  await expect(
+    resolveAgentRunSessionTarget({
+      config: configFor(absentEnv.OPENCLAW_STATE_DIR),
+      sessionFile: formatSqliteSessionFileMarker({
         agentId: "main",
-        sessionKey: "agent:main:dashboard:incognito-missing",
+        sessionId: "missing",
         storePath,
-        expectedSessionId: "missing",
-        gatewayRuntime: recoveryRuntime(),
       }),
-    ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-  }
+      sessionId: "missing",
+      missingSessionKey: "resolve-existing",
+    }),
+  ).rejects.toThrow("Cannot resolve a session key");
+  await expect(
+    retryRestartAbortedMainSessionRecovery({
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-missing",
+      storePath,
+      expectedSessionId: "missing",
+      gatewayRuntime: recoveryRuntime(),
+    }),
+  ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
   expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
 });
 
@@ -180,17 +202,9 @@ it.each(["settle", "replacement"] as const)(
       lifecycleRunId: "cancel-run",
       startedAt: 9_000,
     });
-    setRuntimeConfigSnapshot({
-      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "sessions.json") },
-    });
+    setRuntimeConfigSnapshot(configFor());
     const aborted = vi.fn();
-    setActiveEmbeddedRun(
-      target.sessionId,
-      createEmbeddedRunHandle({ runId: "cancel-run", abort: aborted }),
-      target.sessionKey,
-      undefined,
-      "main",
-    );
+    registerRun(target, "cancel-run", aborted);
     let replacementRegistered = false;
     const replacementAbort = vi.fn();
     const acquire = actor.acquireExisting.bind(actor);
@@ -200,13 +214,7 @@ it.each(["settle", "replacement"] as const)(
         expect(aborted).toHaveBeenCalledOnce();
         if (outcome === "replacement") {
           replacementRegistered = true;
-          setActiveEmbeddedRun(
-            target.sessionId,
-            createEmbeddedRunHandle({ runId: "replacement-run", abort: replacementAbort }),
-            target.sessionKey,
-            undefined,
-            "main",
-          );
+          registerRun(target, "replacement-run", replacementAbort);
         }
         return acquire(...args);
       });
@@ -263,13 +271,7 @@ it("settles same-process recovery through its original actor after preparation y
     entered.resolve();
     return gate.promise;
   });
-  const recovering = withMemory(target, () =>
-    retryRestartAbortedMainSessionRecovery({
-      ...target,
-      expectedSessionId: target.sessionId,
-      gatewayRuntime: recoveryRuntime(prepare),
-    }),
-  );
+  const recovering = recover(target, recoveryRuntime(prepare));
   await entered.promise;
   expect(prepare).toHaveBeenCalledOnce();
   gate.resolve(undefined);
@@ -320,37 +322,19 @@ it("refuses a replacement session after recovery preparation yields", async () =
       { assertCurrent() {}, assertReadable() {} },
     );
     try {
-      expect(
-        await replacement.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: {
-              entry: {
-                sessionId: target.sessionId,
-                updatedAt: Date.now(),
-                incognito: true,
-                abortedLastRun: true,
-                restartRecoveryDeliveryRunId: "replacement-run",
-              },
-            },
-          },
-          authority,
-        ),
-      ).toMatchObject({ kind: "committed" });
+      await writeEntry(replacement, {
+        sessionId: target.sessionId,
+        updatedAt: Date.now(),
+        incognito: true,
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "replacement-run",
+      });
     } finally {
       await replacement.release();
     }
     return undefined;
   });
-  await expect(
-    withMemory(target, () =>
-      retryRestartAbortedMainSessionRecovery({
-        ...target,
-        expectedSessionId: target.sessionId,
-        gatewayRuntime: runtime,
-      }),
-    ),
-  ).rejects.toThrow("closed");
+  await expect(recover(target, runtime)).rejects.toThrow("closed");
   expect(runtime.dispatchAgent).not.toHaveBeenCalled();
   expect(actor.readSession(target.sessionKey, authority)?.entry).toMatchObject({
     abortedLastRun: true,
@@ -379,13 +363,7 @@ it("retains an owed completion when the exact admitted source input is absent", 
     restartRecoveryHarnessCompletion: claim,
   });
   const runtime = recoveryRuntime();
-  const result = await withMemory(target, () =>
-    retryRestartAbortedMainSessionRecovery({
-      ...target,
-      expectedSessionId: target.sessionId,
-      gatewayRuntime: runtime,
-    }),
-  );
+  const result = await recover(target, runtime);
   expect(result).toMatchObject({ failed: 1, started: 0, settled: 0 });
   expect(runtime.dispatchAgent).not.toHaveBeenCalled();
   expect(

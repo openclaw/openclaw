@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
 import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
@@ -188,47 +189,28 @@ function expectDockerSetupCommand(command: string) {
   expect(matched, `expected docker setup command; calls=${JSON.stringify(spawnCalls)}`).toBe(true);
 }
 
-function createDefaultsSandboxConfig(
-  scope: "agent" | "shared" | "session" = "agent",
+function sandboxConfig(
+  sandbox: AgentSandboxConfig = { mode: "all", scope: "agent" },
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {},
 ): OpenClawConfig {
   return {
     agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          scope,
-        },
-      },
+      defaults: { sandbox },
+      entries,
     },
   };
 }
 
 function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          scope,
-          docker: {
-            setupCommand: "echo global",
-          },
-        },
-      },
-      entries: {
-        work: {
-          workspace: "~/openclaw-work",
-          sandbox: {
-            mode: "all",
-            scope,
-            docker: {
-              setupCommand: "echo work",
-            },
-          },
-        },
+  return sandboxConfig(
+    { mode: "all", scope, docker: { setupCommand: "echo global" } },
+    {
+      work: {
+        workspace: "~/openclaw-work",
+        sandbox: { mode: "all", scope, docker: { setupCommand: "echo work" } },
       },
     },
-  };
+  );
 }
 
 describe("Agent-specific sandbox config", () => {
@@ -246,27 +228,19 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use agent-specific workspaceRoot", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
+    const cfg = sandboxConfig(
+      { mode: "all", scope: "agent", workspaceRoot: "~/.openclaw/sandboxes" },
+      {
+        isolated: {
+          workspace: "~/openclaw-isolated",
           sandbox: {
             mode: "all",
             scope: "agent",
-            workspaceRoot: "~/.openclaw/sandboxes",
-          },
-        },
-        entries: {
-          isolated: {
-            workspace: "~/openclaw-isolated",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-              workspaceRoot: "/tmp/isolated-sandboxes",
-            },
+            workspaceRoot: "/tmp/isolated-sandboxes",
           },
         },
       },
-    };
+    );
 
     const context = await resolveContext(cfg, "agent:isolated:main", "/tmp/test-isolated");
 
@@ -320,60 +294,26 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should honor agent-specific sandbox mode overrides", () => {
-    const scenarios: Array<{
-      cfg: OpenClawConfig;
-      sessionKey: string;
-      assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => void;
-    }> = [
+    const scenarios = [
       {
-        cfg: {
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "all",
-                scope: "agent",
-              },
-            },
-            entries: {
-              main: {
-                workspace: "~/openclaw",
-                sandbox: {
-                  mode: "off",
-                },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
+        cfg: sandboxConfig(undefined, {
+          main: { workspace: "~/openclaw", sandbox: { mode: "off" } },
+        }),
         sessionKey: "agent:main:main",
-        assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => {
-          expect(runtime.mode).toBe("off");
-          expect(runtime.sandboxed).toBe(false);
-        },
+        expected: { mode: "off", sandboxed: false },
       },
       {
-        cfg: {
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "off",
-              },
-            },
-            entries: {
-              family: {
-                workspace: "~/openclaw-family",
-                sandbox: {
-                  mode: "all",
-                  scope: "agent",
-                },
-              },
+        cfg: sandboxConfig(
+          { mode: "off" },
+          {
+            family: {
+              workspace: "~/openclaw-family",
+              sandbox: { mode: "all", scope: "agent" },
             },
           },
-        } satisfies OpenClawConfig,
+        ),
         sessionKey: "agent:family:whatsapp:group:123",
-        assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => {
-          expect(runtime.mode).toBe("all");
-          expect(runtime.sandboxed).toBe(true);
-        },
+        expected: { mode: "all", sandboxed: true },
       },
     ];
     for (const scenario of scenarios) {
@@ -382,14 +322,14 @@ describe("Agent-specific sandbox config", () => {
         sessionKey: scenario.sessionKey,
         preparedSessionEntry: null,
       });
-      scenario.assert(runtime);
+      expect(runtime).toMatchObject(scenario.expected);
     }
   });
 
   it("enforces required allowlist tools in default and explicit sandbox configs", () => {
     for (const scenario of [
       {
-        cfg: createDefaultsSandboxConfig(),
+        cfg: sandboxConfig(),
         expected: ["session_status", "view_image"],
       },
       {
@@ -402,14 +342,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "all",
-                scope: "agent",
-              },
-            },
-          },
+          ...sandboxConfig(),
         } satisfies OpenClawConfig,
         expected: ["view_image"],
       },
