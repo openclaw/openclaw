@@ -4135,7 +4135,10 @@ mod tests {
 
     #[test]
     fn dashboard_authority_stays_inside_its_origin_and_path() {
-        for base in ["https://gateway.example/team", "https://gateway.example/team/"] {
+        for base in [
+            "https://gateway.example/team",
+            "https://gateway.example/team/",
+        ] {
             let expected = Url::parse(base).unwrap();
             for (url, allowed) in [
                 ("https://gateway.example/team", true),
