@@ -28,7 +28,7 @@ const env = {
 };
 const unitName = "openclaw-owned.service";
 const unitPath = "/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice";
-const properties = {
+const properties: Record<string, { type: string; data: string | number | boolean }> = {
   Id: { type: "s", data: unitName },
   LoadState: { type: "s", data: "loaded" },
   UnitFileState: { type: "s", data: "enabled" },
@@ -47,6 +47,26 @@ const properties = {
   MemoryCurrent: { type: "t", data: 2048 },
   ControlGroup: { type: "s", data: "/user.slice/openclaw-owned.service" },
 };
+const stopped = {
+  ActiveState: "inactive",
+  SubState: "dead",
+  MainPID: 0,
+  TasksCurrent: Number("18446744073709551615"),
+};
+const readLoaded = (options: Parameters<typeof readSystemdServiceRuntime>[1] = {}) =>
+  readSystemdServiceRuntime(env, { requireLoaded: true, ...options });
+const reply = (type: string, ...data: unknown[]) => success(JSON.stringify({ type, data }));
+function runtimeReply(args: string[], values: Record<string, string | number | boolean> = {}) {
+  return managerReply(
+    args,
+    Object.fromEntries(
+      Object.entries(values).map(([key, data]) => [key, { ...properties[key], data }]),
+    ),
+  );
+}
+function mockRuntime(values: Record<string, string | number | boolean>) {
+  busctl.mockImplementation(async (_env, args) => runtimeReply(args, values));
+}
 
 function success(stdout: string): ExecResult {
   return { code: 0, termination: "exit", stdout, stderr: "" };
@@ -105,16 +125,16 @@ describe("loaded-only systemd runtime", () => {
       canStart: false,
       reason: "disabled-no-start",
     },
-  ])("preserves native start refusal diagnostics ($file, $reason)", async (row) => {
+  ])("reports native start refusal ($file, $reason)", async (row) => {
     busctl.mockImplementation(async (_env, args) =>
-      managerReply(args, {
-        LoadState: { type: "s", data: row.load },
-        UnitFileState: { type: "s", data: row.file },
-        RefuseManualStart: { type: "b", data: row.refuse },
-        CanStart: { type: "b", data: row.canStart },
-        ActiveState: { type: "s", data: "inactive" },
-        MainPID: { type: "u", data: 0 },
-        TasksCurrent: { type: "t", data: 0 },
+      runtimeReply(args, {
+        LoadState: row.load,
+        UnitFileState: row.file,
+        RefuseManualStart: row.refuse,
+        CanStart: row.canStart,
+        ActiveState: "inactive",
+        MainPID: 0,
+        TasksCurrent: 0,
       }),
     );
     systemctl.mockResolvedValue(
@@ -143,14 +163,13 @@ describe("loaded-only systemd runtime", () => {
     }
   });
 
-  it.each([0, 2001])("authenticates the selected system manager UID %s", async (uid) => {
+  it.each([0, 2001])("authenticates system manager UID %s", async (uid) => {
     systemBusctl.mockImplementation(async (args) =>
       args.includes("GetConnectionUnixUser")
         ? success(JSON.stringify({ type: "u", data: [uid] }))
         : managerReply(args),
     );
-    const observation = readSystemdServiceRuntime(env, {
-      requireLoaded: true,
+    const observation = readLoaded({
       systemdReadTarget: { scope: "system", unitName, unitPath: `/etc/systemd/system/${unitName}` },
     });
     if (uid === 0) {
@@ -240,7 +259,7 @@ describe("loaded-only systemd runtime", () => {
           ? success(JSON.stringify({ type: "u", data: uid }))
           : managerReply(args),
       );
-      await expect(readSystemdServiceRuntime(env, { requireLoaded: true })).resolves.toMatchObject({
+      await expect(readLoaded()).resolves.toMatchObject({
         status: "unknown",
         inspectionFailure: expect.anything(),
       });
@@ -265,9 +284,9 @@ describe("loaded-only systemd runtime", () => {
     { LoadState: { type: "s", data: "not-found" } },
     { ActiveState: { type: "s", data: false } },
     { MainPID: { type: "u", data: -1 } },
-  ])("refuses malformed or changed native identity %j", async (overrides) => {
+  ])("refuses malformed native identity %j", async (overrides) => {
     busctl.mockImplementation(async (_env, args) => managerReply(args, overrides));
-    expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe("unknown");
+    expect((await readLoaded()).status).toBe("unknown");
     expect(systemctl).not.toHaveBeenCalled();
   });
 
@@ -320,18 +339,10 @@ describe("loaded-only systemd runtime", () => {
         elapsed = 1001;
         return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
       }
-      return managerReply(args, {
-        ActiveState: { type: "s", data: "inactive" },
-        SubState: { type: "s", data: "dead" },
-        MainPID: { type: "u", data: 0 },
-        TasksCurrent: { type: "t", data: Number("18446744073709551615") },
-      });
+      return runtimeReply(args, stopped);
     });
     try {
-      const observation = readSystemdServiceRuntime(env, {
-        requireLoaded: true,
-        timeoutMs: 1000,
-      });
+      const observation = readLoaded({ timeoutMs: 1000 });
       expect((await observation).status).toBe("unknown");
       expect(enumerated).toBe(true);
       expect(systemctl).not.toHaveBeenCalled();
@@ -343,102 +354,76 @@ describe("loaded-only systemd runtime", () => {
   it.each([
     { pid: 412, tasks: 0 },
     { pid: 0, tasks: 8 },
-  ])("refuses a stopped claim without drained native processes %j", async ({ pid, tasks }) => {
-    busctl.mockImplementation(async (_env, args) =>
-      managerReply(args, {
-        ActiveState: { type: "s", data: "inactive" },
-        SubState: { type: "s", data: "dead" },
-        MainPID: { type: "u", data: pid },
-        TasksCurrent: { type: "t", data: tasks },
-      }),
-    );
-    expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe("unknown");
+  ])("refuses undrained stopped claims %j", async ({ pid, tasks }) => {
+    mockRuntime({ ...stopped, MainPID: pid, TasksCurrent: tasks });
+    expect((await readLoaded()).status).toBe("unknown");
     expect(systemctl).not.toHaveBeenCalled();
   });
 });
 
 describe("owned recovery inspection of collected systemd units", () => {
-  it.each([false, true])(
-    "requires fresh authority to inspect an unloaded definition (owned=%s)",
-    async (owned) => {
-      const assertCurrent = vi.fn();
-      busctl.mockImplementation(async (_env, args) => {
-        if (args.includes("GetUnit")) {
+  it.each([false, true])("requires authority to load definitions (owned=%s)", async (owned) => {
+    const assertCurrent = vi.fn();
+    busctl.mockImplementation(async (_env, args) => {
+      if (args.includes("GetUnit")) {
+        return {
+          code: 1,
+          termination: "exit",
+          stdout: "",
+          stderr: `Call failed: Unit ${unitName} not loaded.`,
+        };
+      }
+      if (args.includes("LoadUnit")) {
+        return reply("o", unitPath);
+      }
+      if (args.includes("GetProcesses")) {
+        // systemd registers the cgroup methods on the type-specific Service
+        // interface, not the generic Unit interface (src/core/dbus.c).
+        if (!args.includes("org.freedesktop.systemd1.Service")) {
           return {
             code: 1,
             termination: "exit",
             stdout: "",
-            stderr: `Call failed: Unit ${unitName} not loaded.`,
+            stderr: "Unknown method GetProcesses",
           };
         }
-        if (args.includes("LoadUnit")) {
-          return success(JSON.stringify({ type: "o", data: [unitPath] }));
-        }
-        if (args.includes("GetProcesses")) {
-          // systemd registers the cgroup methods on the type-specific Service
-          // interface, not the generic Unit interface (src/core/dbus.c).
-          if (!args.includes("org.freedesktop.systemd1.Service")) {
-            return {
-              code: 1,
-              termination: "exit",
-              stdout: "",
-              stderr: "Unknown method GetProcesses",
-            };
-          }
-          return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
-        }
-        return managerReply(args, {
-          ActiveState: { type: "s", data: "inactive" },
-          SubState: { type: "s", data: "dead" },
-          MainPID: { type: "u", data: 0 },
-          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
-        });
-      });
-      const opts = {
-        requireLoaded: true,
-        ...(owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {}),
-      };
-      const runtime = await readSystemdServiceRuntime(env, opts);
-      expect(runtime.status).toBe(owned ? "stopped" : "unknown");
-      expect(runtime.missingUnit).not.toBe(true);
-      if (owned) {
-        expect(assertCurrent).toHaveBeenCalled();
-        expect(busctl.mock.calls.some(([, args]) => args.includes("GetProcesses"))).toBe(true);
+        return reply("a(sus)", []);
       }
-      expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(owned);
-      expect(systemctl).not.toHaveBeenCalled();
-    },
-  );
+      return runtimeReply(args, stopped);
+    });
+    const opts = {
+      requireLoaded: true,
+      ...(owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {}),
+    };
+    const runtime = await readSystemdServiceRuntime(env, opts);
+    expect(runtime.status).toBe(owned ? "stopped" : "unknown");
+    expect(runtime.missingUnit).not.toBe(true);
+    if (owned) {
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(busctl.mock.calls.some(([, args]) => args.includes("GetProcesses"))).toBe(true);
+    }
+    expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(owned);
+    expect(systemctl).not.toHaveBeenCalled();
+  });
 });
 
 describe("owned inspection refuses foreign or unverified collected units", () => {
   it.each(["uid", "busy"] as const)(
-    "preserves the %s refusal without enabling or starting anything",
+    "preserves %s refusal without lifecycle effects",
     async (fault) => {
       let loaded = false;
       const assertCurrent = () => {};
       busctl.mockImplementation(async (_env, args) => {
         if (args.includes("LoadUnit")) {
           loaded = true;
-          return success(JSON.stringify({ type: "o", data: [unitPath] }));
+          return reply("o", unitPath);
         }
         if (args.includes("GetProcesses")) {
-          return success(
-            JSON.stringify({
-              type: "a(sus)",
-              data: [fault === "busy" ? [["/owned", 91, "child"]] : []],
-            }),
-          );
+          return reply("a(sus)", fault === "busy" ? [["/owned", 91, "child"]] : []);
         }
-        return managerReply(args, {
-          ActiveState: { type: "s", data: "inactive" },
-          SubState: { type: "s", data: "dead" },
-          MainPID: { type: "u", data: 0 },
-          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
-        });
+        return runtimeReply(args, stopped);
       });
-      const observation = readSystemdServiceRuntime(env, {
-        requireLoaded: true,
+      const observation = readLoaded({
         loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
       });
       if (fault === "uid") {
@@ -466,71 +451,62 @@ describe("bounded owned runtime inspection", () => {
     "revoked-read",
     "claim-revoked",
     "slow-claim",
-  ] as const)(
-    "keeps %s authority while collecting a failed unit within the remaining budget",
-    async (mode) => {
-      let now = 0;
-      let active = mode !== "revoked-before";
-      let loaded = false;
-      let claimChanged = false;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-      const live = () => {
-        if (!active) {
-          throw new Error("source/executor revoked");
+  ] as const)("bounds failed-unit inspection: %s", async (mode) => {
+    let now = 0;
+    let active = mode !== "revoked-before";
+    let loaded = false;
+    let claimChanged = false;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const live = () => {
+      if (!active) {
+        throw new Error("source/executor revoked");
+      }
+    };
+    const inspection = {
+      managerUid: 2001,
+      assertCurrent() {
+        // Installed artifact-preserving snapshots take about 100ms; native
+        // queries take a few ms. Exact claims authorize loading, not reads.
+        now += mode === "slow-claim" ? 1600 : 100;
+        live();
+        if (claimChanged) {
+          throw new Error("exact claim changed");
         }
-      };
-      const inspection = {
-        managerUid: 2001,
-        assertCurrent() {
-          // Installed artifact-preserving snapshots take about 100ms; native
-          // queries take a few ms. Exact claims authorize loading, not reads.
-          now += mode === "slow-claim" ? 1600 : 100;
-          live();
-          if (claimChanged) {
-            throw new Error("exact claim changed");
-          }
-        },
-        assertReadCurrent: live,
-      };
-      busctl.mockImplementation(async (_env, args) => {
-        now += 5;
-        if (mode === "claim-revoked" && args.includes("GetConnectionUnixUser")) {
-          claimChanged = true;
-        }
-        if (args.includes("LoadUnit")) {
-          loaded = true;
-          if (mode === "revoked-load") {
-            active = false;
-          }
-          return success(JSON.stringify({ type: "o", data: [unitPath] }));
-        }
-        if (mode === "revoked-read" && loaded && args.includes("get-property")) {
+      },
+      assertReadCurrent: live,
+    };
+    busctl.mockImplementation(async (_env, args) => {
+      now += 5;
+      if (mode === "claim-revoked" && args.includes("GetConnectionUnixUser")) {
+        claimChanged = true;
+      }
+      if (args.includes("LoadUnit")) {
+        loaded = true;
+        if (mode === "revoked-load") {
           active = false;
         }
-        if (args.includes("GetProcesses")) {
-          return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
-        }
-        return managerReply(args, {
-          ActiveState: { type: "s", data: "failed" },
-          SubState: { type: "s", data: "failed" },
-          MainPID: { type: "u", data: 0 },
-          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
-        });
-      });
-      try {
-        const runtime = await readSystemdServiceRuntime(env, {
-          requireLoaded: true,
-          timeoutMs: 1500,
-          loadForInspection: inspection,
-        });
-        expect(runtime.status).toBe(mode === "slow-claim" ? "stopped" : "unknown");
-        expect(loaded).toBe(!["revoked-before", "claim-revoked"].includes(mode));
-        expect(systemctl).not.toHaveBeenCalled();
-      } finally {
-        clock.mockRestore();
+        return reply("o", unitPath);
       }
-    },
-  );
+      if (mode === "revoked-read" && loaded && args.includes("get-property")) {
+        active = false;
+      }
+      if (args.includes("GetProcesses")) {
+        return reply("a(sus)", []);
+      }
+      return runtimeReply(args, { ...stopped, ActiveState: "failed", SubState: "failed" });
+    });
+    try {
+      const runtime = await readLoaded({
+        timeoutMs: 1500,
+        loadForInspection: inspection,
+      });
+      expect(runtime.status).toBe(mode === "slow-claim" ? "stopped" : "unknown");
+      expect(loaded).toBe(!["revoked-before", "claim-revoked"].includes(mode));
+      expect(systemctl).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });
 
 describe("retained original-manager transport", () => {
@@ -540,7 +516,7 @@ describe("retained original-manager transport", () => {
     { replaced: false, native: true, tasks: 8n, expectedTasks: 8 },
     { replaced: false, native: true, tasks: 0xffffffffffffffffn, expectedTasks: undefined },
   ])(
-    "reads retained peer counters with replacement=$replaced native=$native tasks=$tasks",
+    "reads peer counters: replaced=$replaced native=$native tasks=$tasks",
     async ({ replaced, native, tasks, expectedTasks }) => {
       busctl.mockResolvedValue({
         code: 1,

@@ -37,6 +37,13 @@ beforeEach(() => {
   native.read.mockReset().mockResolvedValue(null);
 });
 
+const read = (file: string) => fs.readFile(file, "utf8");
+const result = (stdout = "", code = 0, stderr = "", termination: "exit" | "signal" = "exit") => ({
+  stdout,
+  code,
+  stderr,
+  termination,
+});
 async function createInstallFixture() {
   const root = temporary.make("openclaw-systemd-rollback-");
   const env = {
@@ -65,35 +72,32 @@ async function createInstallFixture() {
   return { env, unit, environment, originals, installArgs };
 }
 
-it.each([false, true])(
-  "retains generated input referenced by a concurrent unit edit (replacement=%s)",
-  async (replacement) => {
-    const { unit, environment, installArgs } = await createInstallFixture();
-    await fs.rm(environment);
-    const rename = fs.rename.bind(fs);
-    let edited = false;
-    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination === unit && !edited) {
-        edited = true;
-        const contents = `${await fs.readFile(unit, "utf8")}# concurrent edit\n`;
-        const target = replacement ? `${unit}.operator` : unit;
-        await fs.writeFile(target, contents, { mode: 0o600 });
-        if (replacement) {
-          await rename(target, unit);
-        }
+it.each([false, true])("retains concurrent unit inputs (replacement=%s)", async (replacement) => {
+  const { unit, environment, installArgs } = await createInstallFixture();
+  await fs.rm(environment);
+  const rename = fs.rename.bind(fs);
+  let edited = false;
+  vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+    await rename(source, destination);
+    if (destination === unit && !edited) {
+      edited = true;
+      const contents = `${await read(unit)}# concurrent edit\n`;
+      const target = replacement ? `${unit}.operator` : unit;
+      await fs.writeFile(target, contents, { mode: 0o600 });
+      if (replacement) {
+        await rename(target, unit);
       }
-    });
+    }
+  });
 
-    await expect(stageSystemdService(installArgs)).rejects.toThrow("changed during publication");
-    expect(await fs.readFile(unit, "utf8")).toContain("# concurrent edit");
-    expect(await fs.readFile(unit, "utf8")).toContain(environment);
-    expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
-  },
-);
+  await expect(stageSystemdService(installArgs)).rejects.toThrow("changed during publication");
+  expect(await read(unit)).toContain("# concurrent edit");
+  expect(await read(unit)).toContain(environment);
+  expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
+});
 
 it.each(["success", "failure", "interruption"] as const)(
-  "keeps cached candidate inputs until rollback reload confirms restoration (%s)",
+  "retains cached inputs until rollback reload (%s)",
   async (reload) => {
     const { unit, environment, originals, installArgs } = await createInstallFixture();
     await fs.rm(environment);
@@ -105,7 +109,7 @@ it.each(["success", "failure", "interruption"] as const)(
     native.active.mockResolvedValue({ ok: true, value: true });
     native.exec.mockImplementation(async (_env, args) => {
       if (args[0] === "daemon-reload") {
-        const diskUnit = await fs.readFile(unit, "utf8");
+        const diskUnit = await read(unit);
         if (activationFailed) {
           expect(diskUnit).toBe(originals.get(unit));
           inputPresentAtReload = await fs.stat(environment).then(
@@ -113,12 +117,12 @@ it.each(["success", "failure", "interruption"] as const)(
             () => false,
           );
           if (reload !== "success") {
-            return {
-              code: 1,
-              termination: reload === "failure" ? "exit" : "signal",
-              stdout: "",
-              stderr: `rollback reload ${reload}`,
-            };
+            return result(
+              "",
+              1,
+              `rollback reload ${reload}`,
+              reload === "failure" ? "exit" : "signal",
+            );
           }
           restoredReload = true;
         }
@@ -127,21 +131,16 @@ it.each(["success", "failure", "interruption"] as const)(
       if (args[0] === "restart" && !activationFailed) {
         expect(cachedUnit).toContain(environment);
         activationFailed = true;
-        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
+        return result("", 1, "candidate failed");
       }
-      return {
-        code: 0,
-        termination: "exit",
-        stdout: args[0] === "is-enabled" ? "enabled" : "",
-        stderr: "",
-      };
+      return result(args[0] === "is-enabled" ? "enabled" : "");
     });
     const installation = installSystemdService({
       ...installArgs,
       warn: (message) => warnings.push(message),
     });
     await expect(installation).rejects.toThrow("candidate failed");
-    expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+    expect(await read(unit)).toBe(originals.get(unit));
     expect(inputPresentAtReload).toBe(true);
     if (reload === "success") {
       expect(restoredReload).toBe(true);
@@ -150,7 +149,7 @@ it.each(["success", "failure", "interruption"] as const)(
       expect(warnings).toEqual([]);
     } else {
       expect(cachedUnit).toContain(environment);
-      expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+      expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
       expect(warnings.join("\n")).toContain("retained");
       expect(warnings.join("\n")).toContain(environment);
       expect(warnings.join("\n")).toContain("Retry");
@@ -158,7 +157,7 @@ it.each(["success", "failure", "interruption"] as const)(
   },
 );
 
-it("retries a failed rollback reload before retiring retained generated inputs", async () => {
+it("retries rollback reload before retiring inputs", async () => {
   const { env, unit, environment, originals } = await createInstallFixture();
   await fs.rm(environment);
   const warnings: string[] = [];
@@ -168,20 +167,15 @@ it("retries a failed rollback reload before retiring retained generated inputs",
     async (mutation) => {
       await mutation.publish(environment, "SERVICE_VALUE=candidate\n", 0o600);
       await mutation.publish(unit, `[Service]\nEnvironmentFile=${environment}\n`, 0o600);
-      native.exec.mockResolvedValueOnce({
-        code: 1,
-        termination: "exit",
-        stdout: "",
-        stderr: "reload failed",
-      });
+      native.exec.mockResolvedValueOnce(result("", 1, "reload failed"));
       await expect(mutation.restoreAll()).rejects.toThrow("reload was not confirmed");
-      expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
-      expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+      expect(await read(unit)).toBe(originals.get(unit));
+      expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
       native.exec.mockImplementationOnce(async (_env, args) => {
         expect(args).toEqual(["daemon-reload"]);
-        expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
-        expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
-        return { code: 0, termination: "exit", stdout: "", stderr: "" };
+        expect(await read(unit)).toBe(originals.get(unit));
+        expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
+        return result();
       });
       await expect(mutation.restoreAll()).resolves.toBe(true);
       await expect(fs.stat(environment)).rejects.toMatchObject({ code: "ENOENT" });
@@ -198,7 +192,7 @@ it.each([
   { enabled: "enabled", running: true, failure: "availability-read" },
   { enabled: "enabled", running: true, failure: "definition-read" },
   { enabled: "enabled", running: true, failure: "policy-read" },
-])("preserves the previous prefix and native policy after $failure ($enabled)", async (prior) => {
+])("restores prefix and policy: $failure ($enabled)", async (prior) => {
   const { unit, originals, installArgs } = await createInstallFixture();
   let enabled = prior.enabled;
   let running = prior.running;
@@ -237,15 +231,15 @@ it.each([
     }
     if (args[0] === "restart") {
       if (!failed) {
-        expect(await fs.readFile(unit, "utf8")).toContain("/prefix-b/");
+        expect(await read(unit)).toContain("/prefix-b/");
         running = false;
         failed = true;
-        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
+        return result("", 1, "candidate failed");
       }
-      expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+      expect(await read(unit)).toBe(originals.get(unit));
       running = true;
     }
-    return { code: 0, termination: "exit", stdout, stderr: "" };
+    return result(stdout);
   });
   const installation = withGatewayServiceUpdateAuthority(
     () => {
@@ -266,14 +260,14 @@ it.each([
     expect(native.exec.mock.calls.every(([, args]) => args[0] === "is-enabled")).toBe(true);
   }
   for (const [file, contents] of originals) {
-    expect(await fs.readFile(file, "utf8")).toBe(contents);
+    expect(await read(file)).toBe(contents);
     expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
   }
   expect({ enabled, running }).toEqual({ enabled: prior.enabled, running: prior.running });
 });
 
 it.each(["publication", "activation"])(
-  "leaves %s interruption recovery to the definition transaction",
+  "leaves %s recovery to the definition transaction",
   async (failure) => {
     const { unit, environment, originals, installArgs } = await createInstallFixture();
     let current = true;
@@ -286,7 +280,7 @@ it.each(["publication", "activation"])(
       if (failure === "activation" && args[0] === "restart") {
         revoke();
       }
-      return { code: 0, termination: "exit", stdout: "", stderr: "" };
+      return result();
     });
     const check = async () => {
       assertGatewayServiceUpdateCurrent();
@@ -321,9 +315,9 @@ it.each(["publication", "activation"])(
       outcome: undefined,
     });
     // The central receipt owner must restore these together in its own order.
-    expect(await fs.readFile(unit, "utf8")).toContain("/prefix-b/");
-    expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
-    expect(await fs.readFile(`${unit}.bak`, "utf8")).toBe(originals.get(unit));
+    expect(await read(unit)).toContain("/prefix-b/");
+    expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
+    expect(await read(`${unit}.bak`)).toBe(originals.get(unit));
     expect(native.exec.mock.calls.map(([, args]) => args[0])).toEqual(
       failure === "publication" ? [] : ["daemon-reload", "enable", "restart"],
     );
