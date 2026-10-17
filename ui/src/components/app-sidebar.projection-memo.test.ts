@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
-import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -14,10 +13,6 @@ import {
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { admitSidebarBootScope } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
-import {
-  mountRoster,
-  settleRoster,
-} from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   catalogPage,
@@ -30,7 +25,7 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
-import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
