@@ -33,8 +33,7 @@ sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
 `--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
-The fixture uses the single-agent chip sidebar, matching the live boot query shape.
-The explicit churn scenarios retain their all-agent roster mode.
+Default reloads use one agent chip; explicit churn scenarios use the all-agent roster.
 The Online run also requires the saved sidebar view to survive the reload. If it
 returns to Sessions, the run fails instead of reporting Sessions measurements as
 Online measurements.

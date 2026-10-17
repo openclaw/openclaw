@@ -10,6 +10,7 @@ import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixt
 import { compactCronJobFixture } from "./cron.ts";
 
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
+type TeamScaleCronJob = CronJob & { sessionTarget: "isolated" };
 
 export function createTeamScaleSessionInventory({
   now,
@@ -132,7 +133,7 @@ export function createTeamScaleCronInventory(
   now: number,
   selectedSessionKey: string,
 ) {
-  const cronJobs: CronJob[] = Array.from({ length: count }, (_, index) => ({
+  const cronJobs: TeamScaleCronJob[] = Array.from({ length: count }, (_, index) => ({
     id: `team-cron-${index + 1}`,
     name: `Synthetic scheduled check ${index + 1}`,
     agentId: "main",
