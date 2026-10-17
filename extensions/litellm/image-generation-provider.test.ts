@@ -100,9 +100,42 @@ describe("litellm image generation provider", () => {
     const form = mockObjectArg(postMultipartRequestMock).body as FormData;
     expect(form.get("model")).toBe("gpt-image-2");
     expect(form.get("prompt")).toBe("refine the hero");
+    // `n` must be omitted when it equals the API default: LiteLLM rejects an
+    // explicit `n` for models that do not support it (UnsupportedParamsError).
+    expect(form.get("n")).toBeNull();
     expect(form.getAll("image")).toHaveLength(1);
     expect(form.getAll("image[]")).toHaveLength(0);
     expect(form.get("image")).toBeInstanceOf(Blob);
+  });
+
+  it("forwards n on edit requests only when more than one image is requested", async () => {
+    postMultipartRequestMock.mockImplementation(pngResponse);
+
+    await generate({
+      prompt: "two edit variants",
+      count: 2,
+      inputImages: [
+        {
+          buffer: Buffer.from("fake-input"),
+          mimeType: "image/png",
+        },
+      ],
+    });
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    expect(form.get("n")).toBe("2");
+  });
+
+  it("omits n on single-image generation requests", async () => {
+    postJsonRequestMock.mockImplementation(pngResponse);
+
+    await generate({ prompt: "one variant" });
+
+    expect(mockObjectArg(postJsonRequestMock).body).toEqual({
+      model: "gpt-image-2",
+      prompt: "one variant",
+      size: "1024x1024",
+    });
   });
 
   it("sends multiple reference images as repeated image[] parts", async () => {
