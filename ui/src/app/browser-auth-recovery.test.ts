@@ -210,15 +210,17 @@ describe("browser sign-in recovery", () => {
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("discards recovery from a credential replaced while the probe was pending", async () => {
+  it.each(["navigation", "probe"])("discards credentials replaced during %s", async (phase) => {
     stop();
     let token = "original-token";
-    vi.spyOn(window, "open").mockReturnValue(null);
+    if (phase === "probe") {
+      vi.spyOn(window, "open").mockReturnValue(null);
+    }
     stop = startBrowserAuthRecovery("/nested", () => ({ settings: { token } }));
     const probe = createDeferred<Response>();
     const success = () => new Response(null, { headers: { "content-type": "application/json" } });
     let probes = 0;
-    mockFailedRead((init) => {
+    const fetchMock = mockFailedRead((init) => {
       probes += 1;
       if (probes <= 2) {
         return redirectResponse();
@@ -231,6 +233,16 @@ describe("browser sign-in recovery", () => {
     });
     const restored = observeRestored();
     await failedRead();
+    if (phase === "navigation") {
+      await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
+      token = "replacement-token";
+      await finishRenewal();
+      expect(document.querySelector("iframe")).toBeNull();
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(restored).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD")).toHaveLength(1);
+      return;
+    }
     await finishRenewal();
     const { dialog } = await getRenderedModalDialog(document.body);
     await waitForSolid(() => expect(dialog.querySelector('[role="status"]')?.textContent).toBe(""));
@@ -290,22 +302,6 @@ describe("browser sign-in recovery", () => {
     expect(document.querySelectorAll("openclaw-modal-dialog")).toHaveLength(
       outcome === "stop" ? 0 : 1,
     );
-  });
-
-  it("discards a renewal when Gateway credentials change during navigation", async () => {
-    stop();
-    let token = "original-token";
-    stop = startBrowserAuthRecovery("/nested", () => ({ settings: { token } }));
-    const fetchMock = mockFailedRead();
-    const restored = observeRestored();
-    await failedRead();
-    await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
-    token = "replacement-token";
-    await finishRenewal();
-    expect(document.querySelector("iframe")).toBeNull();
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(restored).not.toHaveBeenCalled();
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD")).toHaveLength(1);
   });
 
   it("discards an in-flight probe when its document owner stops", async () => {

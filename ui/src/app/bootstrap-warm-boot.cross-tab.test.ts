@@ -11,11 +11,27 @@ import {
 import { subscribeWarmBootConnection } from "./bootstrap-warm-boot.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
+let connection: ReturnType<typeof createGatewayStoreTestStore> | undefined;
+const disposers: Array<() => void> = [];
+function createConnection() {
+  connection = createGatewayStoreTestStore();
+  const scope = gatewayCredentialScope(connection.gateway.connection.gatewayUrl);
+  return {
+    ...connection,
+    scope,
+    key: "openclaw.control.bootRecord.v1:" + scope,
+    rejected: vi.fn(),
+  };
+}
+
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
 afterEach(() => {
+  disposers.splice(0).forEach((dispose) => dispose());
+  connection?.gateway.stop();
+  connection = undefined;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -80,16 +96,12 @@ it.each([
 }>)(
   "scopes peer $name to the admitted owner",
   ({ previous, next, profileId, retires, pending, clearAll, cold }) => {
-    const { gateway, current } = createGatewayStoreTestStore();
+    const { gateway, current, scope, key, rejected } = createConnection();
     gateway.connect();
-    const source = current();
     if (!cold) {
-      hello(source);
+      hello(current());
     }
-    const rejected = vi.fn();
-    const stop = subscribeWarmBootConnection(gateway, null, rejected);
-    const scope = gatewayCredentialScope(gateway.connection.gatewayUrl);
-    const key = "openclaw.control.bootRecord.v1:" + scope;
+    disposers.push(subscribeWarmBootConnection(gateway, null, rejected));
     const saved = record(scope);
     const replacement = next
       ? { ...record(scope, next), profileId: profileId ?? "profile-a" }
@@ -100,21 +112,16 @@ it.each([
         localStorage.setItem(key, JSON.stringify(replacement));
       }
     }
-    try {
-      storageChange(clearAll ? null : key, previous ? record(scope, previous) : null, replacement);
-      expect(gateway.snapshot.phase).toBe(retires ? "stopped" : cold ? "connecting" : "connected");
-      expect(rejected).toHaveBeenCalledTimes(retires ? 1 : 0);
-      if (cold) {
-        expect(gateway.snapshot.hello).toBeNull();
-      }
-      if (pending) {
-        window.dispatchEvent(new Event("pagehide"));
-        const stored = localStorage.getItem(key);
-        expect(stored && JSON.parse(stored)).toEqual(retires ? null : saved);
-      }
-    } finally {
-      stop();
-      gateway.stop();
+    storageChange(clearAll ? null : key, previous ? record(scope, previous) : null, replacement);
+    expect(gateway.snapshot.phase).toBe(retires ? "stopped" : cold ? "connecting" : "connected");
+    expect(rejected).toHaveBeenCalledTimes(retires ? 1 : 0);
+    if (cold) {
+      expect(gateway.snapshot.hello).toBeNull();
+    }
+    if (pending) {
+      window.dispatchEvent(new Event("pagehide"));
+      const stored = localStorage.getItem(key);
+      expect(stored && JSON.parse(stored)).toEqual(retires ? null : saved);
     }
   },
 );
@@ -127,86 +134,68 @@ it.each(["local", "external"])(
     localStorage.setItem(key, JSON.stringify(record(scope)));
     persistBootRecord(record(scope));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const failed = subscribeBootRecordChanges(() => {
-      throw new Error("synthetic observer failure");
-    });
+    disposers.push(
+      subscribeBootRecordChanges(() => {
+        throw new Error("synthetic observer failure");
+      }),
+    );
     const observed = vi.fn();
-    const stop = subscribeBootRecordChanges(observed);
-    try {
-      if (source === "local") {
-        expect(() => clearBootRecords(scope)).not.toThrow();
-      } else {
-        localStorage.removeItem(key);
-        storageChange(key, record(scope), null);
-      }
-      window.dispatchEvent(new Event("pagehide"));
-      expect(localStorage.getItem(key)).toBeNull();
-      expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ scope }));
-      expect(error).toHaveBeenCalledOnce();
-    } finally {
-      failed();
-      stop();
+    disposers.push(subscribeBootRecordChanges(observed));
+    if (source === "local") {
+      expect(() => clearBootRecords(scope)).not.toThrow();
+    } else {
+      localStorage.removeItem(key);
+      storageChange(key, record(scope), null);
     }
+    window.dispatchEvent(new Event("pagehide"));
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ scope }));
+    expect(error).toHaveBeenCalledOnce();
   },
 );
 it.each(["unreplaced", "local replacement", "peer replacement"])(
   "tracks captured legacy admission after hello until %s",
   (publication) => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    const scope = gatewayCredentialScope(gateway.connection.gatewayUrl);
+    const { gateway, current, scope, key, rejected } = createConnection();
     const legacy: BootRecord = {
       ...record(scope),
       recoveryScope: undefined,
       authMethod: "token",
       credential: "legacy-fingerprint",
     };
-    const key = "openclaw.control.bootRecord.v1:" + scope;
     localStorage.setItem(key, JSON.stringify(legacy));
-    const rejected = vi.fn();
-    const stop = subscribeWarmBootConnection(gateway, legacy, rejected);
-    try {
-      gateway.connect();
-      const source = current();
-      hello(source);
-      if (publication === "unreplaced") {
-        persistBootRecord(record(scope));
-      }
-      if (publication !== "unreplaced") {
-        const next = record(scope);
-        if (publication === "local replacement") {
-          persistBootRecord(next);
-          window.dispatchEvent(new Event("pagehide"));
-        } else {
-          localStorage.setItem(key, JSON.stringify(next));
-          storageChange(key, legacy, next);
-        }
-      }
-      storageChange(key, { ...legacy, credential: "foreign-fingerprint" }, null);
-      expect(gateway.snapshot.phase).toBe("connected");
-      expect(rejected).not.toHaveBeenCalled();
-      storageChange(key, legacy, null);
-      const retired = publication === "unreplaced";
-      expect(gateway.snapshot.phase).toBe(retired ? "stopped" : "connected");
-      expect(rejected).toHaveBeenCalledTimes(retired ? 1 : 0);
-      if (retired) {
-        localStorage.removeItem(key);
+    disposers.push(subscribeWarmBootConnection(gateway, legacy, rejected));
+    gateway.connect();
+    hello(current());
+    if (publication === "unreplaced") {
+      persistBootRecord(record(scope));
+    }
+    if (publication !== "unreplaced") {
+      const next = record(scope);
+      if (publication === "local replacement") {
+        persistBootRecord(next);
         window.dispatchEvent(new Event("pagehide"));
-        expect(localStorage.getItem(key)).toBeNull();
+      } else {
+        localStorage.setItem(key, JSON.stringify(next));
+        storageChange(key, legacy, next);
       }
-      if (!retired) {
-        window.dispatchEvent(
-          new StorageEvent("storage", {
-            key,
-            oldValue: JSON.stringify(record(scope)),
-            newValue: null,
-          }),
-        );
-        expect(gateway.snapshot.phase).toBe("stopped");
-        expect(rejected).toHaveBeenCalledOnce();
-      }
-    } finally {
-      stop();
-      gateway.stop();
+    }
+    storageChange(key, { ...legacy, credential: "foreign-fingerprint" }, null);
+    expect(gateway.snapshot.phase).toBe("connected");
+    expect(rejected).not.toHaveBeenCalled();
+    storageChange(key, legacy, null);
+    const retired = publication === "unreplaced";
+    expect(gateway.snapshot.phase).toBe(retired ? "stopped" : "connected");
+    expect(rejected).toHaveBeenCalledTimes(retired ? 1 : 0);
+    if (retired) {
+      localStorage.removeItem(key);
+      window.dispatchEvent(new Event("pagehide"));
+      expect(localStorage.getItem(key)).toBeNull();
+    }
+    if (!retired) {
+      storageChange(key, record(scope), null);
+      expect(gateway.snapshot.phase).toBe("stopped");
+      expect(rejected).toHaveBeenCalledOnce();
     }
   },
 );

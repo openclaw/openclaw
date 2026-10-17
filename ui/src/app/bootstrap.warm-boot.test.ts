@@ -19,11 +19,13 @@ let previousUrl: string;
 function bootstrapApplication() {
   return (activeRuntime = createApplication());
 }
-function captureGatewayListeners(revision?: () => number) {
+function captureGatewayConnection<T extends object>(fields: () => T, revision?: () => number) {
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const createGateway = gatewayStore.createApplicationGateway;
+  let current: ReturnType<typeof createGateway>;
   vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation((...args) => {
     const gateway = createGateway(...args);
+    current = gateway;
     if (revision) {
       vi.spyOn(gateway, "connectionRevision", "get").mockImplementation(revision);
     }
@@ -33,12 +35,18 @@ function captureGatewayListeners(revision?: () => number) {
     });
     return gateway;
   });
-  return listeners;
+  return (phase: ApplicationGatewaySnapshot["phase"]) => {
+    const snapshot = Object.assign(current.snapshot, fields(), { phase });
+    listeners.forEach((listener) => listener(snapshot));
+  };
 }
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
-function seedBootRecord(overrides: Partial<BootRecord> = {}): BootRecord {
+function seedBootRecord({
+  agents,
+  ...overrides
+}: Omit<Partial<BootRecord>, "agents"> & { agents?: Partial<AgentsListResult> } = {}): BootRecord {
   const record: BootRecord = {
     version: 2,
     authMethod: "token",
@@ -46,7 +54,13 @@ function seedBootRecord(overrides: Partial<BootRecord> = {}): BootRecord {
     scope: gatewayCredentialScope(loadSettings().gatewayUrl),
     savedAt: Date.now(),
     profileId: "profile-a",
-    agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+    agents: {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+      ...agents,
+    },
     groups: [],
     sectionOrder: [],
     ...overrides,
@@ -79,24 +93,19 @@ describe("warm boot profile validation", () => {
       authMethod: "trusted-proxy",
       credential: "",
       recoveryScope: "account-a",
-      agents: {
-        defaultId: "main",
-        mainKey: "workspace",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      },
+      agents: { mainKey: "workspace" },
     });
     const runtime = bootstrapApplication();
     expect(runtime.warmBoot).toBe(true);
-    expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
-    expect(runtime.context.gateway.snapshot.hello).toBeNull();
+    const { gateway, agents } = runtime.context;
+    expect(gateway.snapshot).toMatchObject({ phase: "stopped", hello: null });
     const client = new GatewayBrowserClient({
       url: loadSettings().gatewayUrl,
       offlineRecoveryScope: "account-a",
     });
     const request = vi.spyOn(client, "request");
-    runtime.context.gateway.snapshot.client = client;
-    expect(runtime.context.agents.state.agentsList).toBeNull();
+    gateway.snapshot.client = client;
+    expect(agents.state.agentsList).toBeNull();
     expect(runtime.context.offlineSessionDefaults).toEqual({
       mainKey: "workspace",
       scope: "per-sender",
@@ -110,16 +119,16 @@ describe("warm boot profile validation", () => {
       ),
     ).resolves.toMatchObject({ kind: "session", sessionKey: "agent:main:workspace" });
     expect(request).not.toHaveBeenCalled();
-    expect(runtime.context.agents.state.agentsList).toBeNull();
-    runtime.context.gateway.snapshot.phase = "connected";
+    expect(agents.state.agentsList).toBeNull();
+    gateway.snapshot.phase = "connected";
     expect(runtime.context.offlineSessionDefaults).toBeNull();
-    runtime.context.gateway.snapshot.phase = "reconnecting";
-    runtime.context.gateway.snapshot.client = new GatewayBrowserClient({
+    gateway.snapshot.phase = "reconnecting";
+    gateway.snapshot.client = new GatewayBrowserClient({
       url: loadSettings().gatewayUrl,
       offlineRecoveryScope: "another-account",
     });
     expect(runtime.context.offlineSessionDefaults).toBeNull();
-    runtime.context.gateway.snapshot.client = client;
+    gateway.snapshot.client = client;
     client.retireOfflineRecoveryScope();
     expect(runtime.context.offlineSessionDefaults).toBeNull();
   });
@@ -154,14 +163,11 @@ describe("warm boot profile validation", () => {
       recoveryScope: "test-recovery-scope",
       agents: {
         defaultId: "private",
-        mainKey: "main",
-        scope: "per-sender",
         agents: [{ id: "private", name: "Private agent" }, { id: "shared" }],
       },
       groups: [{ name: "Personal", position: 0 }],
       sectionOrder: ["Personal"],
     });
-    const listeners = captureGatewayListeners();
     const discovery = createDeferred<AgentsListResult>();
     let discoveryFailed = false;
     const request = vi.fn(async (method: string) => {
@@ -174,21 +180,16 @@ describe("warm boot profile validation", () => {
       return discovery.promise;
     });
     const client = createTestGatewayClient(request);
+    const publish = captureGatewayConnection(() => ({
+      client,
+      selfUser: { id: "profile-a" },
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { method: "token", recoveryScope: "test-recovery-scope" },
+      },
+    }));
     const runtime = bootstrapApplication();
-    const publish = (phase: ApplicationGatewaySnapshot["phase"]) => {
-      const snapshot = runtime.context.gateway.snapshot;
-      Object.assign(snapshot, {
-        phase,
-        client,
-        selfUser: { id: "profile-a" },
-        hello: {
-          type: "hello-ok",
-          protocol: 4,
-          auth: { method: "token", recoveryScope: "test-recovery-scope" },
-        },
-      });
-      listeners.forEach((listener) => listener(snapshot));
-    };
     const agents = runtime.context.agents;
     expect(agents.state.agentsList).toBeNull();
     expect(runtime.context.sessions.state.groupSettings).toEqual(record.groups);
@@ -226,20 +227,14 @@ describe("warm boot profile validation", () => {
   ])(
     "clears $clears times for connected $profileId (credential change: $credentialsChanged)",
     async ({ profileId, clears, credentialsChanged }) => {
-      const cachedProfileId = "profile-a";
       window.history.replaceState({}, "", "/chat");
       const { scope } = seedBootRecord({
-        profileId: cachedProfileId,
         recoveryScope: "cached-account",
       });
       const clearSnapshots = vi.spyOn(snapshots, "clearStoredChatSnapshots").mockResolvedValue();
       let connectionRevision = 0;
-      const listeners = captureGatewayListeners(() => connectionRevision);
-      const runtime = bootstrapApplication();
-      const publish = (phase: ApplicationGatewaySnapshot["phase"]) => {
-        const snapshot = runtime.context.gateway.snapshot;
-        Object.assign(snapshot, {
-          phase,
+      const publish = captureGatewayConnection(
+        () => ({
           hello: {
             type: "hello-ok",
             protocol: 1,
@@ -247,14 +242,14 @@ describe("warm boot profile validation", () => {
               method: "token",
               role: "operator",
               scopes: [],
-              recoveryScope:
-                profileId === cachedProfileId ? "cached-account" : "replacement-account",
+              recoveryScope: profileId === "profile-a" ? "cached-account" : "replacement-account",
             },
           },
           selfUser: { id: profileId },
-        });
-        listeners.forEach((listener) => listener(snapshot));
-      };
+        }),
+        () => connectionRevision,
+      );
+      const runtime = bootstrapApplication();
       expect(runtime.warmBoot).toBe(true);
       if (credentialsChanged) {
         connectionRevision += 1;

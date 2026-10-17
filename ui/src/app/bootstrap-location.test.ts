@@ -88,14 +88,20 @@ describe("resolveInitialApplicationLocation", () => {
     },
   );
 
-  it("does not wait for gateway defaults on an explicit startup route", async () => {
-    const cold = gateway({ phase: "connecting", client: null });
-    const location = { pathname: "/settings/appearance", search: "", hash: "" };
-    await expect(resolveLocation({ location, sessionKey: "main", gateway: cold })).resolves.toBe(
-      location,
-    );
-    expect(cold.subscribe).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["/settings/appearance", "", "main"],
+    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main"],
+  ])(
+    "preserves explicit %s state without waiting for defaults",
+    async (pathname, search, sessionKey) => {
+      const cold = gateway({ phase: "connecting", client: null });
+      const location = { pathname, search, hash: "" };
+      await expect(resolveLocation({ location, sessionKey, gateway: cold })).resolves.toBe(
+        location,
+      );
+      expect(cold.subscribe).not.toHaveBeenCalled();
+    },
+  );
 
   it("canonicalizes a scoped persisted main key when defaults are already known", async () => {
     const ready = gateway({ hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } } });
@@ -109,30 +115,27 @@ describe("resolveInitialApplicationLocation", () => {
     expect(ready.subscribe).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
+  it("rewrites a released dashboard query link", async () => {
+    const cold = gateway({ phase: "connecting", client: null });
+    const resolved = await resolveLocation({
       location: {
         pathname: "/chat",
         search: "?session=agent%3Aresearch%3Atelegram%3A12345&face=dashboard",
         hash: "",
       },
-      expected: { pathname: "/dashboard/research/telegram/12345", search: "", hash: "" },
-      namespace: "dashboard",
-      sessionKey: "agent:research:telegram:12345",
-    },
-  ] as const)("rewrites released query links to $expected.pathname", async (testCase) => {
-    const cold = gateway({ phase: "connecting", client: null });
-    const resolved = await resolveLocation({
-      location: testCase.location,
       gateway: cold,
       agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
     });
 
-    expect(resolved).toEqual(testCase.expected);
+    expect(resolved).toEqual({
+      pathname: "/dashboard/research/telegram/12345",
+      search: "",
+      hash: "",
+    });
     expect(sessionRefFromPath(resolved.pathname, "", "main")).toMatchObject({
-      namespace: testCase.namespace,
+      namespace: "dashboard",
       kind: "literal",
-      sessionKey: testCase.sessionKey,
+      sessionKey: "agent:research:telegram:12345",
     });
     expect(cold.subscribe).not.toHaveBeenCalled();
   });
@@ -152,18 +155,6 @@ describe("resolveInitialApplicationLocation", () => {
       search: "?draft=continue",
       hash: "",
     });
-  });
-
-  it("does not consume Sessions list row-expansion state", async () => {
-    const location = { pathname: "/sessions", search: "?session=agent%3Amain%3Amain", hash: "" };
-    const cold = gateway({ phase: "connecting", client: null });
-    await expect(
-      resolveLocation({
-        location,
-        gateway: cold,
-      }),
-    ).resolves.toBe(location);
-    expect(cold.subscribe).not.toHaveBeenCalled();
   });
 
   it("waits for cold custom-main defaults before rewriting a released query link", async () => {

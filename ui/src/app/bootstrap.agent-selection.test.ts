@@ -22,11 +22,23 @@ const hello = (defaultAgentId = "main", global = false) => ({
   },
 });
 function roster(
-  ids: [string, ...string[]],
+  ids: readonly [string, ...string[]],
   defaultId = ids[0],
   scope: AgentsListResult["scope"] = "per-sender",
 ): AgentsListResult {
   return { defaultId, mainKey: "main", scope, agents: ids.map((id) => ({ id, kind: "agent" })) };
+}
+function readyGateway<T extends object>(client: T) {
+  return {
+    snapshot: { phase: "connected", client, hello: hello() },
+    subscribe: vi.fn(() => () => undefined),
+  };
+}
+function saveSelection(
+  sessionKey: string,
+  overrides: Partial<ReturnType<typeof loadSettings>> = {},
+) {
+  saveSettings({ ...previousSettings, sessionKey, lastActiveSessionKey: sessionKey, ...overrides });
 }
 function resolveLocation(
   overrides: Partial<Parameters<typeof resolveInitialApplicationLocation>[0]>,
@@ -65,30 +77,27 @@ afterEach(() => {
   saveSettings(previousSettings);
 });
 
-it("routes a canonical global session through its persisted agent owner", async () => {
-  const subscribe = vi.fn(() => () => undefined);
+it.each([
+  ["openclaw", ["dummy", "openclaw"], "/chat/openclaw"],
+  ["removed", ["dummy"], "/chat/dummy"],
+] as const)(
+  "routes a global session remembering %s through the live roster",
+  async (selectedAgentId, ids, pathname) => {
+    const subscribe = vi.fn(() => () => undefined);
 
-  await expect(
-    resolveLocation(
-      {
-        location: { pathname: "/chat", search: "", hash: "" },
-        selectedAgentId: "openclaw",
-        agentsList: () => roster(["dummy", "openclaw"], "dummy", "global"),
-      },
-      subscribe,
-    ),
-  ).resolves.toEqual({ pathname: "/chat/openclaw", search: "", hash: "" });
-  expect(subscribe).not.toHaveBeenCalled();
-});
-
-it("falls back when the persisted agent is absent from the Gateway roster", async () => {
-  await expect(
-    resolveLocation({
-      location: { pathname: "/chat", search: "", hash: "" },
-      selectedAgentId: "removed",
-    }),
-  ).resolves.toEqual({ pathname: "/chat/dummy", search: "", hash: "" });
-});
+    await expect(
+      resolveLocation(
+        {
+          location: { pathname: "/chat", search: "", hash: "" },
+          selectedAgentId,
+          agentsList: () => roster(ids, "dummy", "global"),
+        },
+        subscribe,
+      ),
+    ).resolves.toEqual({ pathname, search: "", hash: "" });
+    expect(subscribe).not.toHaveBeenCalled();
+  },
+);
 
 it("refreshes a cached roster and its default before accepting a remembered agent", async () => {
   const cachedList = roster(["retired"]);
@@ -98,14 +107,7 @@ it("refreshes a cached roster and its default before accepting a remembered agen
   await expect(
     resolveLocation({
       sessionKey: "agent:retired:main",
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client: { request: vi.fn() },
-          hello: hello(),
-        },
-        subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext["gateway"],
+      gateway: readyGateway({ request: vi.fn() }) as unknown as ApplicationContext["gateway"],
       agentsList: () => cachedList,
       ensureAgentsList,
     }),
@@ -119,14 +121,7 @@ it("validates a remembered session again after the Gateway client changes", asyn
   const replacementRequest = vi.fn(
     async (): Promise<{ ok: boolean; key?: string; agentId?: string }> => ({ ok: false }),
   );
-  const gatewayState = {
-    snapshot: {
-      phase: "connected",
-      client: { request: firstRequest },
-      hello: hello(),
-    },
-    subscribe: vi.fn(() => () => undefined),
-  };
+  const gatewayState = readyGateway({ request: firstRequest });
   const gateway = gatewayState as unknown as ApplicationContext["gateway"];
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
@@ -164,14 +159,7 @@ it("loads the agent roster again after the Gateway client changes", async () => 
     .fn<() => Promise<AgentsListResult>>()
     .mockReturnValueOnce(first.promise)
     .mockResolvedValue(currentList);
-  const gatewayState = {
-    snapshot: {
-      phase: "connected",
-      client: {},
-      hello: hello(),
-    },
-    subscribe: vi.fn(() => () => undefined),
-  };
+  const gatewayState = readyGateway({});
   const gateway = gatewayState as unknown as ApplicationContext["gateway"];
 
   const pending = resolveLocation({
@@ -193,11 +181,7 @@ it("loads the agent roster again after the Gateway client changes", async () => 
 });
 
 it("starts routing an agent-scoped remembered session while the Gateway is offline", async () => {
-  saveSettings({
-    ...previousSettings,
-    sessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
-    lastActiveSessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
-  });
+  saveSelection("agent:research:thread:12345678-0000-4000-8000-000000000001");
   window.history.replaceState({}, "", "/");
   runtime = bootstrapApplication();
   const routerStart = vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
@@ -216,19 +200,8 @@ it.each([
   const targetSettingsKey = `openclaw.control.settings.v1:${gatewayOriginScope(targetGatewayUrl)}`;
 
   try {
-    saveSettings({
-      ...previousSettings,
-      gatewayUrl: targetGatewayUrl,
-      sessionKey: "global",
-      lastActiveSessionKey: "global",
-      selectedAgentId,
-    });
-    saveSettings({
-      ...previousSettings,
-      sessionKey: "agent:dummy:main",
-      lastActiveSessionKey: "agent:dummy:main",
-      selectedAgentId: "dummy",
-    });
+    saveSelection("global", { gatewayUrl: targetGatewayUrl, selectedAgentId });
+    saveSelection("agent:dummy:main", { selectedAgentId: "dummy" });
     window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
       gatewayUrl: targetGatewayUrl,
       token: "native-token",

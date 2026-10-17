@@ -233,19 +233,11 @@ describe("pending Gateway credentials", () => {
   );
 
   it.each([
-    {
-      name: "an initial missing token",
-      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      retryUnavailable: false,
-    },
-    {
-      name: "a missing password after retrying an unavailable Gateway",
-      authCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-      retryUnavailable: true,
-    },
-  ])(
-    "recovers $name through its same-origin handoff without changing the route",
-    async ({ authCode, retryUnavailable }) => {
+    [ConnectErrorDetailCodes.AUTH_TOKEN_MISSING, false],
+    [ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING, true],
+  ] as const)(
+    "recovers %s through its same-origin handoff (retry unavailable: %s) without changing the route",
+    async (authCode, retryUnavailable) => {
       window.history.replaceState({}, "", "/settings/appearance?keep=yes#section");
       const initialUrl = window.location.href;
       const store = useGateway();
