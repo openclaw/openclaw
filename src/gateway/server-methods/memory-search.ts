@@ -7,6 +7,7 @@ import type {
   MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchResult,
+  MemorySearchResponse,
 } from "../../memory-host-sdk/host/types.js";
 import {
   readMemorySearchManagerStatus,
@@ -28,16 +29,6 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 
 const DEFAULT_MAX_RESULTS = 20;
 const MAX_RESULTS = 50;
-
-export type MemorySearchResponse = {
-  agentId: string;
-  provider: string;
-  searchMode: "hybrid" | "fts-only";
-  results: MemorySearchResult[];
-  stale?: true;
-  warning?: string;
-  action?: string;
-};
 
 function resolveSearchMode(status: MemoryProviderStatus): MemorySearchResponse["searchMode"] {
   const statusMode = status.custom?.searchMode;

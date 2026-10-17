@@ -12,6 +12,8 @@ export type ControlUiSettingsSnapshot = {
     readonly availability: "enabled" | "disabled" | "missing" | "loading" | "unknown";
   };
   readonly connected: boolean;
+  /** Gateway-advertised methods; absent until the connection publishes its catalog. */
+  readonly advertisedMethods?: readonly string[];
   readonly connectionEpoch: number;
   readonly routeIntent: string;
   readonly locale: string;
