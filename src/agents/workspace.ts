@@ -19,7 +19,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
-import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import { getAgentWorkspaceAccess, isDirectoryListingPageBudgetError } from "./workspace-access.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -1056,7 +1056,9 @@ async function* walkWorkspaceFiles(
         }));
       }
     } catch (error) {
-      if (access) {
+      // A local unreadable directory is skipped. The page budget is the
+      // remote equivalent for one oversized directory, not for the tree.
+      if (access && !isDirectoryListingPageBudgetError(error)) {
         throw error;
       }
       continue;

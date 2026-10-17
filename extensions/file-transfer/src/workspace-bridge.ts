@@ -18,9 +18,19 @@ import { fetchWorkspaceFile } from "./workspace-file-fetch.js";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const DIRECTORY_PAGE_SIZE = 4096;
+// Per directory, not per tree walk. 32 pages is 131072 names.
+const MAX_DIRECTORY_PAGES = 32;
 
 class FileFetchTooLargeError extends Error {
   readonly code = "FILE_TOO_LARGE";
+}
+
+class DirectoryListingTooLargeError extends Error {
+  readonly code = "DIRECTORY_LISTING_TOO_LARGE";
+
+  constructor(pages: number) {
+    super(`Directory listing exceeded ${pages} pages`);
+  }
 }
 
 function relativeWithin(root: string, target: string, paths = path): string {
@@ -266,7 +276,7 @@ export function createNodeWorkspaceBridge(options: {
     async readDirectory(params) {
       const entries: Awaited<ReturnType<NonNullable<SandboxFsBridge["readDirectory"]>>> = [];
       let offset = 0;
-      while (true) {
+      for (let page = 0; page < MAX_DIRECTORY_PAGES; page += 1) {
         const payload = await invoke(
           "dir.list",
           {
@@ -324,6 +334,7 @@ export function createNodeWorkspaceBridge(options: {
         }
         offset = nextOffset;
       }
+      throw new DirectoryListingTooLargeError(MAX_DIRECTORY_PAGES);
     },
   };
 }
