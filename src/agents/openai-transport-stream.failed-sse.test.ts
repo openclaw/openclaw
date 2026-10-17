@@ -1,9 +1,9 @@
+import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
@@ -20,6 +20,27 @@ const responsesTransports = [
     createStream: createAzureOpenAIResponsesTransportStreamFn,
   },
 ] as const;
+
+const usage = {
+  input_tokens: 21,
+  output_tokens: 4,
+  total_tokens: 25,
+  input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+};
+type Transport = (typeof responsesTransports)[number];
+function responseStream(
+  transport: Transport,
+  baseUrl: string,
+  prompt: string,
+  options: Parameters<ReturnType<Transport["createStream"]>>[2] = {},
+  model: Parameters<typeof makeResponsesModel>[0] = {},
+) {
+  return transport.createStream()(
+    makeResponsesModel({ api: transport.api, provider: transport.provider, baseUrl, ...model }),
+    { messages: [{ role: "user", content: prompt, timestamp: 0 }], tools: [] },
+    { apiKey: "test-key", ...options },
+  );
+}
 
 async function createResponsesSseServer(...events: Record<string, unknown>[]): Promise<{
   server: Server;
@@ -43,14 +64,8 @@ async function createResponsesSseServer(...events: Record<string, unknown>[]): P
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => reject(error);
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     server.close();
@@ -90,21 +105,16 @@ describe("failed Responses loopback SSE", () => {
         },
       );
       try {
-        const stream = await transport.createStream()(
-          makeResponsesModel({ api: transport.api, provider: transport.provider, baseUrl }),
-          { messages: [{ role: "user", content: "Reply", timestamp: 0 }], tools: [] },
-          {
-            apiKey: "test-key",
-            onPayload: hostedTools
-              ? () => ({
-                  model: "test-model",
-                  input: "Reply",
-                  stream: true,
-                  tools: [{ type: "web_search" }],
-                })
-              : undefined,
-          },
-        );
+        const stream = await responseStream(transport, baseUrl, "Reply", {
+          onPayload: hostedTools
+            ? () => ({
+                model: "test-model",
+                input: "Reply",
+                stream: true,
+                tools: [{ type: "web_search" }],
+              })
+            : undefined,
+        });
         const message = await stream.result();
         expect(message).toMatchObject({
           stopReason: "error",
@@ -142,36 +152,25 @@ describe("failed Responses loopback SSE", () => {
           error: { code: "server_error", message: "provider failed after consuming tokens" },
           output: [],
           usage: {
-            input_tokens: 21,
-            output_tokens: 4,
-            total_tokens: 25,
-            input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+            ...usage,
             output_tokens_details: { reasoning_tokens: 3 },
           },
         },
       });
 
       try {
-        const model = {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          api: transport.api,
-          provider: transport.provider,
+        const stream = await responseStream(
+          transport,
           baseUrl,
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-          contextWindow: 128_000,
-          maxTokens: 4_096,
-        } satisfies Model;
-
-        const stream = await transport.createStream()(
-          model,
+          "Report failed usage",
+          {},
           {
-            messages: [{ role: "user", content: "Report failed usage", timestamp: 0 }],
-            tools: [],
+            id: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
+            cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+            contextWindow: 128_000,
+            maxTokens: 4_096,
           },
-          { apiKey: "test-key" },
         );
         const events = [];
         for await (const event of stream) {
@@ -190,10 +189,7 @@ describe("failed Responses loopback SSE", () => {
             responseModel: "gpt-5.6-luna",
             stopReason: "error",
             errorMessage: "server_error: provider failed after consuming tokens",
-            // The structured error.code must survive normalization -> the thrown
-            // ResponsesStreamFailure -> projectProviderError into errorCode, so the
-            // failover classifier receives a structured descriptor and consults the
-            // provider hook instead of misreading the folded message as timeout (#117609).
+            // Preserve structured classification instead of folding it into timeout (#117609).
             errorCode: "server_error",
             usage: {
               input: 13,
@@ -227,78 +223,43 @@ describe("incomplete Responses loopback SSE", () => {
       createStream: createOpenAIResponsesTransportStreamFn,
     },
   ])("recovers status-less incomplete $api output over real SSE", async (transport) => {
-    const requestPaths: string[] = [];
-    const server = createServer((request, response) => {
-      requestPaths.push(request.url ?? "");
-      request.resume();
-      request.on("end", () => {
-        response.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-        const terminalEvent = {
-          type: "response.incomplete",
-          sequence_number: 0,
-          response: {
-            id: "resp-statusless-sse",
-            incomplete_details: { reason: "max_output_tokens" },
-            output: [
-              {
-                type: "message",
-                id: "msg-statusless-sse",
-                role: "assistant",
-                content: [{ type: "output_text", text: "TERMINAL_PARTIAL" }],
-              },
-              {
-                type: "function_call",
-                id: "fc-statusless-sse",
-                call_id: "call-statusless-sse",
-                name: "write",
-                arguments: '{"path":"unfinished',
-              },
-            ],
-            usage: {
-              input_tokens: 21,
-              output_tokens: 4,
-              total_tokens: 25,
-              input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
-            },
+    const { server, baseUrl, requestPaths } = await createResponsesSseServer({
+      type: "response.incomplete",
+      sequence_number: 0,
+      response: {
+        id: "resp-statusless-sse",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "message",
+            id: "msg-statusless-sse",
+            role: "assistant",
+            content: [{ type: "output_text", text: "TERMINAL_PARTIAL" }],
           },
-        };
-        response.write(`event: response.incomplete\ndata: ${JSON.stringify(terminalEvent)}\n\n`);
-        response.end();
-      });
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
+          {
+            type: "function_call",
+            id: "fc-statusless-sse",
+            call_id: "call-statusless-sse",
+            name: "write",
+            arguments: '{"path":"unfinished',
+          },
+        ],
+        usage,
+      },
     });
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const model = {
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
-        api: transport.api,
-        provider: transport.provider,
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4_096,
-      } satisfies Model;
-
-      const stream = await transport.createStream()(
-        model,
+      const stream = await responseStream(
+        transport,
+        baseUrl,
+        "Reply with a partial sentence",
+        {},
         {
-          messages: [{ role: "user", content: "Reply with a partial sentence", timestamp: 0 }],
-          tools: [],
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          reasoning: false,
+          contextWindow: 128_000,
+          maxTokens: 4_096,
         },
-        { apiKey: "test-key" },
       );
       const events = [];
       for await (const event of stream) {
@@ -327,9 +288,7 @@ describe("incomplete Responses loopback SSE", () => {
         expect(terminal.message.content.some((block) => block.type === "toolCall")).toBe(false);
       }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeResponsesSseServer(server);
     }
   });
 });

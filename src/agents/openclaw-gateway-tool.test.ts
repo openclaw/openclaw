@@ -11,7 +11,6 @@ import {
   resultDetails,
 } from "./code-mode.test-support.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
-import { callGatewayTool } from "./tools/gateway.js";
 
 const { callGatewayToolMock, readGatewayCallOptionsMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
@@ -23,31 +22,14 @@ vi.mock("./tools/gateway.js", () => ({
   readGatewayCallOptions: readGatewayCallOptionsMock,
 }));
 
-type GatewayCall = [method: string, options: unknown, params?: unknown];
-
-function gatewayCall(method: string): GatewayCall {
-  const call = (vi.mocked(callGatewayTool).mock.calls as GatewayCall[]).find(
-    ([candidate]) => candidate === method,
-  );
-  if (!call) {
-    throw new Error(`Expected gateway call for ${method}`);
-  }
-  return call;
-}
-
-function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+const readConfig = (path?: string) =>
+  createGatewayTool().execute("config-read", { action: "config.get", path });
+const readSchema = (path: string) =>
+  createGatewayTool().execute("schema-read", { action: "config.schema.lookup", path });
+const expectSchemaRequest = (path: string) =>
+  expect(
+    callGatewayToolMock.mock.calls.find(([method]) => method === "config.schema.lookup")?.[2],
+  ).toEqual({ path });
 
 describe("gateway tool", () => {
   afterEach(resetCodeModeTestState);
@@ -59,14 +41,7 @@ describe("gateway tool", () => {
       if (method === "config.get") {
         return {
           hash: "hash-1",
-          config: {
-            tools: {
-              exec: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
-          },
+          config: { tools: { exec: { ask: "on-miss", security: "allowlist" } } },
         };
       }
       if (method === "config.schema.lookup") {
@@ -179,32 +154,15 @@ describe("gateway tool", () => {
 
   it("reads config.get paths with bracketed array indexes", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
-      config: {
-        agents: {
-          entries: { ops: { skills: ["deploy"] } },
-        },
-      },
+      config: { agents: { entries: { ops: { skills: ["deploy"] } } } },
     });
 
-    const result = await createGatewayTool().execute("call-indexed-config-path", {
-      action: "config.get",
-      path: "agents.entries.ops.skills[0]",
-    });
-
+    const path = "agents.entries.ops.skills[0]";
+    const result = await readConfig(path);
     expect(result.content).toEqual([
       {
         type: "text",
-        text: JSON.stringify(
-          {
-            ok: true,
-            result: {
-              path: "agents.entries.ops.skills[0]",
-              config: "deploy",
-            },
-          },
-          null,
-          2,
-        ),
+        text: JSON.stringify({ ok: true, result: { path, config: "deploy" } }, null, 2),
       },
     ]);
   });
@@ -214,34 +172,28 @@ describe("gateway tool", () => {
       config: { oversized: "x".repeat(100_000) },
     });
 
-    await expect(
-      createGatewayTool().execute("call-large-config", {
-        action: "config.get",
-      }),
-    ).rejects.toThrow(
+    await expect(readConfig()).rejects.toThrow(
       "config.get response is too large; use path to request a narrower config subtree",
     );
   });
 
   it("returns a path-scoped schema lookup result", async () => {
-    const result = await createGatewayTool().execute("call-schema", {
-      action: "config.schema.lookup",
-      path: "gateway.auth",
-    });
-
-    expect(gatewayCall("config.schema.lookup")[2]).toEqual({ path: "gateway.auth" });
-    const details = expectRecordFields(result.details, { ok: true });
-    const lookupResult = expectRecordFields(details.result, {
-      path: "gateway.auth",
-      hintPath: "gateway.auth",
-    });
-    const children = lookupResult.children as Array<unknown>;
-    expect(children).toHaveLength(1);
-    expectRecordFields(children[0], {
-      key: "token",
-      path: "gateway.auth.token",
-      required: true,
-      hintPath: "gateway.auth.token",
+    const result = await readSchema("gateway.auth");
+    expectSchemaRequest("gateway.auth");
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        path: "gateway.auth",
+        hintPath: "gateway.auth",
+        children: [
+          {
+            key: "token",
+            path: "gateway.auth.token",
+            required: true,
+            hintPath: "gateway.auth.token",
+          },
+        ],
+      },
     });
   });
 
@@ -253,14 +205,8 @@ describe("gateway tool", () => {
       }),
     );
 
-    const result = await createGatewayTool().execute("call-missing-schema", {
-      action: "config.schema.lookup",
-      path: "agents.main.authorizedSenders",
-    });
-
-    expect(gatewayCall("config.schema.lookup")[2]).toEqual({
-      path: "agents.main.authorizedSenders",
-    });
+    const result = await readSchema("agents.main.authorizedSenders");
+    expectSchemaRequest("agents.main.authorizedSenders");
     expect(result.details).toEqual({
       ok: false,
       code: "schema_path_not_found",
