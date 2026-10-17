@@ -3,7 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { CommandProcessCleanupError, hasCommandProcessCleanupError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -31,6 +31,8 @@ vi.mock("../shared/pid-alive.js", () => ({
   getProcessInstanceStartTime: () => 1,
 }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
+// Synthetic process groups must not leave real reaper work in the shared test worker.
+vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
 vi.mock("./exec-termination.js", () => ({
   createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
 }));
@@ -293,23 +295,26 @@ describe("command scope physical settlement", () => {
 
 it.skipIf(process.platform === "win32")(
   "preserves uncertainty when a closed raw command still owns a live group",
-  async () => {
-    vi.useFakeTimers();
-    vi.spyOn(process, "kill").mockReturnValue(true);
-    const fixture = commandFixture();
-    const scope = ownScope(async () => {
-      await spawnFixture();
-    });
-    const outcome = scope.catch((error: unknown) => error);
-    fixture.open();
-    fixture.finish();
-    try {
-      await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
-      expect(await outcome).toMatchObject(uncertainCleanup);
-    } finally {
-      vi.useRealTimers();
-    }
-  },
+  () =>
+    withMockedPlatform("linux", async () => {
+      const listeners = process.listeners("SIGCHLD");
+      vi.useFakeTimers();
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      const fixture = commandFixture();
+      const scope = ownScope(async () => {
+        await spawnFixture();
+      });
+      const outcome = scope.catch((error: unknown) => error);
+      fixture.open();
+      fixture.finish();
+      try {
+        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
+        expect(await outcome).toMatchObject(uncertainCleanup);
+        expect(process.listeners("SIGCHLD")).toEqual(listeners);
+      } finally {
+        vi.useRealTimers();
+      }
+    }),
 );
 
 it.skipIf(process.platform === "win32")(

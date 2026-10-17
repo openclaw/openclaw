@@ -1,24 +1,22 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { Type } from "typebox";
-import { Value } from "typebox/value";
-import { z } from "zod";
-import { ProgressCardSchema } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
-import { SessionRowSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
+import {
+  isChatTranscriptMetadata,
+  isProgressCard,
+} from "../../lib/protocol-validators.generated/transcript.js";
+import * as json from "../../lib/snapshot-json.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
 } from "./session-cache.ts";
 import {
-  CHAT_TRANSCRIPT_METADATA_KEYS,
   MAX_CACHED_CHAT_WEIGHT,
   type ChatCacheObserver,
   type ChatMessageCache,
   type ChatSessionSnapshot,
-  type ChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import {
   isPersistableChatSnapshotKey,
@@ -47,74 +45,85 @@ const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
-const paginationSchema = z.discriminatedUnion("hasMore", [
-  z
-    .object({
-      completeSnapshot: z.literal(true).optional(),
-      hasMore: z.literal(false),
-      totalMessages: z.number().finite().nonnegative().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      hasMore: z.literal(true),
-      nextOffset: z.number().finite().nonnegative(),
-      totalMessages: z.number().finite().nonnegative().optional(),
-    })
-    .strict(),
-]);
-
-const transcriptMetadataSchema = Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS);
-
-const snapshotSchema = z
-  .object({
-    widgetHeights: z
-      .record(z.string(), z.number().finite().min(48).max(8000))
-      .refine((heights) => Object.keys(heights).length <= 100)
-      .optional(),
-    transcriptMetadata: z
-      .custom<ChatTranscriptMetadata>((value) => Value.Check(transcriptMetadataSchema, value))
-      .optional(),
-    progressCard: z
-      .custom<NonNullable<ChatSessionSnapshot["progressCard"]>>((value) =>
-        Value.Check(ProgressCardSchema, value),
-      )
-      .nullable()
-      .optional(),
-    deltaCursor: z.string().optional(),
-    displayedLeafEntryId: z.string().nullable().optional(),
+const nonnegative = json.refine(json.number, (value) => value >= 0);
+const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
+const completePaginationSchema = json.object(
+  {
+    completeSnapshot: json.optional(json.literal(true)),
+    hasMore: json.literal(false),
+    totalMessages: json.optional(nonnegative),
+  },
+  true,
+);
+const morePaginationSchema = json.object(
+  {
+    hasMore: json.literal(true),
+    nextOffset: nonnegative,
+    totalMessages: json.optional(nonnegative),
+  },
+  true,
+);
+const paginationSchema = {
+  parse(value: unknown) {
+    return asOptionalRecord(value)?.hasMore === true
+      ? morePaginationSchema.parse(value)
+      : completePaginationSchema.parse(value);
+  },
+};
+const snapshotSchema = json.object(
+  {
+    widgetHeights: json.optional(
+      json.refine(
+        json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
+        (heights) => Object.keys(heights).length <= 100,
+      ),
+    ),
+    transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
+    progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
+    deltaCursor: json.optional(json.text),
+    displayedLeafEntryId: json.optional(json.nullable(json.text)),
     // Message contents are opaque; only the array boundary needs validation.
-    messages: z.custom<unknown[]>(Array.isArray),
+    messages: json.checked<unknown[]>(Array.isArray),
     pagination: paginationSchema,
-    sessionId: z.string().nullable(),
-  })
-  .strict();
+    sessionId: json.nullable(json.text),
+  },
+  true,
+);
+const recordSchema = json.refine(
+  json.object(
+    {
+      projectionVersion: json.refine(
+        json.number,
+        (value) => Number.isSafeInteger(value) && value > 0,
+      ),
+      savedAt: nonnegative,
+      sessionId: json.nullable(json.text),
+      sessionKey: sessionKeySchema,
+      snapshot: snapshotSchema,
+    },
+    true,
+  ),
+  (record) => record.sessionId === record.snapshot.sessionId,
+);
 
-const recordSchema = z
-  .object({
-    projectionVersion: z.number().int().positive(),
-    savedAt: z.number().finite().nonnegative(),
-    sessionId: z.string().nullable(),
-    sessionKey: z.string().min(1),
-    snapshot: snapshotSchema,
-  })
-  .strict()
-  .refine((record) => record.sessionId === record.snapshot.sessionId);
-
-type SessionSnapshotRecord = z.infer<typeof recordSchema>;
-const metadataSchema = z
-  .object({
-    savedAt: z.number().finite().nonnegative(),
-    sessionKey: z.string().min(1),
-    weight: z.number().finite().nonnegative(),
-  })
-  .strict();
-type SessionSnapshotMetadata = z.infer<typeof metadataSchema>;
-const sidebarRecordSchema = metadataSchema.omit({ weight: true }).extend({
-  projectionVersion: z.literal(1),
-  model: z.unknown(),
-});
-type SidebarRecord = z.infer<typeof sidebarRecordSchema>;
+type SessionSnapshotRecord = json.SnapshotValue<typeof recordSchema>;
+const metadataFields = {
+  savedAt: nonnegative,
+  sessionKey: sessionKeySchema,
+};
+const metadataSchema = json.object({ ...metadataFields, weight: nonnegative }, true);
+type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
+const sidebarRecordsSchema = json.array(
+  json.object(
+    {
+      ...metadataFields,
+      projectionVersion: json.literal(1),
+      model: json.unknown,
+    },
+    true,
+  ),
+);
+type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
 const sidebarRecordBytes = (record: SidebarRecord) =>
   new TextEncoder().encode(JSON.stringify(record)).byteLength;
 type PreparedSnapshotRecord = {
@@ -129,10 +138,8 @@ type PendingSessionState = {
 const activeStores = new Set<SessionSnapshotStore>();
 
 function parseSnapshotRecord(value: unknown, sessionKey?: string): SessionSnapshotRecord | null {
-  const parsed = recordSchema.safeParse(value);
-  return parsed.success && (!sessionKey || parsed.data.sessionKey === sessionKey)
-    ? parsed.data
-    : null;
+  const parsed = json.parseSnapshot(recordSchema, value);
+  return parsed && (!sessionKey || parsed.sessionKey === sessionKey) ? parsed : null;
 }
 
 function createSnapshotRecord(
@@ -170,7 +177,7 @@ function createSnapshotRecord(
       };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
-    const json = JSON.stringify(projected, (_key, value: unknown) => {
+    const serialized = JSON.stringify(projected, (_key, value: unknown) => {
       if (value === projected.messages) {
         return projected.messages.map((message) => {
           const record = asOptionalRecord(message);
@@ -183,8 +190,8 @@ function createSnapshotRecord(
       }
       return removePairingQrContent(value);
     });
-    snapshot = JSON.parse(json);
-    weight = json.length;
+    snapshot = JSON.parse(serialized);
+    weight = serialized.length;
   } catch {
     return null;
   }
@@ -217,13 +224,13 @@ async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null>
     await transactionComplete(transaction);
     const records: SessionSnapshotMetadata[] = [];
     for (const value of values) {
-      const record = metadataSchema.safeParse(value);
-      if (!record.success) {
+      const record = json.parseSnapshot(metadataSchema, value);
+      if (!record) {
         debugSnapshotStore("resetting cache after metadata shape mismatch");
         await resetSessionSnapshotDatabase(database);
         return null;
       }
-      records.push(record.data);
+      records.push(record);
     }
     return records;
   } catch (error) {
@@ -259,12 +266,12 @@ async function writeSnapshotRecords(
     const currentValues = await requestResult(metadataStore.getAll());
     const next = new Map<string, SessionSnapshotMetadata>();
     for (const value of currentValues) {
-      const metadata = metadataSchema.safeParse(value);
-      if (!metadata.success) {
+      const metadata = json.parseSnapshot(metadataSchema, value);
+      if (!metadata) {
         transaction.abort();
         throw new Error("IndexedDB metadata shape mismatch");
       }
-      next.set(metadata.data.sessionKey, metadata.data);
+      next.set(metadata.sessionKey, metadata);
     }
     for (const { record, metadata } of records) {
       next.set(record.sessionKey, metadata);
@@ -311,7 +318,7 @@ async function accessSidebarSnapshot<Model>(
     }
     const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
     const store = transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME);
-    const records = sidebarRecordSchema.array().parse(await requestResult(store.getAll()));
+    const records = sidebarRecordsSchema.parse(await requestResult(store.getAll()));
     if (!isCurrent()) {
       await transactionComplete(transaction);
       return null;

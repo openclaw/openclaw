@@ -39,6 +39,7 @@ import {
   type PreparedSessionTranscriptProjection,
 } from "./session-transcript-projection-rebuild.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_windows"
@@ -250,21 +251,33 @@ function createWatermarkWriter(db: EngineConnection, sessionId: string, updateEx
 }
 
 function createActiveEventInserter(db: EngineConnection, sessionId: string) {
-  const write = prepareSqliteQuerySync<PreparedSessionTranscriptProjection["activeRows"][number]>(
-    db,
-    (parameter) =>
+  type ActiveRow = PreparedSessionTranscriptProjection["activeRows"][number];
+  // Each executor is used only with the chunk length that defines its bound indexes.
+  const prepare = (count: number) =>
+    prepareSqliteQuerySync<readonly ActiveRow[]>(db, (parameter) =>
       getIndexKysely(db)
         .insertInto("session_transcript_active_events")
-        .values({
-          session_id: sessionId,
-          active_position: parameter((row) => row.activePosition),
-          context_eligible: parameter((row) => row.contextEligible),
-          event_seq: parameter((row) => row.eventSeq),
-          message_position: parameter((row) => row.messagePosition),
-        }),
-  );
-  return (row: PreparedSessionTranscriptProjection["activeRows"][number]) =>
-    withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(row));
+        .values(
+          Array.from({ length: count }, (_, index) => ({
+            session_id: sessionId,
+            active_position: parameter((rows) => rows[index]!.activePosition),
+            context_eligible: parameter((rows) => rows[index]!.contextEligible),
+            event_seq: parameter((rows) => rows[index]!.eventSeq),
+            message_position: parameter((rows) => rows[index]!.messagePosition),
+          })),
+        ),
+    );
+  const inserts = new Map<number, ReturnType<typeof prepare>>();
+  return (rows: readonly ActiveRow[]) => {
+    for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+      const chunk = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+      const write = inserts.get(chunk.length) ?? prepare(chunk.length);
+      if (!inserts.has(chunk.length)) {
+        inserts.set(chunk.length, write);
+      }
+      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(chunk));
+    }
+  };
 }
 
 function deleteActiveEventRows(db: EngineConnection, sessionId: string): void {
@@ -288,7 +301,11 @@ function deleteActiveEventRows(db: EngineConnection, sessionId: string): void {
 export function createTranscriptIndexAppenderInTransaction(
   db: EngineConnection,
   sessionId: string,
-): { append: (params: TranscriptIndexAppend) => boolean; flush: () => void } {
+): {
+  append: (params: TranscriptIndexAppend) => boolean;
+  flushRows: () => void;
+  flush: () => void;
+} {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = readSessionTranscriptProjectionState(db, sessionId);
   let watermark: SessionTranscriptProjectionState | undefined = initial;
@@ -298,6 +315,14 @@ export function createTranscriptIndexAppenderInTransaction(
   let updateWatermark: ReturnType<typeof createWatermarkWriter> | undefined;
   let persisted = initial !== undefined;
   let pendingUpdatedAt: number | undefined;
+  const pendingActiveRows: PreparedSessionTranscriptProjection["activeRows"] = [];
+  const flushRows = () => {
+    if (pendingActiveRows.length > 0) {
+      insertActiveEvent ??= createActiveEventInserter(db, sessionId);
+      insertActiveEvent(pendingActiveRows);
+      pendingActiveRows.length = 0;
+    }
+  };
   const markDirty = (current: SessionTranscriptProjectionState) => {
     watermark = { ...current, needsRebuild: true };
     pendingUpdatedAt = Date.now();
@@ -345,8 +370,7 @@ export function createTranscriptIndexAppenderInTransaction(
       insertFts(append.ftsRow);
     }
     if (append.activeRow) {
-      insertActiveEvent ??= createActiveEventInserter(db, sessionId);
-      insertActiveEvent(append.activeRow);
+      pendingActiveRows.push(append.activeRow);
       if (actor) {
         actor.transcript.active = writableSessionActorMap(actor.transcript.active);
       }
@@ -372,7 +396,9 @@ export function createTranscriptIndexAppenderInTransaction(
   };
   return {
     append: appendEvent,
+    flushRows,
     flush() {
+      flushRows();
       if (pendingUpdatedAt === undefined || !watermark) {
         return;
       }
@@ -506,8 +532,8 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
   const rowsToInsert = incremental
     ? params.next.activeRows
     : params.next.activeRows.slice(retainedCount);
+  insertActive(rowsToInsert);
   for (const row of rowsToInsert) {
-    insertActive(row);
     if (row.ftsEntry) {
       insertFts(row.ftsEntry);
     }
@@ -533,10 +559,19 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
 function rebuildSessionTranscriptIndexInTransaction(db: EngineConnection, sessionId: string): void {
   deleteSessionTranscriptFtsRowsInTransaction(db, sessionId);
   deleteActiveEventRows(db, sessionId);
+  const insertActive = createActiveEventInserter(db, sessionId);
+  const pendingActiveRows: PreparedSessionTranscriptProjection["activeRows"] = [];
   const projection = visitSessionTranscriptProjection(db, sessionId, {
-    activeRow: createActiveEventInserter(db, sessionId),
+    activeRow: (row) => {
+      pendingActiveRows.push(row);
+      if (pendingActiveRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+        insertActive(pendingActiveRows);
+        pendingActiveRows.length = 0;
+      }
+    },
     ftsRow: createSessionTranscriptFtsInserter(db, sessionId),
   });
+  insertActive(pendingActiveRows);
   if (!projection) {
     return;
   }

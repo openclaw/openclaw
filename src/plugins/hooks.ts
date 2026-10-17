@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
@@ -242,9 +241,6 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
-  // Prompt-build hooks may start nested agent runs through any caller. The
-  // mutable token lets detached descendants dispatch after the outer run settles.
-  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
   const runtimeDecisionScopeId = randomUUID();
   let runtimeDecisionOrdinal = 0;
 
@@ -809,19 +805,9 @@ export function createHookRunner(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    if (beforePromptBuildDispatch.getStore()?.active) {
-      return undefined;
-    }
-    const token = { active: true };
-    return await beforePromptBuildDispatch.run(token, async () => {
-      try {
-        return await runModifyingHook("before_prompt_build", event, ctx, {
-          mergeResults: mergeBeforePromptBuild,
-          includeRegistration: (registration) => registration.requiresToolAuthority !== true,
-        });
-      } finally {
-        token.active = false;
-      }
+    return runModifyingHook("before_prompt_build", event, ctx, {
+      mergeResults: mergeBeforePromptBuild,
+      includeRegistration: (registration) => registration.requiresToolAuthority !== true,
     });
   }
 

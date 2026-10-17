@@ -88,11 +88,13 @@ it("acquires wrapper leases and manages templates without the application comman
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/openclaw-state.worker.ts",
+    "src/state/openclaw-state-read.worker.ts",
     "src/state/openclaw-state-lease-worker.ts",
     "src/state/openclaw-state-lease-heartbeat.worker.ts",
     "src/infra/gateway-state-owner-heartbeat.worker.ts",
     "src/infra/sqlite-store.worker.ts",
     "src/infra/sqlite-readonly-location.worker.ts",
+    "src/infra/worker-native-lifecycle.worker.ts",
   ]);
   expect(existsSync(join(root, "src/state/openclaw-state-worker-runtime.ts"))).toBe(false);
   const result = spawnSync(

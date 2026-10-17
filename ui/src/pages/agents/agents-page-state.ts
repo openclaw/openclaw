@@ -47,6 +47,7 @@ import {
 } from "../../lib/model-catalog-store.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import type { GeneratedAvatar } from "./avatar-picker.tsx";
 import {
   loadAgentFileContent,
   overwriteAgentFile,
@@ -60,6 +61,7 @@ import {
   resetIdentityDraft,
   saveIdentityDraft,
   selectIdentityAvatar,
+  setIdentityAvatar,
   setIdentityDraftField,
 } from "./identity-actions.ts";
 import { createAgentModelActions } from "./model-config.ts";
@@ -174,6 +176,8 @@ export function createAgentsPageState(
     },
   );
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
+  let identitySaves = selectionDrafts.bindContext(context);
+  let identityAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let chatModelCatalogPending: Promise<unknown> | null = null;
   let chatModelCatalogRequest: AbortController | null = null;
   let catalogClient: GatewayBrowserClient | null = null;
@@ -197,6 +201,8 @@ export function createAgentsPageState(
   });
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
+    // A new source or client owns a new set of drafts. A same-client reconnect
+    // only invalidates in-flight requests below and keeps its drafts visible.
     onIdentityChange: () => resetForSourceChange(),
     invalidateRequests: (change) => {
       if (change.identityChanged) {
@@ -206,8 +212,12 @@ export function createAgentsPageState(
       resetModelCatalog();
     },
     onSnapshot: ({ snapshot: gatewaySnapshot, becameAvailable, becameConnected }) => {
+      identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      if (becameConnected && Object.values(state.identityDraft).some((value) => value !== null)) {
+        scheduleIdentitySave();
+      }
       if (catalogClient !== state.client) {
         stopCatalog?.();
         catalogClient = state.client;
@@ -261,12 +271,15 @@ export function createAgentsPageState(
 
   function syncSettingsSelection() {
     const selection = context.settingsAgentSelection;
-    selectionDrafts.select({
+    const restoredIdentity = selectionDrafts.select({
       selectedId: selection.state.selectedId,
       intentRevision: selection.intentRevision,
       awaitingRoster: !selection.state.selectedId && !context.agents.state.agentsList,
       profileId: context.gateway.snapshot.selfUser?.id ?? null,
     });
+    if (restoredIdentity) {
+      scheduleIdentitySave(0);
+    }
     syncGitHubIdentity(state.agentsSelectedId);
   }
 
@@ -296,7 +309,9 @@ export function createAgentsPageState(
   }
 
   function resetForSourceChange() {
+    clearIdentityAutosave();
     selectionDrafts.clear();
+    identitySaves = selectionDrafts.bindContext(context);
     state.agentsList = null;
     state.agentsSelectedId = null;
     resetSelectionState();
@@ -647,19 +662,54 @@ export function createAgentsPageState(
     }
   }
 
-  function saveSelectedIdentity() {
+  function clearIdentityAutosave() {
+    if (identityAutosaveTimer !== null) {
+      clearTimeout(identityAutosaveTimer);
+      identityAutosaveTimer = null;
+    }
+  }
+
+  function scheduleIdentitySave(delay = 550) {
+    clearIdentityAutosave();
+    const { name, emoji, avatar } = state.identityDraft;
+    if (
+      (name !== null && !name.trim()) ||
+      (emoji !== null && !emoji.trim()) ||
+      (name === null && emoji === null && avatar === null)
+    ) {
+      return;
+    }
+    identityAutosaveTimer = setTimeout(() => {
+      identityAutosaveTimer = null;
+      void saveSelectedIdentity();
+    }, delay);
+  }
+
+  async function saveSelectedIdentity() {
     if (!canCall("agents.update", "operator.admin")) {
       return;
     }
     const client = state.client;
     const agentId = state.agentsSelectedId;
-    if (!client || !agentId || state.identitySaving) {
+    if (!client || !agentId) {
+      return;
+    }
+    const activeSave = identitySaves.get(agentId);
+    if (activeSave?.client === client && activeSave.snapshot === gateway.snapshot) {
+      await activeSave.promise;
+      if (state.client === client && state.agentsSelectedId === agentId) {
+        scheduleIdentitySave(0);
+      }
+      return;
+    }
+    if (state.identitySaving) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
     const agentIdentity = context.agentIdentity;
-    void saveIdentityDraft({
+    const draftAtStart = state.identityDraft;
+    const save = saveIdentityDraft({
       host: state,
       config: context.config,
       expectedClient: client,
@@ -673,9 +723,24 @@ export function createAgentsPageState(
       isCurrent: () => isCurrentRequest(client, generation, agentId, { agents, agentIdentity }),
       onSaved: () => syncAgentState(agents),
     });
+    identitySaves.set(agentId, { client, snapshot: gateway.snapshot, promise: save });
+    try {
+      await save;
+    } finally {
+      if (identitySaves.get(agentId)?.promise === save) {
+        identitySaves.delete(agentId);
+      }
+    }
+    if (
+      isCurrentRequest(client, generation, agentId, { agents, agentIdentity }) &&
+      state.identityDraft !== draftAtStart
+    ) {
+      scheduleIdentitySave(0);
+    }
   }
 
   function resetSelectionState() {
+    clearIdentityAutosave();
     gateway.invalidate();
     resetModelCatalog();
     resetAgentFiles(state);
@@ -915,6 +980,7 @@ export function createAgentsPageState(
       overview: {
         applicationConfig: applicationConfig.read(),
         identityDraft: state.identityDraft,
+        identityScope: state.requestGeneration,
         identitySaving: state.identitySaving,
         identityError: state.identityError,
         modelCatalog: modelCatalog.models,
@@ -925,14 +991,42 @@ export function createAgentsPageState(
         onIdentityFieldChange: (field, value) => {
           if (canEditIdentity()) {
             setIdentityDraftField(state, field, value);
+            scheduleIdentitySave();
           }
         },
         onIdentityAvatarSelect: (file) => {
           if (canEditIdentity()) {
-            selectIdentityAvatar(state, file, context.config);
+            selectIdentityAvatar(state, file, context.config, () => scheduleIdentitySave(0));
           }
         },
-        onIdentitySave: () => saveSelectedIdentity(),
+        onIdentityAvatarSet: (dataUrl) => {
+          if (canEditIdentity()) {
+            setIdentityAvatar(state, dataUrl, context.config);
+            scheduleIdentitySave(0);
+          }
+        },
+        onIdentityAvatarGenerate: async (prompt) => {
+          const client = state.client;
+          const generation = state.requestGeneration;
+          if (
+            !client ||
+            !selectedAgentId ||
+            !canEditIdentity() ||
+            !canCall("agents.avatar.generate", "operator.admin")
+          ) {
+            throw new Error(t("agents.identity.avatarPermission"));
+          }
+          const result = await client.request<GeneratedAvatar>(
+            "agents.avatar.generate",
+            { agentId: selectedAgentId, prompt },
+            { timeoutMs: 100_000 },
+          );
+          if (!isCurrentRequest(client, generation, selectedAgentId, {})) {
+            throw new Error(t("agents.identity.avatarContextChanged"));
+          }
+          return result;
+        },
+        onIdentitySave: () => scheduleIdentitySave(0),
         ...createAgentModelActions({
           ...configEditor,
           onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(state),
@@ -1051,6 +1145,8 @@ export function createAgentsPageState(
     ];
     applyRoute();
     return () => {
+      selectionDrafts.retainCurrentIdentity();
+      clearIdentityAutosave();
       active = false;
       publish = () => {};
       for (const stop of stops) {

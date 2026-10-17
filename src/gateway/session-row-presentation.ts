@@ -478,6 +478,7 @@ export function prepareProjectedSessionPresentation(
       facts.push(
         record.profileRevision,
         record.lastMessagePreview,
+        record.lastAssistantMessage,
         record.fallbackModel,
         liveModel?.provider,
         liveModel?.model,

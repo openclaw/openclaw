@@ -195,6 +195,7 @@
 
 .oc-menu {
   padding: var(--menu-padding);
+  font-size: calc(13px * var(--control-ui-text-scale));
   user-select: none;
 }
 

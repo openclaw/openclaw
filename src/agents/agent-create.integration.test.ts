@@ -214,6 +214,12 @@ it("restores only the configured held store after explicit creation, never throu
   ).rejects.toThrow("restore authority closed");
   expect(recovery.readHolds()).toEqual(recovery.held);
 
+  await expectCreation(
+    { ...params, restorePaths: [] },
+    { status: "error", reason: "already-exists" },
+  );
+  expect(recovery.readHolds()).toEqual(recovery.held);
+
   await expectCreation(params, { status: "existing", agentDir: state.agentDir() });
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
   const isHeld = createRetainedAgentDatabaseMatcher(state.env, () =>

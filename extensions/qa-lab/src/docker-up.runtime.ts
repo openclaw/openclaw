@@ -1,6 +1,7 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
 import {
   execCommand,
@@ -12,7 +13,6 @@ import {
   type FetchLike,
   type RunCommand,
 } from "./docker-runtime.js";
-import { shellQuote } from "./shell-quote.js";
 
 const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 

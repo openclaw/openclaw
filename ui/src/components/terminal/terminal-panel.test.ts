@@ -118,13 +118,11 @@ describe("OpenClawTerminalPanel", () => {
       document.body.append(panel);
       await panel.updateComplete;
 
-      panel.renderRoot
-        .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
-        ?.click();
+      panel.querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')?.click();
       await panel.updateComplete;
 
-      expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
-      expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
+      expect(panel.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
+      expect(panel.querySelector(".tp-resizer")).toBeNull();
       expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
         open: true,
         dock: "main",
@@ -138,13 +136,11 @@ describe("OpenClawTerminalPanel", () => {
       await restored.updateComplete;
       // Destinations only: the occupied main placement drops out of the
       // cluster, and leaving it is an explicit destination pick.
-      expect(restored.renderRoot.querySelector('[aria-label="Fill main content area"]')).toBeNull();
-      restored.renderRoot.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.click();
+      expect(restored.querySelector('[aria-label="Fill main content area"]')).toBeNull();
+      restored.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.click();
       await restored.updateComplete;
 
-      expect(restored.renderRoot.querySelector(".tp")?.classList.contains(`tp--${dock}`)).toBe(
-        true,
-      );
+      expect(restored.querySelector(".tp")?.classList.contains(`tp--${dock}`)).toBe(true);
       restored.remove();
       await Promise.resolve();
     },
@@ -368,19 +364,17 @@ describe("OpenClawTerminalPanel", () => {
     open.reject(new Error("terminal open refused"));
 
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
-        "terminal open refused",
-      );
+      expect(panel.querySelector(".tp-error")?.textContent).toContain("terminal open refused");
     });
     expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector("openclaw-panel-empty-state")).toBeNull();
+    expect(panel.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
   it("closes a session-scoped terminal cancelled after its open response", async () => {
     const { open, panel, requests } = await startPanelWithPendingOpen("agent:main:chat");
     await panel.updateComplete;
-    panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
+    panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
 
     open.resolve(terminalOpenResult("session-1"));
 
@@ -416,7 +410,7 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
 
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+      expect(panel.querySelector(".tp-error")?.textContent).toContain(
         "renderer initialization failed",
       );
     });
@@ -460,7 +454,7 @@ describe("OpenClawTerminalPanel", () => {
     panel.toggle();
 
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
+      expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
     });
     expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
     expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
@@ -504,7 +498,7 @@ describe("OpenClawTerminalPanel", () => {
     });
     expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
     expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
-    expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
+    expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
     expect(controllers[0].write).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["replacement-1"]),
@@ -540,25 +534,23 @@ describe("OpenClawTerminalPanel", () => {
       ),
     );
 
-    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!.click();
+    panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!.click();
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
         "synthetic terminal list unavailable",
       ),
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["current-1"]),
     );
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
-    const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
-      '[aria-label="Terminal sessions"]',
-    )!;
+    expect(panel.querySelector(".tp-session-menu")).toBeNull();
+    const trigger = panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!;
     expect(document.activeElement).toBe(trigger);
     trigger.click();
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-session__agent")?.textContent).toBe("ops"),
+      expect(panel.querySelector(".tp-session__agent")?.textContent).toBe("ops"),
     );
-    expect(panel.renderRoot.querySelector('[role="alert"]')).toBeNull();
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
     expect(listCalls).toBe(2);
   });
 
@@ -589,13 +581,11 @@ describe("OpenClawTerminalPanel", () => {
       };
       const panel = mountTerminalPanel(client);
       panel.toggle();
-      await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+      await waitForFast(() => expect(panel.querySelector(".tp-actions")).not.toBeNull());
 
-      (
-        panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
-      ).click();
+      (panel.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement).click();
       await waitForFast(() => expect(listCount).toBe(1));
-      (panel.renderRoot.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
+      (panel.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
       await waitForFast(() => expect(listCount).toBe(2));
 
       secondList.resolve({
@@ -609,9 +599,7 @@ describe("OpenClawTerminalPanel", () => {
         ],
       });
       await waitForFast(() =>
-        expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
-          "new-agent",
-        ),
+        expect(panel.querySelector(".tp-session-menu")?.textContent).toContain("new-agent"),
       );
       if (outcome === "reject") {
         firstList.reject(new Error("superseded list failure"));
@@ -630,10 +618,10 @@ describe("OpenClawTerminalPanel", () => {
       await Promise.resolve();
       await panel.updateComplete;
 
-      const menu = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+      const menu = panel.querySelector(".tp-session-menu")?.textContent;
       expect(menu).toContain("new-agent");
       expect(menu).not.toContain("old-agent");
-      expect(panel.renderRoot.querySelector('[role="alert"]')).toBeNull();
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
     },
   );
 
@@ -667,11 +655,11 @@ describe("OpenClawTerminalPanel", () => {
       );
     });
 
-    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!.click();
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-session")).not.toBeNull());
-    panel.renderRoot.querySelector<HTMLButtonElement>(".tp-session")!.click();
+    panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!.click();
+    await waitForFast(() => expect(panel.querySelector(".tp-session")).not.toBeNull());
+    panel.querySelector<HTMLButtonElement>(".tp-session")!.click();
     await waitForFast(() =>
-      expect(panel.renderRoot.textContent).toContain("Could not attach terminal session"),
+      expect(panel.textContent).toContain("Could not attach terminal session"),
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["current-1"]),
@@ -737,19 +725,19 @@ describe("OpenClawTerminalPanel", () => {
       expect(requests.some((entry) => entry.method === "terminal.open")).toBe(true);
     });
     await panel.updateComplete;
-    const section = panel.renderRoot.querySelector(".tp");
+    const section = panel.querySelector(".tp");
     expect(section?.classList.contains("tp--fullscreen")).toBe(true);
-    expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
-    expect(panel.renderRoot.querySelector(".tp-upload")).not.toBeNull();
-    expect(panel.renderRoot.querySelectorAll(".tp-actions button")).toHaveLength(1);
+    expect(panel.querySelector(".tp-resizer")).toBeNull();
+    expect(panel.querySelector(".tp-upload")).not.toBeNull();
+    expect(panel.querySelectorAll(".tp-actions button")).toHaveLength(1);
 
     // Closing the last tab must keep the panel (with its "+" button) rendered —
     // a fullscreen document has no toggle to bring a closed panel back.
-    (panel.renderRoot.querySelector(".tabstrip-tab__close") as HTMLElement).click();
+    (panel.querySelector(".tabstrip-tab__close") as HTMLElement).click();
     await panel.updateComplete;
     expect(requests.some((entry) => entry.method === "terminal.close")).toBe(true);
-    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
-    expect(panel.renderRoot.querySelector(".tabstrip-new")).not.toBeNull();
+    expect(panel.querySelector(".tp")).not.toBeNull();
+    expect(panel.querySelector(".tabstrip-new")).not.toBeNull();
   });
 
   it("marks the old session exited when a replacement client no longer lists it", async () => {
@@ -792,7 +780,7 @@ describe("OpenClawTerminalPanel", () => {
     await vi.dynamicImportSettled();
 
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
+      expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
     });
     expect(oldRequests.filter((method) => method === "terminal.open")).toHaveLength(1);
     expect(newRequests).toEqual(["terminal.list"]);
@@ -860,7 +848,7 @@ describe("OpenClawTerminalPanel", () => {
     panel.toggle();
     await panel.updateComplete;
 
-    panel.renderRoot
+    panel
       .querySelector(".tp-resizer")
       ?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 20, clientY: 200 }));
     panel.remove();
@@ -900,10 +888,10 @@ describe("OpenClawTerminalPanel", () => {
       payload: { sessionId: "session-1", exitCode: null, reason: "detached" },
     });
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("detached");
+    expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("detached");
 
     await i18n.setLocale("de");
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("getrennt");
+    expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("getrennt");
   });
 });

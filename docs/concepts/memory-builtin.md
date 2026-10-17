@@ -227,6 +227,13 @@ with search-triggered maintenance. Searches retain keyword recall, and existing
 semantic indexes remain intact. An already keyword-only index can still accept
 file updates during the cooldown; semantic indexing resumes after recovery.
 
+Local file observation runs in one shared file worker, including initial directory
+discovery, native watching, and change settling. Large memory trees therefore do
+not require directory traversal on the Gateway's main thread. Indexing stays with
+the memory manager, which receives dirty notifications before debounce and reads
+published watcher health without polling the worker. Startup waits for watcher
+readiness; shutdown joins native cleanup, and the last watcher closes the worker.
+
 When native file watching is unavailable, Memory Core uses background polling
 with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,

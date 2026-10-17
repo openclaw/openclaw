@@ -200,6 +200,10 @@ readers use it without loading session storage, artifact cleanup, or archive
 compression. Filename parsing shares a pure grammar with the artifact helpers.
 Existing memory session facades retain these exports for installed plugin compatibility.
 
+The private official-plugin runtime `node-crypto-runtime` exposes `sha256Hex`
+for hashing strings or bytes without loading memory indexing helpers. It is a
+JavaScript-only host runtime export, not a typed public Plugin SDK entrypoint.
+
 ### Bundled plugin helper subpaths
 
 Bundled-only helper modules are private-local after the July 2026 sweep.

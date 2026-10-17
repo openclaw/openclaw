@@ -378,10 +378,9 @@ describe("worktree template custody", () => {
             : undefined,
         });
       });
-    await expect(templateRegistry.readTemplateAsync(env, params.cacheKey)).rejects.toMatchObject({
-      code: "outcome-unknown",
-      cause: failure,
-    });
+    await expect(
+      templateRegistry.markTemplateReadyAsync(env, prepared!.id, 101, options.commitGuard),
+    ).rejects.toMatchObject({ code: "outcome-unknown", cause: failure });
     worker.mockRestore();
   });
 });

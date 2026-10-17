@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 337669,
-  "reason": "Combined protocol, Cron, and New Session deferrals measured 337669 B startup; retain the reduced baseline.",
+  "startupJsGzipBytes": 338494,
+  "reason": "Schema runtime deferral saves 62588 B for Chat and 74019 B for New Session; identical 453 startup sources gain 741 B of generated chunk references, within the unchanged 339000 B ceiling.",
   "updatedAt": "2026-10-17"
 }

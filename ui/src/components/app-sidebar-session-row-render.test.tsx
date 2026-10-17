@@ -188,7 +188,7 @@ it("paints the restored roster and workspace in the first sidebar update", async
   expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
 
-it("keeps cached session rows while the live roster settles", async () => {
+it("keeps cached agent rows while the live roster settles", async () => {
   const key = "agent:main:dashboard:cedar";
   const list = createDeferred<SessionsListResult>();
   const requested = createDeferred();
@@ -244,13 +244,14 @@ it("keeps cached session rows while the live roster settles", async () => {
   });
   host.requestUpdate();
   await host.updateComplete;
-  const rowIds = () =>
-    [...host.querySelectorAll(".sidebar-session-content [data-session-key]")].map((row) =>
-      row.getAttribute("data-session-key"),
+  const agentIds = () =>
+    [...host.querySelectorAll(".sidebar-agent-roster__row[data-agent-id]")].map((row) =>
+      row.getAttribute("data-agent-id"),
     );
-  await waitForSolid(() => expect(rowIds()).toEqual([key]));
+  await waitForSolid(() => expect(agentIds()).toEqual(["main"]));
+  expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
   const samples: Array<Array<string | null>> = [];
-  const sample = () => samples.push(rowIds());
+  const sample = () => samples.push(agentIds());
   const observer = new MutationObserver(sample);
   observer.observe(host.hostElement, { childList: true, subtree: true });
   onTestFinished(() => observer.disconnect());
@@ -269,9 +270,10 @@ it("keeps cached session rows while the live roster settles", async () => {
   observer.disconnect();
   sample();
   expect(host.querySelector('aside[data-snapshot-state="live"]')).not.toBeNull();
-  for (const rows of samples) {
-    expect(rows).toEqual([key]);
+  for (const agents of samples) {
+    expect(agents).toEqual(["main"]);
   }
+  expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
 });
 
 it("keeps the unread badge on an idle child with an icon", () => {

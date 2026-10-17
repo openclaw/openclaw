@@ -267,8 +267,11 @@ credential, lease, and external-effect authority stays with the execution owner.
 Cron retains a memory-only clock check for future jobs so forward clock changes
 can trigger overdue work without reloading SQL every minute.
 
-Cron history reads selection metadata in bounded keyset batches using the
-`created_at, task_id` indexes. Completion-time ordering, exact totals, search,
+Cron history streams selection metadata through one SQLite statement using the
+`created_at, task_id` indexes; that statement owns the read snapshot. The
+PostgreSQL bridge buffers query results, so its reader retains bounded keyset
+batches within one snapshot. Both readers retain only selection metadata after
+matching. Completion-time ordering, exact totals, search,
 and live session visibility still select the response page; only that page's
 response fields are hydrated. Summary pages exclude diagnostics and delivery
 traces in SQL, and neither view loads trigger or script recovery state.
@@ -438,6 +441,7 @@ row for session certification. Offline import, Doctor repair, and main-key
 policy changes explicitly queue validation and revoke the shared readiness cell
 and persisted receipt; rollback may conservatively leave readiness revoked.
 Those operations require exclusive offline or startup maintenance custody.
+Startup and Doctor reuse a valid canonical receipt without querying pending rows again.
 Physical integrity admission remains valid independently of session readiness.
 The schema 25 migration seeds every existing node before admission; see
 [session writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
@@ -6355,13 +6359,17 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
-Bulk appends retain attempt recency and projection watermarks in that cursor,
-then flush the index once and fold final recency into the transcript mutation
-write. Rejected identities still update attempt recency without advancing the
-mutation watermark. If an iterator fails, its accepted prefix's index and
-recency settle before the error escapes; the enclosing transaction still owns
-rollback. Identity and foreign-key checks, rewrite generations, stored payloads,
-and commit boundaries are unchanged.
+Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
+one read, then insert payloads, identities, and active projection rows in bounded
+groups. Streaming imports retain per-row acceptance feedback and buffer only the
+accepted writes. Payloads precede their dependent rows, preserving immediate
+foreign keys. The cursor flushes its watermark once and folds final recency into
+the transcript mutation write. Rejected identities still update attempt recency
+without advancing the mutation watermark. If an iterator fails, its accepted
+prefix settles before the error escapes; the enclosing transaction owns rollback.
+Scalar appends without complete actor facts fold identity rejection into the
+payload insertion. Rewrite generations, stored payloads, and commit boundaries
+are unchanged.
 
 Awaited metadata and compaction retain the database executor without opening a
 native handle on the Gateway thread. The worker prepares storage and publishes

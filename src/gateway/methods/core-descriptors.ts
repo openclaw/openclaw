@@ -749,4 +749,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.github.action", "sessions-github", "dynamic", "2026.10", CONTROL_PLANE_WRITE],
   ["update.handoffSentinel", "update-handoff-sentinel", "operator.admin", "2026.10", UNADVERTISED],
   ["skills.files.get", "skills", "operator.read", "2026.10"],
+  ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

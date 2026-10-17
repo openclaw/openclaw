@@ -18,6 +18,8 @@ import {
 } from "./app-server/session-binding.test-helpers.js";
 import * as detachSharedClientRuntime from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
+import { handleCodexDiagnosticsFeedback } from "./command-diagnostics.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexRuntimeContextOverrides,
@@ -581,6 +583,117 @@ describe("Codex diagnostics confirmation", () => {
     return { identity, upload, deps, run };
   }
 
+  it.each(["unchanged", "replacement", "deletion", "request-error"] as const)(
+    "uses prepared binding authority through diagnostics dispatch: %s",
+    async (change) => {
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+      const binding = supervisedTestBinding("thread-prepared-diagnostics");
+      await writeTestBinding(identity, binding);
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      const prepareRead = bindingStore.prepareRead.bind(bindingStore);
+      const prepared = vi.spyOn(bindingStore, "prepareRead").mockImplementation(async (target) => {
+        const current = await prepareRead(target);
+        if (!current) {
+          return current;
+        }
+        const release = vi.fn(() => current.release());
+        releases.push(release);
+        return { read: () => current.read(), release };
+      });
+      const nativeRead = vi.spyOn(bindingStore, "read");
+      const assertOwnerCurrent = vi.fn();
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = requireRecord(JSON.parse(line), "diagnostics request");
+          send(
+            change === "request-error"
+              ? { id: request.id, error: { code: -32000, message: "synthetic upload failure" } }
+              : { id: request.id, result: { threadId: binding.threadId } },
+          );
+        },
+      });
+      const acquire = vi
+        .spyOn(detachSharedClientRuntime, "getLeasedSharedCodexAppServerClient")
+        .mockImplementation(async () => {
+          entered.resolve();
+          await resume.promise;
+          return harness.client;
+        });
+      let pending: ReturnType<typeof handleCodexDiagnosticsFeedback> | undefined;
+      try {
+        pending = handleCodexDiagnosticsFeedback(
+          createCodexCommandHost(),
+          createContext("diagnostics prepared note", undefined, {
+            diagnosticsUploadApproved: true,
+            assertOwnerCurrent,
+          }),
+          { supervision: { enabled: true } },
+          "prepared note",
+        );
+        await Promise.race([
+          entered.promise,
+          pending.then((result) => {
+            throw new Error(`Diagnostics ended before dispatch: ${result.text}`);
+          }),
+        ]);
+        if (change === "replacement") {
+          await expect(bindingStore.resetSessionGeneration(identity)).resolves.toBe("applied");
+          await expect(
+            bindingStore.mutate(identity, {
+              kind: "set",
+              binding: supervisedTestBinding("replacement-thread"),
+            }),
+          ).resolves.toBe(true);
+        } else if (change === "deletion") {
+          await expect(bindingStore.retireSessionGeneration(identity)).resolves.toBe("applied");
+        }
+        resume.resolve();
+        const result = await pending;
+        const writes = harness.writes.map((line) =>
+          requireRecord(JSON.parse(line), "wire request"),
+        );
+        if (change === "replacement" || change === "deletion") {
+          expect(writes).toEqual([]);
+          expect(result.text).toContain(
+            "The Codex diagnostics session changed before upload; request it again.",
+          );
+        } else {
+          expect(writes).toEqual([
+            {
+              id: expect.any(Number),
+              method: "feedback/upload",
+              params: {
+                classification: "bug",
+                threadId: "thread-prepared-diagnostics",
+                includeLogs: true,
+                tags: { source: "openclaw-diagnostics", channel: "test" },
+                reason: "prepared note",
+              },
+            },
+          ]);
+          expect(result.text).toContain(
+            change === "request-error"
+              ? "synthetic upload failure"
+              : "Codex diagnostics sent to OpenAI servers:",
+          );
+        }
+        expect(assertOwnerCurrent).toHaveBeenCalledOnce();
+        expect(nativeRead).not.toHaveBeenCalled();
+        expect(releases).toHaveLength(1);
+        expect(releases[0]).toHaveBeenCalledOnce();
+      } finally {
+        resume.resolve();
+        await pending?.catch(() => undefined);
+        acquire.mockRestore();
+        nativeRead.mockRestore();
+        prepared.mockRestore();
+        harness.client.close();
+      }
+    },
+  );
+
   it("preserves an accepted upload and blocks the next target after owner revocation", async () => {
     let ownerCurrent = true;
     const f = await fixture(
@@ -603,6 +716,14 @@ describe("Codex diagnostics confirmation", () => {
       ownerCurrent = false;
       return { ok: true, value: { threadId: "thread-session-1" } };
     });
+    f.deps.safeCodexControlRequest = async (_pluginConfig, _method, _params, options) => {
+      try {
+        options?.assertCurrent?.();
+        return await f.upload();
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    };
     const result = await f.run("diagnostics");
     expect(f.upload).toHaveBeenCalledOnce();
     expect(result.text).toContain("Codex diagnostics sent to OpenAI servers:");
@@ -667,6 +788,7 @@ describe("Codex diagnostics confirmation", () => {
       ...bindingStore,
       read: () => binding,
       readAsync: async () => binding,
+      prepareRead: async () => ({ read: () => binding, release() {} }),
     };
     const token = readDiagnosticsConfirmationToken(await f.run("diagnostics"));
     binding = replacement;

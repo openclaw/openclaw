@@ -35,6 +35,7 @@ type OpenAICompletionsCompatDefaults = {
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
+  emitsDsmlToolCalls: boolean;
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresTypedUnionBranches: boolean;
@@ -59,6 +60,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
     sessionAffinity: OpenAICompletionsSessionAffinity;
     visibleReasoningDetailTypes: string[];
+    emitsDsmlToolCalls: boolean;
     requiresNonEmptyUserOrAssistantMessage: boolean;
     requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
@@ -217,6 +219,7 @@ function resolveOpenAICompletionsCompatDefaults(
           !usesConfiguredNonOpenAIEndpoint ||
           supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
+    emitsDsmlToolCalls: isDeepSeek || isXiaomi || /(?:^|\/)deepseek(?:[-/]|$)/i.test(modelId ?? ""),
     thinkingFormat:
       isDeepSeek || isXiaomi
         ? "deepseek"
@@ -348,6 +351,8 @@ export function resolveOpenAICompletionsCompat(
       configured?.requiresReasoningContentOnAssistantMessages ??
       defaults.requiresReasoningContentOnAssistantMessages,
     thinkingFormat,
+    // Explicit DeepSeek-format aliases retain their existing response contract.
+    emitsDsmlToolCalls: configured?.thinkingFormat === "deepseek" || defaults.emitsDsmlToolCalls,
     openRouterRouting: configured?.openRouterRouting,
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,

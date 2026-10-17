@@ -23,7 +23,7 @@ import type {
 
 type RowGuardKind = WorktreeRegistryPredicate["kind"] | "lifecycle" | "publication";
 
-async function readRegistry<
+export async function readWorktreeRegistryCommand<
   Command extends Extract<RegisteredStateReadCommand, { type: `worktrees.${string}` }>,
 >(
   context: OpenClawStateWorkerContext,
@@ -189,7 +189,7 @@ export async function readLiveRegistryWorktreeByOwner(
   ownerId: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
   return (
-    await readRegistry(context, {
+    await readWorktreeRegistryCommand(context, {
       type: "worktrees.findLiveByOwner",
       input: { ownerKind, ownerId },
     })
@@ -200,7 +200,8 @@ export async function readRegistryWorktree(
   context: OpenClawStateWorkerContext,
   id: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
-  return (await readRegistry(context, { type: "worktrees.get", input: { id } }))?.value;
+  return (await readWorktreeRegistryCommand(context, { type: "worktrees.get", input: { id } }))
+    ?.value;
 }
 
 export async function readSessionWorktreeBinding(
@@ -209,7 +210,7 @@ export async function readSessionWorktreeBinding(
   ownerId: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
   return (
-    await readRegistry(context, {
+    await readWorktreeRegistryCommand(context, {
       type: "worktrees.sessionBinding",
       input: { boundId, ownerId },
     })
@@ -221,7 +222,7 @@ export async function readLiveRegistryWorktreeByPath(
   path: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
   return (
-    await readRegistry(context, {
+    await readWorktreeRegistryCommand(context, {
       type: "worktrees.findLiveByPath",
       input: { path },
     })
@@ -260,13 +261,17 @@ export async function readRegistryWorktrees(
   options: WorktreeRegistryListOptions = {},
   context: OpenClawStateWorkerContext = captureWorktreeRunEndContext(env),
 ): Promise<ManagedWorktreeRecord[]> {
-  return (await readRegistry(context, { type: "worktrees.list", input: options }))?.value ?? [];
+  return (
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: options }))
+      ?.value ?? []
+  );
 }
 
 export async function readLiveRegistryWorktreeIds(env: NodeJS.ProcessEnv): Promise<string[]> {
   const context = captureWorktreeRunEndContext(env);
   return (
-    (await readRegistry(context, { type: "worktrees.liveIds", input: undefined }))?.value ?? []
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.liveIds", input: undefined }))
+      ?.value ?? []
   );
 }
 
@@ -275,7 +280,7 @@ export async function getRegistryWorktreeProvisionedPaths(
   id: string,
 ): Promise<string[] | undefined> {
   return (
-    await readRegistry(captureWorktreeRunEndContext(env), {
+    await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
       type: "worktrees.provisionedPaths",
       input: { id },
     })
@@ -287,7 +292,7 @@ export async function getRegistryWorktreeProvisionedState(
   id: string,
 ): Promise<ProvisionedFileState[] | undefined> {
   return (
-    await readRegistry(captureWorktreeRunEndContext(env), {
+    await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
       type: "worktrees.provisionedState",
       input: { id },
     })
@@ -299,7 +304,7 @@ export async function getRegistryWorktreeProvisionedChunk(
   params: { worktreeId: string; path: string; chunkIndex: number },
 ): Promise<Uint8Array | undefined> {
   return (
-    await readRegistry(captureWorktreeRunEndContext(env), {
+    await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
       type: "worktrees.provisionedChunk",
       input: params,
     })
@@ -318,5 +323,8 @@ export async function readWorktreeCleanupState(env: NodeJS.ProcessEnv) {
 /** Foreign CLI inspection never admits a writer or repairs lifecycle state. */
 export async function readExistingRegistryWorktrees(env: NodeJS.ProcessEnv, signal?: AbortSignal) {
   const context = captureOpenClawStateReadWorkerContext({ env });
-  return (await readRegistry(context, { type: "worktrees.list", input: {} }, signal))?.value ?? [];
+  return (
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: {} }, signal))
+      ?.value ?? []
+  );
 }

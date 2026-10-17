@@ -77,7 +77,7 @@ export function sessionLineageIdentityHost(
 }
 
 /** Owns routed ancestry requests and the selected descriptor's observation lease. */
-export class SessionLineageController {
+export class SessionLineageOwner {
   routeKey: string | null = null;
   private loaded: ReturnType<typeof resolveUiConversationIdentity> | null = null;
   private request: LineageRequest | null = null;
@@ -129,17 +129,13 @@ export class SessionLineageController {
     );
   }
 
-  private clearRetry(): void {
+  private retireWalk(): void {
+    this.request = null;
+    this.loaded = null;
     if (this.retryTimer !== null) {
       globalThis.clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
-  }
-
-  private retireWalk(): void {
-    this.request = null;
-    this.loaded = null;
-    this.clearRetry();
   }
 
   private retire(): void {

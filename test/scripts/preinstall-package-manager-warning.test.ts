@@ -214,13 +214,9 @@ describe("install runtime enforcement", () => {
     },
   );
 
-  it
-    .skipIf(process.platform === "win32")
-    .each([
-      { name: "persistent supported Node", nodeVersion: "24.16.0", marker: true, accepted: true },
-    ])(
-    "never spawns absent or nonexecutable Node candidates: $name",
-    ({ nodeVersion, marker, accepted }) => {
+  it.skipIf(process.platform === "win32")(
+    "never spawns absent or nonexecutable Node candidates: persistent supported Node",
+    () => {
       const cwd = tempDirs.make("openclaw-preinstall-path-");
       const noExecute = join(cwd, "no-execute");
       const dangling = join(cwd, "dangling");
@@ -234,10 +230,8 @@ describe("install runtime enforcement", () => {
       writeFileSync(notDirectory, "not a directory");
       symlinkSync(join(cwd, "missing-node"), join(dangling, "node"));
       writeFileSync(launcher, "Bun fixture", { mode: 0o755 });
-      const executable = nodeVersion ? join(nodeDir, "node") : launcher;
-      if (nodeVersion) {
-        writeFileSync(executable, "Node fixture", { mode: 0o755 });
-      }
+      const executable = join(nodeDir, "node");
+      writeFileSync(executable, "Node fixture", { mode: 0o755 });
       const prefix: string[] = [];
       for (let directory = cwd; ; directory = dirname(directory)) {
         prefix.push(join(directory, "node_modules", ".bin"));
@@ -250,8 +244,8 @@ describe("install runtime enforcement", () => {
           ? {
               status: 0,
               stdout: JSON.stringify({
-                version: nodeVersion ?? "24.3.0",
-                bunVersion: nodeVersion ? null : "1.4.3",
+                version: "24.16.0",
+                bunVersion: null,
                 execPath: executable,
               }),
             }
@@ -266,7 +260,7 @@ describe("install runtime enforcement", () => {
             probeNodeRuntime: () =>
               probePackageCliNodeRuntime({
                 cwd,
-                env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: marker ? launcher : undefined },
+                env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher },
                 pathEnv: [
                   ...prefix,
                   join(cwd, "missing"),
@@ -280,11 +274,8 @@ describe("install runtime enforcement", () => {
           },
           reportError,
         ),
-      ).toBe(accepted);
-      expect(run.mock.calls.map(([command]) => command)).toEqual(marker ? [executable] : []);
-      if (nodeVersion === "24.14.1") {
-        expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node 24.14.1"));
-      }
+      ).toBe(true);
+      expect(run.mock.calls.map(([command]) => command)).toEqual([executable]);
     },
   );
 

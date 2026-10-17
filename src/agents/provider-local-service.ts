@@ -654,9 +654,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   if (!signal) {
     return promise;
   }
-  return racePromiseWithAbortSignal(promise, signal, toAbortError).catch((error: unknown) => {
-    throw toErrorObject(error, "Non-Error rejection");
-  });
+  return racePromiseWithAbortSignal(promise, signal, toAbortError);
 }
 
 function waitForSpawnResult(

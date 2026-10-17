@@ -84,9 +84,6 @@ export function formatNativeToolOutput(
   return `${formatNativeToolSummary(toolName, meta)}\n${formatFencedCodeBlock(formattedOutput, "txt")}`;
 }
 
-/**
- * Prepare verbose tool output for user-facing progress messages.
- */
 export function formatToolProgressOutput(
   output: string,
   options?: { maxChars?: number },

@@ -18,6 +18,14 @@ import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
 
+export {
+  AgentsAvatarGenerateParamsSchema,
+  AgentsAvatarGenerateResultSchema,
+} from "./agents-avatar-generate.js";
+export type {
+  AgentsAvatarGenerateParams,
+  AgentsAvatarGenerateResult,
+} from "./agents-avatar-generate.js";
 export { SkillsDetailResultSchema } from "./skill-detail.js";
 export { AgentKindSchema, AgentOwnershipSchema };
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";

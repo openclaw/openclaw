@@ -13,6 +13,10 @@ The session control RPC family: session listing and filtering, message send and 
 
 `chat.send` rejects malformed session keys, conflicting `agentId` and agent-qualified keys, and ambiguous unqualified targets with `INVALID_REQUEST`. Select an agent explicitly when the key does not identify one.
 
+`chat.send.timeoutMs` overrides the agent run deadline. Omit it to use
+`agents.defaults.timeoutSeconds`; keep a client's acknowledgment or reply wait
+budget separate. Ending a client-side wait does not abort accepted work.
+
 Session rows include `snapshotAt`, the Gateway's sampling time in milliseconds since the Unix epoch. Cached rows retain their original sampling time. Clients use it to order read snapshots, including runtime-only changes that do not advance persisted `updatedAt`; request order breaks equal-time ties. Read observations without sampling metadata retain request-order reconciliation. This read timestamp does not replace event ordering or session-identity checks.
 
 Once session stores are admitted, authorization for direct session targets prepares only the requested rows. A dirty target must pass stored-data validation before authorization; unrelated rows continue validating in the background. Method scopes, profile bindings, and startup availability are checked again after preparation. `sessions.list` authorizes the caller's scope first and leaves row validity and visibility filtering to the session reader.

@@ -52,13 +52,13 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Combined deferrals use 7/27/22 requests; retain two per path.
+  // Schema runtime deferrals use 7/25/20 requests; retain two per path.
   startupJsRequests: 9,
-  chatBootJsRequests: 29,
-  newBootJsRequests: 24,
-  // Lazy highlighting measured 1,541,363 / 1,118,543 B; retain under 1% headroom.
-  chatBootJsGzipBytes: 1_550_000,
-  newBootJsGzipBytes: 1_130_000,
+  chatBootJsRequests: 27,
+  newBootJsRequests: 22,
+  // Combined measured 1,483,085 / 1,044,906 B; retain under 1% headroom.
+  chatBootJsGzipBytes: 1_495_000,
+  newBootJsGzipBytes: 1_055_000,
   startupCssRequests: 1,
   startupJsGzipBytes: 339_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.

@@ -73,7 +73,6 @@ export class SidebarMenusController {
   catalogViewMenuPosition: CatalogMenuPosition | null = null;
   filterMenuView: SidebarFilterMenuView = "root";
   agentMenuPosition: { x: number; top: number } | null = null;
-  agentMenuQuery = "";
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
 
@@ -520,15 +519,10 @@ export class SidebarMenusController {
     }
   }
 
-  setAgentMenuQuery(query: string) {
-    this.updateState("agentMenuQuery", query);
-  }
-
   closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.agentMenuTrigger;
     this.clearAgentMenuHoverTimers();
     this.agentMenuTrigger = null;
-    this.agentMenuQuery = "";
     this.agentMenuFocusBeforeHover = null;
     this.updateState("agentMenuInteractionState", "closed");
     this.updateState("agentMenuPosition", null);

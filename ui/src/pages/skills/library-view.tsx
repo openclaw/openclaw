@@ -10,7 +10,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { libraryFileText } from "./library-files.ts";
+import { libraryFileText } from "./library-file-text.ts";
 import type { SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 

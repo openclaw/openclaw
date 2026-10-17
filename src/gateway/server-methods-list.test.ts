@@ -12,6 +12,16 @@ import { coreGatewayHandlers } from "./server-methods.js";
 describe("listGatewayMethods", () => {
   const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
 
+  it("advertises avatar generation with admin authority and inference throttling", () => {
+    expect(listGatewayMethods()).toContain("agents.avatar.generate");
+    expect(coreGatewayHandlers["agents.avatar.generate"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "agents.avatar.generate",
+      ),
+    ).toMatchObject({ scope: "operator.admin", since: "2026.10", controlPlaneWrite: true });
+  });
+
   it("advertises private backgrounds with personal read/write scopes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
     for (const { name, scope } of [

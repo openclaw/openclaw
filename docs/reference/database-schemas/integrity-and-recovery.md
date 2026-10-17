@@ -102,6 +102,12 @@ subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
+Worker admission checks current authority after lease cleanup and before opening
+the native agent database. A refusal at that boundary releases its unopened lease
+without revoking an earlier clean-close seal. Once native opening begins, failed
+or uncertain cleanup still invalidates proof. Shutdown cancellation alone is not
+evidence that a previously sealed database needs another full scan.
+
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
 preflight, or integrity verification. It also avoids a post-ready verification
@@ -500,9 +506,34 @@ Native first-run state receives an empty deletion journal when the shared
 catalog contains only native bootstrap tables and no existing agent history.
 If an older installation omitted that journal, Doctor can migrate configured
 agent stores whose integrity, ownership, and contents prove they contain only
-initial schema and index metadata. Stores with user data, unknown contents, or
-previous recovery holds remain held until their deletion history is resolved.
-Doctor reports failure when a held store prevents a required agent from starting.
+initial schema and index metadata.
+
+`doctor --fix` also automatically restores configured populated stores from the
+published missing-journal regression. This requires a receipt that the whole
+journal table was absent at reconstruction, plus the agent database's original
+producer stamp: matching owner, equal positive creation/update timestamps, and
+matching SQLite and metadata schema versions for these affected builds:
+
+- Agent schema 24: `2026.9.7`, `2026.9.8`, `2026.9.9`, `2026.9.33`,
+  `2026.10.1-beta.1`, `2026.10.1-beta.2`, and `2026.10.1`–`2026.10.4`.
+- Agent schema 25: `2026.10.5-beta.1`–`2026.10.5-beta.4`.
+- Agent schema 27: `2026.10.10-beta.1`.
+
+This includes holds recorded by an earlier Doctor. Before restoration, Doctor
+saves and verifies full SQLite backups of shared state (including reconstruction
+receipts and run reports) and the selected agent databases, including their WAL
+contents. Its warning names each restored store and backup path. The existing
+agent restoration owner revalidates the selected configured paths before
+releasing their holds; normal migrations then prepare them for Gateway startup.
+Repeating Doctor after successful restoration does not restore or back up these stores again.
+
+This policy accepts the small risk of resurrecting data from a lost pending
+deletion when the entire journal disappeared. A missing-table observation is
+not proof that no journal ever existed. Present-but-incomplete journals,
+unrecognized versions, rewritten producer stamps, unconfigured stores, and
+stores with current deletion records retain their holds and explicit recovery
+guidance. Doctor reports failure when a remaining hold prevents a required agent
+from starting.
 
 Native integrity-worker errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while integrity checks distinguish proven corruption from transient failures. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 

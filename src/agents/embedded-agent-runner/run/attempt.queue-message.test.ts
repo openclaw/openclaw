@@ -12,6 +12,7 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
 import {
   reportSteeringMessagePersistenceFailure,
@@ -37,7 +38,7 @@ function message(text: string, identity: string = text): Message {
 }
 
 function fixture(queue: Message[] = [], target = queue[0], prepare?: () => Promise<void>) {
-  const listeners = new Set<(event: unknown) => void>();
+  const listeners = new Set<(event: AgentSessionEvent) => unknown>();
   const retire = vi.fn(() => true);
   const accepted = vi.fn();
   const settled = vi.fn();
@@ -70,7 +71,7 @@ function fixture(queue: Message[] = [], target = queue[0], prepare?: () => Promi
     accepted,
     settled,
     abort,
-    emit(event: unknown) {
+    emit(event: AgentSessionEvent) {
       for (const listener of listeners) {
         listener(event);
       }
@@ -226,7 +227,7 @@ it("closes admission on pre-enqueue persistence failure when the observer throws
   }
 });
 
-it.each(["message_end", "agent_handoff"])(
+it.each(["message_end", "agent_handoff"] as const)(
   "keeps admission-only steering owned until %s",
   async (terminal) => {
     vi.useFakeTimers();
@@ -487,9 +488,15 @@ it("keeps an image steer pending across nonterminal retry and compaction events"
   } satisfies Message;
   const f = fixture([target]);
   const wait = f.wait("", { images: [image] });
-  f.emit({ type: "agent_end", messages: [] });
+  f.emit({ type: "agent_end", messages: [], willRetry: true });
   await vi.advanceTimersByTimeAsync(0);
-  f.emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
+  f.emit({
+    type: "auto_retry_start",
+    attempt: 1,
+    maxAttempts: 3,
+    delayMs: 1_000,
+    errorMessage: "retryable failure",
+  });
   f.emit({ type: "compaction_start", reason: "threshold" });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.queue).toEqual([target]);

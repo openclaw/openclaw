@@ -78,6 +78,7 @@ import {
   handleSessionManagementNavigationAction,
   type SessionsPageMenuProps,
 } from "./session-menu.tsx";
+import type { SessionsPageState } from "./sessions-page-state.types.ts";
 import type { SessionsProps } from "./view-types.ts";
 
 registerSessionOrganizationEnglish();
@@ -91,27 +92,6 @@ type SessionsPageListBinding = {
   query: ReturnType<typeof buildSessionsListQuery>;
   key: string;
   transcriptKey: string;
-};
-
-type SessionsPageState = Pick<
-  SessionsProps,
-  | "result"
-  | "loading"
-  | "refreshing"
-  | "error"
-  | "activeMinutes"
-  | "limit"
-  | "includeGlobal"
-  | "includeUnknown"
-  | "statusFilter"
-  | "searchQuery"
-  | "transcriptSearchQuery"
-  | "expandedSessionKey"
-  | "transcriptSearch"
-> & {
-  selectedSessions: Map<string, SessionDeleteRow>;
-  sessionMenu: SessionsPageMenuProps["menu"] | null;
-  sessionMenuWork: SessionsPageMenuProps["work"];
 };
 
 export type SessionsPageOwner = ReturnType<typeof createSessionsPage>;
@@ -1375,6 +1355,7 @@ export function createSessionsPage(
       statusFilter: state.statusFilter,
       basePath: context.basePath,
       agentId: resolveSessionNavigationAgentId(context),
+      allAgentsScope: context.agentSelection.state.scopeId === null,
       mainKey: resolveUiConfiguredMainKey({
         agentsList: context.agents.state.agentsList,
         hello: context.gateway.snapshot.hello,

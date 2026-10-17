@@ -96,7 +96,7 @@ import {
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
-import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
+import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import { readStateStream } from "./openclaw-state-read-stream.js";
@@ -116,7 +116,6 @@ export {
   loadSubagentSessionListRunsFromSqlite,
   readRegisteredAgentDatabaseRows,
   readStateStream,
-  stateReadRegistry,
 };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
@@ -125,16 +124,17 @@ export function readOpenClawStateDatabaseCommand(
   input: OpenClawStateReadRequest,
   command: Exclude<
     OpenClawStateReadRequest["command"],
-    {
-      type:
-        | "admit"
-        | "plugins.metadata.read"
-        | "subagents.restore"
-        | "meetingTranscripts.export"
-        | "gatewayOwnerLease.read"
-        | "agentDatabaseRegistry.read"
-        | "subagents.sessionList";
-    }
+    | RegisteredStateReadCommand
+    | {
+        type:
+          | "admit"
+          | "plugins.metadata.read"
+          | "subagents.restore"
+          | "meetingTranscripts.export"
+          | "gatewayOwnerLease.read"
+          | "agentDatabaseRegistry.read"
+          | "subagents.sessionList";
+      }
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
 ): OpenClawStateReadResult {
@@ -184,9 +184,6 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (isChannelIngressReadCommand(command)) {
     return readChannelIngressInDatabase(db, command);
-  }
-  if ("input" in command && stateReadRegistry.has(command)) {
-    return stateReadRegistry.execute(command, db);
   }
   if (command.type === "subagents.runs") {
     return readSubagentRunsInWorker(db, command);

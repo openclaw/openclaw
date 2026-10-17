@@ -516,11 +516,12 @@ export function createContext(
   const lifecycle = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
   sidebarSessionGatewayBindings.get(sessions)?.(gateway, lifecycle.agentSelection);
   return {
-    chatSubmissions: createChatSubmissions(),
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
+    chatSubmissions: createChatSubmissions(),
     navigation: createApplicationNavigationPreferences(lifecycle.theme),
+    navigate: vi.fn(),
     sessions,
     plugins: {
       registrations: () => [],

@@ -256,7 +256,7 @@ async function runCliIsolatedCompletion(
           );
         }
         const text = payloads
-          .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
+          .filter((payload) => !payload.isReasoning && payload.text !== undefined)
           .map((payload) => payload.text ?? "")
           .join("\n")
           .trim();

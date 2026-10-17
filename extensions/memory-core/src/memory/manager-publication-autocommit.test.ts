@@ -206,7 +206,7 @@ it("retains the cache count across writes and reloads after rollback or an unsco
   const sql = observeHostDataSql();
   const counts = () =>
     sql.queries.filter((query) => /select count\(\*\).*memory_embedding_cache/i.test(query)).length;
-  const write = (hashes: string[], maxEntries = 2) =>
+  const write = (hashes: string[], maxEntries = 10) =>
     backend.execute({
       type: "cache.write.inline",
       input: {
@@ -230,6 +230,10 @@ it("retains the cache count across writes and reloads after rollback or an unsco
     expect(write(["a"])).toMatchObject({ ok: true });
     expect(hashes()).toEqual([{ hash: "a" }, { hash: "b" }]);
     expect(counts()).toBe(coldCounts);
+    // Replacements may inflate the retained upper bound but must not evict live rows.
+    expect(prune(2)).toMatchObject({ ok: true });
+    expect(hashes()).toEqual([{ hash: "a" }, { hash: "b" }]);
+    expect(prune(2)).toMatchObject({ ok: true, value: false });
 
     // One insert succeeds before the second aborts: neither the rows nor count may leak.
     expect(write(["c", "fail"], 4)).toMatchObject({ ok: false, committed: false });

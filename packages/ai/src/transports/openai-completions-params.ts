@@ -317,6 +317,10 @@ export function buildOpenAICompletionsRequest(
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
+  const converted =
+    supportsTools && context.tools
+      ? convertTools(context.tools, compat, model, policy.mode)
+      : undefined;
   // The converter needs intact boundaries for Runtime relocation or cache markers.
   const providerModel: ProviderModel = {
     ...model,
@@ -326,6 +330,7 @@ export function buildOpenAICompletionsRequest(
   const convertedMessages = convertMessages(providerModel, context, compat, {
     cacheOptOutIndexes,
     supportsTools,
+    declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined && !managedCompat?.requiresStringContent,
   });
@@ -392,8 +397,7 @@ export function buildOpenAICompletionsRequest(
   }
   let directToolProjection: ReturnType<typeof projectOpenAITools> | undefined;
   if (supportsTools) {
-    if (context.tools) {
-      const converted = convertTools(context.tools, compat, model, policy.mode);
+    if (converted) {
       if (policy.mode === "direct") {
         directToolProjection = converted.projection;
       }

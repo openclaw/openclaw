@@ -21,8 +21,10 @@ packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
 packages/gateway-protocol/package.json
+packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
+packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
@@ -44,6 +46,7 @@ packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
 packages/gateway-protocol/src/session-communication.ts
+packages/gateway-protocol/src/session-limits.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
@@ -1292,6 +1295,7 @@ src/infra/worker-message-metrics.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
@@ -1539,7 +1543,6 @@ src/plugins/provider-claude-thinking.ts
 src/plugins/provider-thinking-active.ts
 src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
-src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
@@ -1681,8 +1684,10 @@ src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
 src/process/spawn-broker/resource-authority.ts
+src/process/spawn-broker/resource-client.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
+src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
@@ -1745,6 +1750,8 @@ src/sessions/session-row-changes.ts
 src/sessions/session-state-events.ambient-read.ts
 src/sessions/session-state-events.prune.ts
 src/sessions/session-title-source.ts
+src/sessions/session-upstream-links-publication.ts
+src/sessions/session-upstream-links.kernel.ts
 src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
@@ -2010,11 +2017,13 @@ src/state/schema-migration-backup-tables.ts
 src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
+src/state/openclaw-state-read-operation-registry.ts
 src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
+src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-inspection.ts
 src/state/openclaw-state-schema-preflight.ts
@@ -2284,6 +2293,7 @@ packages/ai/src/utils/usage.ts
 packages/gateway-protocol/src/chat-work-context.ts
 packages/gateway-protocol/src/schema/agent-database-admission.ts
 packages/gateway-protocol/src/schema/agent-summary-enums.ts
+packages/gateway-protocol/src/schema/agents-avatar-generate.ts
 packages/gateway-protocol/src/schema/agents-list-session-placement.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/background-preferences.ts
@@ -2441,6 +2451,7 @@ src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
 src/config/sessions/session-entry-lineage.ts
 src/config/sessions/session-entry-patch-operation.ts
+src/config/sessions/session-snapshot-merge.ts
 src/config/sessions/session-entry-projection.ts
 src/config/sessions/session-entry-provenance.ts
 src/config/sessions/session-entry-public-patch.ts
@@ -2476,6 +2487,7 @@ src/config/sessions/work-start-error.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
+src/gateway/session-row-transcript-preview.ts
 src/gateway/session-transcript-entry-message.ts
 src/gateway/session-transcript-source-pages.ts
 src/gateway/worker-environments/transcript-commit-policy.ts

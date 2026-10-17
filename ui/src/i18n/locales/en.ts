@@ -888,6 +888,8 @@ export const en: TranslationMap & {
     selectAllOnPage: "Select all on page",
     selectSession: "Select session",
     optionalPlaceholder: "(optional)",
+    session: "Session",
+    agent: "Agent",
     key: "Key",
     label: "Label",
     kind: "Kind",
@@ -3144,6 +3146,7 @@ export const en: TranslationMap & {
       },
     },
     sessionHeader: {
+      agentContext: "Session and workspace for {agent}",
       renameTooltip: "Rename session",
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",

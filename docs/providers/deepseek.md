@@ -119,13 +119,16 @@ maximum `reasoning_effort`; both map to `"max"`.
 
 ## Thinking and tools
 
-When a DeepSeek-format endpoint emits DSML tool markup as text, OpenClaw recovers
+When a DeepSeek model emits DSML tool markup as text, including through OpenRouter
+or another OpenAI-compatible provider, OpenClaw recovers
 valid `calls`, `tool_calls`, `tool_call`, and `function_calls` blocks into tool
 calls instead of showing their payloads in chat. This includes doubled fullwidth
 markers with a separator space. Direct provider calls and tool-free finalization
 hide these blocks without recovering tools. Malformed or unfinished blocks are
 also hidden without executing them; existing tool permissions still apply to
-recovered calls.
+recovered calls. Native tool calls take precedence when the same response also
+contains DSML, so recovered duplicates do not execute. Routing through OpenRouter
+keeps OpenRouter's reasoning request format.
 
 DeepSeek V4 thinking sessions require replayed assistant messages from a
 thinking-enabled turn to include `reasoning_content` on follow-up requests.

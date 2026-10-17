@@ -135,6 +135,7 @@ export function buildGatewaySessionSnapshot(params: {
     boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     titlePending: sessionRow.titlePending ?? false,
+    lastAssistantMessage: sessionRow.lastAssistantMessage ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
