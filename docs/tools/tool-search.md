@@ -279,7 +279,9 @@ independent queries:
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly.
+Single-query calls continue to return the compact candidate array directly,
+unless a returned MCP server publishes instructions (see
+[MCP server instructions](#mcp-server-instructions)).
 When both shapes contain searches, the non-empty `query` runs first, with the
 top-level `limit` scoped to it. Batch entries follow in request order, including
 repeated query text; each occurrence keeps its own limit and counts toward the
@@ -308,6 +310,29 @@ batch may request at most 50 candidates in total. A batch accepts at most 16
 queries, with at most 512 characters per query and 512 UTF-8 bytes across the
 serialized query list. Invalid batches fail as one request, while a valid query
 with no matches returns an empty `candidates` array.
+
+### MCP server instructions
+
+MCP servers can publish usage guidance in their `initialize` result. For tools
+deferred behind Tool Search, OpenClaw keeps that remote text out of the system
+prompt and the directory. The discovery response that first names a server's
+tools carries it instead, under the same untrusted-content wrapper as the rest
+of the response:
+
+- `tool_search`, single or batch: `mcpServerInstructions`, an object keyed by
+  server name, follows the candidates. Each server returned in the response
+  appears once, however many of its tools matched; a single search then returns
+  `{ results, mcpServerInstructions }` instead of a bare array.
+- `tool_describe`: the described tool's server, after its schema.
+- `dispatch_action`: the target's server, only when no earlier discovery
+  response in the run delivered it, for example when the id came from an
+  earlier turn.
+
+Instructions are never truncated. Candidates and results are fitted first, so
+server text cannot evict a callable entry from a batch. When a server's text
+would push a response past its protected-content bound, that server gets an
+explicit omission marker, pointing to `tool_describe` where that can help,
+instead of a partial text.
 
 ### Directory mode
 

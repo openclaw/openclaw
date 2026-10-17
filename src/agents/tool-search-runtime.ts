@@ -71,6 +71,12 @@ type ToolSearchExactCallOptions = Pick<
   "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
 >;
 
+/** Untrusted MCP initialize guidance attached to one discovery response, keyed by server. */
+export type ToolSearchMcpServerInstructions = Record<string, string>;
+
+export const MCP_SERVER_INSTRUCTIONS_OMITTED =
+  "[omitted: no room for the whole text in this response; tool_describe on one of this server's tools returns it]";
+
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
     ...compactToolSearchCatalogEntry(entry),
@@ -213,6 +219,7 @@ export class ToolSearchRuntime {
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
+  private readonly deliveredServerInstructions = new Set<string>();
 
   constructor(
     private readonly ctx: ToolSearchToolContext,
@@ -354,6 +361,69 @@ export class ToolSearchRuntime {
         )
       ).result,
     );
+  };
+
+  /**
+   * Server guidance for one discovery response that returns these catalog ids.
+   * Deferred MCP tools keep initialize instructions out of the system prompt, so
+   * the response that names a server carries its whole text once, after the
+   * callable entries. A text that would push the protected response past its
+   * bound becomes a pointer instead of being cut, so it never displaces identity.
+   */
+  mcpServerInstructionsFor = (
+    payload: object,
+    ids: readonly string[],
+    options: { parentToolCallId?: string; undeliveredOnly?: boolean; omitted?: string } = {},
+  ): ToolSearchMcpServerInstructions | undefined => {
+    const wanted = new Set(ids);
+    const entries = new Map<string, ToolSearchCatalogEntry>();
+    for (const entry of resolveCatalog(this.ctx).entries) {
+      if (wanted.has(entry.id)) {
+        entries.set(entry.id, entry);
+      }
+    }
+    const guidance = new Map<string, string>();
+    for (const id of ids) {
+      const mcp = entries.get(id)?.mcp;
+      if (
+        mcp?.serverInstructions &&
+        !guidance.has(mcp.serverName) &&
+        !(options.undeliveredOnly && this.deliveredServerInstructions.has(mcp.serverName))
+      ) {
+        guidance.set(mcp.serverName, mcp.serverInstructions);
+      }
+    }
+    if (guidance.size === 0) {
+      return undefined;
+    }
+    const instructions: ToolSearchMcpServerInstructions = Object.fromEntries(guidance);
+    const omitted = options.omitted ?? MCP_SERVER_INSTRUCTIONS_OMITTED;
+    const networkContent = this.hasNetworkContent(options.parentToolCallId);
+    const fits = () =>
+      !renderToolSearchControlText(
+        serializeToolSearchControlResult({ ...payload, mcpServerInstructions: instructions }),
+        networkContent,
+      ).truncated;
+    while (!fits()) {
+      let largest: string | undefined;
+      let largestLength = 0;
+      for (const [server, text] of guidance) {
+        if (instructions[server] === text && text.length > largestLength) {
+          largest = server;
+          largestLength = text.length;
+        }
+      }
+      if (!largest) {
+        break;
+      }
+      instructions[largest] = omitted;
+    }
+    for (const [server, text] of guidance) {
+      if (instructions[server] === text) {
+        this.deliveredServerInstructions.add(server);
+      }
+    }
+    return instructions;
   };
 
   observeNetworkContent(parentToolCallId: string): void {

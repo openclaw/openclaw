@@ -98,6 +98,8 @@ type CodeModeMcpCatalogBinding = {
   namespaceId: "mcp";
   path: string[];
   apiPath: string;
+  /** Owning server's sanitized initialize instructions; untrusted server text. */
+  instructions?: string;
 };
 
 export type CodeModeNamespaceRuntime = {
@@ -324,6 +326,7 @@ function createMcpNamespaceModel(
         doc: {
           identifier: serverIdentifier,
           serverName: mcp.serverName,
+          ...(mcp.serverInstructions ? { instructions: mcp.serverInstructions } : {}),
           tools: [],
         },
       };
@@ -349,6 +352,7 @@ function createMcpNamespaceModel(
       namespaceId: "mcp",
       path: [serverIdentifier, ...path],
       apiPath: `mcp/${serverIdentifier}.d.ts`,
+      ...(mcp.serverInstructions ? { instructions: mcp.serverInstructions } : {}),
     });
     const catalogId = entry.id.trim();
     const toolName = entry.name.trim();

@@ -370,6 +370,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 
   const callableHandles = new Map();
   const callableMetadata = new WeakMap();
+  // Untrusted MCP server guidance from search, keyed by declaration path. Each
+  // serialized output shows it once per server, on that server's first handle.
+  const mcpServerInstructions = new Map();
+  const instructedServersKey = Object.freeze({});
   function callableHandle(binding) {
     const callableName = typeof binding?.callableName === "string" ? binding.callableName : "";
     if (!callableName) return null;
@@ -419,7 +423,17 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const metadata = callableMetadata.get(value);
     if (metadata) {
       if (metadata.source !== "openclaw") observeNetworkContent();
-      return finalState ? serializeOutputValue(metadata, seen, finalState) : metadata;
+      let projected = metadata;
+      const instructions = metadata.source === "mcp" ? mcpServerInstructions.get(metadata.apiPath) : undefined;
+      if (instructions !== undefined) {
+        const instructed = seen.get(instructedServersKey) ?? new Set();
+        seen.set(instructedServersKey, instructed);
+        if (!instructed.has(metadata.apiPath)) {
+          instructed.add(metadata.apiPath);
+          projected = { ...metadata, instructions };
+        }
+      }
+      return finalState ? serializeOutputValue(projected, seen, finalState) : projected;
     }
     if (finalState) {
       if (typeof value === "function") return undefined;
@@ -476,6 +490,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     search: async (query, options) => {
       const matches = await request("search", [query, options]);
       return Object.freeze(matches.map((match) => {
+        if (typeof match?.instructions === "string" && typeof match.apiPath === "string") {
+          mcpServerInstructions.set(match.apiPath, match.instructions);
+        }
         const handle = typeof match === "string" ? callableHandles.get(match) : callableHandle(match);
         if (!handle) throw new Error("Search result has no callable handle.");
         return handle;

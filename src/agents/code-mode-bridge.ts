@@ -304,6 +304,9 @@ export async function runBridgeRequest(params: {
           allowedIds: catalogProjection.searchableIds,
           parentToolCallId: params.parentToolCallId,
         });
+        // Server guidance crosses the bridge once per server per search; the guest
+        // keeps it per server and adds it once to each output that shows those handles.
+        const instructedServers = new Set<string>();
         value = exactBinding
           ? [exactBinding.callableName]
           : matches.map((entry) => {
@@ -315,6 +318,12 @@ export async function runBridgeRequest(params: {
               if (!mcp) {
                 throw new ToolInputError("Search result has no callable namespace route.");
               }
+              const instructions = instructedServers.has(mcp.apiPath)
+                ? undefined
+                : mcp.instructions;
+              if (instructions) {
+                instructedServers.add(mcp.apiPath);
+              }
               return {
                 callableName: mcp.callableName,
                 namespaceId: mcp.namespaceId,
@@ -323,6 +332,8 @@ export async function runBridgeRequest(params: {
                 name: entry.mcp?.toolName ?? entry.name,
                 source: "mcp",
                 description: truncateUtf16Safe(entry.description, 512),
+                // Undefined fields do not cross the JSON bridge.
+                instructions,
               };
             });
         break;

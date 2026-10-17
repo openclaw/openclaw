@@ -555,6 +555,79 @@ function invoiceTool(toolName: string) {
 }
 
 describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) => {
+  it("shows whole server guidance in $api headers and once per server in search output", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const instructions = [
+      "LEDGER_GUIDANCE: cite invoice ids.",
+      ...Array.from({ length: 14 }, (_, index) => `  ${index + 1}. Nested rule.`),
+      "Background detail. ".repeat(160).trim(),
+      "LEDGER_TAIL: confirm before paid calls. */ stays inside the comment",
+    ].join("\n");
+    const targets = ["listInvoices", "voidInvoice"].map((toolName) =>
+      mcpTool({
+        name: `ledger__${toolName}`,
+        serverName: "ledger",
+        toolName,
+        description: `Ledger invoices ${toolName}`,
+        serverInstructions: instructions,
+      }),
+    );
+    const unguided = mcpTool({
+      name: "notes__find",
+      serverName: "notes",
+      toolName: "find",
+      description: "Find invoices notes",
+    });
+    applyCodeModeCatalog({ tools: [...tools, ...targets, unguided], config, catalogRef });
+    const code = `
+      const matches = await catalog.search("invoices", { limit: 10 });
+      const [ledgerTool] = matches.filter(tool => tool.apiPath === "mcp/ledger.d.ts");
+      return {
+        matches,
+        header: (await MCP.ledger.$api()).header,
+        toolHeader: (await ledgerTool.describe()).header,
+        file: (await API.read("mcp/ledger.d.ts")).content,
+        notesFile: (await API.read("mcp/notes.d.ts")).content,
+      };
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+    expect(result).toMatchObject({ status: "completed" });
+    const { value } = result as unknown as {
+      value: {
+        matches: Array<{ callableName: string; apiPath: string; instructions?: string }>;
+        header: string;
+        toolHeader: string;
+        file: string;
+        notesFile: string;
+      };
+    };
+
+    expect(value.matches.map((match) => match.callableName).toSorted()).toEqual([
+      "MCP.ledger.listInvoices",
+      "MCP.ledger.voidInvoice",
+      "MCP.notes.find",
+    ]);
+    // The first ledger handle carries the whole text; the second does not repeat it.
+    expect(value.matches.filter((match) => match.instructions !== undefined)).toEqual([
+      expect.objectContaining({ apiPath: "mcp/ledger.d.ts", instructions }),
+    ]);
+    expect(JSON.stringify(value.matches).split("LEDGER_TAIL").length - 1).toBe(1);
+    for (const declaration of [value.header, value.toolHeader, value.file]) {
+      expect(declaration.split("LEDGER_TAIL").length - 1).toBe(1);
+      expect(declaration).toContain(" *   14. Nested rule.");
+      expect(declaration).toContain(
+        " * LEDGER_TAIL: confirm before paid calls. * / stays inside the comment\n */\ndeclare namespace MCP.ledger {",
+      );
+    }
+    expect(value.notesFile).not.toContain("Server instructions");
+    for (const target of [...targets, unguided]) {
+      expect(target.execute).not.toHaveBeenCalled();
+    }
+  });
+
   it("finds native and MCP capabilities by intent and calls the correct colliding namespace", async () => {
     const { config, catalogRef, ctx, tools } = createCodeModeHarness();
     const native = pluginTool("invoices", "Find overdue invoices locally");
