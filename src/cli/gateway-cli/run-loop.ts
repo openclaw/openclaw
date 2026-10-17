@@ -392,15 +392,21 @@ export async function runGatewayLoop(params: {
       Boolean(failure),
     );
     const isUpdateRestart = isUpdateProcessRestartReason(restartReason);
+    // A shutdown failure means native resources never retired cleanly; resuming
+    // in-process would reuse an unsettled runtime with retained closing
+    // resources. Terminate with the recorded failure instead so only a
+    // supervisor-spawned replacement can re-admit state ownership.
+    const resumeOrExitWithFailure = (owner?: GatewayRestartIntent["successorOwner"]) =>
+      failure ? finishLoopAfterCleanup(1) : reacquireAndResumeInProcessRestart(owner);
 
     if (cancelled) {
-      return reacquireAndResumeInProcessRestart(expectedOwner);
+      return resumeOrExitWithFailure(expectedOwner);
     }
     if (activeRestartRequest?.restartIntent?.successorOwner) {
       if (!expectedOwner) {
         gatewayLog.error("managed update handoff arrived after successor parking closed");
         await markRestartHandoffUnavailable();
-        return reacquireAndResumeInProcessRestart();
+        return resumeOrExitWithFailure();
       }
       if (foregroundHandoff) {
         if (!sameManagedUpdateOwner(getManagedUpdateOwner(), expectedOwner)) {
@@ -476,7 +482,7 @@ export async function runGatewayLoop(params: {
         gatewayLog.warn(`update respawn child did not settle: ${formatErrorMessage(error)}`);
       }
       await markRestartHandoffUnavailable("restart-unhealthy");
-      return reacquireAndResumeInProcessRestart();
+      return resumeOrExitWithFailure();
     }
     if (respawn.mode === "supervised") {
       const restartKind = isUpdateRestart ? "update-process" : "full-process";
@@ -524,7 +530,7 @@ export async function runGatewayLoop(params: {
         if (isUpdateRestart) {
           await markRestartHandoffUnavailable();
         }
-        return reacquireAndResumeInProcessRestart();
+        return resumeOrExitWithFailure();
       }
       gatewayLog.info("restart mode: full process restart (supervisor restart)");
       if (supervisorMode === "launchd") {
@@ -537,7 +543,7 @@ export async function runGatewayLoop(params: {
           if (isUpdateRestart) {
             await markRestartHandoffUnavailable();
           }
-          return reacquireAndResumeInProcessRestart();
+          return resumeOrExitWithFailure();
         }
       }
       updateSuccessor.commit(true);
@@ -561,7 +567,7 @@ export async function runGatewayLoop(params: {
     if (!isUpdateRestart && isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
       return handleRestartAfterServerClose();
     }
-    return reacquireAndResumeInProcessRestart();
+    return resumeOrExitWithFailure();
   };
   let reportedBudget = startupBudget;
   startupBudget.log("startup");
@@ -809,7 +815,14 @@ export async function runGatewayLoop(params: {
             await hostLifecycle?.retire();
           }
           if (shutdownFailure) {
-            if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
+            // A failed close leaves this process unable to resume in-process, and a
+            // schtasks-supervised run that exits nonzero is never relaunched (manual
+            // task starts ignore RestartOnFailure). The handoff observer waits for
+            // this PID to exit before /Run, so the replacement re-admits state fresh.
+            if (
+              (installationReplacement || supervisorMode === "schtasks") &&
+              !getManagedUpdateOwner()
+            ) {
               writeStabilityBundle(
                 "gateway.restart_close_failed",
                 shutdownFailure.error,
@@ -817,6 +830,7 @@ export async function runGatewayLoop(params: {
               );
               await handleRestartAfterServerClose(undefined, false, shutdownFailure);
             } else {
+              // forceExitAfterStabilityBundle records the bundle itself; do not double-write.
               await forceExitAfterStabilityBundle(
                 "gateway.restart_close_failed",
                 1,

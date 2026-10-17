@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import * as backoff from "../infra/backoff.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -473,6 +474,47 @@ it.each(["complete", "native-failure"] as const)(
     } finally {
       successorGate.resolve();
       await successorClosing;
+    }
+  },
+);
+
+it.each(["busy", "durable"] as const)(
+  "retries only a busy native retirement close before surfacing the failure (%s)",
+  async (kind) => {
+    const failure =
+      kind === "busy"
+        ? Object.assign(new Error("database is locked"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 5,
+          })
+        : new Error("native close corrupt");
+    let attempts = 0;
+    const held = {
+      ...resource("retrying-native.sqlite", async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw failure;
+        }
+      }),
+      retireAfterResources: true as const,
+    };
+    registerKnown(held);
+    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue(undefined);
+    const selection = { agentId: held.agentId, path: held.path };
+    try {
+      if (kind === "busy") {
+        expect(await drainAgentDatabaseResources(selection, async () => "closed")).toBe("closed");
+        expect(attempts).toBe(2);
+        expect(sleep).toHaveBeenCalledOnce();
+      } else {
+        await expect(drainAgentDatabaseResources(selection, async () => "closed")).rejects.toThrow(
+          "Agent database native retirement failed",
+        );
+        expect(attempts).toBe(1);
+        expect(sleep).not.toHaveBeenCalled();
+      }
+    } finally {
+      sleep.mockRestore();
     }
   },
 );

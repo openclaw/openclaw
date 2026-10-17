@@ -5,6 +5,7 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   registerAgentDatabaseReaderCloser,
 } from "../infra/agent-database-readers.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -255,6 +256,28 @@ export function revokeAgentDatabaseResources(
   return pending;
 }
 
+// A settling Worker transaction or WAL reader can transiently hold the file lock the
+// native close needs. Failed closes retain exact custody, so retry busy retirements
+// briefly before surfacing the failure; durable errors fail fast.
+const NATIVE_RETIREMENT_BUSY_RETRY_SCHEDULE_MS = [100, 400, 1_200] as const;
+const SQLITE_BUSY_ERRCODE = 5;
+
+function isSqliteBusyRetirementError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  // SAFETY: narrowed above to a non-null object; sqlite errors expose code/errcode/message optionally.
+  const candidate = error as { code?: unknown; errcode?: unknown; message?: unknown };
+  if (candidate.errcode === SQLITE_BUSY_ERRCODE) {
+    return true;
+  }
+  return (
+    candidate.code === "ERR_SQLITE_ERROR" &&
+    typeof candidate.message === "string" &&
+    candidate.message.includes("database is locked")
+  );
+}
+
 export async function drainAgentDatabaseResources<T>(
   selection: AgentDatabaseCloseSelection,
   closeNative: () => Promise<T>,
@@ -288,6 +311,29 @@ export async function drainAgentDatabaseResources<T>(
     const nativeResults = await Promise.allSettled(
       nativeOwners.map((resource) => closeAgentDatabaseResource(resource)),
     );
+    for (const delayMs of NATIVE_RETIREMENT_BUSY_RETRY_SCHEDULE_MS) {
+      const busyEntries = nativeOwners
+        .map((resource, index) => ({ resource, index }))
+        .filter(
+          ({ index }) =>
+            nativeResults[index]?.status === "rejected" &&
+            // SAFETY: the status === "rejected" guard proves the settled result is a PromiseRejectedResult.
+            isSqliteBusyRetirementError((nativeResults[index] as PromiseRejectedResult).reason),
+        );
+      if (busyEntries.length === 0) {
+        break;
+      }
+      await sleepWithAbort(delayMs);
+      const retries = await Promise.allSettled(
+        busyEntries.map(({ resource }) => closeAgentDatabaseResource(resource)),
+      );
+      busyEntries.forEach(({ index }, retryIndex) => {
+        const result = retries[retryIndex];
+        if (result) {
+          nativeResults[index] = result;
+        }
+      });
+    }
     const nativeErrors = nativeResults.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
