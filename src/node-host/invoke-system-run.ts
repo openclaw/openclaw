@@ -110,6 +110,20 @@ const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
 const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval state could not be persisted";
 
+function appendNativeSystemRunDenialGuidance(
+  message: string,
+  reason: SystemRunDeniedReason,
+): string {
+  switch (reason) {
+    case "security=deny":
+      return `${message}\nExecution is disabled by the native security policy. Do not retry through another execution host or workaround; ask the operator to change the policy if this command is intended.`;
+    case "allowlist-miss":
+      return `${message}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}`;
+    default:
+      return message;
+  }
+}
+
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.check(message)) {
     return;
@@ -443,7 +457,7 @@ async function evaluateSystemRunPolicyPhase(
   if (strictInlineEvalRequiresApproval) {
     return parsed.deny(
       `SYSTEM_RUN_DENIED: approval required (` +
-        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
+        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}`,
     );
   }
 
@@ -768,9 +782,10 @@ async function executeSystemRunPhase(
       return;
     }
     if (!response.ok) {
+      const reason = normalizeDeniedReason(response.error.reason);
       await phase.deny(
-        response.error.message,
-        normalizeDeniedReason(response.error.reason),
+        appendNativeSystemRunDenialGuidance(response.error.message, reason),
+        reason,
         response.error.code === "PERMISSION_MISSING" ? response.error.details : undefined,
       );
       return;
