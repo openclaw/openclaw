@@ -17,6 +17,16 @@ function base(
   };
 }
 
+const resolve = (overrides: Partial<ResolveStableChannelMessageIngressParams>) =>
+  resolveStableChannelIngressPolicy(base(overrides));
+const resolveVerified = (overrides: Partial<ResolveStableChannelMessageIngressParams>) =>
+  resolve({
+    identity: { authentication: "verified" },
+    subject: { stableId: "sender-1", authentication: { stableId: "unverified" } },
+    policy: { minIdentifierAuthentication: "verified" },
+    ...overrides,
+  });
+
 describe("identifier authentication", () => {
   it("combines each matched entry with the exact same-kind subject identifier", async () => {
     const identity = {
@@ -40,60 +50,49 @@ describe("identifier authentication", () => {
       },
     };
 
-    const strong = await resolveStableChannelIngressPolicy(
-      base({
-        identity,
-        subject,
-        allowFrom: ["strong@example.test"],
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
-    const weak = await resolveStableChannelIngressPolicy(
-      base({
-        identity,
-        subject,
-        allowFrom: ["weak@example.test"],
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+    const strong = await resolve({
+      identity,
+      subject,
+      allowFrom: ["strong@example.test"],
+      policy: { minIdentifierAuthentication: "verified" },
+    });
+    const weak = await resolve({
+      identity,
+      subject,
+      allowFrom: ["weak@example.test"],
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(strong.senderAccess.allowed).toBe(true);
     expect(weak.senderAccess).toMatchObject({
       allowed: false,
       reasonCode: "dm_policy_not_allowlisted",
     });
-    const pairs = strong.state.allowlists.dm.match.matchedPairs;
-    expect(pairs).toHaveLength(1);
-    expect(pairs).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          opaqueSubjectId: "primary-email",
-          subjectAuthentication: "verified",
-        }),
-      ]),
-    );
-    expect(pairs?.every((pair) => pair.opaqueSubjectId === "primary-email")).toBe(true);
+    expect(strong.state.allowlists.dm.match.matchedPairs).toEqual([
+      expect.objectContaining({
+        opaqueSubjectId: "primary-email",
+        subjectAuthentication: "verified",
+      }),
+    ]);
     expect(JSON.stringify(strong.state)).not.toContain("strong@example.test");
     expect(JSON.stringify(weak.state)).not.toContain("weak@example.test");
   });
 
   it("does not cross-bind same-kind authentication between identity fields", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        identity: {
-          key: "primary-email",
-          kind: "email",
-          authentication: "asserted",
-          aliases: [{ key: "alias-email", kind: "email", authentication: "verified" }],
-        },
-        subject: {
-          stableId: "shared@example.test",
-          authentication: { "primary-email": "asserted" },
-        },
-        allowFrom: ["shared@example.test"],
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+    const result = await resolve({
+      identity: {
+        key: "primary-email",
+        kind: "email",
+        authentication: "asserted",
+        aliases: [{ key: "alias-email", kind: "email", authentication: "verified" }],
+      },
+      subject: {
+        stableId: "shared@example.test",
+        authentication: { "primary-email": "asserted" },
+      },
+      allowFrom: ["shared@example.test"],
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(result.senderAccess).toMatchObject({
       allowed: false,
@@ -128,20 +127,18 @@ describe("identifier authentication", () => {
   });
 
   it("floors an alias missing from a supplied authentication map to unverified", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        identity: {
-          authentication: "verified",
-          aliases: [{ key: "alias", authentication: "verified" }],
-        },
-        subject: {
-          stableId: "sender-1",
-          aliases: { alias: "alias-1" },
-          authentication: { stableId: "verified" },
-        },
-        allowFrom: ["alias-1"],
-      }),
-    );
+    const result = await resolve({
+      identity: {
+        authentication: "verified",
+        aliases: [{ key: "alias", authentication: "verified" }],
+      },
+      subject: {
+        stableId: "sender-1",
+        aliases: { alias: "alias-1" },
+        authentication: { stableId: "verified" },
+      },
+      allowFrom: ["alias-1"],
+    });
 
     expect(result.senderAccess.allowed).toBe(false);
     expect(result.state.allowlists.dm.match.matchedPairs).toEqual([
@@ -154,12 +151,10 @@ describe("identifier authentication", () => {
   });
 
   it("preserves verified static strength when the authentication map is absent", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        identity: { authentication: "verified" },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+    const result = await resolve({
+      identity: { authentication: "verified" },
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(result.senderAccess.allowed).toBe(true);
     expect(result.state.allowlists.dm.match.matchedPairs).toEqual([
@@ -174,35 +169,31 @@ describe("identifier authentication", () => {
   it.each(["disabled", "enabled"] as const)(
     "keeps mutable alias matching %s with only the primary claim supplied",
     async (mutableIdentifierMatching) => {
-      const result = await resolveStableChannelIngressPolicy(
-        base({
-          identity: {
-            key: "member-id",
-            aliases: [{ key: "display-name", kind: "username", dangerous: true }],
-          },
-          subject: {
-            stableId: "member-1",
-            aliases: { "display-name": "Echo" },
-            authentication: { "member-id": "asserted" },
-          },
-          allowFrom: ["Echo"],
-          policy: { mutableIdentifierMatching },
-        }),
-      );
+      const result = await resolve({
+        identity: {
+          key: "member-id",
+          aliases: [{ key: "display-name", kind: "username", dangerous: true }],
+        },
+        subject: {
+          stableId: "member-1",
+          aliases: { "display-name": "Echo" },
+          authentication: { "member-id": "asserted" },
+        },
+        allowFrom: ["Echo"],
+        policy: { mutableIdentifierMatching },
+      });
 
       expect(result.senderAccess.allowed).toBe(mutableIdentifierMatching === "enabled");
     },
   );
 
   it("does not let a wildcard without an exact primary identifier claim verified", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        identity: { authentication: "verified" },
-        subject: {},
-        allowFrom: ["*"],
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+    const result = await resolve({
+      identity: { authentication: "verified" },
+      subject: {},
+      allowFrom: ["*"],
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(result.senderAccess).toMatchObject({
       allowed: false,
@@ -249,37 +240,21 @@ describe("identifier authentication", () => {
         result.routeAccess.allowed && result.senderAccess.allowed,
     },
   ])("applies the exact-pair threshold to $name gates", async ({ patch, check }) => {
-    const common = {
-      identity: { authentication: "verified" as const },
-      subject: {
-        stableId: "sender-1",
-        authentication: { stableId: "unverified" as const },
-      },
-      policy: { minIdentifierAuthentication: "verified" as const },
-    };
-    const result = await resolveStableChannelIngressPolicy(base({ ...patch, ...common }));
+    const result = await resolveVerified(patch);
     expect(check(result)).toBe(false);
   });
 
   it("preserves exact-pair authentication through inherited route lists", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        conversation: { kind: "group", id: "room-1" },
-        identity: { authentication: "verified" },
-        subject: {
-          stableId: "sender-1",
-          authentication: { stableId: "unverified" },
-        },
-        allowFrom: [],
-        groupAllowFrom: ["other"],
-        route: {
-          id: "route-1",
-          senderPolicy: "inherit",
-          senderAllowFrom: ["sender-1"],
-        },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+    const result = await resolveVerified({
+      conversation: { kind: "group", id: "room-1" },
+      allowFrom: [],
+      groupAllowFrom: ["other"],
+      route: {
+        id: "route-1",
+        senderPolicy: "inherit",
+        senderAllowFrom: ["sender-1"],
+      },
+    });
 
     expect(result.routeAccess.allowed).toBe(true);
     expect(result.senderAccess).toMatchObject({
@@ -293,26 +268,24 @@ describe("identifier authentication", () => {
   });
 
   it("namespaces exact pairs from inherited route lists", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        conversation: { kind: "group", id: "room-1" },
-        identity: {
-          authentication: (value) => (value === "sender-1" ? "verified" : "asserted"),
-        },
-        subject: {
-          stableId: "sender-1",
-          authentication: { stableId: "verified" },
-        },
-        allowFrom: [],
-        groupAllowFrom: ["other"],
-        route: {
-          id: "route-1",
-          senderPolicy: "inherit",
-          senderAllowFrom: ["sender-1"],
-        },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+    const result = await resolve({
+      conversation: { kind: "group", id: "room-1" },
+      identity: {
+        authentication: (value) => (value === "sender-1" ? "verified" : "asserted"),
+      },
+      subject: {
+        stableId: "sender-1",
+        authentication: { stableId: "verified" },
+      },
+      allowFrom: [],
+      groupAllowFrom: ["other"],
+      route: {
+        id: "route-1",
+        senderPolicy: "inherit",
+        senderAllowFrom: ["sender-1"],
+      },
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(result.senderAccess).toMatchObject({
       allowed: true,
@@ -322,35 +295,33 @@ describe("identifier authentication", () => {
   });
 
   it("does not cross-bind same-kind origin-subject fields", async () => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        identity: {
-          key: "primary-email",
-          kind: "email",
-          aliases: [{ key: "alias-email", kind: "email" }],
+    const result = await resolve({
+      identity: {
+        key: "primary-email",
+        kind: "email",
+        aliases: [{ key: "alias-email", kind: "email" }],
+      },
+      subject: {
+        stableId: "shared@example.test",
+        authentication: { "primary-email": "verified" },
+      },
+      event: {
+        kind: "reaction",
+        authMode: "origin-subject",
+        mayPair: false,
+        originSubject: {
+          identifiers: [
+            {
+              opaqueId: "alias-email",
+              kind: "email",
+              value: "shared@example.test",
+              authentication: "verified",
+            },
+          ],
         },
-        subject: {
-          stableId: "shared@example.test",
-          authentication: { "primary-email": "verified" },
-        },
-        event: {
-          kind: "reaction",
-          authMode: "origin-subject",
-          mayPair: false,
-          originSubject: {
-            identifiers: [
-              {
-                opaqueId: "alias-email",
-                kind: "email",
-                value: "shared@example.test",
-                authentication: "verified",
-              },
-            ],
-          },
-        },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+      },
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(result.ingress).toMatchObject({
       admission: "drop",
@@ -360,45 +331,29 @@ describe("identifier authentication", () => {
   });
 
   it("applies the threshold to access-group and origin-subject gates", async () => {
-    const accessGroup = await resolveStableChannelIngressPolicy(
-      base({
-        identity: { authentication: "verified" },
-        subject: {
-          stableId: "sender-1",
-          authentication: { stableId: "unverified" },
+    const accessGroup = await resolveVerified({
+      allowFrom: ["accessGroup:operators"],
+      accessGroups: {
+        operators: { type: "message.senders", members: { test: ["sender-1"] } },
+      },
+    });
+    const origin = await resolveVerified({
+      event: {
+        kind: "reaction",
+        authMode: "origin-subject",
+        mayPair: false,
+        originSubject: {
+          identifiers: [
+            {
+              opaqueId: "origin-stable",
+              kind: "stable-id",
+              value: "sender-1",
+              authentication: "verified",
+            },
+          ],
         },
-        allowFrom: ["accessGroup:operators"],
-        accessGroups: {
-          operators: { type: "message.senders", members: { test: ["sender-1"] } },
-        },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
-    const origin = await resolveStableChannelIngressPolicy(
-      base({
-        identity: { authentication: "verified" },
-        subject: {
-          stableId: "sender-1",
-          authentication: { stableId: "unverified" },
-        },
-        event: {
-          kind: "reaction",
-          authMode: "origin-subject",
-          mayPair: false,
-          originSubject: {
-            identifiers: [
-              {
-                opaqueId: "origin-stable",
-                kind: "stable-id",
-                value: "sender-1",
-                authentication: "verified",
-              },
-            ],
-          },
-        },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+      },
+    });
 
     expect(accessGroup.senderAccess.allowed).toBe(false);
     expect(origin.ingress).toMatchObject({
@@ -428,20 +383,18 @@ describe("identifier authentication", () => {
       },
     },
   ])("fails $name access-group matches closed at a verified minimum", async ({ patch }) => {
-    const result = await resolveStableChannelIngressPolicy(
-      base({
-        ...patch,
-        allowFrom: ["accessGroup:audience"],
-        accessGroups: {
-          audience: {
-            type: "discord.channelAudience",
-            guildId: "guild-1",
-            channelId: "channel-1",
-          },
+    const result = await resolve({
+      ...patch,
+      allowFrom: ["accessGroup:audience"],
+      accessGroups: {
+        audience: {
+          type: "discord.channelAudience",
+          guildId: "guild-1",
+          channelId: "channel-1",
         },
-        policy: { minIdentifierAuthentication: "verified" },
-      }),
-    );
+      },
+      policy: { minIdentifierAuthentication: "verified" },
+    });
 
     expect(result.senderAccess).toMatchObject({
       allowed: false,

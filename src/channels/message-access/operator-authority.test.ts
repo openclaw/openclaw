@@ -77,6 +77,10 @@ import {
 } from "./operator-authority.test-support.js";
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
+function authorize(cfg: Parameters<typeof resolveCommandAuthorization>[0]["cfg"], ctx: MsgContext) {
+  return resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true });
+}
+
 installDiscordRegistryHooks();
 registerOperatorAssignmentTests();
 
@@ -219,7 +223,7 @@ it("exposes a verified linked requester in trusted metadata without widening own
             ],
           }),
         ).toHaveLength(1);
-        const auth = resolveCommandAuthorization({ cfg, ctx: { ...ctx }, commandAuthorized: true });
+        const auth = authorize(cfg, { ...ctx });
         expect(auth).toMatchObject({ senderIsOwner: owner, isAuthorizedSender: true });
         const { senderIsOwner } = auth;
         if (owner) {
@@ -300,10 +304,7 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
       expect(buildInboundUserContextPrefix(forged)).not.toContain("requester_profile");
     }
     const adminContext = await context(admin.identity.senderId);
-    expect(
-      resolveCommandAuthorization({ cfg, ctx: adminContext, commandAuthorized: true })
-        .senderIsOwner,
-    ).toBe(true);
+    expect(authorize(cfg, adminContext).senderIsOwner).toBe(true);
     const authority = getCommandOwnerAuthority(adminContext);
     const constructor: unknown = authority && Reflect.get(authority, "constructor");
     const forgedAuthority =
@@ -333,9 +334,7 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
         ),
       },
     ]) {
-      expect(resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner).toBe(
-        false,
-      );
+      expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
     }
     unlinkUserChannelIdentity(admin.profile.id, admin.identity);
     expect(buildInboundUserContextPrefix(original)).not.toContain("requester_profile");
@@ -370,9 +369,7 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
       async ({ cfg, admins, context, retire }) => {
         const admin = admins[0]!;
         const ctx = await context(admin.identity.senderId);
-        expect(
-          resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
-        ).toBe(true);
+        expect(authorize(cfg, ctx).senderIsOwner).toBe(true);
         const prepared = prepareChannelRunAdmission({
           cfg,
           runId: `linked-admin-${change}`,
@@ -404,9 +401,7 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
         if (change === "host") {
           retire();
         }
-        expect(
-          resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
-        ).toBe(false);
+        expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
         expect(() => assertCurrent?.()).toThrow();
         prepared.close();
       },
@@ -473,9 +468,7 @@ it.each([
         }
         if (change === "definition") {
           const fresh = await context(admin.identity.senderId);
-          expect(
-            resolveCommandAuthorization({ cfg, ctx: fresh, commandAuthorized: true }).senderIsOwner,
-          ).toBe(true);
+          expect(authorize(cfg, fresh).senderIsOwner).toBe(true);
           expect(assertCurrent).toThrow();
         }
         expect(admitted?.isCurrent(cfg)).toBe(false);
@@ -680,9 +673,7 @@ it.each([
         }
       }
       const ctx = await context(admin.identity.senderId);
-      expect(resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner).toBe(
-        scenario.owner,
-      );
+      expect(authorize(cfg, ctx).senderIsOwner).toBe(scenario.owner);
       if (scenario.github) {
         const authority = expectDefined(
           prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority,
@@ -715,22 +706,14 @@ it("keeps configured owners independent of Team role and identity links", async 
       unlinkUserChannelIdentity(profile.id, identity);
     }
     for (const [index, ctx] of contexts.entries()) {
-      expect(resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner).toBe(
-        true,
-      );
+      expect(authorize(cfg, ctx).senderIsOwner).toBe(true);
       expect(assertions[index]).toBeTypeOf("function");
       expect(assertions[index]).not.toThrow();
     }
     cfg.commands!.ownerAllowFrom.shift();
-    expect(
-      resolveCommandAuthorization({ cfg, ctx: contexts[0]!, commandAuthorized: true })
-        .senderIsOwner,
-    ).toBe(false);
+    expect(authorize(cfg, contexts[0]!).senderIsOwner).toBe(false);
     expect(assertions[0]).toThrow();
-    expect(
-      resolveCommandAuthorization({ cfg, ctx: contexts[1]!, commandAuthorized: true })
-        .senderIsOwner,
-    ).toBe(true);
+    expect(authorize(cfg, contexts[1]!).senderIsOwner).toBe(true);
     expect(assertions[1]).not.toThrow();
   });
 });
@@ -793,11 +776,7 @@ it("carries native Slack requester authority through preparation and keeps repla
           expect
             .soft(metadata.requester_profile)
             .toEqual(linked ? { id: profile.id, display_name: "Ada Lovelace" } : undefined);
-          const { senderIsOwner } = resolveCommandAuthorization({
-            cfg,
-            ctx: turn,
-            commandAuthorized: true,
-          });
+          const { senderIsOwner } = authorize(cfg, turn);
           expect.soft(senderIsOwner).toBe(isOwner);
           const { tools } = await resolveGatewayScopedTools({
             cfg,

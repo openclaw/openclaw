@@ -1,4 +1,3 @@
-// Message access tests cover channel message visibility and permission helpers.
 import { describe, expect, it } from "vitest";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressState } from "./state.js";
@@ -13,50 +12,34 @@ const subject = (value: string): InternalChannelIngressSubject => ({
   identifiers: [{ opaqueId: "subject-1", kind: "stable-id", value }],
 });
 
-const adapter: InternalChannelIngressAdapter = {
-  normalizeEntries({ entries }) {
-    return {
+function makeAdapter(foldCase = false): InternalChannelIngressAdapter {
+  const normalize = (value: string) => (foldCase ? value.toLowerCase() : value);
+  return {
+    normalizeEntries: ({ entries }) => ({
       matchable: entries.map((entry, index) => ({
         opaqueEntryId: `entry-${index + 1}`,
         kind: "stable-id",
-        value: entry,
-        dangerous: entry.startsWith("display:"),
+        value: normalize(entry),
+        ...(foldCase ? {} : { dangerous: entry.startsWith("display:") }),
       })),
       invalid: [],
       disabled: [],
-    };
-  },
-  matchSubject({ subject: subjectValue, entries }) {
-    const values = new Set(subjectValue.identifiers.map((identifier) => identifier.value));
-    const matchedEntryIds = entries
-      .filter((entry) => entry.value === "*" || values.has(entry.value))
-      .map((entry) => entry.opaqueEntryId);
-    return { matched: matchedEntryIds.length > 0, matchedEntryIds };
-  },
-};
-
-const lowerCaseAdapter: InternalChannelIngressAdapter = {
-  normalizeEntries({ entries }) {
-    return {
-      matchable: entries.map((entry, index) => ({
-        opaqueEntryId: `entry-${index + 1}`,
-        kind: "stable-id",
-        value: entry.toLowerCase(),
-      })),
-      invalid: [],
-      disabled: [],
-    };
-  },
-  matchSubject({ subject: subjectLocal, entries }) {
-    const values = new Set(
-      subjectLocal.identifiers.map((identifier) => identifier.value.toLowerCase()),
-    );
-    const matchedEntryIds = entries
-      .filter((entry) => entry.kind === "stable-id" && values.has(entry.value))
-      .map((entry) => entry.opaqueEntryId);
-    return { matched: matchedEntryIds.length > 0, matchedEntryIds };
-  },
-};
+    }),
+    matchSubject({ subject: candidate, entries }) {
+      const values = new Set(candidate.identifiers.map(({ value }) => normalize(value)));
+      const matchedEntryIds = entries
+        .filter((entry) =>
+          foldCase
+            ? entry.kind === "stable-id" && values.has(entry.value)
+            : entry.value === "*" || values.has(entry.value),
+        )
+        .map(({ opaqueEntryId }) => opaqueEntryId);
+      return { matched: matchedEntryIds.length > 0, matchedEntryIds };
+    },
+  };
+}
+const adapter = makeAdapter();
+const lowerCaseAdapter = makeAdapter(true);
 
 function baseInput(overrides: Partial<ChannelIngressStateInput> = {}): ChannelIngressStateInput {
   return {
@@ -75,17 +58,6 @@ const policy: ChannelIngressPolicyInput = {
   dmPolicy: "pairing",
   groupPolicy: "allowlist",
 };
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
 
 describe("channel message access ingress", () => {
   it.each([
@@ -128,8 +100,8 @@ describe("channel message access ingress", () => {
     },
   ])("$name", async ({ input, policyLocal, expected, secondPolicy, secondExpected }) => {
     const state = await resolveChannelIngressState(input);
-    expectRecordFields(decideChannelIngress(state, policyLocal), expected);
-    expectRecordFields(decideChannelIngress(state, secondPolicy), secondExpected);
+    expect(decideChannelIngress(state, policyLocal)).toMatchObject(expected);
+    expect(decideChannelIngress(state, secondPolicy)).toMatchObject(secondExpected);
   });
 
   it("applies route sender allowlists without retaining raw sender values", async () => {
@@ -155,11 +127,11 @@ describe("channel message access ingress", () => {
 
     const decision = decideChannelIngress(state, policy);
 
-    const senderAllowlist = expectRecordFields(state.routeFacts[0]?.senderAllowlist, {
+    expect(state.routeFacts[0]?.senderAllowlist).toMatchObject({
       hasConfiguredEntries: true,
+      match: { matched: true },
     });
-    expectRecordFields(senderAllowlist.match, { matched: true });
-    expectRecordFields(decision, { admission: "dispatch", decision: "allow" });
+    expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
     expect(JSON.stringify(state)).not.toContain(rawSender);
     expect(JSON.stringify(decision)).not.toContain(rawSender);
   });
@@ -182,7 +154,7 @@ describe("channel message access ingress", () => {
       }),
     );
 
-    expectRecordFields(decideChannelIngress(state, policy), {
+    expect(decideChannelIngress(state, policy)).toMatchObject({
       admission: "drop",
       reasonCode: "route_sender_empty",
     });
@@ -214,7 +186,7 @@ describe("channel message access ingress", () => {
       },
     });
 
-    expectRecordFields(decision, { admission: "dispatch", decision: "allow" });
+    expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
     const activation = decision.graph.gates.find((gate) => gate.phase === "activation")?.activation;
     expect(activation?.allowedImplicitMentionKinds).toEqual([
       "quoted_bot",
@@ -265,12 +237,12 @@ describe("channel message access ingress", () => {
     const decision = decideChannelIngress(state, policy);
 
     expect(state.event.originSubjectMatched).toBe(entry.matched);
-    expectRecordFields(decision, entry.expected);
+    expect(decision).toMatchObject(entry.expected);
     if (entry.matched) {
       const gate = decision.graph.gates.find(
         (gateLocal) => gateLocal.phase === "sender" && gateLocal.kind === "dmSender",
       );
-      expectRecordFields(gate, {
+      expect(gate).toMatchObject({
         effect: "ignore",
         reasonCode: "sender_not_required",
       });
