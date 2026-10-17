@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
@@ -59,6 +60,15 @@ const PNG_BYTES = Buffer.from(
 const MEDIA_URL = "https://media.example.test/11111111-1111-4111-8111-111111111111";
 const remoteFixtures = new Map<string, string>();
 const fetchedUrls: string[] = [];
+const textBlock = (text: string) => ({ type: "text" as const, text });
+const outgoingImage = (extra: Record<string, unknown> = {}) =>
+  expect.objectContaining({
+    type: "image",
+    url: expect.stringContaining("/api/chat/media/outgoing/"),
+    ...extra,
+  });
+const displayBlocks = (messages: ReturnType<typeof projectChatDisplayMessages>) =>
+  messages.flatMap((row) => (Array.isArray(row.content) ? row.content : [])).map(asOptionalRecord);
 
 let restoreRemoteMedia: (() => void) | undefined;
 beforeAll(() => {
@@ -204,8 +214,9 @@ describe("webchat commentary media", () => {
           ? { spawnedCwd: worktree, spawnedBy: "agent:main:main", sessionRoot: worktree }
           : {}),
       });
+      const readManaged = () => listManagedImageRecordEntries({ sessionKey: scope.sessionKey });
       // Prepare the shared media store before the download-sequencing checks.
-      expect(await listManagedImageRecordEntries({ sessionKey: scope.sessionKey })).toEqual([]);
+      expect(await readManaged()).toEqual([]);
       if (scenario === "unrelated-rewrite") {
         expect(
           appendTranscriptMessageSync(scope, {
@@ -260,11 +271,7 @@ describe("webchat commentary media", () => {
           ...(scenario === "top-level"
             ? {}
             : {
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "progress-image",
-                  phase: "commentary",
-                }),
+                textSignature: JSON.stringify({ v: 1, id: "progress-image", phase: "commentary" }),
               }),
         },
         {
@@ -314,18 +321,13 @@ describe("webchat commentary media", () => {
         }
         return event;
       };
-      const readMessage = () => {
-        const message = asOptionalRecord(readEvent().message);
-        if (!message) {
-          throw new Error("Expected assistant message");
-        }
-        return message;
-      };
+      const readMessage = () =>
+        expectDefined(asOptionalRecord(readEvent().message), "assistant message");
       const readDisplayed = () => {
-        const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "progress-row" });
-        if (!anchor) {
-          throw new Error("Expected committed transcript anchor");
-        }
+        const anchor = expectDefined(
+          readActiveTranscriptEntryAnchor({ ...scope, entryId: "progress-row" }),
+          "committed transcript anchor",
+        );
         return projectChatDisplayMessages(
           [projectTranscriptEntryMessage(readEvent(), anchor.rawSeq)],
           { includeCommentaryFallbacks: true },
@@ -380,11 +382,7 @@ describe("webchat commentary media", () => {
             message: attachSessionTranscriptRunId(
               {
                 ...buildAssistantMessage({
-                  model: {
-                    api: "openai-responses",
-                    provider: "openai",
-                    id: "gpt-5.6-luna",
-                  },
+                  model: { api: "openai-responses", provider: "openai", id: "gpt-5.6-luna" },
                   content,
                   stopReason: "toolUse",
                   usage: buildUsageWithNoCost({}),
@@ -400,16 +398,9 @@ describe("webchat commentary media", () => {
             throw new Error("Expected prepared assistant");
           }
           expectedContent = structuredClone(message.content);
-          const appended = appendTranscriptMessageSync(scope, {
-            eventId: "progress-row",
-            message,
-          });
+          const appended = appendTranscriptMessageSync(scope, { eventId: "progress-row", message });
           expect(appended).toMatchObject({ ok: true });
-          await publishTranscriptUpdate(scope, {
-            message,
-            messageId: "progress-row",
-            runId,
-          });
+          await publishTranscriptUpdate(scope, { message, messageId: "progress-row", runId });
           if (scenario === "cache-miss") {
             return;
           }
@@ -427,9 +418,7 @@ describe("webchat commentary media", () => {
           if (gcDuringPreparation) {
             // The second download holds the rewrite while the first original is on disk.
             expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
-            expect(
-              await listManagedImageRecordEntries({ sessionKey: scope.sessionKey }),
-            ).toHaveLength(1);
+            expect(await readManaged()).toHaveLength(1);
             expect(await cleanupManagedOutgoingMediaRecords()).toEqual({
               deletedRecordCount: 0,
               deletedFileCount: 0,
@@ -446,18 +435,15 @@ describe("webchat commentary media", () => {
           }
           if (scenario === "unrelated-rewrite" || scenario === "target-rewrite") {
             const messageId = scenario === "unrelated-rewrite" ? "unrelated-row" : "progress-row";
-            const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
-            if (!anchor) {
-              throw new Error("Expected rewrite target");
-            }
+            const anchor = expectDefined(
+              readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }),
+              "rewrite target",
+            );
             const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
-              const targetMessage = asOptionalRecord(value);
-              if (!targetMessage) {
-                throw new Error("Expected rewrite message");
-              }
+              const targetMessage = expectDefined(asOptionalRecord(value), "rewrite message");
               return {
                 ...targetMessage,
-                content: [{ type: "text", text: "Rewritten while loading" }],
+                content: [textBlock("Rewritten while loading")],
               };
             });
             expect(rewritten).not.toBeNull();
@@ -470,10 +456,7 @@ describe("webchat commentary media", () => {
           await racePromiseWithAbortSignal(commentarySettled.promise, test.signal);
           expect(readMessage()).toHaveProperty("openclawDisplayContent");
           const persisted = readMessage();
-          expect(persisted).toMatchObject({
-            content: expectedContent,
-            stopReason: "toolUse",
-          });
+          expect(persisted).toMatchObject({ content: expectedContent, stopReason: "toolUse" });
           if (!publicationSpy) {
             expect(rewriteUpdate).toMatchObject({
               messageId: "progress-row",
@@ -482,9 +465,7 @@ describe("webchat commentary media", () => {
             expect(rewriteUpdate).not.toHaveProperty("message");
           }
           const displayed = readDisplayed();
-          const blocks = displayed
-            .flatMap((row) => (Array.isArray(row.content) ? row.content : []))
-            .map(asOptionalRecord);
+          const blocks = displayBlocks(displayed);
           const displayedMedia = blocks.filter(
             (block) => block?.type === "image" || block?.type === "attachment",
           );
@@ -498,9 +479,7 @@ describe("webchat commentary media", () => {
           if (scenario === "sender-denied") {
             const failures = blocks.filter((block) => block?.type === "attachment_error");
             expect(failures).toHaveLength(3);
-            expect(await listManagedImageRecordEntries({ sessionKey: scope.sessionKey })).toEqual(
-              [],
-            );
+            expect(await readManaged()).toEqual([]);
           }
           if (scenario === "worktree") {
             expect(blocks).toContainEqual({
@@ -512,16 +491,7 @@ describe("webchat commentary media", () => {
                 mimeType: "image/png",
               },
             });
-            expect(displayedMedia).toEqual([
-              expect.objectContaining({
-                type: "image",
-                url: expect.stringContaining("/api/chat/media/outgoing/"),
-              }),
-              expect.objectContaining({
-                type: "image",
-                url: expect.stringContaining("/api/chat/media/outgoing/"),
-              }),
-            ]);
+            expect(displayedMedia).toEqual([outgoingImage(), outgoingImage()]);
             expect(await fs.readFile(absoluteImage)).toEqual(PNG_BYTES);
           }
           if (scenario === "top-level") {
@@ -539,17 +509,11 @@ describe("webchat commentary media", () => {
           if (scenario === "image") {
             expect(displayed).toContainEqual(
               expect.objectContaining({
-                openclawStreamFallback: expect.objectContaining({
-                  itemId: "progress-image",
-                }),
+                openclawStreamFallback: expect.objectContaining({ itemId: "progress-image" }),
                 content: [
-                  { type: "text", text: "Before" },
-                  expect.objectContaining({
-                    type: "image",
-                    mimeType: "image/png",
-                    url: expect.stringContaining("/api/chat/media/outgoing/"),
-                  }),
-                  { type: "text", text: "After" },
+                  textBlock("Before"),
+                  outgoingImage({ mimeType: "image/png" }),
+                  textBlock("After"),
                 ],
               }),
             );
@@ -627,12 +591,8 @@ describe("webchat commentary media", () => {
             await cleanupManagedOutgoingMediaRecords({
               nowMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
             }),
-          ).toEqual({
-            deletedRecordCount: 0,
-            deletedFileCount: 0,
-            retainedCount: 2,
-          });
-          const entries = await listManagedImageRecordEntries({ sessionKey: scope.sessionKey });
+          ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 2 });
+          const entries = await readManaged();
           expect(entries).toHaveLength(2);
           for (const { record } of entries) {
             expect(record).toMatchObject({ messageId: "progress-row", retentionClass: "history" });
@@ -660,9 +620,7 @@ describe("webchat commentary media", () => {
               (event) => asOptionalRecord(event)?.type === "message",
             ),
           ).toHaveLength(1);
-          const finalContent = readDisplayed()
-            .flatMap((row) => (Array.isArray(row.content) ? row.content : []))
-            .map(asOptionalRecord);
+          const finalContent = displayBlocks(readDisplayed());
           expect(finalContent.filter((block) => block?.type === "image")).toHaveLength(
             finalMediaUrl ? 2 : 1,
           );
@@ -674,10 +632,7 @@ describe("webchat commentary media", () => {
         if (scenario === "completion" || scenario === "cache-miss") {
           expect(cleanupSettled).toBe(true);
           expect(readMessage()).toHaveProperty("openclawDisplayContent");
-          expect(readMessage()).toMatchObject({
-            content: expectedContent,
-            stopReason: "toolUse",
-          });
+          expect(readMessage()).toMatchObject({ content: expectedContent, stopReason: "toolUse" });
           expect(requestCount).toBe(1);
           expect(readDisplayed().flatMap((row) => row.content ?? [])).toContainEqual(
             expect.objectContaining({ type: "image" }),
@@ -685,17 +640,15 @@ describe("webchat commentary media", () => {
         }
         if (scenario === "unrelated-rewrite") {
           expect(readEvent("unrelated-row").message).toMatchObject({
-            content: [{ type: "text", text: "Rewritten while loading" }],
+            content: [textBlock("Rewritten while loading")],
           });
         }
         if (scenario === "revoked" || scenario === "aborted" || scenario === "target-rewrite") {
           expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
           expect(await fs.readdir(state.statePath("media", "outgoing", "originals"))).toEqual([]);
-          expect(await listManagedImageRecordEntries({ sessionKey: scope.sessionKey })).toEqual([]);
+          expect(await readManaged()).toEqual([]);
           if (scenario === "target-rewrite") {
-            expect(readMessage().content).toEqual([
-              { type: "text", text: "Rewritten while loading" },
-            ]);
+            expect(readMessage().content).toEqual([textBlock("Rewritten while loading")]);
           }
         }
         if (scenario === "gc-with-unknown-commit") {
