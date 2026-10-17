@@ -26,6 +26,7 @@ const jobs = [
   { id: "ops-job", name: "survivor-ops-owner", agentId: "ops", effectiveAgentId: "ops" },
 ];
 const marker = (agentId: string) => `OPENCLAW_E2E_LEGACY_OPERATOR_CRON_${agentId.toUpperCase()}`;
+const prompt = (agentId: string) => `Reply with exactly ${marker(agentId)}.`;
 const entries = jobs.map((job, index) => ({
   jobId: job.id,
   action: "finished",
@@ -83,9 +84,7 @@ it.each(["2026.9.4", "2026.9.6"])(
         expect(args.includes("--no-deliver")).toBe(version === "2026.9.6");
         const job = jobs.find((candidate) => candidate.name === args[args.indexOf("--name") + 1])!;
         if (version === "2026.9.6") {
-          expect(args[args.indexOf("--message") + 1]).toBe(
-            `Reply with exactly ${marker(job.effectiveAgentId)}.`,
-          );
+          expect(args[args.indexOf("--message") + 1]).toBe(prompt(job.effectiveAgentId));
           expect(args).not.toContain("--command");
         } else {
           expect(args[args.indexOf("--command") + 1]).toBe("printf survivor-cron");
@@ -140,16 +139,18 @@ it.each(["2026.9.4", "2026.9.6"])(
 );
 
 it.each([
-  { source: "native", damage: "none" },
-  { source: "legacy", damage: "none" },
-  { source: "native", damage: "content" },
-  { source: "legacy", damage: "missing-filter" },
-  { source: "native", damage: "offset" },
-  { source: "native", damage: "transcript-duplicate" },
-  { source: "native", damage: "transcript-other-run" },
-  { source: "native", damage: "transcript-other-prompt-run" },
-  { source: "native", damage: "transcript-missing-cursor" },
-])("checks candidate Cron pages for $source history ($damage)", async ({ source, damage }) => {
+  ["native", "none"],
+  ["legacy", "none"],
+  ["native", "content"],
+  ["legacy", "missing-filter"],
+  ...[
+    "offset",
+    "transcript-duplicate",
+    "transcript-other-run",
+    "transcript-other-prompt-run",
+    "transcript-missing-cursor",
+  ].map((damage) => ["native", damage]),
+])("checks candidate Cron pages for %s history (%s)", async (source, damage) => {
   const root = dirs.make("survivor-cron-reader-check-");
   writeJson(path.join(root, "legacy-operator-baseline.json"), {
     jobs: jobs.map((job, index) => ({
@@ -192,39 +193,33 @@ it.each([
         ...(request.cursor ? { cursor: `earlier-${index}` } : {}),
       });
       transcriptRequests.push(request);
-      const transcriptMarker = marker(job.effectiveAgentId);
-      return reply({
-        messages: [
-          {
-            role: "assistant",
-            content: request.cursor
-              ? `Reply with exactly ${transcriptMarker}.`
-              : damage === "transcript-other-run"
-                ? "another run"
-                : transcriptMarker,
-            ...(request.cursor
-              ? {
-                  provenance: {
-                    kind: "internal_system",
-                    sourceTool: "cron",
-                    jobId: entry.jobId,
-                    runId:
-                      damage === "transcript-other-prompt-run" ? "another-run" : entry.sessionId,
-                    sourceSessionKey: entry.sessionKey,
-                  },
-                  senderSession: { sessionKey: entry.sessionKey },
-                }
-              : {}),
-            __openclaw: {
-              id:
-                request.cursor && damage !== "transcript-duplicate"
-                  ? `prompt-${index}`
-                  : `answer-${index}`,
-              seq: request.cursor ? 1 : 2,
-              ...(request.cursor ? { turnBoundary: true } : {}),
-            },
+      const message = {
+        role: "assistant",
+        content: request.cursor
+          ? prompt(job.effectiveAgentId)
+          : damage === "transcript-other-run"
+            ? "another run"
+            : marker(job.effectiveAgentId),
+        __openclaw: {
+          id: `${request.cursor && damage !== "transcript-duplicate" ? "prompt" : "answer"}-${index}`,
+          seq: request.cursor ? 1 : 2,
+          ...(request.cursor ? { turnBoundary: true } : {}),
+        },
+      };
+      if (request.cursor) {
+        Object.assign(message, {
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "cron",
+            jobId: entry.jobId,
+            runId: damage === "transcript-other-prompt-run" ? "another-run" : entry.sessionId,
+            sourceSessionKey: entry.sessionKey,
           },
-        ],
+          senderSession: { sessionKey: entry.sessionKey },
+        });
+      }
+      return reply({
+        messages: [message],
         ...(!request.cursor && damage !== "transcript-missing-cursor"
           ? { nextCursor: `earlier-${index}` }
           : {}),
@@ -254,8 +249,10 @@ it.each([
     }
   });
   const proof = readJson(path.join(root, "legacy-operator-candidate-cron-history.json"));
-  expect(proof.status).toBe(damage === "none" ? "passed" : "failed");
-  expect(proof.source).toBe(source === "native" ? "published-native-runs" : contract);
+  expect(proof).toMatchObject({
+    status: damage === "none" ? "passed" : "failed",
+    source: source === "native" ? "published-native-runs" : contract,
+  });
   if (damage === "none") {
     expect(proof.pages).toHaveLength(2);
     expect(transcriptRequests).toHaveLength(source === "native" ? 4 : 0);
@@ -267,17 +264,8 @@ it.each([
         expect(transcriptProof.transcript).toMatchObject({
           sessionId: entry.sessionId,
           sessionKey: entry.sessionKey,
-          recent: {
-            messages: [{ role: "assistant", content: marker(job.effectiveAgentId) }],
-          },
-          earlier: {
-            messages: [
-              {
-                role: "assistant",
-                content: `Reply with exactly ${marker(job.effectiveAgentId)}.`,
-              },
-            ],
-          },
+          recent: { messages: [{ role: "assistant", content: marker(job.effectiveAgentId) }] },
+          earlier: { messages: [{ role: "assistant", content: prompt(job.effectiveAgentId) }] },
         });
       }
     }

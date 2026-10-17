@@ -55,58 +55,46 @@ function prepare(version = "2026.9.4") {
   execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
   seedCronHistory(stateDir, artifacts, baseline, tarball);
   const entry = path.join(candidate, "openclaw.mjs");
+  const updater = path.join(baseline, "openclaw.mjs");
+  const preloads = [path.resolve("scripts/tsx.mjs"), diagnostics, helper].flatMap((file) => [
+    "--import",
+    file,
+  ]);
   // This process qualifies the observer, not an installed Doctor. The real
   // published updater cell must exercise Doctor's admission and full ordering.
-  writeFileSync(
-    entry,
-    `
-    import { DatabaseSync } from 'node:sqlite';
-    import { migrateLegacyCronRunLogsToTaskRuns } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/state-migrations.cron-run-logs.ts")).href)};
-    const db = new DatabaseSync(${JSON.stringify(databasePath)});
-    db.exec('BEGIN IMMEDIATE');
-    if (process.env.FIXTURE_IMPORT === '1') {
-      migrateLegacyCronRunLogsToTaskRuns(db);
-    }
-    db.exec('PRAGMA user_version = 17; COMMIT');
-    db.close();
-  `,
-  );
-  const preloads = [
-    "--import",
-    path.resolve("scripts/tsx.mjs"),
-    "--import",
-    diagnostics,
-    "--import",
-    helper,
-  ];
-  const updater = path.join(baseline, "openclaw.mjs");
-  writeFileSync(
-    updater,
-    `
+  const program = `
     import { execFileSync } from 'node:child_process';
     import { DatabaseSync } from 'node:sqlite';
     import { migrateLegacyCronRunLogsToTaskRuns } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/state-migrations.cron-run-logs.ts")).href)};
+    const updating = process.argv[2] === 'update';
     const db = new DatabaseSync(${JSON.stringify(databasePath)});
     db.exec('BEGIN IMMEDIATE');
-    migrateLegacyCronRunLogsToTaskRuns(db);
-    if (process.env.FIXTURE_AFTER_IMPORT_SQL) {
+    if (updating || process.env.FIXTURE_IMPORT === '1') {
+      migrateLegacyCronRunLogsToTaskRuns(db);
+    }
+    if (updating && process.env.FIXTURE_AFTER_IMPORT_SQL) {
       db.exec(process.env.FIXTURE_AFTER_IMPORT_SQL);
     }
+    if (!updating) db.exec('PRAGMA user_version = 17');
     db.exec('COMMIT');
     db.close();
-    execFileSync(process.execPath, ${JSON.stringify([...preloads, entry, "doctor", "--fix", "--non-interactive"])}, {
-      env: { ...process.env, FIXTURE_IMPORT: '0', OPENCLAW_UPDATE_IN_PROGRESS: '1' },
-      stdio: 'inherit',
-    });
-  `,
-  );
+    if (updating) {
+      execFileSync(process.execPath, ${JSON.stringify([...preloads, entry, "doctor", "--fix", "--non-interactive"])}, {
+        env: { ...process.env, FIXTURE_IMPORT: '0', OPENCLAW_UPDATE_IN_PROGRESS: '1' },
+        stdio: 'inherit',
+      });
+    }
+  `;
+  for (const file of [entry, updater]) {
+    writeFileSync(file, program);
+  }
   const invokeProcess = (
     file: string,
     command: string,
     importHistory: boolean,
     afterImportSql?: string,
-  ) =>
-    spawnSync(
+  ) => {
+    const result = spawnSync(
       process.execPath,
       [
         ...preloads,
@@ -130,11 +118,15 @@ function prepare(version = "2026.9.4") {
         },
       },
     );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  };
   return {
     artifacts,
     observations,
     databasePath,
     stateDir,
+    proof: () => readJson(path.join(artifacts, "legacy-operator-cron-history-proof.json")),
+    assert: () => assertCronHistory(artifacts, observations),
     invoke: (importHistory: boolean) => invokeProcess(entry, "doctor", importHistory),
     invokeUpdater: (afterImportSql?: string) =>
       invokeProcess(updater, "update", false, afterImportSql),
@@ -145,16 +137,18 @@ it.each(["2026.9.3", "2026.9.4"])(
   "proves %s retained-history ownership through the updater and Doctor",
   (version) => {
     const fixture = prepare(version);
-    const result = version === "2026.9.3" ? fixture.invokeUpdater() : fixture.invoke(true);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    assertCronHistory(fixture.artifacts, fixture.observations);
-    const evidence = readJson(
-      path.join(fixture.artifacts, "legacy-operator-cron-history-proof.json"),
-    );
-    expect(evidence.currentSchemaAtDoctorEntry).toBe(version === "2026.9.4");
-    expect(evidence.contract).toBe(
-      version === "2026.9.3" ? "published-updater-import-preserved" : "candidate-doctor-import",
-    );
+    if (version === "2026.9.3") {
+      fixture.invokeUpdater();
+    } else {
+      fixture.invoke(true);
+    }
+    fixture.assert();
+    const evidence = fixture.proof();
+    expect(evidence).toMatchObject({
+      currentSchemaAtDoctorEntry: version === "2026.9.4",
+      contract:
+        version === "2026.9.3" ? "published-updater-import-preserved" : "candidate-doctor-import",
+    });
     expect(evidence.doctor.before.legacyRows).toHaveLength(version === "2026.9.3" ? 0 : 2);
     expect(evidence.doctor.after.tasks).toHaveLength(2);
     if (version === "2026.9.3") {
@@ -183,11 +177,8 @@ it.each(["2026.9.3", "2026.9.4"])(
 
 it("rejects a successful Doctor exit which leaves retained history for startup", () => {
   const fixture = prepare();
-  const result = fixture.invoke(false);
-  expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(() => assertCronHistory(fixture.artifacts, fixture.observations)).toThrow(
-    "table was not retired",
-  );
+  fixture.invoke(false);
+  expect(fixture.assert).toThrow("table was not retired");
 });
 
 it("rejects parent-side import even when canonical task rows and Doctor exit are correct", () => {
@@ -195,8 +186,7 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
   const db = new DatabaseSync(fixture.databasePath);
   migrateLegacyCronRunLogsToTaskRuns(db);
   db.close();
-  const result = fixture.invoke(false);
-  expect(result.status, result.stdout + result.stderr).toBe(0);
+  fixture.invoke(false);
   const receiptName = readdirSync(fixture.observations).find((name) =>
     name.startsWith("cron-history-doctor-"),
   );
@@ -210,12 +200,8 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
       observationError: "rejected rehearsal observation ".repeat(40),
     });
   }
-  expect(() => assertCronHistory(fixture.artifacts, fixture.observations)).toThrow(
-    "never received the unchanged retained cron history",
-  );
-  const evidence = readJson(
-    path.join(fixture.artifacts, "legacy-operator-cron-history-proof.json"),
-  );
+  expect(fixture.assert).toThrow("never received the unchanged retained cron history");
+  const evidence = fixture.proof();
   expect(evidence.status).toBe("failed");
   expect(evidence.observations).toHaveLength(8);
   expect(Buffer.byteLength(JSON.stringify(evidence, null, 2))).toBeLessThan(16 * 1024);
@@ -239,9 +225,8 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
 
 it("requires the original seed at the published 9.3 updater entry", () => {
   const fixture = prepare("2026.9.3");
-  const result = fixture.invoke(true);
-  expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(() => assertCronHistory(fixture.artifacts, fixture.observations)).toThrow(
+  fixture.invoke(true);
+  expect(fixture.assert).toThrow(
     "published updater never received the unchanged retained cron history",
   );
 });
@@ -260,7 +245,6 @@ it.each([
   ],
 ])("rejects damaged %s from the 9.3 updater before Doctor", (_, sql, message) => {
   const fixture = prepare("2026.9.3");
-  const result = fixture.invokeUpdater(sql);
-  expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(() => assertCronHistory(fixture.artifacts, fixture.observations)).toThrow(message);
+  fixture.invokeUpdater(sql);
+  expect(fixture.assert).toThrow(message);
 });
