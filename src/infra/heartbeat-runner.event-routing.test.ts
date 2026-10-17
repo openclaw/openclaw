@@ -393,6 +393,75 @@ describe("Heartbeat event routing", () => {
     });
   });
 
+  it.each([
+    {
+      name: "manual CLI wake with cadence disabled",
+      source: "manual" as const,
+      heartbeat: { every: "0m" },
+    },
+    {
+      name: "notification wake",
+      source: "notifications-event" as const,
+      heartbeat: { every: "5m" },
+    },
+  ])(
+    "admits an explicitly targeted system event during an isolated $name",
+    async ({ source, heartbeat }) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createLastTargetConfig({
+          tmpDir,
+          storePath,
+          isolatedSession: true,
+          heartbeat,
+        });
+        const baseKey = resolveMainSessionKey(cfg);
+        const isolatedKey = `${baseKey}:heartbeat`;
+        const eventText = "Background task is ready.";
+        await writeTelegramSessionStore(storePath, baseKey, { sessionId: "base-conversation" });
+        enqueueSystemEvent(eventText, { sessionKey: baseKey });
+
+        const sendTelegram = vi
+          .fn()
+          .mockResolvedValue({ messageId: "wake", chatId: "-100155462274" });
+        let queuedAtReply: string[] | undefined;
+        let promptEvents: string[] | undefined;
+        let formatted: string | undefined;
+        replySpy.mockImplementation(async (ctx, options) => {
+          queuedAtReply = peekSystemEvents(baseKey);
+          promptEvents =
+            getReplySystemEventContext(options)?.events?.map((event) => event.text) ?? [];
+          formatted = await formatQueuedEvents(cfg, ctx, options);
+          return { text: "Task complete." };
+        });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey: baseKey,
+          source,
+          intent: "immediate",
+          reason: "wake",
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+          },
+        });
+
+        expect(result.status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        expect(queuedAtReply).toEqual([eventText]);
+        expect({ promptEvents, queuedAfterRun: peekSystemEvents(baseKey) }).toEqual({
+          promptEvents: [eventText],
+          queuedAfterRun: [],
+        });
+        expect(formatted).toContain(eventText);
+        expect(getFirstReplyContext(replySpy).SessionKey).toBe(isolatedKey);
+        expectTelegramSend(sendTelegram, { to: "-100155462274", text: "Task complete." });
+      });
+    },
+  );
+
   it("delivers an isolated group completion after its base conversation moves to a blocked direct chat", async () => {
     await withRouting(
       async ({ cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {
