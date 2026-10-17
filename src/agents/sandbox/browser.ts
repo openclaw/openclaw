@@ -7,6 +7,7 @@ import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js"
 import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
+  type BrowserBridge,
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
 } from "../../plugin-sdk/browser-bridge.js";
@@ -408,123 +409,133 @@ async function ensureSandboxBrowserContainer(
     params.assertCurrent?.();
   }
 
-  if (!hasContainer) {
-    if (noVncEnabled) {
-      noVncPassword = generateNoVncPassword();
-    }
-    cdpAuthToken = crypto.randomBytes(24).toString("hex");
-    await ensureDockerNetwork(browserDockerCfg.network, {
-      assertCurrent: params.assertCurrent,
-      allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
-    });
-    await ensureSandboxBrowserImage(browserImage);
-    params.assertCurrent?.();
-    const { argv: args, env } = buildSandboxCreateArgs({
-      name: containerName,
-      cfg: browserDockerCfg,
-      scopeKey: params.scopeKey,
-      labels: {
-        "openclaw.sandboxBrowser": "1",
-        "openclaw.browserConfigEpoch": SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
-      },
-      configHash: expectedHash,
-      bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
-    });
-    for (const bind of mountPlan.skippedBinds) {
-      defaultRuntime.log(
-        `sandbox browser: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
-      );
-    }
-    for (const bind of mountPlan.binds) {
-      args.push("-v", bind);
-    }
-    args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
-    if (noVncEnabled) {
-      args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
-    }
-    Object.assign(env, {
-      OPENCLAW_BROWSER_HEADLESS: params.cfg.browser.headless ? "1" : "0",
-      OPENCLAW_BROWSER_ENABLE_NOVNC: params.cfg.browser.noVncEnabled ? "1" : "0",
-      OPENCLAW_BROWSER_CDP_PORT: String(params.cfg.browser.cdpPort),
-      [CDP_AUTH_TOKEN_ENV_KEY]: cdpAuthToken,
-      OPENCLAW_BROWSER_AUTO_START_TIMEOUT_MS: String(params.cfg.browser.autoStartTimeoutMs),
-      OPENCLAW_BROWSER_VNC_PORT: String(params.cfg.browser.vncPort),
-      OPENCLAW_BROWSER_NOVNC_PORT: String(params.cfg.browser.noVncPort),
-      OPENCLAW_BROWSER_NO_SANDBOX: "1",
-    });
-    if (cdpSourceRange) {
-      env[CDP_SOURCE_RANGE_ENV_KEY] = cdpSourceRange;
-    }
-    if (noVncEnabled && noVncPassword) {
-      env[NOVNC_PASSWORD_ENV_KEY] = noVncPassword;
-    }
-    params.assertCurrent?.();
-    await withContainerEnvFile(env, async (envFile) => {
-      args.push("--env-file", envFile, browserImage);
-      params.assertCurrent?.();
-      await execDocker(args);
-    });
-  }
-  if (!hasContainer || !running) {
-    params.assertCurrent?.();
-    await execDocker(["start", containerName]);
-  }
-
-  const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
-  params.assertCurrent?.();
-  if (!mappedCdp) {
-    throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
-  }
-  if (!cdpAuthToken) {
-    throw new Error(`Failed to resolve CDP relay auth for ${containerName}.`);
-  }
-  const cdpUrl = buildSandboxCdpUrl({ cdpPort: mappedCdp, authToken: cdpAuthToken });
-
-  const mappedNoVnc = noVncEnabled
-    ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
-    : null;
-  params.assertCurrent?.();
-  if (noVncEnabled && !noVncPassword) {
-    noVncPassword =
-      (await readDockerContainerEnvVar(containerName, NOVNC_PASSWORD_ENV_KEY)) ?? undefined;
-    params.assertCurrent?.();
-  }
-
-  const existingProfile = existing
-    ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
-    : null;
-
-  let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
-  let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
-  if (!desiredAuthToken && !desiredAuthPassword) {
-    desiredAuthToken = existing?.authToken;
-    desiredAuthPassword = existing?.authPassword;
-    if (!desiredAuthToken && !desiredAuthPassword) {
-      desiredAuthToken = crypto.randomBytes(24).toString("hex");
-    }
-  }
-
-  const canReuse = Boolean(
-    // Guarded restart callbacks retain one admitted turn, not a later turn's authority.
-    !params.withWorkspace &&
-    !params.assertCurrent &&
-    existing &&
-    existing.bridge.server.listening &&
-    existing.containerName === containerName &&
-    existingProfile?.cdpPort === mappedCdp &&
-    existingProfile?.cdpUrl === cdpUrl &&
-    isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy) &&
-    existing.authToken === desiredAuthToken &&
-    existing.authPassword === desiredAuthPassword &&
-    existing.bridge.state.resolved.evaluateEnabled === params.evaluateEnabled,
-  );
-  if (existing && !canReuse) {
-    await stopCachedBrowserBridge(params.scopeKey, existing, params.assertCurrent);
-  }
-
-  let bridge = canReuse ? (existing?.bridge ?? null) : null;
+  let allocatedContainerId: string | undefined;
+  let bridge: BrowserBridge | null = null;
+  let canReuse = false;
   try {
+    if (!hasContainer) {
+      if (noVncEnabled) {
+        noVncPassword = generateNoVncPassword();
+      }
+      cdpAuthToken = crypto.randomBytes(24).toString("hex");
+      await ensureDockerNetwork(browserDockerCfg.network, {
+        assertCurrent: params.assertCurrent,
+        allowContainerNamespaceJoin:
+          browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
+      });
+      await ensureSandboxBrowserImage(browserImage);
+      params.assertCurrent?.();
+      const { argv: args, env } = buildSandboxCreateArgs({
+        name: containerName,
+        cfg: browserDockerCfg,
+        scopeKey: params.scopeKey,
+        labels: {
+          "openclaw.sandboxBrowser": "1",
+          "openclaw.browserConfigEpoch": SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
+        },
+        configHash: expectedHash,
+        bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
+      });
+      for (const bind of mountPlan.skippedBinds) {
+        defaultRuntime.log(
+          `sandbox browser: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+        );
+      }
+      for (const bind of mountPlan.binds) {
+        args.push("-v", bind);
+      }
+      args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
+      if (noVncEnabled) {
+        args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
+      }
+      Object.assign(env, {
+        OPENCLAW_BROWSER_HEADLESS: params.cfg.browser.headless ? "1" : "0",
+        OPENCLAW_BROWSER_ENABLE_NOVNC: params.cfg.browser.noVncEnabled ? "1" : "0",
+        OPENCLAW_BROWSER_CDP_PORT: String(params.cfg.browser.cdpPort),
+        [CDP_AUTH_TOKEN_ENV_KEY]: cdpAuthToken,
+        OPENCLAW_BROWSER_AUTO_START_TIMEOUT_MS: String(params.cfg.browser.autoStartTimeoutMs),
+        OPENCLAW_BROWSER_VNC_PORT: String(params.cfg.browser.vncPort),
+        OPENCLAW_BROWSER_NOVNC_PORT: String(params.cfg.browser.noVncPort),
+        OPENCLAW_BROWSER_NO_SANDBOX: "1",
+      });
+      if (cdpSourceRange) {
+        env[CDP_SOURCE_RANGE_ENV_KEY] = cdpSourceRange;
+      }
+      if (noVncEnabled && noVncPassword) {
+        env[NOVNC_PASSWORD_ENV_KEY] = noVncPassword;
+      }
+      params.assertCurrent?.();
+      await withContainerEnvFile(env, async (envFile) => {
+        args.push("--env-file", envFile, browserImage);
+        params.assertCurrent?.();
+        const created = await execDocker(args);
+        const containerId = created.stdout.trim();
+        if (!/^[a-f0-9]{64}$/u.test(containerId)) {
+          throw new Error("Browser container creation did not return an immutable container ID.");
+        }
+        allocatedContainerId = containerId;
+      });
+    }
+    if (!hasContainer || !running) {
+      params.assertCurrent?.();
+      await execDocker(["start", containerName]);
+    }
+
+    const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
+    params.assertCurrent?.();
+    if (!mappedCdp) {
+      throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
+    }
+    if (!cdpAuthToken) {
+      throw new Error(`Failed to resolve CDP relay auth for ${containerName}.`);
+    }
+    const cdpUrl = buildSandboxCdpUrl({ cdpPort: mappedCdp, authToken: cdpAuthToken });
+
+    const mappedNoVnc = noVncEnabled
+      ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+      : null;
+    params.assertCurrent?.();
+    if (noVncEnabled && !noVncPassword) {
+      noVncPassword =
+        (await readDockerContainerEnvVar(containerName, NOVNC_PASSWORD_ENV_KEY)) ?? undefined;
+      params.assertCurrent?.();
+    }
+
+    const existingProfile = existing
+      ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
+      : null;
+
+    let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
+    let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
+    if (!desiredAuthToken && !desiredAuthPassword) {
+      desiredAuthToken = existing?.authToken;
+      desiredAuthPassword = existing?.authPassword;
+      if (!desiredAuthToken && !desiredAuthPassword) {
+        desiredAuthToken = crypto.randomBytes(24).toString("hex");
+      }
+    }
+
+    canReuse = Boolean(
+      // Guarded restart callbacks retain one admitted turn, not a later turn's authority.
+      !params.withWorkspace &&
+      !params.assertCurrent &&
+      existing &&
+      existing.bridge.server.listening &&
+      existing.containerName === containerName &&
+      existingProfile?.cdpPort === mappedCdp &&
+      existingProfile?.cdpUrl === cdpUrl &&
+      isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy) &&
+      existing.authToken === desiredAuthToken &&
+      existing.authPassword === desiredAuthPassword &&
+      existing.bridge.state.resolved.evaluateEnabled === params.evaluateEnabled,
+    );
+    if (existing && !canReuse) {
+      await stopCachedBrowserBridge(params.scopeKey, existing, params.assertCurrent);
+    }
+
+    bridge = canReuse ? (existing?.bridge ?? null) : null;
     if (!bridge) {
+      const authToken = cdpAuthToken;
       const startTarget = async () => {
         const currentState = await dockerContainerState(containerName);
         params.assertCurrent?.();
@@ -534,7 +545,7 @@ async function ensureSandboxBrowserContainer(
         }
         const ok = await waitForSandboxCdp({
           cdpPort: mappedCdp,
-          authToken: cdpAuthToken,
+          authToken,
           timeoutMs: params.cfg.browser.autoStartTimeoutMs,
         });
         params.assertCurrent?.();
@@ -610,6 +621,32 @@ async function ensureSandboxBrowserContainer(
       } catch (cleanupError) {
         defaultRuntime.error?.(`Sandbox browser bridge cleanup failed: ${String(cleanupError)}`);
       }
+    }
+    // Roll back only this allocation after custody closes. Registry reservations
+    // stay with their workspace owner for reconciliation and pruning.
+    const cleanupErrors: unknown[] = [];
+    if (allocatedContainerId) {
+      try {
+        const removal = await execDocker(["rm", "-f", allocatedContainerId], {
+          allowFailure: true,
+        });
+        const detail = removal.stderr.trim() || removal.stdout.trim() || `exit ${removal.code}`;
+        if (removal.code !== 0 && !/No such (container|object)|does not exist/iu.test(detail)) {
+          throw new Error(
+            `Failed to remove partially created sandbox browser ${containerName}: ${detail}`,
+            { cause: error },
+          );
+        }
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        `Sandbox browser ${containerName} creation and cleanup both failed.`,
+        { cause: error },
+      );
     }
     throw error;
   }

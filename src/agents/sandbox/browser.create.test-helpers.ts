@@ -87,6 +87,7 @@ async function createProfilesMock() {
 }
 
 export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
+  const createdContainerId = "a".repeat(64);
   let BROWSER_BRIDGES: Map<string, unknown>;
   let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
   let prepareSandboxMountPlan: typeof import("./mount-plan.js").prepareSandboxMountPlan;
@@ -261,6 +262,7 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
       }
       if (args[0] === "create") {
         capturedDockerCreateEnvEntries = snapshotDockerCreateEnvEntries(args);
+        return { stdout: `${createdContainerId}\n`, stderr: "", code: 0 };
       }
       return { stdout: "", stderr: "", code: 0 };
     });
@@ -277,6 +279,7 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
 
   return {
     execContainer: namespaceMocks.execContainer,
+    createdContainerId,
     dockerMocks,
     registryMocks,
     bridgeMocks,

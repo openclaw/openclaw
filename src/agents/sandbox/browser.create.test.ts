@@ -137,6 +137,7 @@ describe("ensureSandboxBrowser create args", () => {
         );
         cdpAuthToken = envValue("OPENCLAW_BROWSER_CDP_AUTH_TOKEN", envEntries);
         configHash = envValue("openclaw.configHash", collectDockerFlagValues(args, "--label"));
+        return { stdout: `${harness.createdContainerId}\n`, stderr: "", code: 0 };
       }
       return { stdout: "", stderr: "", code: 0 };
     });
@@ -147,6 +148,97 @@ describe("ensureSandboxBrowser create args", () => {
 
     expect(dockerCalls("create")).toHaveLength(1);
     expect(dockerCalls("start")).toHaveLength(1);
+  });
+
+  it.each(["start", "port", "bridge", "publication"] as const)(
+    "removes this attempt's container when browser %s fails",
+    async (failure) => {
+      const error = new Error(`browser ${failure} failed`);
+      const execDocker = requireValue(
+        dockerMocks.execDocker.getMockImplementation(),
+        "Docker mock",
+      );
+      if (failure === "start") {
+        dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+          if (args[0] === "start") {
+            throw error;
+          }
+          return execDocker(args);
+        });
+      } else if (failure === "port") {
+        dockerMocks.readDockerPort.mockRejectedValueOnce(error);
+      } else if (failure === "bridge") {
+        bridgeMocks.startBrowserBridgeServer.mockRejectedValueOnce(error);
+      } else {
+        registryMocks.updateBrowserRegistry.mockRejectedValueOnce(error);
+      }
+
+      await expect(ensureTestSandboxBrowser()).rejects.toBe(error);
+
+      expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+        ["rm", "-f", harness.createdContainerId],
+        { allowFailure: true },
+      );
+      expect(harness.BROWSER_BRIDGES.size).toBe(0);
+      if (failure === "publication") {
+        expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("preserves an existing container when bridge startup fails", async () => {
+    const cfg = buildConfig(false);
+    const configHash = await computeTestBrowserHash({
+      cfg,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+    });
+    const error = new Error("browser runtime plugin not active");
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    dockerMocks.readDockerContainerLabel.mockResolvedValue(configHash);
+    dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+    bridgeMocks.startBrowserBridgeServer.mockRejectedValueOnce(error);
+
+    await expect(ensureTestSandboxBrowser({ cfg })).rejects.toBe(error);
+
+    expect(dockerArgs("create")).toBeUndefined();
+    expect(dockerArgs("rm")).toBeUndefined();
+  });
+
+  it("preserves a conflicting container when Docker create fails", async () => {
+    const error = new Error("docker name conflict");
+    const execDocker = requireValue(dockerMocks.execDocker.getMockImplementation(), "Docker mock");
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+      if (args[0] === "create") {
+        throw error;
+      }
+      return execDocker(args);
+    });
+
+    await expect(ensureTestSandboxBrowser()).rejects.toBe(error);
+
+    expect(dockerArgs("rm")).toBeUndefined();
+  });
+
+  it("preserves the setup error when container removal fails", async () => {
+    const error = new Error("browser runtime plugin not active");
+    const execDocker = requireValue(dockerMocks.execDocker.getMockImplementation(), "Docker mock");
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+      if (args[0] === "rm") {
+        return { stdout: "", stderr: "Docker daemon unavailable", code: 1 };
+      }
+      return execDocker(args);
+    });
+    bridgeMocks.startBrowserBridgeServer.mockRejectedValueOnce(error);
+
+    await expect(
+      ensureTestSandboxBrowser({ withWorkspace: async (action) => action() }),
+    ).rejects.toMatchObject({
+      cause: error,
+      errors: [
+        error,
+        expect.objectContaining({ message: expect.stringContaining("Docker daemon unavailable") }),
+      ],
+    });
   });
 
   it.each([false, true])("handles a pre-init browser epoch (hot=%s)", async (hot) => {
