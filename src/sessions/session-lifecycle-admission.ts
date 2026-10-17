@@ -67,6 +67,10 @@ type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   run?: SessionWorkRun;
   phase: "pending" | "acquired";
   owner?: symbol;
+  /** Wall-clock admission start; drain diagnostics report blocking age from it. */
+  admittedAtMs?: number;
+  /** Short owner kind for redacted drain diagnostics (e.g. "reply-turn"). */
+  label?: string;
   released: Promise<void>;
 };
 
@@ -130,6 +134,7 @@ const {
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
+  describeCompetingSessionWorkAdmissions,
   getTerminalSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
   isCompetingSessionWorkAdmissionActive,
@@ -144,6 +149,7 @@ export {
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
+  describeCompetingSessionWorkAdmissions,
   getTerminalSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
   isCompetingSessionWorkAdmissionActive,
@@ -416,6 +422,8 @@ export async function beginSessionWorkAdmission(params: {
   storeWriterIdentities?: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
+  /** Short owner kind surfaced by drain diagnostics; never contains raw identifiers. */
+  label?: string;
   /** The execution owner has committed its terminal outcome; cleanup still retains this lease. */
   isSettling?: () => boolean;
   /** Borrow the execution owner's current abort reason, including after admission handoff. */
@@ -466,6 +474,8 @@ export async function beginSessionWorkAdmission(params: {
     agent,
     run: params.run ? Object.freeze({ ...params.run }) : undefined,
     phase: "pending",
+    admittedAtMs: Date.now(),
+    ...(params.label ? { label: params.label } : {}),
     isSettling: params.isSettling,
     getAbortReason: params.getAbortReason ?? (() => signal.reason),
     ...(params.owner ? { owner: params.owner } : {}),
