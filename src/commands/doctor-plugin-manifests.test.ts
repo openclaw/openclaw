@@ -8,7 +8,9 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   collectLegacyPluginManifestContractMigrations,
   legacyPluginManifestContractMigrationToHealthFinding,
+  legacyPluginManifestSkipToHealthFinding,
   maybeRepairLegacyPluginManifestContracts,
+  type LegacyPluginManifestSkip,
 } from "./doctor-plugin-manifests.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -161,6 +163,56 @@ describe("doctor plugin manifest legacy contract repair", () => {
       mediaUnderstandingProviders: ["openai"],
       webSearchProviders: ["gemini"],
     });
+  });
+
+  it("leaves a legacy manifest with undecodable bytes untouched and reports it", async () => {
+    const { root, params } = await createManifestFixture("undecodable-bytes", {
+      id: "openai",
+      tools: ["proof_tool"],
+    });
+    const manifestPath = path.join(root, "openclaw.plugin.json");
+    // Decoding these bytes replaces 0xff with U+FFFD, so a repair would rewrite the
+    // manifest with corrupted text instead of preserving the operator's file.
+    const bytes = Buffer.concat([
+      Buffer.from('{\n  "id": "openai",\n  "name": "Proof '),
+      Buffer.from([0xff]),
+      Buffer.from(
+        ' legacy",\n  "configSchema": { "type": "object" },\n  "tools": ["proof_tool"]\n}\n',
+      ),
+    ]);
+    fs.writeFileSync(manifestPath, bytes);
+    const reason = `File is not valid UTF-8: ${manifestPath}; preserve its bytes and convert a copy to UTF-8 before retrying`;
+
+    const skipped: LegacyPluginManifestSkip[] = [];
+    expect(
+      collectLegacyPluginManifestContractMigrations({
+        ...params,
+        onSkippedManifest: (skip) => skipped.push(skip),
+      }),
+    ).toStrictEqual([]);
+    expect(skipped).toStrictEqual([{ manifestPath, reason }]);
+    expect(legacyPluginManifestSkipToHealthFinding(skipped[0]!)).toStrictEqual({
+      checkId: "core/doctor/legacy-plugin-manifests",
+      severity: "warning",
+      message: `Plugin manifest ${manifestPath} was not migrated: its bytes are not valid UTF-8.`,
+      path: manifestPath,
+      requirement: "utf8-manifest",
+      fixHint:
+        "Convert a copy of the manifest to UTF-8, then run `openclaw doctor --fix` to rewrite legacy capability keys under contracts.*.",
+    });
+
+    const emitNote = vi.fn();
+    const changed = await maybeRepairLegacyPluginManifestContracts({
+      ...params,
+      runtime: createRuntime(),
+      prompter: createPrompter(),
+      note: emitNote,
+    });
+    expect(changed).toBe(false);
+    expect(fs.readFileSync(manifestPath).equals(bytes)).toBe(true);
+    expect(emitNote).toHaveBeenCalledTimes(1);
+    expect(emitNote.mock.calls[0]?.[1]).toBe("Plugin manifests");
+    expect(String(emitNote.mock.calls[0]?.[0])).toContain(reason);
   });
 
   it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {

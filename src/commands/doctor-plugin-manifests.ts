@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -26,11 +27,29 @@ type LegacyManifestContractMigration = NonNullable<
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
 
-function readManifestJson(manifestPath: string): Record<string, unknown> | null {
+/** A legacy manifest left untouched because its bytes cannot be read as UTF-8. */
+export type LegacyPluginManifestSkip = {
+  manifestPath: string;
+  reason: string;
+};
+
+function readManifestJson(manifestPath: string): {
+  raw: Record<string, unknown> | null;
+  skipReason?: string;
+} {
   try {
-    return safeParseJsonWithSchema(JsonRecordSchema, fs.readFileSync(manifestPath, "utf-8"));
+    const contents = fs.readFileSync(manifestPath);
+    // Decoding replaces undecodable bytes with U+FFFD, so migrating such a manifest would
+    // rewrite the file with corrupted text. Report it instead of guessing at the bytes.
+    if (!isUtf8(contents)) {
+      return {
+        raw: null,
+        skipReason: `File is not valid UTF-8: ${manifestPath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
+      };
+    }
+    return { raw: safeParseJsonWithSchema(JsonRecordSchema, contents.toString("utf-8")) };
   } catch {
-    return null;
+    return { raw: null };
   }
 }
 
@@ -94,6 +113,8 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   env?: NodeJS.ProcessEnv;
   manifestRoots?: string[];
   workspaceDir?: string;
+  /** Receives legacy manifests skipped because their bytes are not valid UTF-8. */
+  onSkippedManifest?: (skip: LegacyPluginManifestSkip) => void;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
@@ -103,7 +124,11 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
       return;
     }
     seen.add(seenKey);
-    const raw = readManifestJson(manifestPath);
+    const { raw, skipReason } = readManifestJson(manifestPath);
+    if (skipReason !== undefined) {
+      params?.onSkippedManifest?.({ manifestPath, reason: skipReason });
+      return;
+    }
     const migration = raw && buildLegacyManifestContractMigration({ manifestPath, raw });
     if (migration) {
       migrations.push(migration);
@@ -148,6 +173,20 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   };
 }
 
+export function legacyPluginManifestSkipToHealthFinding(
+  skip: LegacyPluginManifestSkip,
+): HealthFinding {
+  return {
+    checkId: LEGACY_PLUGIN_MANIFESTS_CHECK_ID,
+    severity: "warning",
+    message: `Plugin manifest ${skip.manifestPath} was not migrated: its bytes are not valid UTF-8.`,
+    path: skip.manifestPath,
+    requirement: "utf8-manifest",
+    fixHint:
+      "Convert a copy of the manifest to UTF-8, then run `openclaw doctor --fix` to rewrite legacy capability keys under contracts.*.",
+  };
+}
+
 export async function maybeRepairLegacyPluginManifestContracts(
   params: NonNullable<Parameters<typeof collectLegacyPluginManifestContractMigrations>[0]> & {
     runtime: RuntimeEnv;
@@ -155,12 +194,26 @@ export async function maybeRepairLegacyPluginManifestContracts(
     note?: typeof note;
   },
 ): Promise<boolean> {
-  const migrations = collectLegacyPluginManifestContractMigrations(params);
+  const skipped: LegacyPluginManifestSkip[] = [];
+  const migrations = collectLegacyPluginManifestContractMigrations({
+    ...params,
+    onSkippedManifest: (skip) => skipped.push(skip),
+  });
+
+  const emitNote = params.note ?? note;
+  if (skipped.length > 0) {
+    emitNote(
+      [
+        "Legacy plugin manifests were left unchanged (their bytes are not valid UTF-8):",
+        ...skipped.map((skip) => `- ${skip.reason}`),
+      ].join("\n"),
+      "Plugin manifests",
+    );
+  }
   if (migrations.length === 0) {
     return false;
   }
 
-  const emitNote = params.note ?? note;
   emitNote(
     [
       "Legacy plugin manifest capability keys detected.",

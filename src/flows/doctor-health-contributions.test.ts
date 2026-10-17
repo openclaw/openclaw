@@ -334,7 +334,8 @@ vi.mock("../infra/exec-approvals-generated-migration.js", () => ({
   repairObsoleteGeneratedExecApprovals: mocks.repairObsoleteGeneratedExecApprovals,
 }));
 
-vi.mock("../commands/doctor-plugin-manifests.js", () => ({
+vi.mock("../commands/doctor-plugin-manifests.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-plugin-manifests.js")>()),
   collectLegacyPluginManifestContractMigrations:
     mocks.collectLegacyPluginManifestContractMigrations,
   legacyPluginManifestContractMigrationToHealthFinding:
@@ -885,6 +886,7 @@ describe("doctor health contributions", () => {
     expect(mocks.collectLegacyPluginManifestContractMigrations).toHaveBeenCalledWith({
       config: ctx.cfg,
       env: process.env,
+      onSkippedManifest: expect.any(Function),
     });
     expect(mocks.legacyPluginManifestContractMigrationToHealthFinding).toHaveBeenCalledWith(
       migration,
