@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import {
   appendQaChildOutputTail,
@@ -74,7 +74,9 @@ async function writeWorkspaceSkill(params: {
 }
 
 async function callPluginToolsMcp(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">;
+  env: Pick<QaSuiteRuntimeEnv, "repoRoot"> & {
+    gateway: Pick<QaSuiteRuntimeEnv["gateway"], "runtimeEnv">;
+  };
   toolName: string;
   args: Record<string, unknown>;
 }) {
@@ -98,10 +100,17 @@ async function callPluginToolsMcp(params: {
       appendQaChildOutputTail(stderrTail, chunk);
     });
   }
-  const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
+  const client = new Client(
+    { name: "openclaw-qa-suite", version: "0.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   try {
     await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
-    const listed = await client.listTools({}, { timeout: MCP_REQUEST_TIMEOUT_MS });
+    // Preserve V1's single-page catalog and its one-request timeout budget.
+    const listed = await client.request(
+      { method: "tools/list", params: {} },
+      { timeout: MCP_REQUEST_TIMEOUT_MS },
+    );
     const tool = listed.tools.find((entry) => entry.name === params.toolName);
     if (!tool) {
       const availableTools = listed.tools
@@ -117,8 +126,7 @@ async function callPluginToolsMcp(params: {
         name: params.toolName,
         arguments: params.args,
       },
-      undefined,
-      { timeout: MCP_REQUEST_TIMEOUT_MS },
+      { timeout: MCP_REQUEST_TIMEOUT_MS, toolDefinition: tool },
     );
   } catch (error) {
     const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();

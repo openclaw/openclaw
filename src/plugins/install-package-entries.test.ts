@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, expect, it } from "vitest";
 import { resetGlobalHookRunner } from "./hook-runner-global.js";
 import {
   installPluginFromPath,
@@ -9,195 +9,144 @@ import {
 } from "./install.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
-const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-entries");
+const temps = createSyncSuiteTempRootTracker("openclaw-plugin-install-entries");
 const pluginId = "entry-plugin";
-afterAll(() => suiteTempRootTracker.cleanup());
+const moduleSource = "export {};\n";
+const sourceEntry = "./src/index.ts";
+const runtimeEntry = "./dist/index.js";
+afterAll(() => temps.cleanup());
 beforeEach(() => resetGlobalHookRunner());
 
-type PackageInstallShapeCase = {
-  title: string;
-  openclaw: Record<string, unknown>;
-  files?: Readonly<Record<string, string>>;
-  options?: Pick<
-    Parameters<typeof installPluginFromPath>[0],
-    "dryRun" | "allowSourceTypeScriptEntries"
-  >;
-  ok: boolean;
-  errorIncludes?: readonly string[];
-  expectTarget?: boolean;
-};
-
-function setupPackageInstallShape(params: PackageInstallShapeCase) {
-  const root = suiteTempRootTracker.makeTempDir();
-  const fixture = {
-    pluginDir: path.join(root, "plugin-src"),
-    extensionsDir: path.join(root, "extensions"),
-  };
-  fs.mkdirSync(fixture.pluginDir);
-  fs.mkdirSync(fixture.extensionsDir);
-  fs.writeFileSync(
-    path.join(fixture.pluginDir, "package.json"),
-    JSON.stringify({ name: pluginId, version: "1.0.0", openclaw: params.openclaw }),
-  );
-  for (const [relativePath, contents] of Object.entries(params.files ?? {})) {
-    const filePath = path.join(fixture.pluginDir, relativePath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, contents);
+function packageFixture(openclaw: Record<string, unknown>, files: Record<string, string>) {
+  const root = temps.makeTempDir();
+  const pluginDir = path.join(root, "plugin-src");
+  const extensionsDir = path.join(root, "extensions");
+  fs.mkdirSync(extensionsDir);
+  for (const [file, contents] of Object.entries({
+    "package.json": JSON.stringify({ name: pluginId, version: "1.0.0", openclaw }),
+    ...files,
+  })) {
+    const target = path.join(pluginDir, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, contents);
   }
-  return fixture;
+  return { path: pluginDir, extensionsDir };
 }
 
-describe("package install entries", () => {
-  it.each<PackageInstallShapeCase>([
-    {
-      title: "rejects package installs when openclaw.extensions entries escape the package",
-      openclaw: { extensions: ["../src/index.ts"], runtimeExtensions: ["./dist/index.js"] },
-      files: { "dist/index.js": "export {};\n" },
-      ok: false,
-      errorIncludes: ["extension entry escapes plugin directory"],
-    },
-    {
-      title: "rejects package installs when no extension runtime entry exists",
-      openclaw: { extensions: ["./dist/index.js"] },
-      ok: false,
-      errorIncludes: ["extension entry not found"],
-    },
-    {
-      title: "allows missing TypeScript source entries when an inferred built runtime entry exists",
-      openclaw: { extensions: ["./src/index.ts"] },
-      files: { "dist/index.js": "export {};\n" },
-      ok: true,
-    },
-    {
-      title: "rejects package installs when openclaw.extensions contains a blank entry",
-      openclaw: { extensions: ["./dist/index.js", " "] },
-      files: { "dist/index.js": "export {};\n" },
-      ok: false,
-      errorIncludes: ["openclaw.extensions[1]", "non-empty string"],
-    },
-    {
-      title:
-        "rejects package installs when a TypeScript extension entry has no compiled runtime output",
-      openclaw: { extensions: ["./src/index.ts"] },
-      files: { "src/index.ts": "export {};\n" },
-      ok: false,
-      errorIncludes: [
-        "requires compiled runtime output",
-        "./dist/index.js",
-        "plugin packaging issue",
-        "retry installation after the publisher ships compiled JavaScript",
-      ],
-    },
-    {
-      title:
-        "allows linked source probes when TypeScript extension entries have no compiled runtime output",
-      openclaw: { extensions: ["./src/index.ts"] },
-      files: { "src/index.ts": "export {};\n" },
-      options: { dryRun: true, allowSourceTypeScriptEntries: true },
-      ok: true,
-      expectTarget: true,
-    },
-    {
-      title: "rejects package installs when runtimeExtensions length does not match extensions",
-      openclaw: {
-        extensions: ["./src/one.ts", "./src/two.ts"],
-        runtimeExtensions: ["./dist/one.js"],
-      },
-      files: { "dist/one.js": "export {};\n" },
-      ok: false,
-      errorIncludes: ["runtimeExtensions length (1)", "extensions length (2)"],
-    },
-    {
-      title: "rejects package installs when runtimeExtensions contains a blank entry",
-      openclaw: { extensions: ["./src/index.ts"], runtimeExtensions: [" "] },
-      files: { "src/index.ts": "export {};\n", "dist/index.js": "export {};\n" },
-      ok: false,
-      errorIncludes: ["openclaw.runtimeExtensions[0]", "non-empty string"],
-    },
-    {
-      title: "rejects package installs when runtimeSetupEntry is missing",
-      openclaw: {
-        extensions: ["./dist/index.js"],
-        setupEntry: "./src/setup-entry.ts",
-        runtimeSetupEntry: "./dist/setup-entry.js",
-      },
-      files: { "dist/index.js": "export {};\n", "src/setup-entry.ts": "export {};\n" },
-      ok: false,
-      errorIncludes: ["runtime setup entry not found", "./dist/setup-entry.js"],
-    },
-  ])("$title", async (scenario) => {
-    const { pluginDir, extensionsDir } = setupPackageInstallShape(scenario);
-    const result = await installPluginFromPath({
-      path: pluginDir,
-      extensionsDir,
-      ...scenario.options,
-    });
+type EntryOptions = Pick<
+  Parameters<typeof installPluginFromPath>[0],
+  "dryRun" | "allowSourceTypeScriptEntries"
+>;
+type EntryCase = [
+  title: string,
+  extensions: string[],
+  files: string[],
+  errors: string[],
+  metadata?: Record<string, unknown>,
+  options?: EntryOptions,
+];
 
-    expect(result.ok).toBe(scenario.ok);
-    if (result.ok) {
-      expect(result.pluginId).toBe(pluginId);
-      if (scenario.expectTarget) {
-        expect(result.targetDir).toBe(resolvePluginInstallDir(result.pluginId, extensionsDir));
-      }
-      return;
+it.each<EntryCase>([
+  [
+    "escaped entry",
+    ["../src/index.ts"],
+    [runtimeEntry],
+    ["extension entry escapes plugin directory"],
+    { runtimeExtensions: [runtimeEntry] },
+  ],
+  ["missing runtime", [runtimeEntry], [], ["extension entry not found"]],
+  ["inferred built output", [sourceEntry], [runtimeEntry], []],
+  [
+    "blank extension",
+    [runtimeEntry, " "],
+    [runtimeEntry],
+    ["openclaw.extensions[1]", "non-empty string"],
+  ],
+  [
+    "missing compiled output",
+    [sourceEntry],
+    [sourceEntry],
+    [
+      "requires compiled runtime output",
+      runtimeEntry,
+      "plugin packaging issue",
+      "retry installation after the publisher ships compiled JavaScript",
+    ],
+  ],
+  [
+    "linked source probe",
+    [sourceEntry],
+    [sourceEntry],
+    [],
+    {},
+    { dryRun: true, allowSourceTypeScriptEntries: true },
+  ],
+  [
+    "mismatched runtime count",
+    ["./src/one.ts", "./src/two.ts"],
+    ["dist/one.js"],
+    ["runtimeExtensions length (1)", "extensions length (2)"],
+    { runtimeExtensions: ["./dist/one.js"] },
+  ],
+  [
+    "blank runtime",
+    [sourceEntry],
+    [sourceEntry, runtimeEntry],
+    ["openclaw.runtimeExtensions[0]", "non-empty string"],
+    { runtimeExtensions: [" "] },
+  ],
+  [
+    "missing setup runtime",
+    [runtimeEntry],
+    [runtimeEntry, "src/setup-entry.ts"],
+    ["runtime setup entry not found", "./dist/setup-entry.js"],
+    { setupEntry: "./src/setup-entry.ts", runtimeSetupEntry: "./dist/setup-entry.js" },
+  ],
+])("package entries: %s", async (_title, extensions, paths, errors, metadata, options) => {
+  const files = Object.fromEntries(paths.map((file) => [file, moduleSource]));
+  const fixture = packageFixture({ extensions, ...metadata }, files);
+  const result = await installPluginFromPath({ ...fixture, ...options });
+  expect(result.ok).toBe(errors.length === 0);
+  if (result.ok) {
+    expect(result.pluginId).toBe(pluginId);
+    if (options?.dryRun) {
+      expect(result.targetDir).toBe(resolvePluginInstallDir(pluginId, fixture.extensionsDir));
     }
+  } else {
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
-    expect(fs.existsSync(resolvePluginInstallDir(pluginId, extensionsDir))).toBe(false);
+    expect(fs.existsSync(resolvePluginInstallDir(pluginId, fixture.extensionsDir))).toBe(false);
     expect(result.error).not.toContain("disable/uninstall");
-    for (const fragment of scenario.errorIncludes ?? []) {
-      expect(result.error).toContain(fragment);
+    for (const error of errors) {
+      expect(result.error).toContain(error);
     }
-  });
+  }
+});
 
-  it.each<PackageInstallShapeCase>([
+it.each([
+  ["runtime", "index.js", ".hidden/runtime.cjs"],
+  ["setup", "index.js", ".hidden/setup.cjs"],
+  ["inferred", ".hidden/index.ts", ".hidden/index.js"],
+])("allows hidden %s entries without scanner warnings", async (kind, source, runtime) => {
+  const setup = kind === "setup";
+  const metadata = setup
+    ? { setupEntry: "setup.ts", runtimeSetupEntry: runtime }
+    : kind === "runtime"
+      ? { runtimeExtensions: [runtime] }
+      : {};
+  const fixture = packageFixture(
+    { extensions: [source], ...metadata },
     {
-      title:
-        "allows runtime extension entry files in hidden directories without built-in scanner warnings",
-      openclaw: { extensions: ["index.js"], runtimeExtensions: [".hidden/runtime.cjs"] },
-      files: {
-        "index.js": "module.exports = {};\n",
-        ".hidden/runtime.cjs":
-          'const { execFileSync } = require("child_process");\nexecFileSync(process.execPath, ["-e", ""]);',
-      },
-      ok: true,
+      [source]: source.endsWith(".ts") ? moduleSource : "module.exports = {};\n",
+      ...(setup ? { "setup.ts": moduleSource } : {}),
+      [runtime]:
+        'const { execFileSync } = require("child_process");\nexecFileSync(process.execPath, ["-e", ""]);',
     },
-    {
-      title:
-        "allows runtime setup entry files in hidden directories without built-in scanner warnings",
-      openclaw: {
-        extensions: ["index.js"],
-        setupEntry: "setup.ts",
-        runtimeSetupEntry: ".hidden/setup.cjs",
-      },
-      files: {
-        "index.js": "module.exports = {};\n",
-        "setup.ts": "export {};\n",
-        ".hidden/setup.cjs":
-          'const { execFileSync } = require("child_process");\nexecFileSync(process.execPath, ["-e", ""]);',
-      },
-      ok: true,
-    },
-    {
-      title:
-        "allows inferred runtime entry files in hidden directories without built-in scanner warnings",
-      openclaw: { extensions: [".hidden/index.ts"] },
-      files: {
-        ".hidden/index.ts": "export {};\n",
-        ".hidden/index.js":
-          'const { execFileSync } = require("child_process");\nexecFileSync(process.execPath, ["-e", ""]);',
-      },
-      ok: true,
-    },
-  ])("$title", async (scenario) => {
-    const { pluginDir, extensionsDir } = setupPackageInstallShape(scenario);
-    const warnings: string[] = [];
-    const result = await installPluginFromPath({
-      path: pluginDir,
-      extensionsDir,
-      logger: { warn: (message) => warnings.push(message) },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(warnings).toStrictEqual([]);
+  );
+  const warnings: string[] = [];
+  const result = await installPluginFromPath({
+    ...fixture,
+    logger: { warn: (message) => warnings.push(message) },
   });
+  expect(result.ok).toBe(true);
+  expect(warnings).toStrictEqual([]);
 });

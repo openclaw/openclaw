@@ -283,7 +283,6 @@ describe("canonical proof on physical database validation", () => {
         const published = getAdmittedSqliteSchemaFacts(reader.database.db);
         expect(published?.schemaVersion).toBeGreaterThan(previousSchemaVersion);
         expect(published?.tables.has("session_reactions")).toBe(true);
-        expect(published?.indexes.has("idx_agent_session_reactions_message")).toBe(true);
         expect(
           reader.database.db.prepare("SELECT message_id FROM session_reactions").all(),
         ).toEqual([]);

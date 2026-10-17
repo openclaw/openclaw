@@ -69,40 +69,10 @@ export async function fileToAvatarDataUrl(
   try {
     const bitmap = await createImageBitmap(file);
     try {
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      if (!context) {
-        return await readFileAsDataUrl(file, config);
-      }
-      const draw = (edge: number) => {
-        const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
-        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      };
-      draw(AVATAR_TARGET_SIZE);
-      // toDataURL silently falls back to PNG when WebP is unsupported.
-      const webp = canvas.toDataURL("image/webp", 0.8);
-      if (webp.startsWith("data:image/webp")) {
-        return boundAvatarDataUrl(webp);
-      }
-      // Without WebP, JPEG keeps opaque images compact. JPEG would flatten
-      // transparency, so transparent images step down in size as PNG instead.
-      if (isOpaque(context, canvas.width, canvas.height)) {
-        const jpeg = canvas.toDataURL("image/jpeg", 0.85);
-        if (fitsEditorBudget(jpeg, "image/jpeg")) {
-          return { ok: true, dataUrl: jpeg };
-        }
-      }
-      for (const edge of AVATAR_PNG_FALLBACK_SIZES) {
-        draw(edge);
-        const png = canvas.toDataURL("image/png");
-        if (fitsEditorBudget(png, "image/png")) {
-          return { ok: true, dataUrl: png };
-        }
-      }
-      return TOO_DETAILED;
+      const result = imageToAvatarDataUrl(bitmap, bitmap.width, bitmap.height);
+      return result.ok || result.reason === "too-detailed"
+        ? result
+        : await readFileAsDataUrl(file, config);
     } finally {
       bitmap.close();
     }
@@ -111,4 +81,53 @@ export async function fileToAvatarDataUrl(
     // unscaled; the size gate above still bounds the persisted payload.
     return readFileAsDataUrl(file, config);
   }
+}
+
+/** Shared encoding budget for uploaded files and trusted rendered Blobsters. */
+export function imageToAvatarDataUrl(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+): AvatarDataUrlResult {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return UNUSABLE;
+  }
+  const draw = (edge: number) => {
+    const scale = Math.min(1, edge / Math.max(width, height));
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  };
+  draw(AVATAR_TARGET_SIZE);
+  // toDataURL silently falls back to PNG when WebP is unsupported.
+  const webp = canvas.toDataURL("image/webp", 0.8);
+  if (webp.startsWith("data:image/webp")) {
+    return boundAvatarDataUrl(webp);
+  }
+  // Without WebP, JPEG keeps opaque images compact. JPEG would flatten
+  // transparency, so transparent images step down in size as PNG instead.
+  if (isOpaque(context, canvas.width, canvas.height)) {
+    const jpeg = canvas.toDataURL("image/jpeg", 0.85);
+    if (fitsEditorBudget(jpeg, "image/jpeg")) {
+      return { ok: true, dataUrl: jpeg };
+    }
+  }
+  for (const edge of AVATAR_PNG_FALLBACK_SIZES) {
+    draw(edge);
+    const png = canvas.toDataURL("image/png");
+    if (fitsEditorBudget(png, "image/png")) {
+      return { ok: true, dataUrl: png };
+    }
+  }
+  return TOO_DETAILED;
+}
+
+export async function svgToAvatarDataUrl(svg: string): Promise<AvatarDataUrlResult> {
+  const image = new Image();
+  image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  await image.decode();
+  return imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight);
 }

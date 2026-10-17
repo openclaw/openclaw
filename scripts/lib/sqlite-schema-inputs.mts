@@ -29,6 +29,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema
 import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-storage-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
 import { withLegacyStateHeadLayout } from "../../src/state/openclaw-state-db-schema-v26-layout.js";
+import { withLegacyStateWriteIndexes } from "../../src/state/openclaw-state-db-schema-v27-indexes.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -55,7 +56,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  add("state-before-v26", "state", withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL));
+  const stateBeforeV27 = withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL);
+  add("state-before-v27", "state", stateBeforeV27);
+  add("state-before-v26", "state", withLegacyStateHeadLayout(stateBeforeV27));
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
   add("client-credentials-v1", "client", CLIENT_CREDENTIAL_SCHEMA_SQL);

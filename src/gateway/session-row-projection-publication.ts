@@ -169,6 +169,9 @@ export function createSessionRowPublication(owner: {
             hasBoard: projection.hasBoard,
             activitySummaryWatermark,
             transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptAssistantMessage: sameTranscript
+              ? previousFacts.transcriptAssistantMessage
+              : undefined,
             transcriptTerminalModel: sameTranscript
               ? previousFacts.transcriptTerminalModel
               : undefined,

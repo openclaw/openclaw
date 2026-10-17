@@ -299,16 +299,18 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     options: KeywordSearchOptions,
     sourceFilterList: MemorySource[],
   ) {
+    const publishedState = await this.publishedRetrievalState();
     const result = await runMemoryKeywordSearch(
       { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
       this.buildKeywordSearchQuery(query, limit, options, sourceFilterList),
       options.signal,
-      true,
+      publishedState === undefined,
     );
-    if (!result.indexState) {
+    const indexState = publishedState ?? result.indexState;
+    if (!indexState) {
       throw new Error("Memory keyword preparation returned no index state");
     }
-    return { indexState: result.indexState, keyword: result };
+    return { indexState, keyword: result };
   }
 
   private resolveKeywordSearchResult(

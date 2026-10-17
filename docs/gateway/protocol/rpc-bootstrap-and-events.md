@@ -56,7 +56,17 @@ still counts the complete window, including owner-first rows. Require a matching
 base revision before applying a delta. Revision misses, retired views, and reads
 without a useful delta return the normal full row array. Current authorization
 and selection always precede this comparison. The Gateway retains up to 32 prior
-vectors per bounded query view and clears them with the presentation owner.
+vectors per bounded query view, including across runtime activity and selection
+revision updates such as membership changes. A selection revision refreshes the
+current selection without discarding previously served comparison rows.
+Configuration, identity, and explicit selection resets retire the view and its history.
+Views are retained in least-recently-used order, with limits of 512 cache slots
+(selection and row presentation use separate slots) and 32 MiB of estimated
+retention per projection. The estimate counts row/history references, selection
+and partition entries, query keys, and view overhead; it is not a heap-size limit
+for shared row objects or their encodings. A response exceeding the budget is
+served without retaining its baseline. Eviction does not change authorization
+or selection; a later read can return full rows to establish a new baseline.
 
 This mode is optional: bare revision tokens never receive deltas, and older
 Gateways treat the prefixed token as a miss and return full rows.
@@ -371,11 +381,18 @@ or protocol-version change.
   Clients must not delete a replacement with a different ID. A key-only delete event
   or a rowless global notification invalidates the saved session list; it does
   not identify the current generation as deleted.
-- `presence`: system presence snapshot updates.
+- `presence`: system presence snapshot updates, or keyed resets/deltas for clients
+  advertising `presence-deltas`. See [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
+  for version matching, ordering, and full-snapshot recovery.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.
 - `heartbeat`: heartbeat event stream update.
-- `cron`: cron run/job change event.
+- `cron`: cron run/job change event with the changed job's identity and attention
+  state. The optional `job` contains `id`, `name`, `agentId`, `enabled`,
+  `updatedAtMs`, and the next/last run, running, and auto-disable fields in `state`.
+  Job definitions, run summaries, diagnostics, and delivery traces are omitted;
+  use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
+  Internal `cron_changed` plugin hooks still receive the full job snapshot.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.

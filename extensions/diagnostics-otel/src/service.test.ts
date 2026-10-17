@@ -59,6 +59,7 @@ const telemetryState = vi.hoisted(() => {
     ),
   };
   const meter = {
+    createGauge: vi.fn(() => ({ record: vi.fn() })),
     createCounter: vi.fn((name: string) => {
       const counter = { add: vi.fn() };
       counters.set(name, counter);

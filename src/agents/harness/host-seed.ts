@@ -245,7 +245,11 @@ export function bindBoundedSeed(
               abortSignal: signal,
             },
             (prepared) =>
-              persistCompactionBoundaryWithSessionEntryAsync(writeTarget, { prepared }, assert),
+              persistCompactionBoundaryWithSessionEntryAsync(
+                writeTarget,
+                { prepared, transcriptByteCompactionLatch: null },
+                assert,
+              ),
           ),
       );
       assert();

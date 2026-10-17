@@ -106,6 +106,7 @@
   "model-catalog-pricing",
   "model-ref-parse",
   "music-generation",
+  "node-crypto-runtime",
   "node-host",
   "node-selection-runtime",
   "number-runtime",

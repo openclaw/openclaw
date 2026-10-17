@@ -10,12 +10,9 @@ const processTreeMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@lydell/node-pty", () => ({
-  spawn: nodePtyMocks.spawn,
-}));
-vi.mock("../process/kill-tree.js", () => ({
-  signalProcessTree: processTreeMocks.signalProcessTree,
-}));
+vi.mock("@lydell/node-pty", () => nodePtyMocks);
+// mock-isolation: synthetic PTY process ids must never signal host processes.
+vi.mock("../process/kill-tree.js", () => processTreeMocks);
 
 import { startPty } from "./tui-pty-test-support.js";
 
@@ -28,25 +25,74 @@ function createMockPty(overrides: Partial<IPty> = {}): IPty {
   } as IPty;
 }
 
+function start(
+  env: Record<string, string | undefined> = {},
+  timeouts: { exitTimeoutMs?: number; outputTimeoutMs?: number } = {},
+) {
+  return startPty("node", [], {
+    cwd: process.cwd(),
+    env,
+    exitTimeoutMs: 1_000,
+    outputTimeoutMs: 1_000,
+    ...timeouts,
+  });
+}
+
+function captureOutput() {
+  let onData: ((data: string) => void) | undefined;
+  nodePtyMocks.spawn.mockReturnValue(
+    createMockPty({
+      onData: vi.fn((listener: (data: string) => void) => {
+        onData = listener;
+        return { dispose: vi.fn() };
+      }),
+    }),
+  );
+  return (data: string) => onData?.(data);
+}
+
+function lifecycle(term = "term", force = "force") {
+  const order: string[] = [];
+  let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+  const kill = vi.fn(() => order.push(term));
+  nodePtyMocks.spawn.mockReturnValue(
+    createMockPty({
+      pid: 4242,
+      kill,
+      onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
+      onExit: vi.fn((listener: typeof onExit) => {
+        onExit = listener;
+        return { dispose: () => order.push("exit-dispose") };
+      }),
+    }),
+  );
+  processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
+    order.push(force);
+    opts?.onComplete?.();
+  });
+  return {
+    order,
+    kill,
+    exit: (signal?: number) => {
+      order.push("exit");
+      onExit?.({ exitCode: 0, ...(signal === undefined ? {} : { signal }) });
+    },
+  };
+}
+
 describe("TUI PTY test support", () => {
   beforeEach(() => {
-    nodePtyMocks.spawn.mockReset();
+    nodePtyMocks.spawn.mockReset().mockReturnValue(createMockPty());
     processTreeMocks.signalProcessTree.mockClear();
     vi.unstubAllEnvs();
   });
 
   it("removes explicitly cleared inherited environment variables", () => {
     vi.stubEnv("OPENCLAW_TUI_PTY_PARENT_ONLY", "parent");
-    nodePtyMocks.spawn.mockReturnValue(createMockPty());
 
-    startPty("node", [], {
-      cwd: process.cwd(),
-      env: {
-        OPENCLAW_TUI_PTY_PARENT_ONLY: undefined,
-        OPENCLAW_TUI_PTY_CHILD_ONLY: "child",
-      },
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
+    start({
+      OPENCLAW_TUI_PTY_PARENT_ONLY: undefined,
+      OPENCLAW_TUI_PTY_CHILD_ONLY: "child",
     });
 
     const spawnOptions = nodePtyMocks.spawn.mock.calls[0]?.[2];
@@ -57,52 +103,20 @@ describe("TUI PTY test support", () => {
     });
   });
 
-  it("applies fixture-specific terminal dimensions", () => {
-    nodePtyMocks.spawn.mockReturnValue(createMockPty());
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {
-        OPENCLAW_TUI_PTY_COLS: "72",
-        OPENCLAW_TUI_PTY_ROWS: "20",
-      },
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
+  it.each([
+    ["72", "20", 72, 20],
+    ["0", "not-a-number", 100, 30],
+  ] as const)("resolves terminal dimensions %s × %s", (colsEnv, rowsEnv, cols, rows) => {
+    const run = start({
+      OPENCLAW_TUI_PTY_COLS: colsEnv,
+      OPENCLAW_TUI_PTY_ROWS: rowsEnv,
     });
-
     expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
       "node",
       [],
-      expect.objectContaining({
-        cols: 72,
-        rows: 20,
-      }),
+      expect.objectContaining({ cols, rows }),
     );
-    expect(run).toMatchObject({ cols: 72, rows: 20 });
-  });
-
-  it("falls back when fixture-specific terminal dimensions are invalid", () => {
-    nodePtyMocks.spawn.mockReturnValue(createMockPty());
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {
-        OPENCLAW_TUI_PTY_COLS: "0",
-        OPENCLAW_TUI_PTY_ROWS: "not-a-number",
-      },
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
-    });
-
-    expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
-      "node",
-      [],
-      expect.objectContaining({
-        cols: 100,
-        rows: 30,
-      }),
-    );
-    expect(run).toMatchObject({ cols: 100, rows: 30 });
+    expect(run).toMatchObject({ cols, rows });
   });
 
   it.each([
@@ -112,17 +126,11 @@ describe("TUI PTY test support", () => {
     "preserves Unicode characters with fixture-specific $chunkSize-character input chunks",
     async ({ chunkSize, chunks }) => {
       const write = vi.fn();
-      const pty = createMockPty({ write });
-      nodePtyMocks.spawn.mockReturnValue(pty);
+      nodePtyMocks.spawn.mockReturnValue(createMockPty({ write }));
 
-      const run = startPty("node", [], {
-        cwd: process.cwd(),
-        env: {
-          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: chunkSize,
-          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1",
-        },
-        exitTimeoutMs: 1_000,
-        outputTimeoutMs: 1_000,
+      const run = start({
+        OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: chunkSize,
+        OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1",
       });
 
       await run.write("A👋B");
@@ -146,26 +154,12 @@ describe("TUI PTY test support", () => {
       chunks: ["\u001b[38;2;155;163;178minto live   ", "  \r\n", "\u001b[0mworkspace"],
     },
   ])("matches visible text across $label", async ({ chunks }) => {
-    let onData: ((data: string) => void) | undefined;
-    nodePtyMocks.spawn.mockReturnValue(
-      createMockPty({
-        onData: vi.fn((listener: (data: string) => void) => {
-          onData = listener;
-          return { dispose: vi.fn() };
-        }),
-      }),
-    );
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {},
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
-    });
+    const onData = captureOutput();
+    const run = start({});
 
     const output = run.waitForOutput("into live workspace");
     for (const chunk of chunks) {
-      onData?.(chunk);
+      onData(chunk);
     }
 
     await expect(output).resolves.toContain("into live");
@@ -173,24 +167,10 @@ describe("TUI PTY test support", () => {
   });
 
   it("does not match text hidden inside terminal control sequences", async () => {
-    let onData: ((data: string) => void) | undefined;
-    nodePtyMocks.spawn.mockReturnValue(
-      createMockPty({
-        onData: vi.fn((listener: (data: string) => void) => {
-          onData = listener;
-          return { dispose: vi.fn() };
-        }),
-      }),
-    );
+    const onData = captureOutput();
+    const run = start({}, { outputTimeoutMs: 25 });
 
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {},
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 25,
-    });
-
-    onData?.("\u001b]0;hidden session marker\u0007visible session");
+    onData("\u001b]0;hidden session marker\u0007visible session");
 
     await expect(run.waitForOutput("visible session")).resolves.toContain("visible session");
     expect(run.visibleOutput()).toBe("visible session");
@@ -201,32 +181,14 @@ describe("TUI PTY test support", () => {
   });
 
   it("waits for PTY exit before completing idempotent disposal", async () => {
-    const order: string[] = [];
-    let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-    const kill = vi.fn(() => order.push("kill"));
-    const pty = createMockPty({
-      kill,
-      onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
-      onExit: vi.fn((listener: typeof exitListener) => {
-        exitListener = listener;
-        return { dispose: () => order.push("exit-dispose") };
-      }),
-    });
-    nodePtyMocks.spawn.mockReturnValue(pty);
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {},
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
-    });
+    const { order, kill, exit } = lifecycle("kill");
+    const run = start({});
 
     const disposal = run.dispose();
     expect(run.dispose()).toBe(disposal);
     expect(order).toEqual(["kill"]);
 
-    order.push("exit");
-    exitListener?.({ exitCode: 0 });
+    exit();
     await disposal;
 
     expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
@@ -234,27 +196,8 @@ describe("TUI PTY test support", () => {
   });
 
   it("force-kills the owned process tree when graceful disposal times out", async () => {
-    const order: string[] = [];
-    const kill = vi.fn(() => order.push("term"));
-    nodePtyMocks.spawn.mockReturnValue(
-      createMockPty({
-        pid: 4242,
-        kill,
-        onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
-        onExit: vi.fn(() => ({ dispose: () => order.push("exit-dispose") })),
-      }),
-    );
-    processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
-      order.push("force");
-      opts?.onComplete?.();
-    });
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {},
-      exitTimeoutMs: 1,
-      outputTimeoutMs: 1_000,
-    });
+    const { order, kill } = lifecycle();
+    const run = start({}, { exitTimeoutMs: 1 });
 
     await run.dispose();
 
@@ -266,29 +209,8 @@ describe("TUI PTY test support", () => {
   });
 
   it("force-kills the PTY and waits for its exit event", async () => {
-    const order: string[] = [];
-    let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-    processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
-      order.push("kill");
-      opts?.onComplete?.();
-    });
-    nodePtyMocks.spawn.mockReturnValue(
-      createMockPty({
-        pid: 4242,
-        onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
-        onExit: vi.fn((listener: typeof exitListener) => {
-          exitListener = listener;
-          return { dispose: () => order.push("exit-dispose") };
-        }),
-      }),
-    );
-
-    const run = startPty("node", [], {
-      cwd: process.cwd(),
-      env: {},
-      exitTimeoutMs: 1_000,
-      outputTimeoutMs: 1_000,
-    });
+    const { order, exit } = lifecycle("term", "kill");
+    const run = start({});
 
     const forcedExit = run.forceKill();
     expect(run.forceKill()).toBe(forcedExit);
@@ -297,8 +219,7 @@ describe("TUI PTY test support", () => {
       onComplete: expect.any(Function),
     });
 
-    order.push("exit");
-    exitListener?.({ exitCode: 0, signal: 9 });
+    exit(9);
     await forcedExit;
     expect(run.dispose()).toBe(forcedExit);
 

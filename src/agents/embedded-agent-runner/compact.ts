@@ -178,12 +178,15 @@ export async function compactEmbeddedAgentSessionDirect(
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const parentSignal = getAsyncWorkSignal();
-  const memoryTranscript = readCompactionAccountingRecorder(
+  const accountingRecorder = readCompactionAccountingRecorder(
     paramsBase.contextEngineRuntimeContext,
-  )?.memoryTranscript;
+  );
+  const memoryTranscript = accountingRecorder?.memoryTranscript;
+  const preparedSession = accountingRecorder?.preparedSession;
   memoryTranscript?.assertActive();
   const runSessionTarget =
     memoryTranscript?.sessionTarget ??
+    preparedSession?.sessionTarget ??
     (await resolveAgentRunSessionTarget({
       ...paramsBase,
       missingSessionKey: "resolve-existing",
@@ -193,10 +196,12 @@ export async function compactEmbeddedAgentSessionDirect(
     paramsBase.abortSignal?.throwIfAborted();
     memoryTranscript?.assertActive();
   };
-  const entry = await readSessionEntryReadOnlyInWorker(
-    { ...runSessionTarget, readConsistency: "latest" },
-    assertReadCurrent,
-  );
+  const entry =
+    preparedSession?.entry ??
+    (await readSessionEntryReadOnlyInWorker(
+      { ...runSessionTarget, readConsistency: "latest" },
+      assertReadCurrent,
+    ));
   assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const requestedParams: CompactEmbeddedAgentSessionParams = {

@@ -76,7 +76,7 @@ import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-packa
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 import {
   withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
+  type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
@@ -385,7 +385,7 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   index: InstalledPluginIndex | null,
   expectedRevision: number,
   options: InstalledPluginIndexStoreOptions & {
-    lease: PluginLifecycleLeaseContext;
+    lease: PluginMetadataLeaseContext;
   },
 ): Promise<boolean> {
   const { lease, ...storeOptions } = options;
@@ -441,7 +441,7 @@ export function restorePersistedInstalledPluginIndexInDatabase(
 
 async function runInstalledPluginIndexWrite<T>(
   options: InstalledPluginIndexStoreOptions,
-  lease: PluginLifecycleLeaseContext,
+  lease: PluginMetadataLeaseContext,
   operation: (
     scope: Pick<SqliteWorkerStore<InstalledPluginIndexWriteOperations>, "execute">,
     identity: OpenClawStateLeaseIdentity,
@@ -598,7 +598,7 @@ function resolveRefreshedPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
-      lease?: PluginLifecycleLeaseContext;
+      lease?: PluginMetadataLeaseContext;
     },
 ): Promise<InstalledPluginIndex> {
   return (await refreshPersistedInstalledPluginIndexWithReceipt(params)).index;
@@ -607,7 +607,7 @@ export async function refreshPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndexWithReceipt(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
-      lease?: PluginLifecycleLeaseContext;
+      lease?: PluginMetadataLeaseContext;
       assertCurrent?: () => void;
       onAcknowledged?: (receipt: InstalledPluginIndexWriteReceipt) => void;
     },
@@ -646,7 +646,7 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
     installRoots: resolveActivePluginInstallRoots(env),
     ...(now ? { nowMs: now().getTime() } : {}),
   };
-  const refresh = async (lease: PluginLifecycleLeaseContext) => {
+  const refresh = async (lease: PluginMetadataLeaseContext) => {
     const receipt = await runInstalledPluginIndexWrite(
       storeOptions,
       lease,

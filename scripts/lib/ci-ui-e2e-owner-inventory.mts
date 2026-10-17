@@ -185,7 +185,7 @@ type UiE2eOwnerWatch = {
 
 const sessionMenuOwnerRoots = [
   "ui/src/components/modal-dialog.ts",
-  "ui/src/components/session-menu.ts",
+  "ui/src/components/session-menu-solid.tsx",
   "ui/src/lib/sessions/session-capability.ts",
   "ui/src/pages/chat/components/chat-header-session-menu.ts",
 ] as const;
@@ -233,7 +233,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/activity-session-git.e2e.test.ts",
     ["activity"],
     [
-      "ui/src/components/link-reader-panel.ts",
+      "ui/src/components/link-reader-panel.tsx",
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/activity/activity-page.ts",
       "ui/src/pages/activity/session-activity-git.ts",
@@ -327,7 +327,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/assistant-panel-context.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/assistant-panel.ts", "ui/src/pages/chat/chat-pane.ts"],
+    ["ui/src/components/assistant-panel-solid.tsx", "ui/src/pages/chat/chat-pane.ts"],
     ["ui/src/styles/assistant-panel.css"],
   ),
   pageWatch("ui/src/e2e/attachment-file-styles.e2e.test.ts", ["chat"]),
@@ -598,7 +598,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-header-session-outcomes.e2e.test.ts",
     ["chat", "sessions"],
-    ["ui/src/components/session-menu.ts"],
+    ["ui/src/components/session-menu-solid.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-heartbeat-activity-rollup.e2e.test.ts", ["chat"]),
   pageWatch(
@@ -869,7 +869,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/chat-split-close-focus.e2e.test.ts",
     ["chat"],
     [
-      "ui/src/components/assistant-panel.ts",
+      "ui/src/components/assistant-panel-solid.tsx",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
     ],
@@ -1230,7 +1230,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/inference-setup-gate.e2e.test.ts",
     ["chat", "config", "custodian", "model-providers", "new-session"],
-    ["ui/src/components/assistant-panel.ts", "ui/src/pages/custodian/custodian-surface.tsx"],
+    ["ui/src/components/assistant-panel-solid.tsx", "ui/src/pages/custodian/custodian-surface.tsx"],
     ["ui/src/styles/assistant-panel.css"],
   ),
   pageWatch(
@@ -1415,7 +1415,10 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/new-session-page.cloud-dispatch.e2e.test.ts",
     ["chat", "new-session"],
-    ["ui/src/components/session-menu.ts", "ui/src/pages/new-session/cloud-profile-discovery.ts"],
+    [
+      "ui/src/components/session-menu-solid.tsx",
+      "ui/src/pages/new-session/cloud-profile-discovery.ts",
+    ],
   ),
   pageWatch("ui/src/e2e/new-session-page.cloud-os.e2e.test.ts", ["chat", "new-session"]),
   pageWatch("ui/src/e2e/new-session-page.cloud-size.e2e.test.ts", ["chat", "new-session"]),
@@ -1844,7 +1847,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["activity", "chat", "profile"],
     [
       "ui/src/components/solid/channel-avatar.tsx",
-      "ui/src/components/session-menu.ts",
+      "ui/src/components/session-menu-solid.tsx",
       "ui/src/components/viewer-facepile.ts",
       "ui/src/lib/session-pull-requests.ts",
     ],
@@ -2138,7 +2141,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["config"],
     [
       "ui/src/components/assistant-panel-content.ts",
-      "ui/src/components/assistant-panel.ts",
+      "ui/src/components/assistant-panel-solid.tsx",
       "ui/src/components/modal-dialog.ts",
     ],
     [
@@ -2191,7 +2194,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["custodian", "new-session", "terminal"],
     [
       "ui/src/components/assistant-panel-content.ts",
-      "ui/src/components/assistant-panel.ts",
+      "ui/src/components/assistant-panel-solid.tsx",
       "ui/src/components/browser/browser-panel.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/components/terminal/terminal-panel-registration.ts",

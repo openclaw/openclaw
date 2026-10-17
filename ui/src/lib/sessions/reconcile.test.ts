@@ -90,6 +90,44 @@ describe("history defaults ownership", () => {
   });
 });
 
+test("enrichment survives omitted fields but not explicit transcript clearing receipts", () => {
+  const initial = buildResult([
+    {
+      key: "agent:main:main",
+      kind: "direct",
+      sessionId: "same-session",
+      updatedAt: 1,
+      derivedTitle: "Task",
+      lastMessagePreview: "Last message",
+      lastAssistantMessage: { text: "Assistant reply", timestamp: 1 },
+    },
+  ]);
+  const event = {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    reason: "transcript",
+    session: { key: "agent:main:main", kind: "direct", sessionId: "same-session", updatedAt: 2 },
+  };
+  const omitted = reconcileSessionChanged(initial, event).result;
+  expect(omitted?.sessions[0]?.lastAssistantMessage).toEqual({
+    text: "Assistant reply",
+    timestamp: 1,
+  });
+  const cleared = reconcileSessionChanged(omitted, {
+    ...event,
+    session: {
+      ...event.session,
+      updatedAt: 3,
+      derivedTitle: null,
+      lastMessagePreview: null,
+      lastAssistantMessage: null,
+    },
+  }).result;
+  expect(cleared?.sessions[0]?.derivedTitle).toBeUndefined();
+  expect(cleared?.sessions[0]?.lastMessagePreview).toBeUndefined();
+  expect(cleared?.sessions[0]?.lastAssistantMessage).toBeUndefined();
+});
+
 test("reconciling the same sessions.changed twice keeps result identity on the second pass", () => {
   const result = buildResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }]);
   const payload = {

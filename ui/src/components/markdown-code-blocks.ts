@@ -23,7 +23,7 @@ const [readHighlighter, setHighlighter] = createSignal<Highlighter | null | unde
 let highlighterLoad: Promise<void> | undefined;
 
 /** Shared by code renderers; a failed optional chunk leaves escaped, copyable text. */
-export function loadMarkdownHighlighter(): Promise<void> {
+function loadMarkdownHighlighter(): Promise<void> {
   highlighterLoad ??= import("./markdown-highlight-runtime.ts").then(
     (runtime) => {
       setHighlighter(() => runtime.highlightCodeHtml);

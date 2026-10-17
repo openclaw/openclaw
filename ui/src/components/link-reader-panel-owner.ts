@@ -19,7 +19,11 @@ import {
   type ReaderSection,
   createReaderReadyView,
 } from "./link-reader-panel-view.ts";
-import { linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
+import {
+  LINK_READER_METADATA_UPDATED_EVENT,
+  linkReaderResponseMatchesTarget,
+  type LinkReaderMetadataUpdate,
+} from "./link-reader-response.ts";
 import {
   resolveLinkReaderTarget,
   linkReaderTargetKey as targetKey,
@@ -619,6 +623,13 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
           void loadDetail("files");
         }
         publish();
+        if (!detail.stale) {
+          window.dispatchEvent(
+            new CustomEvent<LinkReaderMetadataUpdate>(LINK_READER_METADATA_UPDATED_EVENT, {
+              detail: { client, agentId, sessionKey, target, preview: detail },
+            }),
+          );
+        }
       }
     } catch (error) {
       if (isCurrent()) {

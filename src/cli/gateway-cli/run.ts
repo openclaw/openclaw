@@ -607,10 +607,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
               },
             }),
       });
-      if (killed.length === 0) {
-        // Nothing was freed; keep the no-op out of normal startup output.
-        gatewayLog.debug(`force: no listeners on port ${port}`);
-      } else {
+      if (killed.length > 0) {
         for (const proc of killed) {
           gatewayLog.info(
             `force: killed pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""} on port ${port}`,

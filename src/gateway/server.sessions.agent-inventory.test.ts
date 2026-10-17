@@ -71,8 +71,12 @@ test.each(inventorySizes)(
       ...current,
       tools: { ...current.tools, sessions: { ...current.tools?.sessions, visibility: "all" } },
     };
-    const backfilled = observeSessionRowBackfill(Object.keys(entries));
+    const backfilled = observeSessionRowBackfill(expectedKeys);
     const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    for (const key of expectedKeys) {
+      projection.describe({ agentId: "main", key });
+    }
     await backfilled;
     await projection.ensureMaterialized();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];

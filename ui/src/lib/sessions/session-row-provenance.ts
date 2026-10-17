@@ -12,7 +12,12 @@ import {
 } from "./session-key.ts";
 import { isShallowEqualSessionRow } from "./session-row-equality.ts";
 
-const enrichmentFields = ["derivedTitle", "lastMessagePreview", "activitySummary"] as const;
+const enrichmentFields = [
+  "derivedTitle",
+  "lastMessagePreview",
+  "lastAssistantMessage",
+  "activitySummary",
+] as const;
 
 /** Row identity and one read revision; individual fields do not carry custody records. */
 export function createSessionRowProvenance() {

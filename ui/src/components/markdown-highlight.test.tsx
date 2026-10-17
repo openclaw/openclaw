@@ -5,7 +5,7 @@ import { MessageJson } from "../pages/chat/components/chat-message-text-view.tsx
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { LinkReaderMarkdown } from "./link-reader-markdown.tsx";
-import { handleMarkdownCodeBlockClick, loadMarkdownHighlighter } from "./markdown-code-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
@@ -127,7 +127,6 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   });
 
   chunk.release();
-  await loadMarkdownHighlighter();
   await waitForSolid(() =>
     expect(view.container.querySelectorAll(".hljs-keyword")).toHaveLength(27),
   );

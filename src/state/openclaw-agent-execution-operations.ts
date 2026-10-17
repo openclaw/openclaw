@@ -28,13 +28,11 @@ import {
 import type { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
-import type { loadAgentSchemaInspectionOperations } from "./openclaw-agent-schema-inspection-operations.worker.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
 
 export { loadAgentAuthProfileOperations };
-export { loadAgentSchemaInspectionOperations } from "./openclaw-agent-schema-inspection-operations.worker.js";
 
 export async function loadAgentTranscriptReadOperations() {
   const [
@@ -361,6 +359,7 @@ export async function loadAgentCompoundOperations() {
 export async function loadAgentEntryDeletionOperations() {
   const deletion = await import("../config/sessions/session-entry-deletion.worker.js");
   return {
+    "session.lifecycle.deletePlan": deletion.planSessionDeletionInAgentWorker,
     "session.lifecycle.delete": deletion.deleteSessionEntryInAgentWorker,
   } satisfies Handlers;
 }
@@ -680,7 +679,6 @@ export async function loadSessionRowBackfillOperations() {
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadAgentAuthProfileOperations>> &
-    Awaited<ReturnType<typeof loadAgentSchemaInspectionOperations>> &
     Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
     Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &

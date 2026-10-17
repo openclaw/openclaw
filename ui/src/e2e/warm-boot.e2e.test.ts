@@ -26,6 +26,7 @@ const reloadProfiles = [
   "trusted-proxy",
   "legacy-rail",
   "large",
+  "short-tail",
   "imported",
 ];
 
@@ -128,11 +129,15 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const timestamp = Date.now();
         const imported = profile === "imported";
+        const shortTail = profile === "short-tail";
         const olderMessages =
-          profile === "large" || imported
+          profile === "large" || shortTail || imported
             ? Array.from({ length: imported ? 119 : 1_099 }, (_, index) => ({
-                role: index % 2 ? "assistant" : "user",
+                role: shortTail && index >= 1_020 ? "toolResult" : index % 2 ? "assistant" : "user",
                 content: `Older history ${index + 1}`,
+                ...(shortTail && index >= 1_020
+                  ? { toolCallId: `older-tool-${index}`, toolName: "read" }
+                  : {}),
                 __openclaw: {
                   id: `older-${index + 1}`,
                   ...(imported ? { importedFrom: "claude-cli" } : { seq: index + 1 }),
@@ -497,7 +502,9 @@ suite.define(() => {
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
         });
-        if (profile === "large" || imported) {
+        if (profile === "large" || shortTail || imported) {
+          await waitForChatScrollIdle(page);
+          expect(await gateway.getRequests("chat.history")).toEqual([]);
           const messages = [
             ...olderMessages,
             {

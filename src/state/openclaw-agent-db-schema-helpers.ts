@@ -182,10 +182,7 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
 
 export function ensureSessionReactionsSchemaInTransaction(db: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(db);
-  if (
-    schema?.tables.has("session_reactions") &&
-    schema.indexes.has("idx_agent_session_reactions_message")
-  ) {
+  if (schema?.tables.has("session_reactions")) {
     return;
   }
   db.exec(

@@ -481,6 +481,12 @@ Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
 
+`readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
+write revision without SQL. PostgreSQL owners retaining a snapshot across their own
+commit capture this revision under the writer lock and accept only that commit's
+advance afterward. Another advance invalidates the snapshot, including during
+post-commit reads. Read the scope token before the final revision check.
+
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read

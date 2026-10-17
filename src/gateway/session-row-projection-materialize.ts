@@ -100,7 +100,7 @@ export function createSessionRowDescriptionReader(owner: {
       if (row && isIncognitoSessionKey(row.key)) {
         owner.materializePrivate(row, repositoryWorkspace);
       } else {
-        if (row && owner.dirty.has(records.identity(row))) {
+        if (row && (owner.dirty.has(records.identity(row)) || !row.materialized)) {
           // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
           owner.refresh([records.identity(row)]);
           row = owner.lookup(query);
@@ -199,7 +199,7 @@ export function createSessionRowMaterializer(owner: {
     accept(
       ids: readonly string[],
       facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
-      options: { archived?: boolean; materialize?: boolean } = {},
+      options: { materializeCold?: boolean; materialize?: boolean } = {},
     ) {
       if (!owner.isActive()) {
         return;
@@ -226,7 +226,11 @@ export function createSessionRowMaterializer(owner: {
             row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
             row.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
           }
-          if (row && isColdArchivedSessionRow(row) && !options.archived) {
+          if (row && !row.materialized && !options.materializeCold) {
+            // Prepare selection facts for the roster, but enrich only requested rows.
+            if (!isColdArchivedSessionRow(row)) {
+              row.retainedDatabaseFacts = databaseFacts;
+            }
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {
@@ -298,6 +302,7 @@ export function readResidentSessionRow(
         resolveGatewaySessionDisplayName(row.key, row.entry),
       ),
       lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
+      lastAssistantMessage: row.lastAssistantMessage,
     },
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,

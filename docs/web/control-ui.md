@@ -424,7 +424,10 @@ After an automatic read, the next waits three times its duration,
 bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
 bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
-stops when neither roster is visible. Each refresh reads at most 300 sessions
+stops when neither roster is visible. Team mode's owner and status filters reuse
+this window instead of also loading a separate sidebar list; **Involving me**
+still selects membership on the Gateway. Unchanged rows reuse the sidebar's
+revision-based responses. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.
 Pinned sessions count toward that limit; sessions outside the window do not appear
 in the grouped sidebar or contribute to activity summaries, except that the open

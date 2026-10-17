@@ -17,6 +17,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
 import { withLegacyStateHeadLayout } from "./openclaw-state-db-schema-v26-layout.js";
+import { withLegacyStateWriteIndexes } from "./openclaw-state-db-schema-v27-indexes.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -55,7 +56,7 @@ describe("meeting transcript chronology migration", () => {
     const previousVersion = MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION - 1;
     template = path.join(directories.make("meeting-chronology-template-"), "openclaw.sqlite");
     using db = new DatabaseSync(template);
-    db.exec(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL));
+    db.exec(withLegacyStateWriteIndexes(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL)));
     db.exec(`DROP INDEX idx_meeting_transcript_sessions_chronology;
       ALTER TABLE meeting_transcript_sessions DROP COLUMN started_at_ms;
       DROP TABLE secret_store_entries;
@@ -262,7 +263,10 @@ describe("meeting transcript chronology migration", () => {
       ).toEqual(backupTables);
       const migrationTables = [
         ...backupTables,
+        "acp_replay_events",
         "session_state_heads",
+        "skill_usage",
+        "state_leases",
         "sqlite_stat1",
         "sqlite_stat4",
       ];

@@ -293,6 +293,8 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
       suppressErrorNotice: payload.suppressErrorNotice,
+      localModelMayStillBeFinishing:
+        payload.state === "aborted" && payload.localModelMayStillBeFinishing,
       errorMessage: payload.errorMessage?.trim()
         ? resolveGatewayErrorText(payload, null)
         : undefined,

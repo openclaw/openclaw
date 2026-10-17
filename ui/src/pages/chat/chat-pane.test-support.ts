@@ -131,6 +131,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly element: HTMLElement;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
+  readonly sessionDiscussion: ChatPaneRuntime["sessionDiscussion"];
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
@@ -581,6 +582,7 @@ export function createTestChatPane(params: {
     sessions: context.sessions,
     sessionsError: null,
     sessionsLoading: false,
+    settings: loadSettings(),
     sidebarContent: null,
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,

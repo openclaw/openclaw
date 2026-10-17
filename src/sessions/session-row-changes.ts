@@ -74,6 +74,8 @@ export type SessionRowChange =
   | {
       all: true;
       scope: string | { agentId?: string; storePath?: string; topology?: true };
+      /** Run owners without a logical key retain the identity for indexed row invalidation. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       factsInvalidated?: true;
     };
 

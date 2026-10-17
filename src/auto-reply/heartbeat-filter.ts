@@ -120,6 +120,7 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
 export function isHeartbeatUserMessage(
   message: HeartbeatTranscriptMessage,
   heartbeatPrompt?: string,
+  options: { heartbeatOnly?: boolean } = {},
 ): boolean {
   if (message.role !== "user") {
     return false;
@@ -130,7 +131,9 @@ export function isHeartbeatUserMessage(
     return false;
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
-  const transcriptPrompts = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
+  const transcriptPrompts = options.heartbeatOnly
+    ? [INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat]
+    : Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
   if (transcriptPrompts.some((prompt) => trimmed === prompt)) {
     return true;
   }
@@ -161,6 +164,7 @@ export function isHeartbeatUserMessage(
 export function isHeartbeatOkResponse(
   message: HeartbeatTranscriptMessage,
   ackMaxChars?: number,
+  allowTruncated = false,
 ): boolean {
   if (message.role !== "assistant" || collectAssistantToolCalls(message).length > 0) {
     return false;
@@ -169,7 +173,7 @@ export function isHeartbeatOkResponse(
   return (
     !hasNonTextContent &&
     (isSilentAssistantTranscriptMessage(message) ||
-      isHeartbeatAcknowledgementText(text, ackMaxChars))
+      isHeartbeatAcknowledgementText(text, ackMaxChars, allowTruncated))
   );
 }
 
@@ -221,6 +225,7 @@ function resolveHeartbeatArtifactSpanEnd(
   messages: HeartbeatTranscriptMessage[],
   startIndex: number,
   ackMaxChars?: number,
+  allowTruncated = false,
 ): number | undefined {
   let index = startIndex + 1;
   let sawTerminalHeartbeatArtifact = false;
@@ -235,7 +240,7 @@ function resolveHeartbeatArtifactSpanEnd(
     if (message.role === "user" && !isEmbeddedToolResultOnlyContent(message.content)) {
       break;
     }
-    if (isHeartbeatOkResponse(message, ackMaxChars)) {
+    if (isHeartbeatOkResponse(message, ackMaxChars, allowTruncated)) {
       sawTerminalHeartbeatArtifact = true;
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
@@ -286,7 +291,12 @@ export function filterHeartbeatTranscriptArtifacts<T extends HeartbeatTranscript
   for (let i = 0; i < messages.length;) {
     const message = expectDefined(messages[i], "messages entry at i");
     const next = isHeartbeatUserMessage(message, heartbeatPrompt)
-      ? resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars)
+      ? resolveHeartbeatArtifactSpanEnd(
+          messages,
+          i,
+          ackMaxChars,
+          isHeartbeatUserMessage(message, heartbeatPrompt, { heartbeatOnly: true }),
+        )
       : undefined;
     if (next === undefined) {
       result.push(message);

@@ -101,7 +101,7 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
       >
         <div class="agents-home__explore-toolbar">
           <div class="agents-home__explore-heading">
-            <h2>{t("clawsCatalog.explore")}</h2>
+            <h2>{t("tabs.claws")}</h2>
             <p>{t("clawsCatalog.exploreDescription")}</p>
           </div>
           <label class="agents-home__claw-search">

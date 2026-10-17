@@ -533,6 +533,7 @@ export function advanceTranscriptMutationAtInTransaction(
         ...(options.rowTranscript
           ? {
               lastMessagePreview: options.rowTranscript.lastMessagePreview,
+              lastAssistantMessage: options.rowTranscript.lastAssistantMessage,
               terminalModel: options.rowTranscript.terminalModel,
             }
           : {}),
@@ -602,6 +603,7 @@ export function advanceTranscriptMutationAtInTransaction(
         ...(options.rowTranscript
           ? {
               lastMessagePreview: options.rowTranscript.lastMessagePreview,
+              lastAssistantMessage: options.rowTranscript.lastAssistantMessage,
               terminalModel: options.rowTranscript.terminalModel,
             }
           : {}),

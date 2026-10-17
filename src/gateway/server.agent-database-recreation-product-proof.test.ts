@@ -426,39 +426,55 @@ describe("agent deletion product proof with a state dir outside home and the tem
               const registry = requireActivePluginRegistry();
               const priorMemoryCapabilities = [...registry.memoryCapabilities];
               registerMemoryCapability("memory-fixture", { runtime: memory.runtime });
-              let result: AgentsDeleteResult;
-              try {
-                const opened = await memory.runtime.getMemorySearchManager({
-                  cfg: memoryConfig,
-                  agentId: EXTERNAL_STATE_AGENT_ID,
-                });
-                expect(opened.manager, opened.error).not.toBeNull();
-                await expect(opened.manager!.probeEmbeddingAvailability()).resolves.toMatchObject({
-                  ok: true,
-                });
-                const survivor = await memory.runtime.getMemorySearchManager({
-                  cfg: memoryConfig,
-                  agentId: "main",
-                });
-                expect(survivor.manager, survivor.error).not.toBeNull();
-                await expect(survivor.manager!.probeEmbeddingAvailability()).resolves.toMatchObject(
-                  {
-                    ok: true,
-                  },
-                );
-                result = await client.request<AgentsDeleteResult>("agents.delete", {
-                  agentId: EXTERNAL_STATE_AGENT_ID,
-                  deleteFiles: true,
-                });
-                expect(memoryCloses).toBe(1);
-                expect(survivor.manager!.status().dbPath).toBe(
-                  resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-                );
-              } finally {
-                registry.memoryCapabilities = priorMemoryCapabilities;
-                await memory.runtime.closeAllMemorySearchManagers?.();
-                await disposePluginRegistryInstances(memory.registry);
-              }
+              const memoryClient = client;
+              // The real Memory fixture's watcher needs its public worker artifact,
+              // even though the generic Gateway fixture disables bundled plugins.
+              const result = await withEnvAsync(
+                {
+                  OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+                  OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+                },
+                async () => {
+                  try {
+                    const opened = await memory.runtime.getMemorySearchManager({
+                      cfg: memoryConfig,
+                      agentId: EXTERNAL_STATE_AGENT_ID,
+                    });
+                    expect(opened.manager, opened.error).not.toBeNull();
+                    await expect(
+                      opened.manager!.probeEmbeddingAvailability(),
+                    ).resolves.toMatchObject({
+                      ok: true,
+                    });
+                    const survivor = await memory.runtime.getMemorySearchManager({
+                      cfg: memoryConfig,
+                      agentId: "main",
+                    });
+                    expect(survivor.manager, survivor.error).not.toBeNull();
+                    await expect(
+                      survivor.manager!.probeEmbeddingAvailability(),
+                    ).resolves.toMatchObject({
+                      ok: true,
+                    });
+                    const deleted = await memoryClient.request<AgentsDeleteResult>(
+                      "agents.delete",
+                      {
+                        agentId: EXTERNAL_STATE_AGENT_ID,
+                        deleteFiles: true,
+                      },
+                    );
+                    expect(memoryCloses).toBe(1);
+                    expect(survivor.manager!.status().dbPath).toBe(
+                      resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+                    );
+                    return deleted;
+                  } finally {
+                    registry.memoryCapabilities = priorMemoryCapabilities;
+                    await memory.runtime.closeAllMemorySearchManagers?.();
+                    await disposePluginRegistryInstances(memory.registry);
+                  }
+                },
+              );
               expect(readSqliteReaderDiagnosticsForPath(databasePath).connections).toEqual([]);
 
               // Database files are removed by the database-owned deletion first; the

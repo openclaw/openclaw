@@ -81,11 +81,18 @@ export function createSessionRowProjectionBackfill(params: {
         // A replacement/private-session revocation must not publish another session's text.
         if (!disposed && live?.entry && params.current(row)) {
           const facts = live.retainedDatabaseFacts;
+          // A newer unknown assistant fact needs its queued read, not this older snapshot.
+          if (revisions.get(id) !== captured && facts?.transcriptAssistantMessage === undefined) {
+            continue;
+          }
           params.publish(
             live,
-            facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined
+            facts?.transcriptPreview !== undefined &&
+              facts.transcriptAssistantMessage !== undefined &&
+              facts.transcriptTerminalModel !== undefined
               ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
                   lastMessagePreview: facts.transcriptPreview,
+                  lastAssistantMessage: facts.transcriptAssistantMessage,
                   terminalModel: facts.transcriptTerminalModel,
                 })
               : fields,
@@ -121,16 +128,23 @@ export function createSessionRowProjectionBackfill(params: {
       const id = identity(row);
       const next = revision(row, facts);
       if (facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined) {
-        revisions.set(id, next);
-        queued.delete(id);
         params.publish(
           row,
           presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
             lastMessagePreview: facts.transcriptPreview,
+            // A user append knows the latest preview before it knows the prior assistant.
+            lastAssistantMessage:
+              facts.transcriptAssistantMessage === undefined
+                ? row.lastAssistantMessage
+                : facts.transcriptAssistantMessage,
             terminalModel: facts.transcriptTerminalModel,
           }),
         );
-        return;
+        if (facts.transcriptAssistantMessage !== undefined) {
+          revisions.set(id, next);
+          queued.delete(id);
+          return;
+        }
       }
       if (!isDeepStrictEqual(revisions.get(id), next)) {
         revisions.set(id, next);

@@ -1,11 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GatewayErrorDetailCodes,
-  type ProjectsListResult,
-  type TaskSuggestion,
-  type TaskSuggestionEvent,
-  type TaskSuggestionsAcceptResult,
-  type TaskSuggestionsListResult,
+import { GatewayErrorDetailCodes } from "../../../../packages/gateway-protocol/src/gateway-error-details.js";
+import type {
+  ProjectsListResult,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";

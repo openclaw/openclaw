@@ -62,7 +62,7 @@ describe("AppSidebar agent roster pins", () => {
       expect(pin.querySelector(".session-glyph__emoji")?.textContent).toBe("⭐");
       const link = pin.querySelector<HTMLAnchorElement>("a")!;
       expect(new URL(link.href).pathname).toBe(`/chat/${id}/pinned`);
-      // The expanded Sessions group still presents its owning agent once.
+      // The rail shortcut stays separate from the agent-only roster.
       const avatar = sidebar.querySelector(
         `[data-agent-group="${id}"] .sidebar-agent-roster__header .identity-avatar--agent`,
       );
@@ -77,17 +77,7 @@ describe("AppSidebar agent roster pins", () => {
         expect(avatar?.querySelector(".identity-avatar__agent-face")).not.toBeNull();
       }
     }
-    expect(
-      [
-        ...sidebar.querySelectorAll<HTMLElement>("[data-agent-group] .session-row-host--pinned"),
-      ].map((row) => row.dataset.sessionKey),
-    ).toEqual(["agent:main:pinned", "agent:recent:pinned", "agent:working:pinned"]);
-    expect(sessionKeys(sidebar)).not.toContain("agent:system:pinned");
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group="main"] [data-session-key="agent:main:recent"] .session-glyph__emoji',
-      )?.textContent,
-    ).toBe("📝");
+    expect(sessionKeys(sidebar)).toEqual([]);
     sidebar.sidebarAgentsMode = "chip";
     await settleRoster(sidebar);
     expect(sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
@@ -120,21 +110,20 @@ describe("AppSidebar agent roster pins", () => {
     expect(sidebar.sidebarEntries).toEqual(entries);
   });
 
-  it("toggles cross-agent personal shortcuts without changing group membership or shared pins", async () => {
-    const key = "agent:working:task";
+  it("toggles personal shortcuts from a session row while keeping the agent-only roster", async () => {
+    const key = "agent:main:task";
     const { sidebar, context, sessions, result } = await mountRoster(roster, [
-      session("working", 2, { key, isMain: false }),
+      session("main", 2, { key, isMain: false }),
     ]);
     sidebar.sidebarEntries = ["route:usage", "route:plugins"];
     const onUpdate = vi.fn((next: string[]) => {
       sidebar.sidebarEntries = next;
     });
     sidebar.onUpdateSidebarEntries = onUpdate;
-    sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
     for (const pinned of [true, false]) {
       const pin = sidebar.querySelector<HTMLButtonElement>(
-        `[data-agent-group="working"] [data-session-key="${key}"] .session-action--pin`,
+        `[data-session-key="${key}"] .session-action--pin`,
       )!;
       expect(pin).not.toBeNull();
       expect(pin.disabled).toBe(false);
@@ -148,15 +137,17 @@ describe("AppSidebar agent roster pins", () => {
       ).toBe(pinned);
       const rows = sidebar.querySelectorAll(`[data-session-key="${key}"]`);
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.closest('[data-agent-group="working"]')).not.toBeNull();
       expect(rows[0]?.classList.contains("session-row-host--pinned")).toBe(pinned);
       expect(context.agentSelection.state.selectedId).toBe("main");
     }
     expect(onUpdate).toHaveBeenLastCalledWith(["route:usage", "route:plugins"]);
     expect(sidebar.sidebarEntries).toEqual(["route:usage", "route:plugins"]);
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
+    expect(sessionKeys(sidebar)).toEqual([]);
   });
 
-  it("keeps a rail shortcut reachable while its session tree belongs to the collapsed agent group", async () => {
+  it("keeps a cross-agent rail shortcut reachable without a nested session tree", async () => {
     const parentKey = "agent:working:project";
     const childKey = "agent:recent:child";
     const { sidebar } = await mountRoster(roster, [
@@ -172,36 +163,12 @@ describe("AppSidebar agent roster pins", () => {
     sidebar.sidebarEntries = [`session:${parentKey}`];
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
-    const toggle = sidebar.querySelector<HTMLButtonElement>(
-      `[data-agent-group="working"] [data-child-session-toggle="${parentKey}"]`,
-    );
-    expect(toggle).not.toBeNull();
-    toggle?.click();
-    await settleRoster(sidebar);
-    expect(
-      sidebar
-        .querySelector(`[data-agent-group="working"] [data-child-session-toggle="${parentKey}"]`)
-        ?.getAttribute("aria-expanded"),
-    ).toBe("true");
-    expect(sessionKeys(sidebar)).toEqual([parentKey, childKey, "agent:working:notes"]);
-    const child = sidebar.querySelector(`[data-session-key="${childKey}"]`)!;
-    expect(child.closest('[data-agent-group="working"]')).not.toBeNull();
-    expect(child.classList.contains("sidebar-recent-session--child")).toBe(true);
-    expect(child.querySelector(".sidebar-session-indicator .identity-avatar--agent")).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')!.click();
-    await settleRoster(sidebar);
     expect(sessionKeys(sidebar)).toEqual([]);
-    expect(
-      sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${parentKey}"] a`),
-    ).not.toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')!.click();
-    await settleRoster(sidebar);
-    const reopened = sidebar.querySelector<HTMLButtonElement>(
-      `[data-agent-group="working"] [data-child-session-toggle="${parentKey}"]`,
-    )!;
-    expect(reopened.getAttribute("aria-expanded")).toBe("true");
-    reopened.click();
-    await settleRoster(sidebar);
-    expect(sessionKeys(sidebar)).toEqual([parentKey, "agent:working:notes"]);
+    expect(sidebar.querySelector("[data-agent-collapse]")).toBeNull();
+    const link = sidebar.querySelector<HTMLAnchorElement>(
+      `.sidebar-rail [data-sidebar-entry="session:${parentKey}"] a`,
+    );
+    expect(link).not.toBeNull();
+    expect(new URL(link!.href).pathname).toBe("/chat/working/project");
   });
 });

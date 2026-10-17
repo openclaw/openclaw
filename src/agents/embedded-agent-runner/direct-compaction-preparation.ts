@@ -6,6 +6,7 @@ import {
   getActiveDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
@@ -33,7 +34,6 @@ import type { SandboxContext } from "../sandbox/types.js";
 import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { classifyCompactionReason } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
@@ -55,7 +55,8 @@ export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ) {
   const startedAt = Date.now();
-  const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
+  const diagId =
+    params.diagId?.trim() || `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
   const trigger = params.trigger ?? "manual";
   const attempt = params.attempt ?? 1;
   const maxAttempts = params.maxAttempts ?? 1;

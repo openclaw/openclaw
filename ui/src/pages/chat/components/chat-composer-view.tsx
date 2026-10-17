@@ -230,6 +230,17 @@ export function renderChatComposerView(
         {props.footerContent}
         <div class="agent-chat__composer-notices">
           {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
+          <Show when={context().cancellationCaveat}>
+            {(caveat) => (
+              <div
+                class="agent-chat__cancellation-notice compaction-indicator"
+                role="status"
+                aria-live="polite"
+              >
+                {caveat()}
+              </div>
+            )}
+          </Show>
         </div>
         <ComposerQuestionDock panel={context().questionPanelProps} />
         {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}

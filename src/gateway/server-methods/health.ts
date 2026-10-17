@@ -84,11 +84,8 @@ export const healthHandlers: GatewayRequestHandlers = {
         eventLoop: _cachedEventLoop,
         ...cachedState
       } = cached;
-      // Dead-letter counts are cheap live reads. Preserve the grouped pressure
-      // aggregate for the cache interval so routine health RPCs do not amplify it.
-      const deliveryQueues = await buildDeliveryQueueHealthSummary(
-        _cachedDeliveryQueues?.ingressPressure ?? [],
-      );
+      // The queue owner reuses health facts until a write receipt or claim expiry invalidates them.
+      const deliveryQueues = await buildDeliveryQueueHealthSummary();
       const contextEngines = await buildContextEngineHealthSummary();
       // A reset sampler has no current window; never revive the cached reading.
       const eventLoop = getEventLoopHealth?.();

@@ -187,6 +187,12 @@ by parsed host or other beacon metadata. A stable `instanceId` helps consumers
 associate rows with the same client. It does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
 
+Reconnecting removes retained offline rows for the same operator identity: device
+id, then client instance id, then connection id. Closing a tab removes its row if
+another connection of that identity remains live. When the last connection closes,
+at most one offline row remains for that identity until the existing five-minute
+TTL, preserving recently-offline metadata without accumulating reconnect history.
+
 The Control UI groups connection rows by their recorded identity namespace when
 displaying people. Connections with the same qualified profile identity share one
 person. Unqualified connections with the same raw ID form a separate group. A raw
@@ -260,6 +266,13 @@ into the entry.
 
 ## Consumers
 
+The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
+to avoid retransmitting the whole roster for each changed connection. Its Gateway
+store reconstructs the same ordered presence list and requests a fresh snapshot
+if an update does not match its current version. Native clients keep full
+presence events. Recipient visibility and the best-effort freshness policy are
+the same for both formats.
+
 ### Control UI Devices page
 
 The **Devices** page joins `system-presence` with durable pairing and node
@@ -277,7 +290,7 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 - If you see duplicates:
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
-  - check for multiple tabs or reconnects. Separate user connections have separate rows, and old rows expire after the TTL
+  - check for multiple live tabs. Separate user connections have separate rows; only the last offline row for a device or instance remains until the TTL, and reconnecting removes it
 
 ## Related
 

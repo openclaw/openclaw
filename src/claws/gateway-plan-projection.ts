@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type {
   ClawActionEffect,
   ClawConfiguredAccess,
@@ -141,9 +141,7 @@ function sealClawLifecyclePlan(
   plan: Omit<ClawLifecyclePlanResult, "schemaVersion" | "planIntegrity">,
   canonicalPlanIntegrity: string,
 ): ClawLifecyclePlanResult {
-  const planIntegrity = `sha256:${createHash("sha256")
-    .update(stableStringify({ canonicalPlanIntegrity, plan }))
-    .digest("hex")}`;
+  const planIntegrity = `sha256:${sha256Hex(stableStringify({ canonicalPlanIntegrity, plan }))}`;
   return { schemaVersion: "openclaw.clawsGatewayPlan.v1", planIntegrity, ...plan };
 }
 
@@ -177,9 +175,7 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {
   const { planIntegrity: _planIntegrity, ...content } = plan;
-  return `sha256:${createHash("sha256")
-    .update(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))
-    .digest("hex")}`;
+  return `sha256:${sha256Hex(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))}`;
 }
 
 export function plansMatchAcrossSourceRoots(params: {

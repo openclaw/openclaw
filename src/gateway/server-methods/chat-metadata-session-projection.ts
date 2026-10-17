@@ -236,7 +236,7 @@ export function hasSessionCatalogContext(
   );
 }
 
-function resolveRequiredWorkerInferenceProfileId(
+export function resolveRequiredWorkerInferenceProfileId(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
 ): string | undefined {

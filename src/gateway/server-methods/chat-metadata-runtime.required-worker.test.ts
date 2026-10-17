@@ -32,7 +32,9 @@ test("required worker chat metadata admits cold main and bookmarked sessions wit
       expect(metadata.models?.[0]).not.toHaveProperty("unavailableReason");
       expect(metadata.models?.[0]).not.toHaveProperty("available");
       expect(metadata.models?.[1]).toEqual(models[1]);
-      expect((await harness.runtime.readStartup(scope))?.metadata).toEqual(metadata);
+      expect((await harness.runtime.readStartup(scope))?.metadata).toMatchObject({
+        requiredWorkerInferenceProfileId: "dedicated",
+      });
     }
     expect((await harness.runtime.read({ agentId: "main" })).models).toEqual(models);
     expect(

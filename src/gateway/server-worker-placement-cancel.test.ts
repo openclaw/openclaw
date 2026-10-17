@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -13,33 +10,22 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { clearAgentRunContext } from "../infra/agent-run-registry.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import { handleChatSendSetupError } from "./server-methods/chat-send-dispatch-errors.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
+import { cleanupAdmission } from "./server-worker-placement-reclaim.test-support.js";
+import {
+  admitWorkerStopChat,
+  createWorkerStopChatContext,
+} from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
-const routing = vi.hoisted(() => ({
-  load: vi.fn<
-    typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-  >(),
-}));
-vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: routing.load,
-}));
 
 it.each(["success", "failed-write", "setup-failed-write"] as const)(
   "Stop preserves canonical terminal ownership through %s",
@@ -51,13 +37,13 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         : vi
             .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
             .mockReturnValue(() => terminalWrite.promise);
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
+    const state = await createOpenClawTestState({ scenario: "minimal" });
+    const { root } = state;
     const cfg = {};
     setRuntimeConfigSnapshot(cfg);
-    const target = {
-      storePath: path.join(root, "sessions.json"),
-      sessionKey: "agent:main:terminal-stop",
-    };
+    const sessionKey = "agent:main:terminal-stop";
+    const { storePath } = await resolveGatewaySessionStoreTargetInWorker({ cfg, key: sessionKey });
+    const target = { storePath, sessionKey };
     const sessionId = "terminal-stop-session";
     const runId = "terminal-stop-run";
     const entry = {
@@ -65,47 +51,21 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       worktree: { id: "terminal-worktree", branch: "test", repoRoot: root },
       updatedAt: Date.now(),
     };
-    const events: Array<{
-      phase: unknown;
-      status: unknown;
-      aborted: unknown;
-      stopReason: unknown;
-    }> = [];
-    const chatRunState = createChatRunState();
-    const log: SubsystemLogger = {
+    const identity = { sessionId, sessionKey: target.sessionKey, agentId: "main" };
+    const terminal = { status: "killed", lastRunId: runId, abortedLastRun: true };
+    const events: Array<Record<"phase" | "status" | "aborted" | "stopReason", unknown>> = [];
+    const subscriptionFixture = createSubscriptionTestFixture();
+    const log = Object.assign(subscriptionFixture.log, {
       subsystem: "test-terminal",
-      child: () => log,
       isEnabled: () => false,
-      trace: vi.fn(),
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      fatal: vi.fn(),
-      raw: vi.fn(),
-    };
-    const context = {
-      dedupe: new Map(),
-      chatRunState,
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      agentRunSeq: new Map(),
+    });
+    const context = Object.assign(createWorkerStopChatContext(), {
       getRuntimeConfig: () => cfg,
       removeChatRun: vi.fn(),
-      broadcast: vi.fn(),
-      nodeSendToSession: vi.fn(),
       cancelRunBoundApprovals: vi.fn(),
       logGateway: log,
-    } as unknown as import("./server-methods/types.js").GatewayRequestContext;
-    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
-      typeof import("./session-utils-store-worker.js")
-    >("./session-utils-store-worker.js");
-    routing.load.mockImplementation((params) =>
-      loadGatewaySessionEntryReadOnlyInWorker({
-        ...params,
-        cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
-      }),
-    );
+    });
+    const { chatRunState } = context;
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
     let reclaim: Promise<unknown> | undefined;
@@ -113,9 +73,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     const releaseWriter = createDeferred();
     const abortObserved = createDeferred();
     let placement = {
-      sessionId,
-      sessionKey: target.sessionKey,
-      agentId: "main",
+      ...identity,
       state: "active" as "active" | "reclaimed",
       turnClaim: null,
     };
@@ -132,35 +90,18 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       }
     });
     const admit = async (id: string) =>
-      (
-        await admitWorkerStopChat({
-          context,
-          storePath: target.storePath,
-          sessionKey: target.sessionKey,
-          sessionId,
-          agentId: "main",
-          entry,
-          runId: id,
-        })
-      ).promise;
+      (await admitWorkerStopChat({ context, storePath, ...identity, entry, runId: id })).promise;
     try {
       await replaceSessionEntry(target, entry);
       subscriptions = startGatewayEventSubscriptions({
-        scheduler: createTestGatewayScheduler(),
-        signal: new AbortController().signal,
-        log,
+        ...subscriptionFixture.createParams(),
         broadcast: context.broadcast,
-        broadcastToConnIds: vi.fn(),
-        nodeHasSessionSubscribers: () => false,
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
         chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
-        restartRecoveryCandidates: new Map(),
-        refreshConnectedUserProfiles: vi.fn(),
+        log,
+        toolEventRecipients: chatRunState.toolEventRecipients,
       });
       active = await admit(runId);
       expect(active.ok).toBe(true);
@@ -200,14 +141,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
               path: root,
             }),
           },
-          resolveGatewaySessionStoreTargetInWorker: (params) =>
-            resolveGatewaySessionStoreTargetInWorker({
-              ...params,
-              cfg: {
-                ...params.cfg,
-                session: { ...params.cfg.session, store: target.storePath },
-              },
-            }),
+          resolveGatewaySessionStoreTargetInWorker,
           resolveCanonicalSessionEntryFromStoreKeys,
         }),
         cancelSessionWork: async (request) => {
@@ -222,17 +156,11 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         revokeSessionAuthority: vi.fn(),
       });
       reclaim = barriers.runReclaimBarrier({
-        sessionId,
-        sessionKey: target.sessionKey,
-        agentId: "main",
+        ...identity,
         begin: async () => ({ ...placement, state: "draining" }) as never,
         reclaim: async () => {
           reclaimEffectStarted = true;
-          expect(loadSessionEntry(target)).toMatchObject({
-            status: "killed",
-            lastRunId: runId,
-            abortedLastRun: true,
-          });
+          expect(loadSessionEntry(target)).toMatchObject(terminal);
           placement = { ...placement, state: "reclaimed" };
           return placement as never;
         },
@@ -244,13 +172,9 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(loadSessionEntry(target)?.status).toBeUndefined();
       const late = await admit("during-terminal-write");
       expect(late.ok).toBe(false);
-      expect(
-        (
-          context.dedupe.get("chat:during-terminal-write")?.payload as
-            | { summary?: string }
-            | undefined
-        )?.summary,
-      ).toBe("aborted");
+      expect(context.dedupe.get("chat:during-terminal-write")).toMatchObject({
+        payload: { summary: "aborted" },
+      });
       if (outcome === "setup-failed-write") {
         expect(owned.restartSafeAdmission).toBeUndefined();
         await handleChatSendSetupError({
@@ -283,23 +207,17 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(context.chatAbortControllers.has(runId)).toBe(false);
       await closeSessionSqliteDatabasesForTest();
       const persisted = loadSessionEntry({ ...target, readConsistency: "latest" });
-      expect(persisted).toMatchObject({ status: "killed", lastRunId: runId, abortedLastRun: true });
+      expect(persisted).toMatchObject(terminal);
       expect(persisted?.endedAt).toBeTypeOf("number");
       const fresh = await admit("explicit-after-terminal-stop");
       expect(fresh.ok).toBe(true);
-      if (fresh.ok) {
-        fresh.value.cleanupAdmittedRun();
-        clearAgentRunContext("explicit-after-terminal-stop", fresh.value.lifecycleGeneration);
-      }
+      cleanupAdmission("explicit-after-terminal-stop", fresh);
     } finally {
       terminalWrite.resolve();
       releaseWriter.resolve();
       await heldWriter;
       await reclaim?.catch(() => {});
-      if (active?.ok) {
-        active.value.cleanupAdmittedRun();
-        clearAgentRunContext(runId, active.value.lifecycleGeneration);
-      }
+      cleanupAdmission(runId, active);
       unsubscribe();
       await subscriptions?.agentUnsub();
       subscriptions?.heartbeatUnsub();
@@ -308,8 +226,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       await closeSessionSqliteDatabasesForTest();
       clearRuntimeConfigSnapshot();
       persistenceSpy?.mockRestore();
-      routing.load.mockReset();
-      await fs.rm(root, { recursive: true, force: true });
+      await state.cleanup();
     }
   },
 );

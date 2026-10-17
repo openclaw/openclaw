@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanel } from "./browser-panel-owner.ts";
+import { stubScreenshotMedia } from "./browser-panel-controller-test-support.ts";
+import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 import "./browser-panel.ts";
 
 describe("Browser toolbar", () => {
@@ -21,37 +20,23 @@ describe("Browser toolbar", () => {
   });
 
   async function mount() {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      embedded: boolean;
-      presented: boolean;
-      refreshOnPresentation: boolean;
-      client: GatewayBrowserClient;
-      browserPanelController: BrowserPanel;
-      renderRoot: HTMLElement;
-      invalidate: () => void;
-      updateComplete: Promise<unknown>;
-    };
+    stubScreenshotMedia();
+    const panel = document.createElement("openclaw-browser-panel");
     panel.available = true;
     panel.embedded = true;
     panel.presented = true;
-    panel.refreshOnPresentation = false;
-    panel.client = createBrowserClient(async () => ({
-      download: { path: "/managed/preview.png", suggestedFilename: "preview.png" },
-    })).client;
+    panel.client = createBrowserPageClient(
+      "asset",
+      "https://assets.example.test/preview.png",
+    ).client;
     mountSolid(() => panel);
-    await panel.updateComplete;
-    const controller = panel.browserPanelController;
-    controller.activeTargetId = "asset";
-    controller.view = createView("asset", "https://assets.example.test/preview.png");
-    panel.invalidate();
-    await panel.updateComplete;
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
     return panel;
   }
 
   it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its light-DOM host", async () => {
     const panel = await mount();
-    const glyphs = panel.renderRoot.querySelectorAll(".bp-toolbar button > svg");
+    const glyphs = panel.querySelectorAll(".bp-toolbar button > svg");
     expect(glyphs).toHaveLength(8);
     for (const glyph of glyphs) {
       expect(glyph.getAttribute("viewBox")).toBe("0 0 24 24");
@@ -64,6 +49,7 @@ describe("Browser toolbar", () => {
   });
 
   it("openclaw-browser-panel Download renders the Gateway error message and HTTP status", async () => {
+    const panel = await mount();
     vi.stubGlobal(
       "fetch",
       vi
@@ -75,24 +61,17 @@ describe("Browser toolbar", () => {
           ),
         ),
     );
-    const panel = await mount();
-    panel.renderRoot
-      .querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!
-      .click();
-    await waitForSolid(() =>
-      expect(panel.renderRoot.textContent).toContain("HTTP 401: Unauthorized"),
-    );
+    panel.querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!.click();
+    await waitForSolid(() => expect(panel.textContent).toContain("HTTP 401: Unauthorized"));
   });
 
   it("replaces the download glyph while saving without adding a status row or replacing the preview", async () => {
+    const panel = await mount();
     const body = createDeferred<Blob>();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: () => body.promise }));
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    const panel = await mount();
-    const preview = panel.renderRoot.querySelector(".bp-shot");
-    const button = panel.renderRoot.querySelector<HTMLButtonElement>(
-      'button[aria-label="Download file"]',
-    )!;
+    const preview = panel.querySelector(".bp-shot");
+    const button = panel.querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!;
     const downloadShape = button.querySelector("svg")!.innerHTML;
     button.click();
     await panel.updateComplete;
@@ -100,15 +79,15 @@ describe("Browser toolbar", () => {
     expect(button.getAttribute("aria-label")).toBe("Downloading…");
     expect(button.disabled).toBe(true);
     expect(button.querySelector("svg")!.innerHTML).not.toBe(downloadShape);
-    expect(panel.renderRoot.querySelector(".bp-note")).toBeNull();
-    expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
+    expect(panel.querySelector(".bp-note")).toBeNull();
+    expect(panel.querySelector(".bp-shot")).toBe(preview);
 
     body.resolve(new Blob(["complete asset"], { type: "image/png" }));
     await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("false"));
     expect(button.getAttribute("aria-label")).toBe("Download file");
     expect(button.disabled).toBe(false);
     expect(button.querySelector("svg")!.innerHTML).toBe(downloadShape);
-    expect(panel.renderRoot.querySelector(".bp-note")).toBeNull();
-    expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
+    expect(panel.querySelector(".bp-note")).toBeNull();
+    expect(panel.querySelector(".bp-shot")).toBe(preview);
   });
 });

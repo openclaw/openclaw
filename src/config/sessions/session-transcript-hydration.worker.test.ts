@@ -3,6 +3,7 @@ import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { assertNoActiveSqliteReaders } from "../../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
@@ -42,6 +43,7 @@ function fixture(
       db: reader,
       close() {
         transactionsAtClose.push(reader.isTransaction);
+        assertNoActiveSqliteReaders(reader, "hydration cleanup");
         reader.close();
       },
     },
@@ -85,7 +87,7 @@ function fixture(
   return { writer, reader, chunks, controller, transactionsAtClose, stream };
 }
 
-it("keeps exact bytes and one snapshot across ACKs and keyset pages", async () => {
+it("keeps exact bytes and one snapshot across ACKs", async () => {
   const codec = resolveZstdCodec();
   if (!codec) {
     throw new Error("The hydration regression requires zstd support");
@@ -163,11 +165,11 @@ it("keeps exact bytes and one snapshot across ACKs and keyset pages", async () =
 });
 
 it.each(["cancel", "host-error"] as const)(
-  "closes the snapshot after %s before reading the next payload page",
+  "closes the snapshot after %s without decoding unread payloads",
   async (failure) => {
     const f = fixture([
-      ...Array.from({ length: 256 }, (_, seq) => ({ seq, text: "{}" })),
-      { seq: 256, compressed: new Uint8Array([0]), size: 1 },
+      ...Array.from({ length: 128 }, (_, seq) => ({ seq, text: "{}" })),
+      { seq: 128, compressed: new Uint8Array([0]), size: 1 },
     ]);
     const error = new Error(failure);
     try {

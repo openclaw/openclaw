@@ -55,8 +55,8 @@ import {
   scanUsageCostRollupInWorker,
 } from "./session-cost-usage-worker-refresh.js";
 import {
+  createUsageCostReportSource,
   prepareUsageCostReportEntry,
-  readUsageCostReportEntry,
 } from "./session-cost-usage-worker-report.js";
 import {
   UsageCostHostEffectError,
@@ -155,11 +155,13 @@ export async function executeUsageCostWorker(
     operation.kind === "refresh" && operation.sessionFiles
       ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
       : [];
+  const committedOnly = operation.kind === "sessions" && operation.committedOnly === true;
   const sessionPaths =
     operation.kind === "sessions"
       ? await resolveUsageCostTranscriptPaths(
           operation.sessions.map((session) => session.sessionFile),
           access,
+          { materializeArchives: !committedOnly },
         )
       : undefined;
   const selectedPaths = sessionPaths
@@ -356,53 +358,33 @@ export async function executeUsageCostWorker(
       const filesByPath = new Map(
         reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
       );
-      const consumed = new Set<string>();
-      const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-      const source = {
+      const report = createUsageCostReportSource({
+        rows: byPath,
+        entries,
+        files: filesByPath,
+        sessions: operation.kind === "sessions" ? operation.sessions : undefined,
         deferredPaths: cacheBudget.deferredPaths,
         deferredMetadata: cacheBudget.deferredMetadata,
-        readRow(filePath: string) {
-          consumed.add(filePath);
-          return byPath.get(filePath);
+        startMs: operation.startMs,
+        endMs: operation.endMs,
+        dayBucket: operation.dayBucket,
+        throwIfCancelled: control.throwIfCancelled,
+        replayBudget,
+        cacheBudget,
+        committedOnly,
+        scan: {
+          pricingFingerprint: operation.pricingFingerprint,
+          resolveCosts,
+          readGeneration,
+          readRows,
         },
-        readBody: (row: SessionCostUsageRollupRow) => entries.get(row.key)?.blob ?? null,
-        readEntry: (row: SessionCostUsageRollupRow) =>
-          readUsageCostReportEntry({
-            prepared: entries.get(row.key)!,
-            file: filesByPath.get(row.key),
-            startMs: operation.startMs,
-            endMs: operation.endMs,
-            dayBucket: operation.dayBucket,
-            throwIfCancelled: control.throwIfCancelled,
-            replayBudget,
-            cacheBudget,
-            scan: {
-              pricingFingerprint: operation.pricingFingerprint,
-              resolveCosts,
-              readGeneration,
-              readRows,
-            },
-          }),
-        onInvalidBody(key: string) {
-          const row = byPath.get(key);
-          if (row) {
-            invalidRows.set(key, row);
-          }
-        },
-        remainingRows: (function* () {
-          for (const row of rows) {
-            if (!consumed.has(row.key)) {
-              yield row;
-            }
-          }
-        })(),
-      };
+      });
       const result =
         operation.kind === "summary"
           ? {
               kind: "summary" as const,
               summary: await projectCostUsageSummary({
-                ...source,
+                ...report.source,
                 ...operation,
                 files: reportFiles.filter((file) => file !== undefined),
               }),
@@ -410,14 +392,17 @@ export async function executeUsageCostWorker(
           : {
               kind: "sessions" as const,
               ...(await projectSessionCostSummaries({
-                ...source,
+                ...report.source,
                 ...operation,
                 files: (sessionPaths ?? []).map((filePath) => filesByPath.get(filePath ?? "")),
               })),
               remainingReportBytes: Math.max(0, cacheBudget.remainingBytes),
             };
+      if (result.kind === "sessions") {
+        result.cacheStatus.partial = report.partialStatus();
+      }
       control.throwIfCancelled();
-      return { ...result, invalidRows: [...invalidRows.values()] };
+      return { ...result, invalidRows: [...report.invalidRows.values()] };
     };
     try {
       const snapshot = await control.runNativeSection(() => {

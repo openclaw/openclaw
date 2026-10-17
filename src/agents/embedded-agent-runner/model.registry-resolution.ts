@@ -1,7 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
-import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
@@ -16,6 +14,7 @@ import {
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
+import type { ModelRegistry } from "../sessions/model-registry.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
@@ -40,16 +39,6 @@ type ExplicitModelResolution =
   | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
   | { kind: "suppressed" | "unavailable"; error?: string };
 
-function getRegistryProviderMetadataOwners(
-  modelRegistry: CoreModelRegistry,
-): PluginMetadataSnapshotOwnerMaps | undefined {
-  return (
-    modelRegistry as CoreModelRegistry & {
-      getProviderMetadataOwners?: () => PluginMetadataSnapshotOwnerMaps | undefined;
-    }
-  ).getProviderMetadataOwners?.();
-}
-
 export function normalizeConfiguredProviderModel(
   params: Parameters<typeof applyConfiguredProviderOverrides>[0] & { agentDir?: string },
 ): Model | undefined {
@@ -60,7 +49,7 @@ export function normalizeConfiguredProviderModel(
 export function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
-  modelRegistry: CoreModelRegistry;
+  modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
@@ -78,7 +67,7 @@ export function resolveExplicitModelWithRegistry(params: {
   if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg, workspaceDir })) {
     return { kind: "suppressed" };
   }
-  const providerMetadataOwners = getRegistryProviderMetadataOwners(modelRegistry);
+  const providerMetadataOwners = modelRegistry.getProviderMetadataOwners();
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const suppressionError = (baseUrl: string | undefined) =>
     buildSuppressedBuiltInModelError({ provider, id: modelId, config: cfg, baseUrl, workspaceDir });
@@ -264,7 +253,7 @@ async function resolvePluginDynamicModelWithRegistry(
     ...params,
     discoveredModel: pluginDynamicModel,
     providerConfig,
-    providerMetadataOwners: getRegistryProviderMetadataOwners(modelRegistry),
+    providerMetadataOwners: modelRegistry.getProviderMetadataOwners(),
     runtimeHooks,
     preferDiscoveredModelMetadata: shouldCompareProviderRuntimeResolvedModel({
       ...params,
@@ -343,7 +332,7 @@ type ResolveModelWithPreparedRegistryParams = {
   assertCurrent?: () => void;
   provider: string;
   modelId: string;
-  modelRegistry: CoreModelRegistry;
+  modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
   agentRuntimeId?: string;
@@ -395,6 +384,6 @@ export async function resolveModelWithPreparedRegistry(
     ? undefined
     : buildConfiguredFallbackModel({
         ...params,
-        providerMetadataOwners: getRegistryProviderMetadataOwners(params.modelRegistry),
+        providerMetadataOwners: params.modelRegistry.getProviderMetadataOwners(),
       });
 }

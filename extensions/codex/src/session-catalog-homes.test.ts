@@ -26,6 +26,16 @@ const ownerConfig = (
   entries: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>,
 ): OpenClawConfig => ({ agents: { ownership: "explicit", entries } });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const runtimeOptions = resolveCodexSupervisionAppServerRuntimeOptions;
+function catalogOptions(getRuntimeConfig: () => OpenClawConfig, home: string) {
+  return {
+    config: getRuntimeConfig(),
+    getRuntimeConfig,
+    getPluginConfig: () => ({}),
+    resolveRuntimeOptions: runtimeOptions,
+    env: { CODEX_HOME: home },
+  };
+}
 
 describe("Codex catalog home discovery", () => {
   it.each([
@@ -34,7 +44,7 @@ describe("Codex catalog home discovery", () => {
     { homeScope: "agent", initiallyMissing: true, aliasKind: "agent-directory" },
     { homeScope: "agent", initiallyMissing: false, aliasKind: "home-leaf" },
   ] as const)(
-    "keeps the captured $homeScope home across $aliasKind retargeting and client restart (initiallyMissing=$initiallyMissing)",
+    "pins $homeScope/$aliasKind across retarget and restart (missing=$initiallyMissing)",
     async ({ homeScope, initiallyMissing, aliasKind }) => {
       const root = tempDirs.make("codex-catalog-home-alias-");
       const targetsRoot = aliasKind === "home-leaf" ? path.join(root, "agent") : root;
@@ -64,13 +74,10 @@ describe("Codex catalog home discovery", () => {
         alpha: { agentDir: aliasKind === "agent-directory" ? alias : path.join(root, "agent") },
       });
       const factory = createCodexSessionCatalogControl({
-        config,
-        getRuntimeConfig: () => config,
+        ...catalogOptions(() => config, homeScope === "user" ? alias : path.join(root, "native")),
         getPluginConfig: () => ({
           appServer: { transport: "stdio", homeScope, command: process.execPath },
         }),
-        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-        env: { CODEX_HOME: homeScope === "user" ? alias : path.join(root, "native") },
       });
       const launchedHomes: string[] = [];
       const threadId = "123e4567-e89b-12d3-a456-426614174001";
@@ -154,20 +161,15 @@ describe("Codex catalog home discovery", () => {
       alpha: { agentDir: path.join(root, "alpha") },
       beta: { agentDir: path.join(root, "beta") },
     });
-    const resolveRuntimeOptions = vi.fn(
-      (options: Parameters<typeof resolveCodexSupervisionAppServerRuntimeOptions>[0] = {}) => {
-        if (options?.agentDir === path.join(root, "alpha")) {
-          throw new Error("alpha runtime is unavailable");
-        }
-        return resolveCodexSupervisionAppServerRuntimeOptions(options);
-      },
-    );
+    const resolveRuntimeOptions = vi.fn((options: Parameters<typeof runtimeOptions>[0] = {}) => {
+      if (options?.agentDir === path.join(root, "alpha")) {
+        throw new Error("alpha runtime is unavailable");
+      }
+      return runtimeOptions(options);
+    });
     const resolver = createCodexCatalogHomeResolver({
-      config,
-      getRuntimeConfig: () => config,
-      getPluginConfig: () => ({}),
+      ...catalogOptions(() => config, path.join(root, "native")),
       resolveRuntimeOptions,
-      env: { CODEX_HOME: path.join(root, "native") },
     });
 
     expect(resolveRuntimeOptions).not.toHaveBeenCalled();
@@ -197,11 +199,7 @@ describe("Codex catalog home discovery", () => {
     entries.zzzunused = { agentDir: path.dirname(unusedHome) };
     const config = ownerConfig(entries);
     const resolver = createCodexCatalogHomeResolver({
-      config,
-      getRuntimeConfig: () => config,
-      getPluginConfig: () => ({}),
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-      env: { CODEX_HOME: path.join(root, "native") },
+      ...catalogOptions(() => config, path.join(root, "native")),
     });
     const stat = vi.spyOn(fs, "stat");
     try {
@@ -229,13 +227,10 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
     projectId: null,
   }));
   await Promise.all(
-    pages.map((thread) =>
+    pages.map(({ path: file, id, source, originator }) =>
       fs.writeFile(
-        thread.path,
-        `${JSON.stringify({
-          type: "session_meta",
-          payload: { id: thread.id, source: thread.source, originator: thread.originator },
-        })}\n`,
+        file,
+        `${JSON.stringify({ type: "session_meta", payload: { id, source, originator } })}\n`,
       ),
     ),
   );
@@ -285,19 +280,17 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
     const config: OpenClawConfig = {
       agents: { entries: { main: { agentDir: path.join(home, "agent") } } },
     };
-    const pluginConfig = {
-      appServer: {
-        transport: "websocket",
-        url: `ws://127.0.0.1:${address.port}`,
-        homeScope: "agent",
-        requestTimeoutMs: 5_000,
-      },
-    };
     control = createCodexSessionCatalogControl({
-      env: { CODEX_HOME: home },
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => config,
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+      ...catalogOptions(() => config, home),
+      config: undefined,
+      getPluginConfig: () => ({
+        appServer: {
+          transport: "websocket",
+          url: `ws://127.0.0.1:${address.port}`,
+          homeScope: "agent",
+          requestTimeoutMs: 5_000,
+        },
+      }),
     });
     const source = {
       ...(await control.homesForAgent("main"))[0]!,

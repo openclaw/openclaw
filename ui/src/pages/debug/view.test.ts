@@ -1,10 +1,9 @@
 import hljs from "highlight.js/lib/core";
 import { createComponent, createStore, flush } from "solid-js";
-import { assert, beforeAll, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadMarkdownHighlighter } from "../../components/markdown-code-blocks.ts";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -19,8 +18,6 @@ import {
   useDebugTestEnvironment,
 } from "./debug.test-support.ts";
 import { DebugPageView, type DebugProps } from "./view.tsx";
-
-beforeAll(loadMarkdownHighlighter);
 
 type TestDebugPage = HTMLElement;
 const pages = new WeakMap<
@@ -120,7 +117,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
 useDebugTestEnvironment();
 
 describe("DebugPageView", () => {
-  it("retains event payload DOM and only highlights changed diagnostics", () => {
+  it("retains event payload DOM and only highlights changed diagnostics", async () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
       ts: 1,
@@ -135,6 +132,7 @@ describe("DebugPageView", () => {
       assert(eventSection);
       const payloads = Array.from(eventSection.querySelectorAll("pre"));
       assert(payloads[0]);
+      await waitForSolid(() => expect(payloads[0]!.querySelector("span")).not.toBeNull());
       const firstToken = payloads[0].querySelector("span");
       assert(firstToken);
       highlight.mockClear();

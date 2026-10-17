@@ -302,7 +302,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         checkAbort(runtime.signal, ABORT_LABEL);
         if (item.atMs >= window.sinceMs && item.atMs < window.untilMs) {
           pending.push({
-            key: `${item.kind}\0${item.url}\0${item.actor.toLowerCase()}\0${item.atMs}`,
+            key: JSON.stringify([item.kind, item.url, item.actor.toLowerCase(), item.atMs]),
             value: item,
           });
           itemCount++;

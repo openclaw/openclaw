@@ -11,6 +11,7 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -93,13 +94,15 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
   const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
   const client = expectDefined(host.client, "shared client");
   const peer = pageHost(makeChatHost({ client, sessions: host.sessions, sessionKey: selected }));
-  const paint = vi.fn();
-  const peerPaint = vi.fn();
-  host.requestUpdate = paint;
-  peer.requestUpdate = peerPaint;
+  const publish = vi.fn();
+  const peerPublish = vi.fn();
+  const stopPublication = subscribeChatOutboxQueue(host, publish);
+  const stopPeerPublication = subscribeChatOutboxQueue(peer, peerPublish);
   const stopHost = chatOutboxOwner(host).subscribe(host);
   const stopPeer = chatOutboxOwner(peer).subscribe(peer);
   onTestFinished(() => {
+    stopPeerPublication();
+    stopPublication();
     stopPeer();
     stopHost();
     host.sessions.dispose();
@@ -132,15 +135,15 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
     ),
   ).toBe(true);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["old-owner"]);
-  paint.mockClear();
-  peerPaint.mockClear();
+  publish.mockClear();
+  peerPublish.mockClear();
 
   vi.spyOn(client, "recoveryScope", "get").mockReturnValue("replacement-scope");
   handlePageGatewayEvent(host, sessionEvent(foreign), () => false);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
   expect(peer.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
-  expect(paint).toHaveBeenCalledTimes(1);
-  expect(peerPaint).toHaveBeenCalledTimes(1);
+  expect(publish).toHaveBeenCalledTimes(1);
+  expect(peerPublish).toHaveBeenCalledTimes(1);
 });
 
 it.each(

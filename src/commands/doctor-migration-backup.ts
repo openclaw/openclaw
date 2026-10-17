@@ -39,6 +39,7 @@ import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -99,6 +100,14 @@ export async function backupDoctorMigrationDatabases(params: {
       continue;
     }
     const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
+    if (
+      params.versionMigrationsOnly &&
+      migration?.kind === "agent" &&
+      params.agentDatabaseTargets?.some((target) => target.path === pathname)
+    ) {
+      // This custody checks current bytes once, before its version and additive phases.
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
+    }
     if (migration) {
       integrityChecks.set(
         realpathSync.native(pathname),
@@ -243,7 +252,9 @@ export async function backupDoctorSqliteDatabases(params: {
   migrationTables?: ReadonlyMap<string, readonly string[]>;
   integrityChecks?: ReadonlyMap<string, SqliteIntegrityCheckOptions>;
   stateFamilyBackedUp?: true;
-}): Promise<MigrationMessages> {
+  /** Recovery must retain its own verified originals, including on disposable rehearsals. */
+  requireSnapshots?: true;
+}): Promise<MigrationMessages & { snapshots?: readonly { sourcePath: string; path: string }[] }> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
     return { changes: [], warnings: [] };
@@ -262,7 +273,9 @@ export async function backupDoctorSqliteDatabases(params: {
   }
   const { authority } = params;
   authority.assertCurrent();
-  const disposable = createDoctorRehearsalDatabaseCoverage(params.env);
+  const disposable = params.requireSnapshots
+    ? undefined
+    : createDoctorRehearsalDatabaseCoverage(params.env);
   disposable?.admit([...pending, ...params.databasePaths]);
   const retainedPaths = [...new Set([...pending, ...params.databasePaths])].filter(
     (pathname) => !disposable?.excludes(pathname),
@@ -284,6 +297,7 @@ export async function backupDoctorSqliteDatabases(params: {
     ),
   ];
   if (
+    !params.requireSnapshots &&
     sources.length > 0 &&
     sources.every((sourcePath) => {
       const { dev, ino } = statSync(sourcePath, { bigint: true });
@@ -534,5 +548,12 @@ export async function backupDoctorSqliteDatabases(params: {
       `Migration backups remain protected; cleanup registration failed: ${formatErrorMessage(error)}`,
     );
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    snapshots: inventory.map(({ path: sourcePath }) => ({
+      sourcePath,
+      path: targetFor(sourcePath),
+    })),
+  };
 }

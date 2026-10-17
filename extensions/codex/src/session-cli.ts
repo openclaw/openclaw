@@ -11,8 +11,8 @@ import type {
   SessionsCatalogListParams,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape, truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
@@ -94,7 +94,7 @@ function singleLineTerminalText(value: string): string {
 }
 
 function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 1)}\u2026`;
+  return truncateWithMarker(value, maxLength, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function sessionTitle(session: CodexSessionCatalogSession): string {
@@ -109,7 +109,7 @@ function sessionStatus(session: CodexSessionCatalogSession): string {
 }
 
 function quoteShellArgument(value: string): string {
-  return `'${singleLineTerminalText(value).replaceAll("'", `'"'"'`)}'`;
+  return shellEscape(singleLineTerminalText(value));
 }
 
 function formatHostIdentity(host: CodexSessionCatalogHost): string {

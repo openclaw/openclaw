@@ -9,7 +9,10 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
+import {
+  publishAgentDeletionWorkAdmission,
+  replayAgentDeletionTerminalWrites,
+} from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { captureAgentDatabasePreparationDeletionForIdentity } from "../state/agent-database-admission.js";
@@ -498,6 +501,11 @@ function runAgentDeletionWithLease<T>(
                 }
               },
               rollback: async () => {
+                await replayAgentDeletionTerminalWrites({ agentId: id, statePath }, (write) =>
+                  operation.runDatabaseCleanup(write.target, () =>
+                    write.persist(assertCurrentFinal),
+                  ),
+                );
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
                   completeOperation();

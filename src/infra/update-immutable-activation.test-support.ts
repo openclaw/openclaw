@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { vi } from "vitest";
 import {
   createImmutableInstallRecord,
   recordImmutablePreparedGeneration,
 } from "./package-update-activation-immutable.js";
-import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
+import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationJournalPath,
+} from "./package-update-activation-paths.js";
+import { immutableLayout, identity } from "./update-immutable-layout.test-support.js";
+export { identity } from "./update-immutable-layout.test-support.js";
 import type {
+  ImmutableActivationOperation,
   ImmutableInstallDescriptor,
   ImmutablePreparedGeneration,
 } from "./update-immutable-install-schema.js";
@@ -16,10 +21,34 @@ import type { ImmutableGatewayObservation } from "./update-immutable-verificatio
 
 export const previousSha = "a".repeat(40);
 export const candidateSha = "b".repeat(40);
-export const identity = (file: string) => {
-  const stat = fs.lstatSync(file);
-  return `${stat.dev}:${stat.ino}`;
-};
+
+export function syntheticActivationCustody(
+  descriptor: ImmutableInstallDescriptor,
+  [generationIdentity, helperIdentity]: readonly [string, string],
+): Pick<ImmutableActivationOperation, "authority" | "recovery"> {
+  const root = descriptor.root;
+  const journal = resolvePackageActivationJournalPath(resolvePackageActivationAnchor(root));
+  const control = path.dirname(journal);
+  return {
+    authority: {
+      databasePath: journal,
+      databaseIdentity: identity(journal),
+      parentIdentity: identity(control),
+      installKey: root,
+      owner: "synthetic-executor",
+    },
+    recovery: {
+      root,
+      path: path.join(control, `recovery-${descriptor.current.sha}`),
+      sha: descriptor.current.sha,
+      identity: generationIdentity,
+      buildDigest: descriptor.current.buildDigest,
+      helperPath: path.join(control, "recovery.mjs"),
+      helperIdentity,
+      helperDigest: "6".repeat(64),
+    },
+  };
+}
 
 export function syntheticImmutableServiceObservation(
   descriptor: ImmutableInstallDescriptor,
@@ -82,13 +111,22 @@ export function syntheticImmutableGatewayObservation(
 
 /** Physical pointer and SQLite fixture; only privileged ownership is projected. */
 export function createImmutableActivationLayout(parent: string) {
-  const root = path.join(parent, "installation");
-  const currentPath = path.join(root, "releases", previousSha);
+  const descriptor: ImmutableInstallDescriptor = {
+    ...immutableLayout(parent, {
+      sha: previousSha,
+      buildDigest: "1".repeat(64),
+      unit: "immutable-fixture.service",
+      account: "synthetic",
+      ownParent: true,
+    }),
+    version: 2,
+    activationEnabled: true,
+  };
+  const root = descriptor.root;
   const candidatePath = path.join(root, "releases", candidateSha);
   const schemaVersions = { state: 1, agent: 1 };
-  fs.mkdirSync(currentPath, { recursive: true, mode: 0o755 });
   fs.mkdirSync(candidatePath, { mode: 0o755 });
-  for (const generation of [currentPath, candidatePath]) {
+  for (const generation of [descriptor.current.path, candidatePath]) {
     fs.writeFileSync(
       path.join(generation, "package.json"),
       JSON.stringify({
@@ -98,47 +136,6 @@ export function createImmutableActivationLayout(parent: string) {
       }),
     );
   }
-  fs.symlinkSync(`releases/${previousSha}`, path.join(root, "current"));
-  const lstat = fs.lstatSync;
-  vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-    const stat = lstat(...args);
-    if (
-      stat &&
-      (String(args[0]) === parent || String(args[0]).startsWith(`${parent}${path.sep}`))
-    ) {
-      Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
-    }
-    return stat;
-  });
-  if (process.geteuid) {
-    vi.spyOn(process, "geteuid").mockReturnValue(0);
-  }
-  const runtime = fs.realpathSync(process.execPath);
-  const descriptor: ImmutableInstallDescriptor = {
-    version: 2,
-    activationEnabled: true,
-    kind: "immutable",
-    root,
-    rootIdentity: identity(root),
-    releasesIdentity: identity(path.join(root, "releases")),
-    current: {
-      sha: previousSha,
-      path: currentPath,
-      identity: identity(currentPath),
-      pointerIdentity: identity(path.join(root, "current")),
-      buildDigest: "1".repeat(64),
-    },
-    service: {
-      unit: "immutable-fixture.service",
-      scope: "system",
-      account: "synthetic",
-      stateDir: path.join(parent, "state"),
-      configPath: path.join(parent, "state", "openclaw.json"),
-      profile: null,
-    },
-    runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
-    source: "https://github.com/openclaw/openclaw.git",
-  };
   const candidate: ImmutablePreparedGeneration = {
     sha: candidateSha,
     path: candidatePath,
@@ -152,27 +149,33 @@ export function createImmutableActivationLayout(parent: string) {
     candidate,
     () => {},
   );
+  return { root, descriptor, candidate, protection: syntheticImmutableProtection(descriptor) };
+}
+
+export function syntheticImmutableProtection(
+  descriptor: ImmutableInstallDescriptor,
+  options = { key: "synthetic-state", hash: "3".repeat(64), policyFingerprint: "4".repeat(64) },
+): ImmutableProtectionSnapshot {
   const protectedFile = { dev: "1", ino: "2", mode: 0o600, nlink: 1 as const, uid: 0, gid: 0 };
   const statePath = path.join(descriptor.service.stateDir, "openclaw.db");
-  const protection: ImmutableProtectionSnapshot = {
+  return {
     capturedAtMs: 1,
     auditBoundary: null,
     state: {
       path: statePath,
       identity: protectedFile,
       pathProof: { targetPath: statePath, entries: [] },
-      key: "synthetic-state",
+      key: options.key,
     },
     config: [
       {
         path: descriptor.service.configPath,
         identity: protectedFile,
         pathProof: { targetPath: descriptor.service.configPath, entries: [] },
-        hash: "3".repeat(64),
+        hash: options.hash,
         fingerprint: {},
-        policyFingerprint: "4".repeat(64),
+        policyFingerprint: options.policyFingerprint,
       },
     ],
   };
-  return { root, descriptor, candidate, protection };
 }

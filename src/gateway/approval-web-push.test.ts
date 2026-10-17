@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
+import { encodePngRgba } from "../media/png-encode.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.types.js";
 
@@ -197,6 +198,45 @@ describe("approval Web Push delivery", () => {
       },
     });
   });
+
+  it.each(["identified", "private"] as const)(
+    "preserves %s avatar privacy on approval request and replacement",
+    async (detailLevel) => {
+      const subscription = boundSubscription("avatar-device", null);
+      subscription.devicePreferences.detailLevel = detailLevel;
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
+      listDevicePairingMock.mockReturnValue({
+        paired: [pairedOperator("avatar-device", ["operator.approvals", "operator.read"])],
+      });
+      preparedWebPushSendMock.mockResolvedValue([
+        { ok: true, subscriptionId: subscription.subscriptionId, statusCode: 201 },
+      ]);
+      const avatar = `data:image/png;base64,${encodePngRgba(Buffer.from([255, 150, 0, 255]), 1, 1).toString("base64")}`;
+      const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+      const delivery = createApprovalWebPushDelivery({
+        getRuntimeConfig: () => ({ agents: { entries: { research: { identity: { avatar } } } } }),
+      });
+      const now = Date.now();
+      const record: ExecApprovalRecord = {
+        id: "exec:avatar",
+        request: { command: "echo avatar", agentId: "research" },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      };
+
+      expect(await delivery.handleRequested(record)).toBe(true);
+      await delivery.handleResolved(record);
+
+      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2);
+      for (const [call] of preparedWebPushSendMock.mock.calls) {
+        if (detailLevel === "identified") {
+          expect(call.payload.icon).toMatch(/^data:image\/png;base64,/);
+        } else {
+          expect(call.payload).not.toHaveProperty("icon");
+        }
+      }
+    },
+  );
 
   it.each([true, false])(
     "sends only targets with committed receipts after bindings return (receipt committed: %s)",

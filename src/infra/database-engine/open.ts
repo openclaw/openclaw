@@ -132,52 +132,55 @@ export function openEngineStore(ref: {
     );
   }
   ref.prepareAnchor();
+  const readOrCreateAnchor = () => {
+    const inspection = ref.inspectSqlite();
+    if (inspection.hasExistingData) {
+      throw new Error(
+        `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
+      );
+    }
+    if (!inspection.hasEngineAnchor && ref.existingOnly) {
+      throw new Error(
+        "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
+      );
+    }
+    if (!inspection.hasEngineAnchor) {
+      anchor.exec(
+        "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
+      );
+    }
+    const rows = readEngineAnchor(anchor, "identity", true) ?? [];
+    if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
+      throw new Error(
+        "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
+      );
+    }
+    const row = rows[0];
+    if (row) {
+      if (
+        typeof row.store_id !== "string" ||
+        row.engine !== "postgres" ||
+        typeof row.schema !== "string"
+      ) {
+        throw new Error("Invalid PostgreSQL anchor identity. Restore a matching backup.");
+      }
+      return { storeId: row.store_id, namespace: row.schema };
+    }
+    const storeId = randomUUID();
+    const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+    anchor
+      .prepare(
+        "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
+      )
+      .run(storeId, namespace);
+    return { storeId, namespace };
+  };
   const identity =
     known?.engine === "postgres"
       ? known
-      : runSqliteImmediateTransactionSync(anchor, () => {
-          const inspection = ref.inspectSqlite();
-          if (inspection.hasExistingData) {
-            throw new Error(
-              `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
-            );
-          }
-          if (!inspection.hasEngineAnchor && ref.existingOnly) {
-            throw new Error(
-              "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
-            );
-          }
-          if (!inspection.hasEngineAnchor) {
-            anchor.exec(
-              "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
-            );
-          }
-          const rows = readEngineAnchor(anchor, "identity", true) ?? [];
-          if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
-            throw new Error(
-              "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
-            );
-          }
-          const row = rows[0];
-          if (row) {
-            if (
-              typeof row.store_id !== "string" ||
-              row.engine !== "postgres" ||
-              typeof row.schema !== "string"
-            ) {
-              throw new Error("Invalid PostgreSQL anchor identity. Restore a matching backup.");
-            }
-            return { storeId: row.store_id, namespace: row.schema };
-          }
-          const storeId = randomUUID();
-          const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
-          anchor
-            .prepare(
-              "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
-            )
-            .run(storeId, namespace);
-          return { storeId, namespace };
-        });
+      : ref.existingOnly
+        ? readOrCreateAnchor()
+        : runSqliteImmediateTransactionSync(anchor, readOrCreateAnchor);
   const store: AdmittedStore = { ...ref, input: ref.input, ...identity };
   const adapter = databaseEngineAdapters.postgres;
   const db = adapter.openConnection(store);

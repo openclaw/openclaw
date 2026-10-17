@@ -34,10 +34,8 @@ function registerPairedNode(): { registry: NodeRegistry; frames: string[] } {
       usesSharedGatewayAuth: false,
       socket: {
         readyState: WebSocket.OPEN,
-        send(frame: unknown) {
-          if (typeof frame === "string") {
-            frames.push(frame);
-          }
+        send(frame: string | Buffer) {
+          frames.push(frame.toString());
         },
       },
       connect: {

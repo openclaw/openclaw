@@ -128,6 +128,7 @@ export function createTabList(
 
   return {
     active,
+    element: (value: string | null) => (value === null ? undefined : nodes.get(value)),
     tabIndex: (value: string) => (focus().value === value ? 0 : -1),
     ref(value: string) {
       onCleanup(() => nodes.delete(value));
