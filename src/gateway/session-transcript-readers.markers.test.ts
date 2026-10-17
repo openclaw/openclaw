@@ -66,6 +66,10 @@ function messageIds(messages: unknown[]) {
   return messages.map((entry) => (entry as { __openclaw: { id: string } })["__openclaw"].id);
 }
 
+function openClawMeta(entry: unknown): Record<string, unknown> {
+  return (entry as { __openclaw: Record<string, unknown> })["__openclaw"];
+}
+
 function historicalWindowIds(
   events: Array<{ id: string; type?: string }>,
   targetId: string,
@@ -142,6 +146,34 @@ describe("session transcript reader marker projection", () => {
         expect.objectContaining({ __openclaw: expect.objectContaining({ id: "after" }) }),
       ]),
     );
+  });
+
+  test("returns the stored compaction summary only to exact-message reads", async () => {
+    const scope = await writeTranscript("compaction-summary", [
+      message("before", "Original conversation"),
+      compaction("summary", "before"),
+      message("after", "Continued conversation", "assistant"),
+    ]);
+    const paged = await readSessionMessagesAsync(scope, {
+      mode: "full",
+      reason: "Compaction summary stays out of history pages",
+    });
+    const defaultRead = await readSessionMessageByIdAsync(scope, "summary");
+    const requestedRead = await readSessionMessageByIdAsync(scope, "summary", {
+      includeCompactionSummary: true,
+    });
+
+    expect(openClawMeta(requestedRead.message)).toMatchObject({
+      kind: "compaction",
+      id: "summary",
+      tokensBefore: 100,
+      tokensAfter: 25,
+      summary: "summary summary",
+    });
+    expect(openClawMeta(defaultRead.message)).not.toHaveProperty("summary");
+    for (const entry of paged) {
+      expect(openClawMeta(entry)).not.toHaveProperty("summary");
+    }
   });
 
   test("reads a bounded ended window without successor turns after same-ID reset", async () => {

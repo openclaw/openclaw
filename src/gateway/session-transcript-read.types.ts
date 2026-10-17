@@ -39,7 +39,11 @@ export type ReadSessionMessagesAsyncOptions =
 export type SessionTranscriptMessageByIdOptions = (
   | { currentOnly?: false; maxBytes?: never }
   | { currentOnly: true; maxBytes: number }
-) & { historyVisibility?: { sessionStartedAt?: number; requireVisible?: boolean } };
+) & {
+  historyVisibility?: { sessionStartedAt?: number; requireVisible?: boolean };
+  /** Exact-message reads may carry the stored compaction summary; history pages must not. */
+  includeCompactionSummary?: boolean;
+};
 
 export type ReadRecentSessionMessagesResult = {
   olderOffset?: number;

@@ -65,6 +65,7 @@ export async function readChatHistoryMessageById(input: ChatHistoryMessageParams
     const result = await readers.readSessionMessageByIdAsync(scope, captured.messageId, {
       allowResetArchiveFallback: true,
       historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
+      includeCompactionSummary: captured.includeCompactionSummary === true,
     });
     memory?.assertCurrent();
     return result;

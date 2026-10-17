@@ -258,11 +258,14 @@ async function readCatalogPageFromEntry(
       offset: snapshot.totalMessages - before,
       maxMessages: Math.min(before, limit + 1),
     });
-    const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
-      maxChars: MAX_CATALOG_TEXT_CHARS,
-      // Catalog assistant items contain text/model facts, not forwarded sender labels.
-      resolveCronJobName: () => undefined,
-    });
+    const projected = projectChatDisplayMessages(
+      page.events.map((event) => sqliteMessageEventWithSeq(event)),
+      {
+        maxChars: MAX_CATALOG_TEXT_CHARS,
+        // Catalog assistant items contain text/model facts, not forwarded sender labels.
+        resolveCronJobName: () => undefined,
+      },
+    );
     const identities = projected.flatMap((message) => {
       const metadata = asOptionalRecord(message["__openclaw"]);
       const identity =

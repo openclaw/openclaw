@@ -472,6 +472,7 @@ export async function readChatHistoryMessageFromReaders(
   const options = {
     allowResetArchiveFallback: true,
     historyVisibility: { sessionStartedAt: params.entry?.sessionStartedAt },
+    includeCompactionSummary: params.includeCompactionSummary === true,
   };
   return readCanonicalOrImportedMessage(
     readers,

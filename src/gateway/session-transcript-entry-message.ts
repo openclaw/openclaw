@@ -27,10 +27,20 @@ export function readTranscriptMessageIdempotencyKey(message: unknown): string | 
   return readNonBlankString(asOptionalRecord(message)?.idempotencyKey);
 }
 
+/** Stored compaction summaries are written capped; the exact-message read stays bounded too. */
+const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
+
+/** A summary that exceeds the stored cap is withheld instead of returning unbounded text. */
+function readBoundedCompactionSummary(record: Record<string, unknown>): string | undefined {
+  const summary = readNonBlankString(record.summary);
+  return summary && summary.length <= MAX_COMPACTION_SUMMARY_CHARS ? summary : undefined;
+}
+
 export function sqliteMessageEventWithSeq(
   entry: Pick<SessionTranscriptMessageEvent, "event" | "seq" | "displayPosition">,
+  options?: { includeCompactionSummary?: boolean },
 ): unknown {
-  return projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
+  return projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition, options);
 }
 
 /** Project one stored transcript entry onto the client-visible chat history shape. */
@@ -38,6 +48,7 @@ export function projectTranscriptEntryMessage(
   entry: unknown,
   seq: number,
   transcriptPosition?: TranscriptDisplayPosition,
+  options?: { includeCompactionSummary?: boolean },
 ): unknown {
   if (!isVisibleTranscriptRecord(entry)) {
     return null;
@@ -85,6 +96,12 @@ export function projectTranscriptEntryMessage(
   const kind = record.type;
   const compactionIdentity =
     kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
+  // The summary is only reachable through an exact-message read: history pages stay
+  // unchanged, and a page-level compaction marker never carries the retained text.
+  const compactionSummary =
+    kind === "compaction" && options?.includeCompactionSummary
+      ? readBoundedCompactionSummary(record)
+      : undefined;
   return {
     role: "system",
     content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],
@@ -106,6 +123,7 @@ export function projectTranscriptEntryMessage(
       Number.isFinite(record.tokensAfter)
         ? { tokensAfter: record.tokensAfter }
         : {}),
+      ...(compactionSummary ? { summary: compactionSummary } : {}),
       transcriptPosition,
       seq,
     },

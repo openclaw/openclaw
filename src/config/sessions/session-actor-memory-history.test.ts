@@ -35,6 +35,12 @@ const messageIds = (messages: readonly unknown[]) =>
   messages.flatMap((item) =>
     isRecord(item) && isRecord(item["__openclaw"]) ? [item["__openclaw"].id] : [],
   );
+const openClawMeta = (entry: unknown) => {
+  expect(isRecord(entry)).toBe(true);
+  const meta = (entry as Record<string, unknown>)["__openclaw"];
+  expect(isRecord(meta)).toBe(true);
+  return meta as Record<string, unknown>;
+};
 
 async function fixture(events: unknown[], entry: Partial<InternalSessionEntry> = {}) {
   const owner = createMemorySessionActorOwner({ agentId: "main", path: storePath });
@@ -177,6 +183,49 @@ describe("memory actor history", () => {
     });
     expect(after.windowReset).toBeUndefined();
     expect(after.messages).toContainEqual(expect.objectContaining({ content: "Current" }));
+  });
+
+  it("returns the stored compaction summary only to the exact-message read", async () => {
+    const { storage } = await fixture([
+      message("before", null, "user", "Original conversation"),
+      {
+        type: "compaction",
+        id: "summary",
+        parentId: "before",
+        timestamp: "2026-10-11T00:00:02.000Z",
+        summary: "Retained compaction summary",
+        firstKeptEntryId: "before",
+        tokensBefore: 100,
+        tokensAfter: 25,
+      },
+    ]);
+    const requested = await storage.read(
+      {
+        type: "session.history.by-id",
+        input: { messageId: "summary", options: { includeCompactionSummary: true } },
+      },
+      authority,
+    );
+    expect(openClawMeta(requested.message)).toMatchObject({
+      kind: "compaction",
+      id: "summary",
+      tokensBefore: 100,
+      tokensAfter: 25,
+      summary: "Retained compaction summary",
+    });
+    const defaultRead = await storage.read(
+      { type: "session.history.by-id", input: { messageId: "summary" } },
+      authority,
+    );
+    expect(openClawMeta(defaultRead.message)).not.toHaveProperty("summary");
+    const page = await storage.read(
+      { type: "session.history.recent", input: { options: { maxMessages: 10 } } },
+      authority,
+    );
+    expect(messageIds(page.messages)).toEqual(["before", "summary"]);
+    for (const entry of page.messages) {
+      expect(openClawMeta(entry)).not.toHaveProperty("summary");
+    }
   });
 
   it("sizes pages before copying and makes progress past oversized history", async () => {

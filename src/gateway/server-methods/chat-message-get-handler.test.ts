@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -280,6 +280,141 @@ it("resolves one indexed message per worker request while hiding stale announce 
     } finally {
       read.mockRestore();
     }
+  });
+});
+
+describe("compaction summary inspection", () => {
+  const summary = "Goal: keep the release plan for beta.4.";
+  const markerTimestamp = "2026-09-30T00:00:00.000Z";
+
+  async function withCompactionScope(
+    run: (
+      scope: { agentId: string; sessionKey: string; sessionId: string },
+      readMarker: (messageId: string) => Promise<Mock<RespondFn>>,
+      context: Awaited<ReturnType<typeof createHistoryReadContext>>,
+    ) => Promise<void>,
+    options: { summary?: string } = {},
+  ) {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:compaction-summary-get",
+        sessionId: "compaction-summary-get",
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        sessionStartedAt: 2000,
+      });
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "question",
+          parentId: null,
+          message: { role: "user", content: "Original question" },
+        },
+        {
+          type: "compaction" as const,
+          id: "retained-summary",
+          parentId: "question",
+          timestamp: markerTimestamp,
+          summary: options.summary ?? summary,
+          firstKeptEntryId: "question",
+          tokensBefore: 400,
+          tokensAfter: 120,
+        },
+        {
+          type: "message",
+          id: "answer",
+          parentId: "retained-summary",
+          message: { role: "assistant", content: "Continued" },
+        },
+      ]);
+      const context = await createHistoryReadContext();
+      const readMarker = async (messageId: string) => {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          chatMessageGetHandlers["chat.message.get"],
+          "message handler",
+        )({
+          params: { sessionKey: scope.sessionKey, messageId },
+          context,
+          client: null,
+          req: { type: "req", id: `compaction-summary-${messageId}`, method: "chat.message.get" },
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledOnce();
+        return respond;
+      };
+      await run(scope, readMarker, context);
+    });
+  }
+
+  function markerMeta(respond: Mock<RespondFn>): Record<string, unknown> | undefined {
+    const payload = asOptionalRecord(respond.mock.calls[0]?.[1]);
+    return asOptionalRecord(asOptionalRecord(payload?.["message"])?.["__openclaw"]);
+  }
+
+  it("returns the stored summary with a visible compaction marker", async () => {
+    await withCompactionScope(async (_scope, readMarker, context) => {
+      const respond = await readMarker("retained-summary");
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        ok: true,
+        message: {
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          __openclaw: {
+            kind: "compaction",
+            id: "retained-summary",
+            tokensBefore: 400,
+            tokensAfter: 120,
+            summary,
+          },
+        },
+      });
+      // The same session read as a history page must stay marker-only.
+      const pageRespond = vi.fn<RespondFn>();
+      await expectDefined(
+        chatHistoryHandlers["chat.history"],
+        "history handler",
+      )({
+        params: { sessionKey: _scope.sessionKey },
+        context,
+        client: null,
+        req: { type: "req", id: "compaction-summary-page", method: "chat.history" },
+        isWebchatConnect: () => false,
+        respond: pageRespond,
+      });
+      expect(pageRespond.mock.calls[0]?.[0]).toBe(true);
+      expect(JSON.stringify(pageRespond.mock.calls)).toContain("retained-summary");
+      expect(JSON.stringify(pageRespond.mock.calls)).not.toContain(summary);
+    });
+  });
+
+  it.each([16_000, 16_001])(
+    "bounds a %s-character stored summary before the transport",
+    async (length) => {
+      await withCompactionScope(
+        async (_scope, readMarker) => {
+          const respond = await readMarker("retained-summary");
+          const meta = markerMeta(respond);
+          expect(meta).toMatchObject({ kind: "compaction", id: "retained-summary" });
+          expect(meta?.["summary"]).toBe(length === 16_000 ? "x".repeat(16_000) : undefined);
+        },
+        { summary: "x".repeat(length) },
+      );
+    },
+  );
+
+  it("withholds the summary when the marker cannot be read", async () => {
+    await withCompactionScope(async (_scope, readMarker) => {
+      const respond = await readMarker("unknown-marker");
+      expect(respond.mock.calls[0]?.[1]).toEqual({ ok: false, unavailableReason: "not_found" });
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(summary);
+    });
   });
 });
 
