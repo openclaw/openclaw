@@ -203,37 +203,39 @@ describe("full release child evidence producer", () => {
     expect(upload?.with?.overwrite).toBe(false);
   });
 
-  it.each(["success", "failure"])(
-    "seals %s workload facts independently of the parent",
-    (conclusion) => {
-      const data = fixture();
-      data.jobs[1]!.conclusion = conclusion;
-      const { evidence, output } = sealed(data);
-      expect(evidence).toMatchObject({
-        schema: "openclaw.full-release-child-evidence/v1",
-        sourceParentRunId: "77",
-        sourceParentAttempt: 1,
-        runId: "101",
-        plannedRunAttempt: 1,
-        effectiveRunAttempt: 1,
-        role: "normalCi",
-        targetSha: TARGET,
-        workflowSha: TARGET,
-        workloadConclusion: conclusion,
-        inputs: { release_scope: "full", target_ref: TARGET },
-        publisher: { jobId: "3", jobName: PUBLISHER },
-      });
-      expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
-        "node tests",
-        "resolve target",
-      ]);
-      const { sha256, ...payload } = evidence;
-      expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
-      expect(readFileSync(output, "utf8")).toBe(
-        `artifact_name=full-release-child-evidence-${TARGET}-normalCi-101-1\n`,
-      );
-    },
-  );
+  it.each([
+    ["normalCi", "success"],
+    ["normalCi", "failure"],
+    ["pluginPrereleaseIndependent", "success"],
+    ["releaseChecksCandidate", "success"],
+  ])("seals %s %s workload facts independently of the parent", (role, conclusion) => {
+    const data = fixture(role);
+    data.jobs[1]!.conclusion = conclusion;
+    const { evidence, output } = sealed(data);
+    expect(evidence).toMatchObject({
+      schema: "openclaw.full-release-child-evidence/v1",
+      sourceParentRunId: "77",
+      sourceParentAttempt: 1,
+      runId: "101",
+      plannedRunAttempt: 1,
+      effectiveRunAttempt: 1,
+      role,
+      targetSha: TARGET,
+      workflowSha: TARGET,
+      workloadConclusion: conclusion,
+      inputs: { release_scope: "full", target_ref: TARGET },
+      publisher: { jobId: "3", jobName: PUBLISHER },
+    });
+    expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
+      "node tests",
+      "resolve target",
+    ]);
+    const { sha256, ...payload } = evidence;
+    expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
+    expect(readFileSync(output, "utf8")).toBe(
+      `artifact_name=full-release-child-evidence-${TARGET}-${role}-101-1\n`,
+    );
+  });
 
   it("seals a complete paginated attempt without a monolithic metadata response", () => {
     const data = fixture();
@@ -241,21 +243,9 @@ describe("full release child evidence producer", () => {
       data.jobs.push({ ...data.jobs[1]!, id: index + 10, name: `workload ${index}` });
     }
     const { evidence } = sealed(data);
-    expect(evidence.workloadConclusion).toBe("success");
+    expect(evidence).toMatchObject({ workloadConclusion: "success", observedRunAttempts: [1] });
     expect(evidence.jobs).toHaveLength(102);
-    expect(evidence.observedRunAttempts).toEqual([1]);
   });
-
-  it.each(["pluginPrereleaseIndependent", "releaseChecksCandidate"])(
-    "seals %s evidence at the exact target SHA",
-    (role) => {
-      expect(sealed(fixture(role)).evidence).toMatchObject({
-        role,
-        targetSha: TARGET,
-        workflowSha: TARGET,
-      });
-    },
-  );
 
   it.each([
     { runAttempt: 2, retryWorkload: true, observedRunAttempts: [1, 2], accepted: 2 },

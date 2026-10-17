@@ -22,6 +22,7 @@ export const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
 export const SHA = "a".repeat(40);
 export const TARGET_SHA = "b".repeat(40);
 export const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
+const WORKFLOW = { workflowRef: "release-ci/tooling", workflowSha: SHA };
 
 export function collectorEnv(overrides: NodeJS.ProcessEnv) {
   return {
@@ -94,9 +95,8 @@ export function generatedManifest(planArtifact: Record<string, any>): Record<str
     version: 3,
     workflowFullRef: "refs/heads/release-ci/tooling",
     workflowName: "Full Release Validation",
-    workflowRef: "release-ci/tooling",
+    ...WORKFLOW,
     workflowRefType: "branch",
-    workflowSha: SHA,
   };
 }
 
@@ -117,8 +117,7 @@ export function child(key: string, overrides: Record<string, unknown> = {}) {
     status: "in_progress",
     url: "https://example.invalid/runs/101",
     workflow: "ci.yml",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...overrides,
   };
 }
@@ -159,8 +158,7 @@ export function plan(overrides: Record<string, unknown> = {}) {
     candidateBindingResult: "success",
     rerunGroup: "all",
     resolveTargetResult: "success",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...overrides,
   });
 }
@@ -179,8 +177,7 @@ export function executionPlan(
     parentRunId: "77",
     repository: "openclaw/openclaw",
     targetSha: TARGET_SHA,
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...(candidateRequest === undefined ? {} : { candidateRequest }),
     ...(expectedOverrides as Record<string, unknown> | undefined),
   };

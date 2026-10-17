@@ -10,28 +10,21 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
 type Workflow = {
-  jobs: Record<
-    string,
-    { if?: string; steps: Array<Record<string, unknown>>; "timeout-minutes"?: number }
-  >;
+  jobs: Record<string, { if?: string; steps: Array<Record<string, unknown>> }>;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 const workflow = parse(source) as Workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function step(job: string, name: string, owner = workflow) {
-  const match = owner.jobs[job]?.steps.find((entry) => entry.name === name);
-  if (!match) {
-    throw new Error(`missing workflow step: ${job}/${name}`);
-  }
+function step(job: string, name: string) {
+  const match = workflow.jobs[job]?.steps.find((entry) => entry.name === name);
+  assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
 
 function sparsePaths(checkout: Record<string, unknown>) {
   const value = checkout["sparse-checkout"];
-  if (typeof value !== "string") {
-    throw new TypeError("sparse-checkout must be a string");
-  }
+  assert(typeof value === "string", "sparse-checkout must be a string");
   return value
     .split("\n")
     .map((path) => path.trim())
@@ -39,13 +32,9 @@ function sparsePaths(checkout: Record<string, unknown>) {
 }
 
 function checkoutPath(checkout: Record<string, unknown>) {
-  if (checkout.path === undefined) {
-    return "";
-  }
-  if (typeof checkout.path !== "string") {
-    throw new TypeError("checkout path must be a string");
-  }
-  return checkout.path;
+  const path = checkout.path ?? "";
+  assert(typeof path === "string", "checkout path must be a string");
+  return path;
 }
 
 function runNode(args: string[], cwd: string) {
@@ -314,21 +303,13 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       const root = tempDirs.make("openclaw-release-locales-");
       const diagnosticPath = join(root, "diagnostics.json");
       const summaryPath = join(root, "summary.md");
+      const jobs = [
+        { name: "native-i18n", conclusion: "success" },
+        { name: "control-ui-i18n", conclusion },
+      ];
       const diagnostic = JSON.stringify({
         state: "blocked_complete",
-        children:
-          conclusion === "missing"
-            ? {}
-            : {
-                normalCi: {
-                  timing: {
-                    jobs: [
-                      { name: "native-i18n", conclusion: "success" },
-                      { name: "control-ui-i18n", conclusion },
-                    ],
-                  },
-                },
-              },
+        children: conclusion === "missing" ? {} : { normalCi: { timing: { jobs } } },
       });
       writeFileSync(diagnosticPath, diagnostic);
       const output = execFileSync("bash", ["-e", "-c", String(summaryStep.run)], {

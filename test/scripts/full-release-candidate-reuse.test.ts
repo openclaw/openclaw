@@ -88,6 +88,7 @@ function workflowJobs(
 function artifactMetadata(
   archive: Buffer,
   overrides: Record<string, unknown> = {},
+  runOverrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const manifest = fullReleaseCandidateManifestFixture();
   return {
@@ -103,34 +104,17 @@ function artifactMetadata(
       head_sha: manifest.request.toolingSha,
       id: 77,
       repository_id: 1,
+      ...runOverrides,
     },
     ...overrides,
   };
 }
 
 type CandidateManifestFixture = ReturnType<typeof fullReleaseCandidateManifestFixture>;
-type CandidateArtifactFixture = CandidateManifestFixture["package"]["artifact"];
 type CandidateConstituentSource = Pick<
   CandidateManifestFixture,
   "package" | "prepublishPluginRegistry" | "producer" | "sharedImage"
 >;
-
-function constituentArtifactMetadata(
-  artifact: CandidateArtifactFixture,
-  workflowSha: string,
-): Record<string, unknown> {
-  return {
-    digest: `sha256:${artifact.digest}`,
-    expired: false,
-    expires_at: artifact.expiresAt,
-    id: Number(artifact.id),
-    name: artifact.name,
-    workflow_run: {
-      head_sha: workflowSha,
-      id: Number(artifact.runId),
-    },
-  };
-}
 
 function constituentArtifactReader(manifest: CandidateConstituentSource) {
   const artifacts = [
@@ -143,7 +127,14 @@ function constituentArtifactReader(manifest: CandidateConstituentSource) {
     if (!artifact) {
       throw new Error("GitHub Actions artifact metadata returned HTTP 404.");
     }
-    return constituentArtifactMetadata(artifact, manifest.producer.workflowSha);
+    return {
+      digest: `sha256:${artifact.digest}`,
+      expired: false,
+      expires_at: artifact.expiresAt,
+      id: Number(artifact.id),
+      name: artifact.name,
+      workflow_run: { head_sha: manifest.producer.workflowSha, id: Number(artifact.runId) },
+    };
   };
 }
 
@@ -156,27 +147,40 @@ async function fixture(now = NOW) {
   manifest.prepublishPluginRegistry.artifact.expiresAt = expiresAt;
   manifest.sharedImage.artifact.expiresAt = expiresAt;
   const archive = await archiveWithManifest(manifest);
+  const metadata = artifactMetadata(archive, {
+    created_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    expires_at: expiresAt,
+  });
+  const select = (
+    overrides: Partial<Parameters<typeof selectTrustedFullReleaseCandidate>[0]> = {},
+  ) =>
+    selectTrustedFullReleaseCandidate({
+      artifacts: [metadata],
+      now: NOW,
+      request: manifest.request,
+      readWorkflowRun: async (runId: number) => workflowRun(runId),
+      readWorkflowJobs: async () => workflowJobs(manifest),
+      ...overrides,
+    });
   return {
     archive,
     manifest,
-    metadata: artifactMetadata(archive, {
-      created_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
-      expires_at: expiresAt,
-    }),
+    metadata,
+    select,
   };
 }
 
 async function loadingFixture(
-  data?: Awaited<ReturnType<typeof fixture>>,
+  data?: Pick<Awaited<ReturnType<typeof fixture>>, "archive" | "manifest" | "metadata">,
   runOverrides: Record<string, unknown> = {},
 ) {
   const { archive, manifest, metadata } = data ?? (await fixture());
   const selected = await selectTrustedFullReleaseCandidate({
     artifacts: [metadata],
     now: NOW,
+    request: manifest.request,
     readWorkflowRun: async () => workflowRun(77, runOverrides),
     readWorkflowJobs: async () => workflowJobs(manifest),
-    request: manifest.request,
   });
   const options = {
     downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
@@ -257,35 +261,18 @@ async function verificationFixture() {
 
 describe("trusted full release candidate selection", () => {
   it("treats malformed metadata and workflow provenance as misses before selection", async () => {
-    const { archive, manifest, metadata } = await fixture();
+    const { archive, metadata, select } = await fixture();
     let runReads = 0;
-    const selected = await selectTrustedFullReleaseCandidate({
+    const selected = await select({
       artifacts: [
         { ...metadata, name: "wrong" },
         { ...metadata, digest: "" },
         { ...metadata, expired: true },
         { ...metadata, expires_at: "2026-08-28T11:59:59Z" },
         { ...metadata, expires_at: "2026-08-29T01:00:00Z" },
-        {
-          ...artifactMetadata(archive, { id: 302 }),
-          workflow_run: {
-            head_repository_id: 2,
-            head_sha: manifest.request.toolingSha,
-            id: 78,
-            repository_id: 1,
-          },
-        },
-        {
-          ...artifactMetadata(archive, { id: 303 }),
-          workflow_run: {
-            head_repository_id: 1,
-            head_sha: "9".repeat(40),
-            id: 79,
-            repository_id: 1,
-          },
-        },
+        artifactMetadata(archive, { id: 302 }, { head_repository_id: 2, id: 78 }),
+        artifactMetadata(archive, { id: 303 }, { head_sha: "9".repeat(40), id: 79 }),
       ],
-      now: NOW,
       readWorkflowRun: async () => {
         runReads += 1;
         return workflowRun();
@@ -293,66 +280,52 @@ describe("trusted full release candidate selection", () => {
       readWorkflowJobs: async () => {
         throw new Error("workflow jobs must not be read");
       },
-      request: manifest.request,
     });
     expect(selected).toBeNull();
     expect(runReads).toBe(0);
   });
 
   it("orders candidates by newest creation time then descending numeric artifact ID", async () => {
-    const { archive, manifest } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
+    const { archive, select } = await fixture();
+    const selected = await select({
       artifacts: [
         artifactMetadata(archive, { id: 9 }),
         artifactMetadata(archive, { id: 10 }),
         artifactMetadata(archive, { created_at: "2026-08-28T09:00:00Z", id: 99 }),
       ],
-      now: NOW,
-      readWorkflowRun: async (runId) => workflowRun(runId),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
     });
     expect(selected?.artifact.id).toBe(10);
   });
 
   it("stops provenance reads when the discovery deadline is exhausted", async () => {
-    const { manifest, metadata } = await fixture();
+    const { select } = await fixture();
     let reads = 0;
     await expect(
-      selectTrustedFullReleaseCandidate({
-        artifacts: [metadata],
+      select({
         deadlineMs: Date.now() - 1,
-        now: NOW,
         readWorkflowRun: async () => {
           reads += 1;
           return workflowRun();
         },
-        readWorkflowJobs: async () => workflowJobs(manifest),
-        request: manifest.request,
       }),
     ).rejects.toThrow("candidate discovery exceeded its time budget");
     expect(reads).toBe(0);
   });
 
   it("skips a trust miss but never falls back after selecting malformed evidence", async () => {
-    const { manifest, metadata } = await fixture();
+    const { manifest, metadata, select } = await fixture();
     const malformedArchive = await archiveWithManifest("{");
-    const newest = artifactMetadata(malformedArchive, {
-      created_at: "2026-08-28T11:00:00Z",
-      id: 302,
-      workflow_run: {
-        head_repository_id: 1,
-        head_sha: manifest.request.toolingSha,
-        id: 78,
-        repository_id: 1,
+    const newest = artifactMetadata(
+      malformedArchive,
+      {
+        created_at: "2026-08-28T11:00:00Z",
+        id: 302,
       },
-    });
-    const selected = await selectTrustedFullReleaseCandidate({
+      { id: 78 },
+    );
+    const selected = await select({
       artifacts: [metadata, newest],
-      now: NOW,
-      readWorkflowRun: async (runId) => workflowRun(runId),
       readWorkflowJobs: async (runId) => workflowJobs(manifest, { runId }),
-      request: manifest.request,
     });
     const downloads: number[] = [];
     await expect(
@@ -624,33 +597,30 @@ globalThis.fetch = async (url) => {
   });
 });
 
-describe("candidate archive deadline", () => {
-  it("does not start artifact metadata reads after the absolute deadline", async () => {
-    let reads = 0;
-    await expect(
-      downloadExactActionsArtifactArchive({
-        deadlineMs: Date.now() - 1,
-        expected: {
-          artifactDigest: `sha256:${"a".repeat(64)}`,
-          artifactExpiresAt: EXPIRES_AT,
-          artifactId: 301,
-          artifactName: `full-release-candidate-v2-${"b".repeat(64)}`,
-          artifactSizeBytes: 1,
-          repository: REPOSITORY,
-          runId: 77,
-          workflowSha: "b".repeat(40),
-        },
-        fetchImpl: async () => {
-          reads += 1;
-          return new Response();
-        },
-        token: "test-token",
-      }),
-    ).rejects.toThrow("deadline exceeded");
-    expect(reads).toBe(0);
-  });
+it("does not start artifact metadata reads after the absolute deadline", async () => {
+  let reads = 0;
+  await expect(
+    downloadExactActionsArtifactArchive({
+      deadlineMs: Date.now() - 1,
+      expected: {
+        artifactDigest: `sha256:${"a".repeat(64)}`,
+        artifactExpiresAt: EXPIRES_AT,
+        artifactId: 301,
+        artifactName: `full-release-candidate-v2-${"b".repeat(64)}`,
+        artifactSizeBytes: 1,
+        repository: REPOSITORY,
+        runId: 77,
+        workflowSha: "b".repeat(40),
+      },
+      fetchImpl: async () => {
+        reads += 1;
+        return new Response();
+      },
+      token: "test-token",
+    }),
+  ).rejects.toThrow("deadline exceeded");
+  expect(reads).toBe(0);
 });
-
 describe("full release candidate loading", () => {
   it.each([WORKFLOW_PATH, ".github/workflows/full-release-artifacts.yml"])(
     "binds exact candidate artifacts from %s",
@@ -718,40 +688,24 @@ describe("full release candidate loading", () => {
   it("rejects unavailable, expired, or changed constituent artifacts before reuse", async () => {
     const { manifest, options } = await loadingFixture();
     const packageId = manifest.package.artifact.id;
-    const cases = [
-      {
-        expected: "package artifact is unavailable",
-        readArtifact: async (artifactId: string) => {
-          if (artifactId === packageId) {
-            throw new Error("GitHub Actions artifact metadata returned HTTP 404.");
-          }
-          return constituentArtifactReader(manifest)(artifactId);
-        },
-      },
-      {
-        expected: "package artifact is expired or near expiry",
-        readArtifact: async (artifactId: string) => {
-          const value = await constituentArtifactReader(manifest)(artifactId);
-          return artifactId === packageId ? { ...value, expired: true } : value;
-        },
-      },
-      {
-        expected: "package artifact identity changed",
-        readArtifact: async (artifactId: string) => {
-          const value = await constituentArtifactReader(manifest)(artifactId);
-          return artifactId === packageId
-            ? { ...value, digest: `sha256:${"9".repeat(64)}` }
-            : value;
-        },
-      },
+    const cases: Array<[string, Record<string, unknown> | null]> = [
+      ["package artifact is unavailable", null],
+      ["package artifact is expired or near expiry", { expired: true }],
+      ["package artifact identity changed", { digest: `sha256:${"9".repeat(64)}` }],
     ];
-    for (const testCase of cases) {
+    for (const [expected, overrides] of cases) {
       await expect(
         loadSelectedFullReleaseCandidate({
           ...options,
-          readArtifact: testCase.readArtifact,
+          readArtifact: async (artifactId: string) => {
+            if (artifactId === packageId && overrides === null) {
+              throw new Error("GitHub Actions artifact metadata returned HTTP 404.");
+            }
+            const value = await constituentArtifactReader(manifest)(artifactId);
+            return artifactId === packageId ? { ...value, ...overrides } : value;
+          },
         }),
-      ).rejects.toThrow(testCase.expected);
+      ).rejects.toThrow(expected);
     }
   });
 
