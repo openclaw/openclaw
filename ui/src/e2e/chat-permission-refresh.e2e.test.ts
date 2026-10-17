@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -15,18 +15,16 @@ import {
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
 
-function permissionSession(name: string, label: string) {
-  return {
-    key: `agent:main:${name}`,
-    kind: "direct",
-    label,
-    permissionMode: "guarded",
-    sessionId: `${name}-generation`,
-    updatedAt: 1,
-  };
-}
+const session = {
+  key: "agent:main:permission-refresh",
+  kind: "direct",
+  label: "Permission refresh",
+  permissionMode: "guarded",
+  sessionId: "permission-refresh-generation",
+  updatedAt: 1,
+};
 
-async function permissionControls(page: Page, session: ReturnType<typeof permissionSession>) {
+async function permissionControls(page: Page) {
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
   const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
   const trigger = pane.locator('[data-chat-permission-select="true"]');
@@ -48,7 +46,7 @@ async function expectPermissionError(pane: Locator, text: string) {
   await pane.locator(".chat-error").getByText(text, { exact: false }).waitFor();
 }
 
-async function installPermissionSession(page: Page, session: ReturnType<typeof permissionSession>) {
+async function installPermissionSession(page: Page) {
   return installMockGateway(page, {
     sessions: [session],
     methodResponses: {
@@ -60,20 +58,21 @@ async function installPermissionSession(page: Page, session: ReturnType<typeof p
   });
 }
 
-function permissionEvent(
-  session: ReturnType<typeof permissionSession>,
-  permissionMode: string | null,
-  updatedAt: number,
-) {
+function permissionEvent(permissionMode: string | null, updatedAt: number) {
   return { ...session, sessionKey: session.key, reason: "patch", permissionMode, updatedAt };
 }
+
+const permissionList = (
+  permissionMode: string | undefined,
+  updatedAt: number,
+  sessionId = session.sessionId,
+) => chatSessionListResponse([{ ...session, permissionMode, updatedAt, sessionId }]);
 
 suite.define(() => {
   it("keeps a saved permission mode when its list refresh fails", async () => {
     const page = await newChatPage(suite);
-    const session = permissionSession("permission-refresh", "Permission refresh");
-    const gateway = await installPermissionSession(page, session);
-    const { pane, trigger, select, settled } = await permissionControls(page, session);
+    const gateway = await installPermissionSession(page);
+    const { pane, trigger, select, settled } = await permissionControls(page);
     await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
     const patchMatch = { key: session.key, permissionMode: "workspace" };
     await gateway.deferNext("sessions.patch", patchMatch);
@@ -81,11 +80,8 @@ suite.define(() => {
     await select("workspace");
     await gateway.waitForRequest("sessions.patch", { match: patchMatch });
     // Hydration can observe the old permission while its write is still pending.
-    await evaluateControlUiContext(page, async (context) => {
-      await context.sessions.list({ agentId: "main" });
-    });
-    const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-    await gateway.deferNext("sessions.list", rosterMatch);
+    await evaluateControlUiContext(page, (context) => context.sessions.list({ agentId: "main" }));
+    const listRequests = await gateway.deferNext("sessions.list", rosterMatch);
     await gateway.resolveDeferred("sessions.patch");
     await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
     // Swarm hydration can finish here; the parent must not appear in its own child query.
@@ -108,10 +104,9 @@ suite.define(() => {
 
   it("keeps a newer permission event after an older patch response arrives", async () => {
     const page = await newChatPage(suite);
-    const session = permissionSession("permission-ordering", "Permission ordering");
-    const gateway = await installPermissionSession(page, session);
+    const gateway = await installPermissionSession(page);
 
-    const { trigger, select, settled } = await permissionControls(page, session);
+    const { trigger, select, settled } = await permissionControls(page);
     await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
     const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
     const patchMatch = { key: session.key, permissionMode: "workspace" };
@@ -120,7 +115,7 @@ suite.define(() => {
     await select("workspace");
     await gateway.waitForRequest("sessions.patch", { match: patchMatch });
     await gateway.deferNext("sessions.list", rosterMatch);
-    await gateway.emitGatewayEvent("sessions.changed", permissionEvent(session, "full", 3));
+    await gateway.emitGatewayEvent("sessions.changed", permissionEvent("full", 3));
     await expect
       .poll(() =>
         evaluateControlUiContext(
@@ -148,19 +143,12 @@ suite.define(() => {
 
   it("settles permission patches before reflecting changes and observes remote updates", async () => {
     const page = await newChatPage(suite);
-    const session = {
-      ...permissionSession("session-a", "Session A"),
-      sessionId: "session-a-original",
-      updatedAt: 2,
-    };
     const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
+      methodResponses: { "sessions.list": chatSessionListResponse([session]) },
       sessionKey: session.key,
     });
 
-    const { pane, trigger, select, settled } = await permissionControls(page, session);
+    const { pane, trigger, select, settled } = await permissionControls(page);
     await trigger.waitFor({ state: "visible", timeout: 10_000 });
     expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
     expect(
@@ -177,8 +165,7 @@ suite.define(() => {
       });
     };
 
-    const firstListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-    await gateway.deferNext("sessions.list", rosterMatch);
+    const firstListCount = await gateway.deferNext("sessions.list", rosterMatch);
     await trigger.click();
     const firstOption = pane.locator('[data-chat-permission-option="default"]');
     await firstOption.waitFor({ state: "visible" });
@@ -198,16 +185,12 @@ suite.define(() => {
     await waitForRequests(gateway, "sessions.list", firstListCount + 1, rosterMatch);
 
     // Later patch acknowledgements read canonical state, not injected wire snapshots.
-    const workspaceList = chatSessionListResponse([
-      { ...session, permissionMode: "workspace", updatedAt: 3 },
-    ]);
+    const workspaceList = permissionList("workspace", 3);
     await gateway.setSessionsListResponse(workspaceList);
     // Snapshot and emit in one browser turn so an earlier request cannot satisfy this event.
     const workspaceEventListCount = await page.evaluate(
       ({ session: eventSession, match }) => {
-        const mockGateway = (
-          window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-        ).openclawControlUiE2eGateway;
+        const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
         if (!mockGateway) {
           throw new Error("Mock Gateway is not installed");
         }
@@ -215,7 +198,7 @@ suite.define(() => {
         mockGateway.emit("sessions.changed", eventSession);
         return count;
       },
-      { session: permissionEvent(session, "workspace", 3), match: rosterMatch },
+      { session: permissionEvent("workspace", 3), match: rosterMatch },
     );
     await gateway.resolveDeferred("sessions.list", workspaceList);
     await settled("workspace");
@@ -223,8 +206,7 @@ suite.define(() => {
 
     // Admit this event's refresh before measuring the next mutation's own roster request.
     await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
-    const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-    await gateway.deferNext("sessions.list", rosterMatch);
+    const secondListCount = await gateway.deferNext("sessions.list", rosterMatch);
     await select("default");
     const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
     expect(requireRecord(patchRequests[1]?.params)).toMatchObject({
@@ -233,11 +215,9 @@ suite.define(() => {
     });
     await waitForRequests(gateway, "sessions.list", secondListCount + 1, rosterMatch);
 
-    const defaultList = chatSessionListResponse([
-      { ...session, permissionMode: undefined, updatedAt: 4 },
-    ]);
+    const defaultList = permissionList(undefined, 4);
     await gateway.setSessionsListResponse(defaultList);
-    await gateway.emitGatewayEvent("sessions.changed", permissionEvent(session, null, 4));
+    await gateway.emitGatewayEvent("sessions.changed", permissionEvent(null, 4));
     await gateway.resolveDeferred("sessions.list", defaultList);
     await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
     expect(await trigger.getAttribute("aria-label")).toContain("Default");
@@ -258,16 +238,9 @@ suite.define(() => {
     await select("full");
     const stalePatch = (await waitForRequests(gateway, "sessions.patch", 4))[3];
     expectPatch(stalePatch?.params, "full");
-    const replacement = {
-      ...session,
-      permissionMode: "read-only",
-      sessionId: "session-after-replacement",
-      updatedAt: 5,
-    };
-    const replacementList = chatSessionListResponse([replacement]);
+    const replacementList = permissionList("read-only", 5, "session-after-replacement");
     await gateway.setSessionsListResponse(replacementList);
-    const recoveryListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-    await gateway.deferNext("sessions.list", rosterMatch);
+    const recoveryListCount = await gateway.deferNext("sessions.list", rosterMatch);
     await gateway.rejectDeferred("sessions.patch", {
       code: "INVALID_REQUEST",
       message: "session identity changed; refresh and retry",

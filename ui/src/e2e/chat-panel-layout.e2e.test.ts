@@ -19,6 +19,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const sessionKey = "agent:main:chat-panel-layout";
+const chatMethods = ["board.get", "chat.metadata", "chat.startup"];
 let sandbox: HttpServer;
 let sandboxPort: number;
 
@@ -36,23 +37,36 @@ function documentIdentity(input: Locator) {
   );
 }
 
-async function installWidget(page: Page, title: string, markup: string) {
-  const body = buildWidgetDocument(title, markup);
+async function installBoardGateway(
+  page: Page,
+  scenario: NonNullable<Parameters<typeof installMockGateway>[1]>,
+  widgetHeight = 6,
+) {
+  const body = buildWidgetDocument(
+    "Dashboard",
+    '<label>Widget note <input id="widget-note"></label><script>globalThis.documentIdentity=crypto.randomUUID();</script>',
+  );
   await page.route("**/__openclaw__/board/**", (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body }),
   );
+  return installMockGateway(page, {
+    sessionKey,
+    historyMessages: [{ role: "assistant", content: "The release overview is ready." }],
+    ...scenario,
+    methodResponses: { "board.get": boardResponse(widgetHeight), ...scenario.methodResponses },
+  });
 }
 
-function boardResponse(name: string, title: string, sizeH: number, frameUrl: string) {
+function boardResponse(sizeH: number) {
   return {
     sessionKey,
     revision: 1,
-    tabs: [{ tabId: "main", title: name === "overview" ? "Overview" : "Main", position: 0 }],
+    tabs: [{ tabId: "main", title: "Main", position: 0 }],
     widgets: [
       {
-        name,
+        name: "continuity",
         tabId: "main",
-        title,
+        title: "Dashboard",
         contentKind: "html",
         sizeW: 12,
         sizeH,
@@ -60,8 +74,8 @@ function boardResponse(name: string, title: string, sizeH: number, frameUrl: str
         position: 0,
         grantState: "none",
         revision: 1,
-        instanceId: `${name}-instance`,
-        frameUrl,
+        instanceId: "continuity-instance",
+        frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
         viewTicket: "ticket",
         viewTicketTtlMs: 1_200_000,
         viewGeneration: "0123456789abcdef0123456789abcdef",
@@ -124,13 +138,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1440, height: 960 }, permissions: ["local-network-access"] },
       async ({ page }) => {
-        await installWidget(
-          page,
-          "Release overview",
-          '<style>body{font:16px system-ui;padding:32px;background:#101820;color:#e5edf5}h1{font-size:36px;color:inherit}section{display:flex;gap:16px;flex-wrap:wrap}article{background:#1b2935;padding:24px;border-radius:12px;min-width:140px}strong{display:block;font-size:36px;color:#61d9ad}label{display:block;margin-top:32px}input{display:block;margin-top:12px;padding:12px;width:80%;background:#1b2935;color:inherit;border:1px solid #395165;border-radius:8px}</style><p>OPENCLAW / RELEASE OVERVIEW</p><h1>Good work. In view.</h1><p>Review the release, then discuss it in this conversation.</p><section><article><strong>24</strong>Merged changes</article><article><strong>8</strong>Ready for review</article><article><strong>92%</strong>Checks passing</article></section><label>Release note<input id="widget-note"></label><script>globalThis.documentIdentity=crypto.randomUUID();</script>',
-        );
-        const gateway = await installMockGateway(page, {
-          sessionKey,
+        const gateway = await installBoardGateway(page, {
           sessions: [
             {
               key: sessionKey,
@@ -142,23 +150,13 @@ suite.define(() => {
             },
           ],
           featureMethods: [
-            "board.get",
-            "chat.metadata",
-            "chat.startup",
+            ...chatMethods,
             "sessions.list",
             "sessions.describe",
             "sessions.resolve",
           ],
-          historyMessages: [{ role: "assistant", content: "The release overview is ready." }],
           methodResponses: {
             "cron.list": { jobs: [], total: 0, hasMore: false },
-            "board.get": boardResponse(
-              "overview",
-              "Release overview",
-              6,
-              new URL("/__openclaw__/board/overview/index.html?bt=ticket", suite.server.baseUrl)
-                .href,
-            ),
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
@@ -322,28 +320,15 @@ suite.define(() => {
         permissions: ["local-network-access"],
       },
       async ({ page }) => {
-        await installWidget(
+        const gateway = await installBoardGateway(
           page,
-          "Panel continuity",
-          '<label>Widget note <input id="widget-note"></label><script>globalThis.documentIdentity=crypto.randomUUID();</script>',
-        );
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          terminalEnabled: true,
-          communityInvite: false,
-          featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
-          historyMessages: [
-            { role: "assistant", content: "Arrange the dashboard beside this chat." },
-          ],
-          methodResponses: {
-            "board.get": boardResponse(
-              "continuity",
-              "Panel continuity",
-              4,
-              `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
-            ),
+          {
+            terminalEnabled: true,
+            communityInvite: false,
+            featureMethods: [...chatMethods, "terminal.open"],
           },
-        });
+          4,
+        );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
         const input = widgetInput(page);
         await input.fill("Keep this unsaved widget input");

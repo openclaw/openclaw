@@ -13,6 +13,7 @@ import {
   installMockGateway,
   requireRecord,
 } from "./chat-flow.test-support.ts";
+import { seedLegacyComposerDraft } from "./chat-outbox-legacy-draft.test-support.ts";
 import {
   outboxPayloadFile as file,
   outboxPayloadHistory as history,
@@ -28,6 +29,17 @@ const retainedText = "Mock Gateway: retained v3 Blob submission";
 const upgradeText = "Mock Gateway: upgrade this inline queue";
 const originalBytes = file.buffer.toString("base64");
 const suite = createChatFlowE2eSuite();
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+
+async function restoreInput(page: Page, gateway: Gateway, text: string, destination: RegExp) {
+  const notice = paneFor(page).locator(".chat-outbox-recovery");
+  await notice.locator(".chat-outbox-recovery-row").getByText(text, { exact: true }).waitFor();
+  await expectRequestCountStable(gateway, "chat.send", 0);
+  await notice.getByRole("button", { name: "Restore", exact: true }).click();
+  const dialog = page.locator("openclaw-modal-dialog");
+  await dialog.getByText(destination).waitFor();
+  await dialog.getByRole("button", { name: "Restore", exact: true }).click();
+}
 
 // Legacy metadata shares the v4 prefix but is not the current account's admitted queue.
 async function readQueue(page: Page): Promise<ChatQueueItem[]> {
@@ -81,10 +93,7 @@ suite.define(() => {
           await expect.poll(async () => (await readQueue(page)).length).toBe(1);
           const original = (await readQueue(page))[0]!;
           const reference = original.attachmentPayload;
-          assert(
-            reference,
-            "Admission must own the complete Blob before seeding the legacy envelope",
-          );
+          assert(reference, "Admission must own the Blob before migration");
           // Finish the durable clear before deleting v4's revision fence for the legacy seed.
           await waitForCommittedComposerDraft(page, draftScope, null, 0);
           await page.route("**/outbox-legacy-seed", (route) =>
@@ -138,22 +147,14 @@ suite.define(() => {
           expect(await readQueue(page)).toEqual([]);
           expect(await pane.locator(".chat-queue__item").count()).toBe(0);
           expect(await pane.getByText("Delivery unconfirmed", { exact: true }).count()).toBe(0);
-          const notice = pane.locator(".chat-outbox-recovery");
-          await notice
-            .locator(".chat-outbox-recovery-row")
-            .getByText(retainedText, { exact: true })
-            .waitFor();
-          await expectRequestCountStable(gateway, "chat.send", 0);
-          await notice.getByRole("button", { name: "Restore", exact: true }).click();
-          const dialog = page.locator("openclaw-modal-dialog");
-          await dialog
-            .getByText(
-              legacySessionKey === "global"
-                ? /Add this saved copy to “Main Session”/
-                : /Add this saved copy to “topic”/,
-            )
-            .waitFor();
-          await dialog.getByRole("button", { name: "Restore", exact: true }).click();
+          await restoreInput(
+            page,
+            gateway,
+            retainedText,
+            legacySessionKey === "global"
+              ? /Add this saved copy to “Main Session”/
+              : /Add this saved copy to “topic”/,
+          );
           await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
           await page.reload();
           await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
@@ -224,45 +225,14 @@ suite.define(() => {
           `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`,
           JSON.stringify({ version: 2, gatewayOwner, sessions }),
         );
-        const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("openclaw-control-ui", 1);
-          request.onupgradeneeded = () =>
-            request.result
-              .createObjectStore("composerDrafts", { keyPath: "key" })
-              .createIndex("ownerKey", "ownerKey");
-          request.onsuccess = () => resolve(request.result);
-          request.addEventListener("error", () =>
-            reject(request.error ?? new Error("IndexedDB request failed")),
-          );
-        });
-        const transaction = database.transaction("composerDrafts", "readwrite");
-        const ownerKey = JSON.stringify([gatewayOwner, "e2e-recovery-scope"]);
-        transaction.objectStore("composerDrafts").put({
-          key: JSON.stringify([gatewayOwner, "e2e-recovery-scope", scopeKey]),
-          ownerKey,
-          gatewayOwner,
-          recoveryScope: "e2e-recovery-scope",
-          scopeKey,
-          text: "Mock Gateway: old durable draft",
-          revision: Date.now(),
-          updatedAt: Date.now(),
-          writeId: "upgrade-draft",
-          attachments: [
-            {
-              blob: new Blob(["draft bytes"], { type: "text/plain" }),
-              mimeType: "text/plain",
-              fileName: "draft.txt",
-            },
-          ],
-        });
-        await new Promise<void>((resolve, reject) => {
-          transaction.oncomplete = () => resolve();
-          transaction.addEventListener("abort", () =>
-            reject(transaction.error ?? new Error("IndexedDB transaction failed")),
-          );
-        });
-        database.close();
       }, originalBytes);
+      await seedLegacyComposerDraft(page, {
+        gatewayOwner: `ws://${new URL(suite.server.baseUrl).host}`,
+        scopeKey: "agent:main:main\u0000agent:main",
+        text: "Mock Gateway: old durable draft",
+        writeId: "upgrade-draft",
+        attachment: { content: "draft bytes", fileName: "draft.txt" },
+      });
       const gateway = await installMockGateway(page, {
         historyMessages: history,
         sessionInfo: {
@@ -282,16 +252,7 @@ suite.define(() => {
       await composer.fill("");
       await pane.getByRole("button", { name: "Remove draft.txt", exact: true }).click();
       await waitForCommittedComposerDraft(page, "chat:v3:agent:main:main\u0000agent:main", null, 0);
-      const notice = pane.locator(".chat-outbox-recovery");
-      await notice
-        .locator(".chat-outbox-recovery-row")
-        .getByText(upgradeText, { exact: true })
-        .waitFor();
-      await expectRequestCountStable(gateway, "chat.send", 0);
-      await notice.getByRole("button", { name: "Restore", exact: true }).click();
-      const dialog = page.locator("openclaw-modal-dialog");
-      await dialog.getByText(/Add this saved copy to “Main/).waitFor();
-      await dialog.getByRole("button", { name: "Restore", exact: true }).click();
+      await restoreInput(page, gateway, upgradeText, /Add this saved copy to “Main/);
       await expect
         .poll(() => readQueue(page))
         .toMatchObject([{ sendRunId: "legacy-idempotency", sendAttempts: 0, sendState: "failed" }]);

@@ -7,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
+  chatMessage,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -14,6 +15,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { seedLegacyComposerDraft } from "./chat-outbox-legacy-draft.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const pageOptions = { locale: "en-US", serviceWorkers: "block" as const };
@@ -23,6 +25,17 @@ const userFor = (page: Page, text: string, exact = false) =>
   page.locator(".chat-group.user").getByText(text, { exact });
 const button = (target: Page | Locator, name: string) =>
   target.getByRole("button", { name, exact: true });
+const deliveredMessage = (
+  content: string,
+  runId: string,
+  stamp: { id: string; seq: number; timestamp: number },
+) => ({
+  content,
+  role: "user",
+  timestamp: stamp.timestamp,
+  idempotencyKey: `${runId}:user`,
+  __openclaw: { id: stamp.id, seq: stamp.seq, idempotencyKey: `${runId}:user` },
+});
 
 const unconfirmedInput = (
   id: string,
@@ -41,27 +54,26 @@ const unconfirmedInput = (
 });
 async function seedComposer(
   page: Page,
-  sourceVersion: number,
-  sourceData: Record<string, unknown>,
+  version: number,
+  data: Record<string, unknown>,
   options: { marker?: string; account?: boolean } = {},
 ) {
+  const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
   await page.addInitScript(
-    ({ gatewayUrl, version, data, marker, account }) => {
+    ({ gatewayUrl: owner, version: format, data: state, marker, account }) => {
       if (marker && sessionStorage.getItem(marker)) {
         return;
       }
       if (marker) {
         sessionStorage.setItem(marker, "yes");
       }
-      const key = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}${account ? ":account:e2e-recovery-scope" : ""}`;
-      sessionStorage.setItem(key, JSON.stringify({ version, gatewayOwner: gatewayUrl, ...data }));
+      const key = `openclaw.control.chatComposer.v${format}:${encodeURIComponent(owner)}${account ? ":account:e2e-recovery-scope" : ""}`;
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({ version: format, gatewayOwner: owner, ...state }),
+      );
     },
-    {
-      gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-      version: sourceVersion,
-      data: sourceData,
-      ...options,
-    },
+    { gatewayUrl, version, data, ...options },
   );
 }
 
@@ -76,10 +88,8 @@ suite.define(() => {
           await installMockGateway(page, {
             historyMessages: ["failed", "unconfirmed", "waiting-reconnect", "held"].flatMap(
               (state, index) => [
-                {
-                  role: "user",
+                chatMessage("user", "Pending " + state, {
                   timestamp: 1_000 + index * 2,
-                  content: [{ type: "text", text: "Pending " + state }],
                   __openclaw: {
                     id: "delivery-" + index,
                     kind: "pending-send",
@@ -92,12 +102,10 @@ suite.define(() => {
                         }
                       : {}),
                   },
-                },
-                {
-                  role: "assistant",
+                }),
+                chatMessage("assistant", "Separate turn", {
                   timestamp: 1_001 + index * 2,
-                  content: [{ type: "text", text: "Separate turn" }],
-                },
+                }),
               ],
             ),
           });
@@ -244,7 +252,6 @@ suite.define(() => {
         expect(await userBubble.count()).toBe(1);
         expect(await reconnectStatus.getByRole("button", { name: /Retry/ }).count()).toBe(0);
         await button(reconnectStatus, "Discard").waitFor();
-
         await gateway.setOnline(true);
 
         const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
@@ -286,17 +293,11 @@ suite.define(() => {
           };
           const differentTimestamp = Date.now();
           await gateway.setHistoryMessages([
-            {
-              content: "different delivered turn",
-              idempotencyKey: "different-run:user",
-              role: "user",
+            deliveredMessage("different delivered turn", "different-run", {
+              id: "different-history-turn",
+              seq: 1,
               timestamp: differentTimestamp,
-              __openclaw: {
-                id: "different-history-turn",
-                seq: 1,
-                idempotencyKey: "different-run:user",
-              },
-            },
+            }),
           ]);
           await gateway.emitGatewayEvent("session.message", {
             hasActiveRun: false,
@@ -309,114 +310,81 @@ suite.define(() => {
           await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
+          const historyCount = async (match: Record<string, unknown>) =>
+            (await gateway.getRequests("chat.history", match)).length;
           const receiptMatch = { sessionKey: "agent:main:main", limit: 1000 };
           const displayMatch = { sessionKey: "agent:main:main", limit: 80 };
-          const receiptBefore = (await gateway.getRequests("chat.history", receiptMatch)).length;
-          const displayBefore = (await gateway.getRequests("chat.history", displayMatch)).length;
-          let receiptArmed = false;
-          let receiptReleased = false;
-          let refreshBefore: number | undefined;
-          let refreshArmed = false;
-          let refreshReleased = false;
-          try {
-            await gateway.deferNext("chat.history", receiptMatch);
-            receiptArmed = true;
-            const acceptedTimestamp = Date.now();
-            await gateway.setHistoryMessages([
-              {
-                content: prompt,
-                idempotencyKey: `${runId}:user`,
-                role: "user",
-                timestamp: acceptedTimestamp,
-                __openclaw: {
-                  id: "accepted-history-turn",
-                  seq: 2,
-                  idempotencyKey: `${runId}:user`,
-                },
-              },
-            ]);
-            await gateway.emitGatewayEvent("session.message", {
-              clientRunId: runId,
-              hasActiveRun: true,
-              messageId: "accepted-history-turn",
-              messageSeq: 2,
-              sessionKey: "main",
-              status: "running",
-            });
-            await gateway.waitForRequest("chat.history", {
-              after: receiptBefore,
-              match: receiptMatch,
-            });
-            await gateway.waitForRequest("chat.history", {
-              after: displayBefore,
-              match: displayMatch,
-            });
-            // This exact history row is committed while the recovery receipt is held.
-            await waitForHistoryCommit(acceptedTimestamp);
-            expect(await userBubble.count()).toBe(1);
+          const receiptBefore = await historyCount(receiptMatch);
+          const displayBefore = await historyCount(displayMatch);
+          await gateway.deferNext("chat.history", receiptMatch);
+          const acceptedTimestamp = Date.now();
+          await gateway.setHistoryMessages([
+            deliveredMessage(prompt, runId, {
+              id: "accepted-history-turn",
+              seq: 2,
+              timestamp: acceptedTimestamp,
+            }),
+          ]);
+          await gateway.emitGatewayEvent("session.message", {
+            clientRunId: runId,
+            hasActiveRun: true,
+            messageId: "accepted-history-turn",
+            messageSeq: 2,
+            sessionKey: "main",
+            status: "running",
+          });
+          await gateway.waitForRequest("chat.history", {
+            after: receiptBefore,
+            match: receiptMatch,
+          });
+          await gateway.waitForRequest("chat.history", {
+            after: displayBefore,
+            match: displayMatch,
+          });
+          // This exact history row is committed while the recovery receipt is held.
+          await waitForHistoryCommit(acceptedTimestamp);
+          expect(await userBubble.count()).toBe(1);
 
-            refreshBefore = (await gateway.getRequests("chat.history", displayMatch)).length;
-            await gateway.deferNext("chat.history", displayMatch);
-            refreshArmed = true;
-            // Only the receipt has been admitted to the FIFO of deferred responses.
+          const refreshBefore = await historyCount(displayMatch);
+          await gateway.deferNext("chat.history", displayMatch);
+          // Only the receipt has been admitted to the FIFO of deferred responses.
+          await gateway.resolveDeferred("chat.history");
+          await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+          // Native history can retire the outbox before the held receipt returns.
+          // Otherwise, join admission of the refresh before checking its held window.
+          await page.waitForFunction(
+            ({ before, match }) => {
+              const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+              return (
+                document.querySelector(
+                  '.chat-group.user .chat-bubble[data-entry-id="accepted-history-turn"]',
+                ) !== null || (mock?.findRequests("chat.history", match).length ?? 0) > before
+              );
+            },
+            { before: refreshBefore, match: displayMatch },
+          );
+          await pane.evaluate(
+            (element) =>
+              (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
+          );
+          expect(
+            await userBubble.count(),
+            "The committed user row must survive receipt retirement while readback is held",
+          ).toBe(1);
+          const durableBubble = page.locator(
+            '.chat-group.user .chat-bubble[data-entry-id="accepted-history-turn"]',
+          );
+          expect(await durableBubble.count()).toBe(1);
+          expect(await durableBubble.getByText(prompt, { exact: true }).count()).toBe(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+          if ((await historyCount(displayMatch)) > refreshBefore) {
             await gateway.resolveDeferred("chat.history");
-            receiptReleased = true;
-            await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
-            // Native history can retire the outbox before the held receipt returns.
-            // Otherwise, join admission of the refresh before checking its held window.
-            await page.waitForFunction(
-              ({ before, match }) => {
-                const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-                return (
-                  document.querySelector(
-                    '.chat-group.user .chat-bubble[data-entry-id="accepted-history-turn"]',
-                  ) !== null || (mock?.findRequests("chat.history", match).length ?? 0) > before
-                );
-              },
-              { before: refreshBefore, match: displayMatch },
-            );
-            await pane.evaluate(
-              (element) =>
-                (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
-            );
-
-            expect(
-              await userBubble.count(),
-              "The committed user row must survive receipt retirement while readback is held",
-            ).toBe(1);
-            const durableBubble = page.locator(
-              '.chat-group.user .chat-bubble[data-entry-id="accepted-history-turn"]',
-            );
-            expect(await durableBubble.count()).toBe(1);
-            expect(await durableBubble.getByText(prompt, { exact: true }).count()).toBe(1);
-            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-
-            if ((await gateway.getRequests("chat.history", displayMatch)).length > refreshBefore) {
-              await gateway.resolveDeferred("chat.history");
-              refreshReleased = true;
-              await waitForHistoryCommit(acceptedTimestamp);
-            }
-            expect(await durableBubble.count()).toBe(1);
-            expect(await userBubble.count()).toBe(1);
-            expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-          } finally {
-            // Armed but unused deferrals are not responses. Join only admitted reads.
-            if (
-              receiptArmed &&
-              !receiptReleased &&
-              (await gateway.getRequests("chat.history", receiptMatch)).length > receiptBefore
-            ) {
-              await gateway.resolveDeferred("chat.history");
-            }
-            if (
-              refreshArmed &&
-              !refreshReleased &&
-              refreshBefore !== undefined &&
-              (await gateway.getRequests("chat.history", displayMatch)).length > refreshBefore
-            ) {
-              await gateway.resolveDeferred("chat.history");
-            }
+            await waitForHistoryCommit(acceptedTimestamp);
           }
+          expect(await durableBubble.count()).toBe(1);
+          expect(await userBubble.count()).toBe(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
           return;
         }
 
@@ -428,7 +396,6 @@ suite.define(() => {
             .getByText("send the next message", { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.send", 1);
-
           await button(deliveryStatus, "Discard").click();
         } else {
           await deliveryStatus.getByRole("button", { name: "Retry queued message" }).click();
@@ -444,8 +411,7 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
           expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
         } else {
-          expect(secondParams.idempotencyKey).toBe(runId);
-          expect(secondParams.message).toBe(prompt);
+          expect(secondParams).toMatchObject({ idempotencyKey: runId, message: prompt });
         }
         await expectRequestCountStable(gateway, "chat.send", 2);
         await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
@@ -575,53 +541,14 @@ suite.define(() => {
         route.fulfill({ contentType: "text/html", body: "Mock recovery seed" }),
       );
       await page.goto(`${suite.server.baseUrl}outbox-recovery-seed`);
-      const seededDatabaseVersion = await page.evaluate(async (gatewayOwner) => {
-        const request = indexedDB.open("openclaw-control-ui", 1);
-        request.addEventListener("upgradeneeded", () => {
-          const store = request.result.createObjectStore("composerDrafts", { keyPath: "key" });
-          store.createIndex("ownerKey", "ownerKey", { unique: false });
-        });
-        const db = await new Promise<IDBDatabase>((resolve, reject) => {
-          request.onsuccess = () => resolve(request.result);
-          request.addEventListener(
-            "error",
-            () => reject(request.error ?? new Error("IndexedDB open failed")),
-            { once: true },
-          );
-        });
-        const tx = db.transaction("composerDrafts", "readwrite");
-        const recoveryScope = "e2e-recovery-scope";
-        const scopeKey = "global\u0000agent:main";
-        tx.objectStore("composerDrafts").put({
-          key: JSON.stringify([gatewayOwner, recoveryScope, scopeKey]),
-          ownerKey: JSON.stringify([gatewayOwner, recoveryScope]),
-          gatewayOwner,
-          recoveryScope,
-          scopeKey,
-          revision: 42,
-          writeId: "legacy-attachment",
-          updatedAt: Date.now(),
-          text: "Review the attached deployment note",
-          attachments: [
-            {
-              blob: new Blob(["deployment note"], { type: "text/plain" }),
-              mimeType: "text/plain",
-              fileName: "legacy-note.txt",
-              sizeBytes: 15,
-            },
-          ],
-        });
-        await new Promise<void>((resolve, reject) => {
-          tx.addEventListener("complete", () => resolve());
-          tx.addEventListener(
-            "error",
-            () => reject(tx.error ?? new Error("IndexedDB write failed")),
-            { once: true },
-          );
-        });
-        db.close();
-        return db.version;
-      }, gatewayAddress);
+      const seededDatabaseVersion = await seedLegacyComposerDraft(page, {
+        gatewayOwner: gatewayAddress,
+        scopeKey: "global\u0000agent:main",
+        text: "Review the attached deployment note",
+        revision: 42,
+        writeId: "legacy-attachment",
+        attachment: { content: "deployment note", fileName: "legacy-note.txt", sizeBytes: 15 },
+      });
       expect(seededDatabaseVersion).toBe(1);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const notice = page.locator(".chat-outbox-recovery");
@@ -636,12 +563,10 @@ suite.define(() => {
         .locator(".chat-attachments-preview .chat-attachment-file__name")
         .getByText("legacy-note.txt", { exact: true });
       await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
-
       await attachment.waitFor();
       await page.reload();
       await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
       await attachment.waitFor();
-
       await expectRequestCountStable(gateway, "chat.send", 0);
     }));
 
@@ -672,13 +597,10 @@ suite.define(() => {
         .locator(".chat-outbox-recovery-row")
         .getByText("Could you summarize the latest test results?", { exact: true })
         .waitFor();
-
       expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
       await page.emulateMedia({ colorScheme: "dark" });
       await page.waitForFunction(() => document.documentElement.dataset.themeMode === "dark");
-
       await page.setViewportSize({ width: 390, height: 844 });
-
       expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );

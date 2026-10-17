@@ -258,16 +258,15 @@ suite.define(() => {
             expect(await countOutboxPayloads(page)).toBe(1);
             const payloads = await readOutboxPayloadBytes(page, payload.key);
             expect(payloads).toEqual(files.map((file) => file.buffer.toString("base64")));
-            expect(requests[0]?.params).toEqual(
-              expect.objectContaining({
-                attachments: files.map((file) => ({
-                  type: "image",
-                  origin: "file",
-                  mimeType: file.mimeType,
-                  fileName: file.name,
-                  content: file.buffer.toString("base64"),
-                })),
-              }),
+            expect(requests[0]?.params).toHaveProperty(
+              "attachments",
+              files.map((file) => ({
+                type: "image",
+                origin: "file",
+                mimeType: file.mimeType,
+                fileName: file.name,
+                content: file.buffer.toString("base64"),
+              })),
             );
             expect(sends).toEqual([
               {
