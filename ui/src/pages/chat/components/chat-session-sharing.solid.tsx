@@ -1,4 +1,14 @@
-import { createMemo, createSignal, createUniqueId, For, mapArray, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createUniqueId,
+  flush,
+  For,
+  mapArray,
+  merge,
+  Show,
+  untrack,
+} from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type {
   GatewaySessionRow,
@@ -465,7 +475,17 @@ export function useChatSessionSharingMenu(props: ChatSessionSharingProps): {
 
 export function ChatSessionSharing(props: ChatSessionSharingProps) {
   const id = createUniqueId();
-  const sharing = useChatSessionSharingMenu(props);
+  const [opened, setOpened] = createSignal(false);
+  const [prewarm, setPrewarm] = createSignal(false);
+  const [prepared, setPrepared] = createSignal(untrack(() => ({ ...props })));
+  const sharing = useChatSessionSharingMenu(merge(() => (opened() ? props : prepared())));
+  const prepare = () => {
+    if (opened() || prewarm() || props.openDisabledReason) {
+      return;
+    }
+    setPrepared({ ...props });
+    setPrewarm(true);
+  };
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
@@ -513,6 +533,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
         <ChatSessionPublicIndicator {...props} />
         <Menu
           lazy
+          prewarm={prewarm()}
           id={id}
           class={
             capped()
@@ -525,6 +546,8 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
           disabled={Boolean(props.openDisabledReason)}
           triggerClass="btn btn--ghost chat-pane__sharing-trigger"
           triggerAttributes={{
+            onPointerEnter: prepare,
+            onFocus: prepare,
             title:
               props.openDisabledReason ??
               t("chat.sessionSharing.current", {
@@ -540,7 +563,17 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
             </>
           }
           items={sharing.items()}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPrepared({ ...props });
+              setPrewarm(false);
+            }
+            setOpened(open);
+          }}
           onBeforeShow={() => {
+            // Catch up the idle snapshot before native popup focus can run.
+            setPrepared({ ...props });
+            flush();
             if (!props.openDisabledReason) {
               props.onOpen();
             }
