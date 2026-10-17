@@ -12,12 +12,10 @@ import { createChannelIngressDrain } from "./ingress-drain.js";
 import { createChannelIngressError } from "./ingress-errors.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressMonitor,
   type ChannelIngressMonitorLifecycle,
 } from "./ingress-monitor.js";
 import {
   createMonitor,
-  PermanentIngressError,
   useIngressMonitorQueueFixture,
   waitForAbort,
   type RawEvent,
@@ -32,6 +30,15 @@ import {
 const withQueue = useIngressMonitorQueueFixture();
 const queueIt = (name: string, run: (queue: ChannelIngressQueue<StoredEvent>) => Promise<void>) =>
   it(name, () => withQueue(run));
+function queueEach<T>(cases: readonly T[]) {
+  return (
+    name: string,
+    run: (queue: ChannelIngressQueue<StoredEvent>, scenario: T) => Promise<void>,
+  ) =>
+    it.each(cases.map((scenario) => [scenario] as const))(name, (scenario) =>
+      withQueue((queue) => run(queue, scenario)),
+    );
+}
 const event = (id: string, lane = "a", text = "hello"): RawEvent => ({ id, lane, text });
 const stored = (raw: RawEvent): StoredEvent => ({ version: 1, rawEvent: JSON.stringify(raw) });
 const stopWhenIdle = async (monitor: ReturnType<typeof createMonitor>) => {
@@ -79,35 +86,33 @@ describe("channel ingress monitor", () => {
     });
   });
 
-  it.each([
+  queueEach([
     ["standard", 20_000],
     [{ completedMaxEntries: 1_000 }, 1_000],
   ] as const)(
-    "prunes standard retention with %s overrides",
-    async (retention, completedMaxEntries) => {
-      await withQueue(async (queue) => {
-        let currentTime = CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
-        const prune = vi.spyOn(queue, "prune");
-        const monitor = createMonitor(queue, vi.fn(), {
-          retention,
-          now: () => currentTime,
-        });
-        monitor.start();
-        await monitor.waitForIdle();
-        expect(prune).toHaveBeenCalledOnce();
-        expect(prune).toHaveBeenCalledWith({
-          completedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
-          completedMaxEntries,
-          failedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedTtlMs,
-          failedMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedMaxEntries,
-          now: expect.any(Number),
-        });
-        currentTime += CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
-        monitor.requestDrain();
-        await monitor.waitForPumpIdle();
-        expect(prune).toHaveBeenCalledTimes(2);
-        await monitor.stop();
+    "prunes standard retention with %j overrides",
+    async (queue, [retention, completedMaxEntries]) => {
+      let currentTime = CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
+      const prune = vi.spyOn(queue, "prune");
+      const monitor = createMonitor(queue, vi.fn(), {
+        retention,
+        now: () => currentTime,
       });
+      monitor.start();
+      await monitor.waitForIdle();
+      expect(prune).toHaveBeenCalledOnce();
+      expect(prune).toHaveBeenCalledWith({
+        completedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
+        completedMaxEntries,
+        failedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedTtlMs,
+        failedMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedMaxEntries,
+        now: expect.any(Number),
+      });
+      currentTime += CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
+      monitor.requestDrain();
+      await monitor.waitForPumpIdle();
+      expect(prune).toHaveBeenCalledTimes(2);
+      await monitor.stop();
     },
   );
 
@@ -131,46 +136,34 @@ describe("channel ingress monitor", () => {
     }
   });
 
-  it.each([false, true])(
+  queueEach([false, true])(
     "prunes once before %s batch admission, ignoring filtered events",
-    async (batch) => {
-      await withQueue(async (queue) => {
-        const prune = vi.spyOn(queue, "prune");
-        const enqueue = vi.spyOn(queue, "enqueue");
-        const enqueueBatch = vi.spyOn(queue, "enqueueBatch");
-        const monitor = createMonitor(queue, vi.fn(), {
-          inspect: (raw) =>
-            raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
-          retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
-        });
-        if (batch) {
-          await monitor.admitBatch([
-            event("ignored", "a", "receipt"),
-            event("event-batch-1", "a", "first"),
-            event("event-batch-2", "b", "second"),
-            event("event-batch-3", "c", "third"),
-          ]);
-          expect((await queue.listPending()).map((row) => row.id)).toEqual([
-            "event-batch-1",
-            "event-batch-2",
-            "event-batch-3",
-          ]);
-        } else {
-          await expect(monitor.admit(event("ignored", "a", "receipt"))).resolves.toEqual({
-            kind: "ignored",
-          });
-          expect(prune).not.toHaveBeenCalled();
-          expect(enqueue).not.toHaveBeenCalled();
-          await monitor.admit(event("event-one"));
-        }
-        const append = batch ? enqueueBatch : enqueue;
-        expect(prune).toHaveBeenCalledOnce();
-        expect(append).toHaveBeenCalledOnce();
-        expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
-          Math.min(...append.mock.invocationCallOrder),
-        );
-        await monitor.stop();
+    async (queue, batch) => {
+      const prune = vi.spyOn(queue, "prune");
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const enqueueBatch = vi.spyOn(queue, "enqueueBatch");
+      const monitor = createMonitor(queue, vi.fn(), {
+        inspect: (raw) =>
+          raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
       });
+      if (batch) {
+        const rows = [event("ignored"), event("one"), event("two", "b"), event("three", "c")];
+        await monitor.admitBatch(rows);
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["one", "two", "three"]);
+      } else {
+        await expect(monitor.admit(event("ignored"))).resolves.toEqual({ kind: "ignored" });
+        expect(prune).not.toHaveBeenCalled();
+        expect(enqueue).not.toHaveBeenCalled();
+        await monitor.admit(event("event-one"));
+      }
+      const append = batch ? enqueueBatch : enqueue;
+      expect(prune).toHaveBeenCalledOnce();
+      expect(append).toHaveBeenCalledOnce();
+      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
+        Math.min(...append.mock.invocationCallOrder),
+      );
+      await monitor.stop();
     },
   );
 
@@ -208,43 +201,21 @@ describe("channel ingress monitor", () => {
     ).resolves.toMatchObject({ kind: "failed", record: { reason: "invalid-event" } });
     await monitor.stop();
   });
-  it.each([
+  queueEach([
     { kind: "legacy", storedLaneKey: undefined, schedulingLaneKey: "lane:a" },
     { kind: "per-event", storedLaneKey: "lane:a", schedulingLaneKey: "lane:a:event-derived" },
   ])(
-    "preserves transport identity with a $kind scheduling lane",
-    async ({ storedLaneKey, schedulingLaneKey }) => {
-      await withQueue(async (queue) => {
-        await queue.enqueue("event-derived", stored(event("event-derived")), {
-          laneKey: storedLaneKey,
-        });
-        const deliver = vi.fn();
-        const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
-          queue,
-          inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
-          payload: {
-            storage: "raw-event",
-            version: 1,
-            serialize: (raw) => JSON.stringify(raw),
-            deserialize: (body) => JSON.parse(body) as RawEvent,
-            createClaimError: (kind) => new PermanentIngressError(kind),
-          },
-          deliver,
-          pollIntervalMs: 10,
-          retention: { pruneIntervalMs: 60_000 },
-          drain: {
-            deriveLaneKey: () => schedulingLaneKey,
-            resolveNonRetryableFailure: (error) =>
-              error instanceof PermanentIngressError
-                ? { reason: "invalid-event", message: error.message }
-                : null,
-          },
-        });
-        monitor.start();
-        await monitor.waitForIdle();
-        expect(deliver).toHaveBeenCalledOnce();
-        await monitor.stop();
+    "preserves transport identity with a %j scheduling lane",
+    async (queue, { storedLaneKey, schedulingLaneKey }) => {
+      await queue.enqueue("event-derived", stored(event("event-derived")), {
+        laneKey: storedLaneKey,
       });
+      const deliver = vi.fn();
+      const monitor = createMonitor(queue, deliver, { deriveLaneKey: () => schedulingLaneKey });
+      monitor.start();
+      await monitor.waitForIdle();
+      expect(deliver).toHaveBeenCalledOnce();
+      await monitor.stop();
     },
   );
 
@@ -439,92 +410,85 @@ describe("channel ingress monitor", () => {
     await expect(monitor.waitForIdle()).resolves.toBeUndefined();
   });
 
-  it.each(["detached", "inherited"] as const)(
+  queueEach(["detached", "inherited"] as const)(
     "keeps delivery admissible after its %s root releases",
-    async (root) => {
-      await withQueue(async (queue) => {
-        const gate = createDeferred();
-        const pumpSettled = createDeferred();
-        let admissionClosed: boolean | undefined;
-        const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-          await gate.promise;
-          admissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-          await lifecycle.onAdopted();
-        });
-        const detached = root === "detached";
-        const monitor = createMonitor(
-          queue,
-          deliver,
-          detached
-            ? {
-                pollIntervalMs: 10,
-                waitForDeliveryIdleBeforeRepump: false,
-                runPumpTask: (work) =>
-                  runWithGatewayIndependentRootWorkContinuation(work).finally(pumpSettled.resolve),
-              }
-            : { pollIntervalMs: 60_000 },
-        );
-        const scan = detached ? undefined : gateNextScan(queue);
-        monitor.start();
-        try {
-          // The admitting root releases before dispatch (inherited) or delivery (detached).
-          await runWithGatewayIndependentRootWorkAdmission(async () => {
-            await monitor.admit(event(detached ? "event-detached-root" : "event-released-root"));
-            if (scan) {
-              await scan.started;
-            }
-          });
-          scan?.release();
-          await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-          if (detached) {
-            await pumpSettled.promise;
-          }
-          gate.resolve();
-          await vi.waitFor(() => expect(admissionClosed).toBeDefined());
-          expect(admissionClosed).toBe(false);
-          await monitor.waitForIdle();
-          expect(await queue.listClaims()).toEqual([]);
-          if (detached) {
-            expect(await queue.listPending()).toEqual([]);
-          }
-        } finally {
-          gate.resolve();
-          scan?.release();
-          await monitor.stop();
-        }
+    async (queue, root) => {
+      const gate = createDeferred();
+      const pumpSettled = createDeferred();
+      let admissionClosed: boolean | undefined;
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await gate.promise;
+        admissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        await lifecycle.onAdopted();
       });
+      const detached = root === "detached";
+      const monitor = createMonitor(
+        queue,
+        deliver,
+        detached
+          ? {
+              pollIntervalMs: 10,
+              waitForDeliveryIdleBeforeRepump: false,
+              runPumpTask: (work) =>
+                runWithGatewayIndependentRootWorkContinuation(work).finally(pumpSettled.resolve),
+            }
+          : { pollIntervalMs: 60_000 },
+      );
+      const scan = detached ? undefined : gateNextScan(queue);
+      monitor.start();
+      try {
+        // The admitting root releases before dispatch (inherited) or delivery (detached).
+        await runWithGatewayIndependentRootWorkAdmission(async () => {
+          await monitor.admit(event(detached ? "event-detached-root" : "event-released-root"));
+          if (scan) {
+            await scan.started;
+          }
+        });
+        scan?.release();
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+        if (detached) {
+          await pumpSettled.promise;
+        }
+        gate.resolve();
+        await vi.waitFor(() => expect(admissionClosed).toBeDefined());
+        expect(admissionClosed).toBe(false);
+        await monitor.waitForIdle();
+        expect(await queue.listClaims()).toEqual([]);
+        if (detached) {
+          expect(await queue.listPending()).toEqual([]);
+        }
+      } finally {
+        gate.resolve();
+        scan?.release();
+        await monitor.stop();
+      }
     },
   );
 
-  it.each([
+  queueEach([
     { deferred: false, result: "completed", claims: 0 },
     { deferred: true, result: "deferred", claims: 1 },
     { deferred: true, result: "completed", claims: 1 },
-  ] as const)(
-    "preserves $result on stop with deferred=$deferred",
-    async ({ deferred, result, claims }) => {
-      await withQueue(async (queue) => {
-        const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-          if (deferred) {
-            lifecycle.onDeferred();
-          }
-          await waitForAbort(lifecycle.abortSignal);
-          return { kind: result };
-        });
-        const monitor = createMonitor(queue, deliver);
-        await startWith(monitor, event("event-stop-result"));
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-        await monitor.stop();
-        // A recorded handoff retains custody even if the terminal return conflicts.
-        expect(await queue.listPending()).toEqual([]);
-        if (claims) {
-          expect(await queue.listClaims()).toHaveLength(claims);
-        } else {
-          expect(await queue.listClaims()).toEqual([]);
-        }
-      });
-    },
-  );
+  ] as const)("preserves %j on stop", async (queue, { deferred, result, claims }) => {
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      if (deferred) {
+        lifecycle.onDeferred();
+      }
+      await waitForAbort(lifecycle.abortSignal);
+      return { kind: result };
+    });
+    const monitor = createMonitor(queue, deliver);
+    await startWith(monitor, event("event-stop-result"));
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+    await monitor.stop();
+    // A recorded handoff retains custody even if the terminal return conflicts.
+    expect(await queue.listPending()).toEqual([]);
+    if (claims) {
+      expect(await queue.listClaims()).toHaveLength(claims);
+    } else {
+      expect(await queue.listClaims()).toEqual([]);
+    }
+  });
 
   queueIt("clears queued drain requests when abort wins", async (queue) => {
     const { promise: pruneStarted, resolve: markPruneStarted } = createDeferred();
@@ -546,81 +510,70 @@ describe("channel ingress monitor", () => {
     await monitor.stop();
   });
 
-  it.each(["onDeferred", "onAdoptionFinalizing"] as const)(
+  queueEach(["onDeferred", "onAdoptionFinalizing"] as const)(
     "waits for tracked %s claims to settle before drain disposal",
-    async (handoff) => {
-      await withQueue(async (queue) => {
-        let deferredLifecycle: ChannelIngressMonitorLifecycle | undefined;
-        const monitor = createMonitor(
-          queue,
-          async (_raw, lifecycle) => {
-            deferredLifecycle = lifecycle;
-            lifecycle[handoff]();
-          },
-          { deferredClaims: "wait-on-stop" },
-        );
-        await startWith(monitor, event("event-tracked-deferred"));
-        await vi.waitFor(() => expect(deferredLifecycle).toBeDefined());
-        let stopped = false;
-        const stopping = monitor.stop().then(() => {
-          stopped = true;
-        });
-        await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
-        expect(stopped).toBe(false);
-        await deferredLifecycle?.onAbandoned();
-        await stopping;
-        expect(stopped).toBe(true);
-      });
+    async (queue, handoff) => {
+      let deferredLifecycle: ChannelIngressMonitorLifecycle | undefined;
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle[handoff]();
+        },
+        { deferredClaims: "wait-on-stop" },
+      );
+      await startWith(monitor, event("event-tracked-deferred"));
+      await vi.waitFor(() => expect(deferredLifecycle).toBeDefined());
+      const stopped = vi.fn();
+      const stopping = monitor.stop().then(stopped);
+      await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
+      expect(stopped).not.toHaveBeenCalled();
+      await deferredLifecycle?.onAbandoned();
+      await stopping;
+      expect(stopped).toHaveBeenCalledOnce();
     },
   );
 
-  it.each(
+  queueEach(
     (["throw", "return"] as const).flatMap((failureMode) =>
       [false, true].map((ownerAborted) => ({ failureMode, ownerAborted })),
     ),
-  )(
-    "settles tracked finalization after $failureMode with ownerAborted=$ownerAborted",
-    async ({ failureMode, ownerAborted }) => {
-      await withQueue(async (queue) => {
-        const error = new Error("inline finalization failed");
-        const abort = new AbortController();
-        let finalizingLifecycle: ChannelIngressMonitorLifecycle | undefined;
-        const monitor = createMonitor(
-          queue,
-          async (_raw, lifecycle) => {
-            finalizingLifecycle = lifecycle;
-            lifecycle.onAdoptionFinalizing();
-            if (ownerAborted) {
-              abort.abort(error);
-            }
-            if (failureMode === "throw") {
-              throw error;
-            }
-            return { kind: "failed-retryable", error };
-          },
-          { deferredClaims: "wait-on-stop", abortSignal: abort.signal },
-        );
-        await startWith(monitor, event("event-finalization-failure"));
-        await monitor.waitForIdle();
-        await monitor.pause();
-        let settlementFinished = false;
-        const settlement = monitor.waitForDeferredClaims().then(() => {
-          settlementFinished = true;
-        });
-        try {
-          expect(await queue.listClaims()).toEqual([]);
-          expect(await queue.listPending({ limit: "all" })).toMatchObject([
-            { id: "event-finalization-failure", attempts: 1, lastError: error.message },
-          ]);
-          await vi.waitFor(() => expect(settlementFinished).toBe(true));
-        } finally {
-          await finalizingLifecycle?.onAbandoned();
-          await settlement;
-          await monitor.stop();
+  )("settles tracked finalization after %j", async (queue, { failureMode, ownerAborted }) => {
+    const error = new Error("inline finalization failed");
+    const abort = new AbortController();
+    let finalizingLifecycle: ChannelIngressMonitorLifecycle | undefined;
+    const monitor = createMonitor(
+      queue,
+      async (_raw, lifecycle) => {
+        finalizingLifecycle = lifecycle;
+        lifecycle.onAdoptionFinalizing();
+        if (ownerAborted) {
+          abort.abort(error);
         }
-      });
-    },
-  );
+        if (failureMode === "throw") {
+          throw error;
+        }
+        return { kind: "failed-retryable", error };
+      },
+      { deferredClaims: "wait-on-stop", abortSignal: abort.signal },
+    );
+    await startWith(monitor, event("event-finalization-failure"));
+    await monitor.waitForIdle();
+    await monitor.pause();
+    const settled = vi.fn();
+    const settlement = monitor.waitForDeferredClaims().then(settled);
+    try {
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        { id: "event-finalization-failure", attempts: 1, lastError: error.message },
+      ]);
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    } finally {
+      await finalizingLifecycle?.onAbandoned();
+      await settlement;
+      await monitor.stop();
+    }
+  });
   queueIt("keeps opt-in durable admission available after stop", async (queue) => {
     const deliver = vi.fn();
     const retired = createMonitor(queue, deliver, { admissionMode: "durable-after-stop" });
@@ -646,14 +599,12 @@ describe("channel ingress monitor", () => {
     const monitor = createMonitor(queueFactory, vi.fn(), undefined, onError, undefined, 1);
     vi.useFakeTimers();
     try {
-      const startError = (() => {
-        try {
-          monitor.start();
-          return expect.unreachable("start must fail while the durable queue is denied");
-        } catch (error) {
-          return error;
-        }
-      })();
+      let startError: unknown;
+      try {
+        monitor.start();
+      } catch (error) {
+        startError = error;
+      }
       expect(startError).toBeInstanceOf(ChannelIngressUnavailableError);
       expect((startError as Error).cause).toBe(denial);
       expect(isChannelIngressUnavailableError(startError)).toBe(true);
@@ -710,84 +661,83 @@ describe("channel ingress monitor shutdown", () => {
     vi.useRealTimers();
   });
 
-  it.each(["cancel", "adopt", "completed", "failed"] as const)(
+  queueEach(["cancel", "adopt", "completed", "failed"] as const)(
     "joins the %s write before disposal without waiting for delivery",
-    async (settlementKind) => {
-      await withQueue(async (queue) => {
-        const started = createDeferred();
-        const writeStarted = createDeferred();
-        const commit = createDeferred();
-        const order: string[] = [];
-        const pauseWrite = async (write: () => Promise<boolean>) => {
-          writeStarted.resolve();
-          await commit.promise;
-          const result = await write();
-          order.push("committed");
-          return result;
-        };
-        if (settlementKind === "cancel" || settlementKind === "failed") {
-          const release = queue.release.bind(queue);
-          vi.spyOn(queue, "release").mockImplementation((...args) =>
-            pauseWrite(() => release(...args)),
-          );
-        } else {
-          const complete = queue.complete.bind(queue);
-          vi.spyOn(queue, "complete").mockImplementation((...args) =>
-            pauseWrite(() => complete(...args)),
-          );
-        }
-        let settlement = Promise.resolve();
-        const monitor = createMonitor(
-          queue,
-          async (_raw, lifecycle) => {
-            started.resolve();
-            if (settlementKind === "completed") {
-              return { kind: "completed" };
-            }
-            if (settlementKind === "failed") {
-              return { kind: "failed-retryable", error: new Error("retry delivery") };
-            }
-            await waitForAbort(lifecycle.abortSignal);
-            settlement = Promise.resolve(
-              settlementKind === "cancel" ? lifecycle.onCancelled?.() : lifecycle.onAdopted(),
-            );
-            return { kind: settlementKind === "cancel" ? "deferred" : "completed" };
-          },
-          {
-            deferredClaims: "wait-on-stop",
-            waitForDeliveryIdleOnStop: false,
-          },
+    async (queue, settlementKind) => {
+      const releases = settlementKind === "cancel" || settlementKind === "failed";
+      const started = createDeferred();
+      const writeStarted = createDeferred();
+      const commit = createDeferred();
+      const order: string[] = [];
+      const pauseWrite = async (write: () => Promise<boolean>) => {
+        writeStarted.resolve();
+        await commit.promise;
+        const result = await write();
+        order.push("committed");
+        return result;
+      };
+      if (releases) {
+        const release = queue.release.bind(queue);
+        vi.spyOn(queue, "release").mockImplementation((...args) =>
+          pauseWrite(() => release(...args)),
         );
-        await startWith(monitor, event("inline-settlement"));
-        await started.promise;
-        if (settlementKind === "completed" || settlementKind === "failed") {
-          await writeStarted.promise;
-        }
-        const stopping = monitor.stop().then(() => order.push("stopped"));
-        const successor = createChannelIngressDrain({
-          queue,
-          dispatchClaimedEvent: async (_claim, lifecycle) => {
-            await lifecycle.onAdopted();
-          },
-        });
-        try {
-          await writeStarted.promise;
-          await monitor.waitForPumpIdle();
-          expect(await successor.drainOnce()).toEqual({ started: 0 });
-          commit.resolve();
-          await Promise.all([settlement, stopping]);
-          expect(order).toEqual(["committed", "stopped"]);
-          expect(await queue.listClaims()).toEqual([]);
-          expect((await queue.listPending()).map((row) => row.id)).toEqual(
-            settlementKind === "cancel" || settlementKind === "failed" ? ["inline-settlement"] : [],
+      } else {
+        const complete = queue.complete.bind(queue);
+        vi.spyOn(queue, "complete").mockImplementation((...args) =>
+          pauseWrite(() => complete(...args)),
+        );
+      }
+      let settlement = Promise.resolve();
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          started.resolve();
+          if (settlementKind === "completed") {
+            return { kind: "completed" };
+          }
+          if (settlementKind === "failed") {
+            return { kind: "failed-retryable", error: new Error("retry delivery") };
+          }
+          await waitForAbort(lifecycle.abortSignal);
+          settlement = Promise.resolve(
+            settlementKind === "cancel" ? lifecycle.onCancelled?.() : lifecycle.onAdopted(),
           );
-        } finally {
-          commit.resolve();
-          await Promise.allSettled([settlement, stopping]);
-          await successor.waitForIdle();
-          successor.dispose();
-        }
+          return { kind: settlementKind === "cancel" ? "deferred" : "completed" };
+        },
+        {
+          deferredClaims: "wait-on-stop",
+          waitForDeliveryIdleOnStop: false,
+        },
+      );
+      await startWith(monitor, event("inline-settlement"));
+      await started.promise;
+      if (settlementKind === "completed" || settlementKind === "failed") {
+        await writeStarted.promise;
+      }
+      const stopping = monitor.stop().then(() => order.push("stopped"));
+      const successor = createChannelIngressDrain({
+        queue,
+        dispatchClaimedEvent: async (_claim, lifecycle) => {
+          await lifecycle.onAdopted();
+        },
       });
+      try {
+        await writeStarted.promise;
+        await monitor.waitForPumpIdle();
+        expect(await successor.drainOnce()).toEqual({ started: 0 });
+        commit.resolve();
+        await Promise.all([settlement, stopping]);
+        expect(order).toEqual(["committed", "stopped"]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(
+          releases ? ["inline-settlement"] : [],
+        );
+      } finally {
+        commit.resolve();
+        await Promise.allSettled([settlement, stopping]);
+        await successor.waitForIdle();
+        successor.dispose();
+      }
     },
   );
 });

@@ -1,3 +1,4 @@
+import { setImmediate as tick } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -60,11 +61,6 @@ describe("channel ingress monitor admission", () => {
     return { release, entered, inspectAsync };
   }
 
-  const tick = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
   it("does not replay or acknowledge an append with a wrapped unknown native outcome", async () => {
     const queue = createQueue();
     const unknown = new SqliteWorkerError("Synthetic lost native outcome", "outcome-unknown");
@@ -72,15 +68,13 @@ describe("channel ingress monitor admission", () => {
       cause: new AggregateError([unknown]),
     });
     const append = queue.enqueue.bind(queue);
-    let attempted = false;
-    const enqueue = vi.spyOn(queue, "enqueue").mockImplementation(async (...args) => {
-      const result = await append(...args);
-      if (!attempted) {
-        attempted = true;
+    const enqueue = vi
+      .spyOn(queue, "enqueue")
+      .mockImplementationOnce(async (...args) => {
+        await append(...args);
         throw failure;
-      }
-      return result;
-    });
+      })
+      .mockImplementation(append);
     const acknowledged = vi.fn();
     const monitor = createMonitor({
       queue,
@@ -294,9 +288,7 @@ describe("channel ingress monitor admission", () => {
     prepare: (...args: Parameters<MonitorOptions["deliver"]>) => "complete" | void = (
       _raw,
       lifecycle,
-    ) => {
-      lifecycle.onDeferred();
-    },
+    ) => lifecycle.onDeferred(),
   ) {
     const started: string[] = [];
     const release = createDeferred();

@@ -29,12 +29,16 @@ function createDrainFixture(
 ) {
   const queue = createTestIngressQueue(stateDir, queueOptions);
   const dispatches: string[] = [];
+  const events: Parameters<
+    CreateChannelIngressDrainOptions<IngressDrainTestPayload>["dispatchClaimedEvent"]
+  >[0][] = [];
   const lifecycles: ChannelIngressDispatchLifecycle[] = [];
   const byId = new Map<string, ChannelIngressDispatchLifecycle>();
   const drains: ReturnType<typeof createChannelIngressDrain>[] = [];
   return {
     queue,
     dispatches,
+    events,
     lifecycles,
     byId,
     dispose: () => drains.forEach((drain) => drain.dispose()),
@@ -52,6 +56,7 @@ function createDrainFixture(
           ...rest,
           dispatchClaimedEvent: (event, lifecycle) => {
             dispatches.push(event.id);
+            events.push(event);
             lifecycles.push(lifecycle);
             byId.set(event.id, lifecycle);
             return dispatchClaimedEvent
