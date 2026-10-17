@@ -8,7 +8,10 @@ import type {
   ChannelsPairingCodeApproveResult,
 } from "../../packages/gateway-protocol/src/schema/channel-pairing.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
@@ -121,7 +124,7 @@ export function registerPairingCli(program: Command) {
         `${theme.heading("Pairing requests")} ${theme.muted(`(${requests.length})`)}`,
       );
       defaultRuntime.log(
-        renderTable({
+        renderTerminalSafeTable({
           width: tableWidth,
           columns: [
             { key: "Code", header: "Code", minWidth: 10 },

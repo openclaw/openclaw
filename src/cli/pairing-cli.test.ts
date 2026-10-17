@@ -167,6 +167,37 @@ describe("pairing cli", () => {
     }
   });
 
+  it("strips terminal controls from pairing ids and metadata", async () => {
+    listChannelPairingRequests.mockResolvedValueOnce([
+      {
+        id: "req-1",
+        code: "ABC123",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+        meta: { senderId: "snd\u001b]0;pwned\u0007PAIR_MARKER" },
+      },
+      {
+        id: "req-2",
+        code: "DEF456",
+        createdAt: "2026-01-08T00:00:01Z",
+        lastSeenAt: "2026-01-08T00:00:01Z",
+        meta: { senderId: "plain-sender" },
+      },
+    ]);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runPairing(["pairing", "list", "--channel", "telegram"]);
+      const raw = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(raw).not.toContain("snd\u001b]0;pwned\u0007PAIR_MARKER");
+      expect(raw).not.toContain("\u0007");
+      expect(raw).toContain("PAIR_MARKER");
+      expect(raw).toContain("plain-sender");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("rejects conflicting positional and option channels for list", async () => {
     await expect(
       runPairing(["pairing", "list", "discord", "--channel", "telegram"]),
