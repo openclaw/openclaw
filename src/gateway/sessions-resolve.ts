@@ -263,7 +263,7 @@ export function resolveSessionKeyFromResolveParams(params: {
       },
       candidateKeys === undefined
         ? { ...selector, metadataPrepared: params.preparedRead !== undefined }
-        : { candidateKeys, metadataPrepared: true },
+        : { candidateKeys, metadataPrepared: params.preparedRead !== undefined },
     );
   };
   const configuredAgentIds = new Set(listAgentIds(cfg));
