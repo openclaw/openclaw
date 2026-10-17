@@ -40,6 +40,22 @@ const leases: SharedLease[] = [];
 const releaseBlockedIo: Array<() => void> = [];
 let previousRuntime: PluginRuntime | null;
 
+function ownerPair(onNextClientCreated = () => {}) {
+  const firstOwner = registerOwner();
+  const nextOwner = registerOwner();
+  const firstClient = createMockClient("first");
+  const nextClient = createMockClient("next");
+  createMatrixClientMock.mockResolvedValueOnce(firstClient).mockImplementationOnce(async () => {
+    onNextClientCreated();
+    return nextClient;
+  });
+  return { firstOwner, nextOwner, firstClient, nextClient };
+}
+function expectBlocked(settled: ReturnType<typeof vi.fn>) {
+  expect(settled).not.toHaveBeenCalled();
+  expect(createMatrixClientMock).toHaveBeenCalledOnce();
+}
+
 function registerOwner(onDisposeRegistered?: () => void): RegisteredOwner {
   const controller = new AbortController();
   const disposers = new Set<Disposer>();
@@ -75,10 +91,11 @@ function registerOwner(onDisposeRegistered?: () => void): RegisteredOwner {
 
 function acquire(
   runtime: PluginRuntime,
-  params: Parameters<typeof acquireSharedMatrixClient>[0],
+  auth: Parameters<typeof acquireSharedMatrixClient>[0]["auth"],
+  abortSignal?: AbortSignal,
 ): Promise<SharedLease> {
   setMatrixRuntime(runtime);
-  const acquisition = acquireSharedMatrixClient(params);
+  const acquisition = acquireSharedMatrixClient({ auth, startClient: false, abortSignal });
   acquisitions.push(acquisition);
   void acquisition.then(
     (lease) => leases.push(lease),
@@ -109,25 +126,17 @@ afterEach(async () => {
 
 describe("shared Matrix plugin lifecycle", () => {
   it("retires the disposed owner's shared client while another runtime stays live", async () => {
-    const firstOwner = registerOwner();
-    const otherOwner = registerOwner();
-    const firstClient = createMockClient("first");
-    const otherClient = createMockClient("other");
-    createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(otherClient);
+    const { firstOwner, nextOwner: otherOwner, firstClient, nextClient: otherClient } = ownerPair();
     const auth = authFor("lifecycle-first");
-    const first = await acquire(firstOwner.runtime, { auth, startClient: false });
-    const shared = await acquire(firstOwner.runtime, { auth, startClient: false });
-    const other = await acquire(otherOwner.runtime, {
-      auth: authFor("lifecycle-other"),
-      startClient: false,
-    });
+    const first = await acquire(firstOwner.runtime, auth);
+    const shared = await acquire(firstOwner.runtime, auth);
+    const other = await acquire(otherOwner.runtime, authFor("lifecycle-other"));
 
     expect(shared.client).toBe(first.client);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
     await firstOwner.dispose();
 
-    expect(first.abortSignal.aborted).toBe(true);
-    expect(shared.abortSignal.aborted).toBe(true);
+    expect([first.abortSignal.aborted, shared.abortSignal.aborted]).toEqual([true, true]);
     expect(firstClient.stopAndPersist).toHaveBeenCalledOnce();
     expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
     expect(other.abortSignal.aborted).toBe(false);
@@ -138,35 +147,28 @@ describe("shared Matrix plugin lifecycle", () => {
   });
 
   it("waits for the previous owner's physical shutdown before reusing the same auth", async () => {
-    const firstOwner = registerOwner();
-    const nextOwner = registerOwner();
-    const firstClient = createMockClient("first");
-    const nextClient = createMockClient("next");
+    let physicallyStopped = false;
+    const { firstOwner, nextOwner, firstClient, nextClient } = ownerPair(() => {
+      expect(physicallyStopped).toBe(true);
+    });
     const finishStop = createDeferred<void>();
     releaseBlockedIo.push(() => finishStop.resolve());
-    let physicallyStopped = false;
     firstClient.stopAndPersist.mockImplementation(async () => {
       await finishStop.promise;
       physicallyStopped = true;
     });
-    createMatrixClientMock.mockResolvedValueOnce(firstClient).mockImplementationOnce(async () => {
-      expect(physicallyStopped).toBe(true);
-      return nextClient;
-    });
     const auth = authFor("lifecycle-transfer");
-    await acquire(firstOwner.runtime, { auth, startClient: false });
-    const next = acquire(nextOwner.runtime, { auth, startClient: false });
+    await acquire(firstOwner.runtime, auth);
+    const next = acquire(nextOwner.runtime, auth);
     const settled = vi.fn();
     void next.then(settled, settled);
     await setImmediate();
 
-    expect(settled).not.toHaveBeenCalled();
-    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    expectBlocked(settled);
     const retirement = firstOwner.dispose();
     await setImmediate();
     expect(firstClient.stopAndPersist).toHaveBeenCalledOnce();
-    expect(settled).not.toHaveBeenCalled();
-    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    expectBlocked(settled);
 
     finishStop.resolve();
     await retirement;
@@ -177,17 +179,13 @@ describe("shared Matrix plugin lifecycle", () => {
   });
 
   it("keeps a successor alive when the previous owner's captured cleanup runs late", async () => {
-    const firstOwner = registerOwner();
-    const nextOwner = registerOwner();
-    const firstClient = createMockClient("first");
-    const nextClient = createMockClient("next");
-    createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(nextClient);
+    const { firstOwner, nextOwner, firstClient, nextClient } = ownerPair();
     const auth = authFor("lifecycle-late-cleanup");
-    const first = await acquire(firstOwner.runtime, { auth, startClient: false });
+    const first = await acquire(firstOwner.runtime, auth);
     const capturedDisposers = firstOwner.snapshotDisposers();
     await first.release({ mode: "persist" });
     expect(firstOwner.snapshotDisposers()).toEqual([]);
-    const replacement = await acquire(nextOwner.runtime, { auth, startClient: false });
+    const replacement = await acquire(nextOwner.runtime, auth);
 
     await firstOwner.dispose();
     for (const dispose of capturedDisposers) {
@@ -199,7 +197,7 @@ describe("shared Matrix plugin lifecycle", () => {
     expect(firstClient.stopAndPersist).toHaveBeenCalledOnce();
     expect(nextClient.quiesceSync).not.toHaveBeenCalled();
     expect(replacement.abortSignal.aborted).toBe(false);
-    const sharedReplacement = await acquire(nextOwner.runtime, { auth, startClient: false });
+    const sharedReplacement = await acquire(nextOwner.runtime, auth);
     expect(sharedReplacement.client).toBe(nextClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
   });
@@ -212,16 +210,16 @@ describe("shared Matrix plugin lifecycle", () => {
     const firstOwner = registerOwner(() => {
       // Registration exposes the created client before its first lease is admitted.
       // Let the successor wait for that custody before cancelling the first caller.
-      next = acquire(nextOwner.runtime, { auth, startClient: false });
+      next = acquire(nextOwner.runtime, auth);
       queueMicrotask(() => caller.abort());
     });
     const firstClient = createMockClient("unclaimed");
     const nextClient = createMockClient("next");
     createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(nextClient);
 
-    await expect(
-      acquire(firstOwner.runtime, { auth, startClient: false, abortSignal: caller.signal }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(acquire(firstOwner.runtime, auth, caller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
     expect(firstClient.start).not.toHaveBeenCalled();
     expect(firstClient.stopWithoutPersist).toHaveBeenCalledOnce();
     if (!next) {

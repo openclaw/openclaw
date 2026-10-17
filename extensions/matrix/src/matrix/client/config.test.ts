@@ -23,9 +23,30 @@ function matrixConfig(matrix: MatrixConfig): CoreConfig {
   return { channels: { matrix } };
 }
 
-function resolveDefaultMatrixAuthContext(cfg: CoreConfig, env: NodeJS.ProcessEnv = {}) {
-  return resolveMatrixAuthContext({ cfg, env });
+function resolveDefaultMatrixAuthContext(
+  cfg: CoreConfig,
+  env: NodeJS.ProcessEnv = {},
+  accountId?: string,
+) {
+  return resolveMatrixAuthContext({ cfg, env, accountId });
 }
+
+const configAuth = {
+  homeserver: "https://cfg.example.org",
+  userId: "@cfg:example.org",
+  accessToken: "cfg-token",
+  password: "cfg-pass",
+  deviceName: "CfgDevice",
+  initialSyncLimit: 5,
+};
+const envAuth = {
+  MATRIX_HOMESERVER: "https://env.example.org",
+  MATRIX_USER_ID: "@env:example.org",
+  MATRIX_ACCESS_TOKEN: "env-token",
+  MATRIX_PASSWORD: "env-pass",
+  MATRIX_DEVICE_NAME: "EnvDevice",
+};
+const opsAccount = { homeserver: "https://ops.example.org", accessToken: "ops-token" };
 
 beforeEach(() => {
   installMatrixTestRuntime();
@@ -37,7 +58,6 @@ afterEach(() => {
 
 function createEnvSecretRefConfig(params: {
   field: "accessToken" | "password";
-  accountId?: string;
   provider?: string;
   secrets?: CoreConfig["secrets"];
 }): CoreConfig {
@@ -51,58 +71,25 @@ function createEnvSecretRefConfig(params: {
     },
   };
   return {
-    channels: {
-      matrix:
-        params.accountId && params.accountId !== "default"
-          ? { accounts: { [params.accountId]: account } }
-          : account,
-    },
+    ...matrixConfig(account),
     secrets: params.secrets,
   };
 }
 
 describe("Matrix auth/config live surfaces", () => {
   it("prefers config over env", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://cfg.example.org",
-      userId: "@cfg:example.org",
-      accessToken: "cfg-token",
-      password: "cfg-pass",
-      deviceName: "CfgDevice",
-      initialSyncLimit: 5,
-    });
-    const env = {
-      MATRIX_HOMESERVER: "https://env.example.org",
-      MATRIX_USER_ID: "@env:example.org",
-      MATRIX_ACCESS_TOKEN: "env-token",
-      MATRIX_PASSWORD: "env-pass",
-      MATRIX_DEVICE_NAME: "EnvDevice",
-    } as NodeJS.ProcessEnv;
-    const resolved = resolveDefaultMatrixAuthContext(cfg, env).resolved;
-    expect(resolved).toEqual({
-      homeserver: "https://cfg.example.org",
-      userId: "@cfg:example.org",
-      accessToken: "cfg-token",
-      password: "cfg-pass",
+    const cfg = matrixConfig({ ...configAuth });
+    expect(resolveDefaultMatrixAuthContext(cfg, envAuth).resolved).toEqual({
+      ...configAuth,
       deviceId: undefined,
-      deviceName: "CfgDevice",
-      initialSyncLimit: 5,
       encryption: false,
     });
   });
 
   it("uses env when config is missing", () => {
-    const cfg = {};
-    const env = {
-      MATRIX_HOMESERVER: "https://env.example.org",
-      MATRIX_USER_ID: "@env:example.org",
-      MATRIX_ACCESS_TOKEN: "env-token",
-      MATRIX_PASSWORD: "env-pass",
-      MATRIX_DEVICE_ID: "ENVDEVICE",
-      MATRIX_DEVICE_NAME: "EnvDevice",
-    } as NodeJS.ProcessEnv;
-    const resolved = resolveDefaultMatrixAuthContext(cfg, env).resolved;
-    expect(resolved).toEqual({
+    expect(
+      resolveDefaultMatrixAuthContext({}, { ...envAuth, MATRIX_DEVICE_ID: "ENVDEVICE" }).resolved,
+    ).toEqual({
       homeserver: "https://env.example.org",
       userId: "@env:example.org",
       accessToken: "env-token",
@@ -124,11 +111,8 @@ describe("Matrix auth/config live surfaces", () => {
       },
     });
     expect(
-      resolveMatrixAuthContext({
-        cfg,
-        accountId: "default",
-        env: { MATRIX_TEST_SECRET: " supplied-secret " },
-      }).resolved.password,
+      resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: " supplied-secret " }, "default")
+        .resolved.password,
     ).toBe("supplied-secret");
   });
 
@@ -142,13 +126,9 @@ describe("Matrix auth/config live surfaces", () => {
       },
     });
     cfg.secrets = { providers: { default: { source: "env", allowlist: [] } } };
-    const env = {
-      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
-    } as NodeJS.ProcessEnv;
-
-    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
-    expect(resolved.accessToken).toBe("ops-token");
-    expect(resolved.password).toBeUndefined();
+    expect(
+      resolveMatrixConfigForAccount(cfg, "ops", { MATRIX_OPS_ACCESS_TOKEN: "ops-token" }),
+    ).toMatchObject({ accessToken: "ops-token", password: undefined });
   });
 
   it("rejects accessToken SecretRefs with a missing env value", () => {
@@ -212,59 +192,35 @@ describe("Matrix auth/config live surfaces", () => {
       homeserver: "https://cfg.example.org",
       accessToken: { source: "file", provider: "matrix-file", id: "value" },
     });
-    cfg.secrets = {
-      providers: {
-        "matrix-file": {
-          source: "file",
-          path: "/tmp/matrix-token",
-        },
-      },
-    };
-
-    expect(
-      resolveDefaultMatrixAuthContext(cfg, {} as NodeJS.ProcessEnv).resolved.accessToken,
-    ).toBeUndefined();
+    cfg.secrets = { providers: { "matrix-file": { source: "file", path: "/tmp/matrix-token" } } };
+    expect(resolveDefaultMatrixAuthContext(cfg).resolved.accessToken).toBeUndefined();
   });
 
   it("uses collision-free scoped env var names for normalized account ids", () => {
-    expect(getMatrixScopedEnvVarNames("ops-prod").accessToken).toBe(
-      "MATRIX_OPS_X2D_PROD_ACCESS_TOKEN",
-    );
-    expect(getMatrixScopedEnvVarNames("ops_prod").accessToken).toBe(
-      "MATRIX_OPS_X5F_PROD_ACCESS_TOKEN",
-    );
+    expect(
+      ["ops-prod", "ops_prod"].map((id) => getMatrixScopedEnvVarNames(id).accessToken),
+    ).toEqual(["MATRIX_OPS_X2D_PROD_ACCESS_TOKEN", "MATRIX_OPS_X5F_PROD_ACCESS_TOKEN"]);
   });
 
   it("prefers channels.matrix.accounts.default over global env for the default account", () => {
-    const cfg = matrixConfig({
-      accounts: {
-        default: {
-          homeserver: "https://matrix.gumadeiras.com",
-          userId: "@pinguini:matrix.gumadeiras.com",
-          password: "cfg-pass", // pragma: allowlist secret
-          deviceName: "OpenClaw Gateway Pinguini",
-          encryption: true,
-        },
-      },
-    });
-    const env = {
-      MATRIX_HOMESERVER: "https://env.example.org",
-      MATRIX_USER_ID: "@env:example.org",
-      MATRIX_PASSWORD: "env-pass",
-      MATRIX_DEVICE_NAME: "EnvDevice",
-    } as NodeJS.ProcessEnv;
-
-    const resolved = resolveMatrixAuthContext({ cfg, env });
-    expect(resolved.accountId).toBe("default");
-    expect(resolved.resolved).toEqual({
+    const account = {
       homeserver: "https://matrix.gumadeiras.com",
       userId: "@pinguini:matrix.gumadeiras.com",
-      accessToken: undefined,
-      password: "cfg-pass",
-      deviceId: undefined,
+      password: "cfg-pass", // pragma: allowlist secret
       deviceName: "OpenClaw Gateway Pinguini",
-      initialSyncLimit: undefined,
       encryption: true,
+    };
+    const { MATRIX_ACCESS_TOKEN: _unusedToken, ...env } = envAuth;
+    const resolved = resolveDefaultMatrixAuthContext(
+      matrixConfig({ accounts: { default: { ...account } } }),
+      env,
+    );
+    expect(resolved.accountId).toBe("default");
+    expect(resolved.resolved).toEqual({
+      ...account,
+      accessToken: undefined,
+      deviceId: undefined,
+      initialSyncLimit: undefined,
       allowPrivateNetwork: undefined,
       ssrfPolicy: undefined,
       dispatcherPolicy: undefined,
@@ -278,9 +234,7 @@ describe("Matrix auth/config live surfaces", () => {
       accessToken: "legacy-token",
     });
 
-    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe(
-      "default",
-    );
+    expect(resolveDefaultMatrixAuthContext(cfg).accountId).toBe("default");
   });
 
   it("requires explicit defaultAccount selection when multiple named Matrix accounts exist", () => {
@@ -290,14 +244,11 @@ describe("Matrix auth/config live surfaces", () => {
           homeserver: "https://matrix.assistant.example.org",
           accessToken: "assistant-token",
         },
-        ops: {
-          homeserver: "https://matrix.ops.example.org",
-          accessToken: "ops-token",
-        },
+        ops: opsAccount,
       },
     });
 
-    expect(() => resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv })).toThrow(
+    expect(() => resolveDefaultMatrixAuthContext(cfg)).toThrow(
       /channels\.matrix\.defaultAccount.*--account <id>/i,
     );
   });
@@ -309,49 +260,33 @@ describe("Matrix auth/config live surfaces", () => {
       MATRIX_ACCESS_TOKEN: "default-token",
       MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
       MATRIX_OPS_ACCESS_TOKEN: "ops-token",
-    } as NodeJS.ProcessEnv;
+    };
 
-    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("default");
+    expect(resolveDefaultMatrixAuthContext(cfg, env).accountId).toBe("default");
   });
 
   it("keeps implicit selection for env-backed accounts that can use cached credentials", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://matrix.example.org",
-    });
-    const env = {
-      MATRIX_OPS_USER_ID: "@ops:example.org",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("ops");
+    expect(
+      resolveDefaultMatrixAuthContext(matrixConfig({ homeserver: "https://matrix.example.org" }), {
+        MATRIX_OPS_USER_ID: "@ops:example.org",
+      }).accountId,
+    ).toBe("ops");
   });
 
-  it("rejects explicit non-default account ids that are neither configured nor scoped in env", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://legacy.example.org",
-      accessToken: "legacy-token",
-      accounts: {
-        ops: {
-          homeserver: "https://ops.example.org",
-          accessToken: "ops-token",
-        },
-      },
-    });
-
-    expect(() =>
-      resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv, accountId: "typo" }),
-    ).toThrow(/Matrix account "typo" is not configured/i);
-  });
-
-  it("rejects invalid explicit account ids instead of borrowing the default account", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://legacy.example.org",
-      accessToken: "legacy-token",
-    });
-
-    expect(() =>
-      resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv, accountId: "!!!" }),
-    ).toThrow(/Matrix account id "!!!" is invalid/i);
-  });
+  it.each([
+    ["typo", /Matrix account "typo" is not configured/i],
+    ["!!!", /Matrix account id "!!!" is invalid/i],
+  ] as const)(
+    "rejects explicit account %s instead of borrowing the default",
+    (accountId, error) => {
+      const cfg = matrixConfig({
+        homeserver: "https://legacy.example.org",
+        accessToken: "legacy-token",
+        accounts: { ops: opsAccount },
+      });
+      expect(() => resolveDefaultMatrixAuthContext(cfg, {}, accountId)).toThrow(error);
+    },
+  );
 
   it.each(["channel", "account"])(
     "rejects a disabled %s before resolving secrets",
@@ -373,76 +308,44 @@ describe("Matrix auth/config live surfaces", () => {
         },
       });
 
-      expect(() =>
-        resolveMatrixAuthContext({
-          cfg,
-          env: {} as NodeJS.ProcessEnv,
-          accountId: "disabled",
-        }),
-      ).toThrow(/Matrix account "disabled" is disabled/i);
+      expect(() => resolveDefaultMatrixAuthContext(cfg, {}, "disabled")).toThrow(
+        /Matrix account "disabled" is disabled/i,
+      );
     },
   );
 
-  it("does not inherit the base userId for non-default accounts", () => {
+  it.each([
+    { field: "userId", account: opsAccount, expected: { userId: "" } },
+    {
+      field: "auth secrets",
+      account: {
+        homeserver: opsAccount.homeserver,
+        userId: "@ops:example.org",
+        password: "ops-pass", // pragma: allowlist secret
+      },
+      expected: { accessToken: undefined, password: "ops-pass", deviceId: undefined },
+    },
+    {
+      field: "password",
+      account: { homeserver: opsAccount.homeserver, userId: "@ops:example.org" },
+      expected: { password: undefined },
+    },
+  ])("does not inherit base or global $field for non-default accounts", ({ account, expected }) => {
     const cfg = matrixConfig({
       homeserver: "https://base.example.org",
       userId: "@base:example.org",
       accessToken: "base-token",
-      accounts: {
-        ops: {
-          homeserver: "https://ops.example.org",
-          accessToken: "ops-token",
-        },
-      },
-    });
-
-    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
-    expect(resolved.userId).toBe("");
-  });
-
-  it("does not inherit base or global auth secrets for non-default accounts", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://base.example.org",
-      accessToken: "base-token",
       password: "base-pass", // pragma: allowlist secret
       deviceId: "BASEDEVICE",
-      accounts: {
-        ops: {
-          homeserver: "https://ops.example.org",
-          userId: "@ops:example.org",
-          password: "ops-pass", // pragma: allowlist secret
-        },
-      },
+      accounts: { ops: account },
     });
     const env = {
       MATRIX_ACCESS_TOKEN: "global-token",
       MATRIX_PASSWORD: "global-pass",
       MATRIX_DEVICE_ID: "GLOBALDEVICE",
-    } as NodeJS.ProcessEnv;
+    };
 
-    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
-    expect(resolved.accessToken).toBeUndefined();
-    expect(resolved.password).toBe("ops-pass");
-    expect(resolved.deviceId).toBeUndefined();
-  });
-
-  it("does not inherit a base password for non-default accounts", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://base.example.org",
-      password: "base-pass", // pragma: allowlist secret
-      accounts: {
-        ops: {
-          homeserver: "https://ops.example.org",
-          userId: "@ops:example.org",
-        },
-      },
-    });
-    const env = {
-      MATRIX_PASSWORD: "global-pass",
-    } as NodeJS.ProcessEnv;
-
-    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
-    expect(resolved.password).toBeUndefined();
+    expect(resolveMatrixConfigForAccount(cfg, "ops", env)).toMatchObject(expected);
   });
 
   it("accepts internal http homeservers only when private-network access is enabled", () => {
@@ -463,7 +366,7 @@ describe("Matrix auth/config live surfaces", () => {
       proxy: "http://127.0.0.1:7890",
     });
 
-    const resolved = resolveDefaultMatrixAuthContext(cfg, {} as NodeJS.ProcessEnv).resolved;
+    const resolved = resolveDefaultMatrixAuthContext(cfg).resolved;
 
     expect(resolved.dispatcherPolicy).toEqual({
       mode: "explicit-proxy",
