@@ -363,6 +363,12 @@ describe.skipIf(!connection)("agent database port", () => {
     ]);
     expect(
       (
+        await client.query(`SELECT event_utf8_bytes = octet_length(event_json) AS matches_stored_bytes
+          FROM "${namespace}".trajectory_runtime_events WHERE session_id = 'session' AND seq = 1`)
+      ).rows,
+    ).toEqual([{ matches_stored_bytes: true }]);
+    expect(
+      (
         await client.query(
           `SELECT advancement_key FROM "${namespace}".context_engine_turn_outbox ORDER BY enqueue_sequence`,
         )
