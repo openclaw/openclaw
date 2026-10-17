@@ -73,6 +73,19 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
+const tokenCredential = (token = "synthetic-personal-token", provider = "anthropic") =>
+  ({ type: "token", provider, token }) satisfies AuthProfileCredential;
+const apiKeyCredential = (key: string) =>
+  ({ type: "api_key", provider: "xai", key }) satisfies AuthProfileCredential;
+
+function connect(
+  ownerProfileId: string,
+  credential: AuthProfileCredential,
+  options: ReturnType<typeof stateOptions>,
+) {
+  return connectUserModelAccount({ ownerProfileId, credential, assertCurrent() {} }, options);
+}
+
 function connectToken(
   ownerProfileId: string,
   options: ReturnType<typeof stateOptions>,
@@ -81,7 +94,7 @@ function connectToken(
   return connectUserModelAccount(
     {
       ownerProfileId,
-      credential: { type: "token", provider: "anthropic", token },
+      credential: tokenCredential(token),
       replacement: readSelectedUserModelAccount(ownerProfileId, "anthropic", options),
       assertCurrent() {},
     },
@@ -94,12 +107,9 @@ describe("personal model accounts", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("catalog-alice@example.test", options);
     const first = connectToken(alice.id, options).authProfileId;
-    const second = connectUserModelAccount(
-      {
-        ownerProfileId: alice.id,
-        credential: { type: "token", provider: "openai", token: "synthetic-second-token" },
-        assertCurrent() {},
-      },
+    const second = connect(
+      alice.id,
+      tokenCredential("synthetic-second-token", "openai"),
       options,
     ).authProfileId;
     const { db } = openOpenClawStateDatabase(options);
@@ -281,9 +291,7 @@ describe("personal model accounts", () => {
   it.each([
     {
       credential: {
-        type: "api_key",
-        provider: "xai",
-        key: "  synthetic-personal-api-key\r\n",
+        ...apiKeyCredential("  synthetic-personal-api-key\r\n"),
         displayName: `${"x".repeat(255)}🤖`,
         metadata: { account: "synthetic-account" },
       },
@@ -291,9 +299,7 @@ describe("personal model accounts", () => {
     },
     ...["\ud83e", "\udd16"].map((surrogate) => ({
       credential: {
-        type: "token" as const,
-        provider: "anthropic",
-        token: "synthetic-malformed-label-token",
+        ...tokenCredential("synthetic-malformed-label-token"),
         displayName: `${"x".repeat(255)}${surrogate}`,
       },
       label: `${"x".repeat(255)}\ufffd`,
@@ -303,9 +309,7 @@ describe("personal model accounts", () => {
       { displayName: "account@example.test", label: "account@example.test" },
     ].map(({ displayName, label }) => ({
       credential: {
-        type: "token" as const,
-        provider: "example",
-        token: "synthetic-account-label-token",
+        ...tokenCredential("synthetic-account-label-token", "example"),
         email: "account@example.test",
         displayName,
       },
@@ -317,10 +321,7 @@ describe("personal model accounts", () => {
       const options = stateOptions();
       const alice = ensureProfileForEmail("label-alice@example.test", options);
       const bob = ensureProfileForEmail("label-bob@example.test", options);
-      const { authProfileId } = connectUserModelAccount(
-        { ownerProfileId: alice.id, credential, assertCurrent() {} },
-        options,
-      );
+      const { authProfileId } = connect(alice.id, credential, options);
       closeOpenClawStateDatabaseByPath(options.path);
       expect(readUserModelAuthProfile(authProfileId, options)?.credential).toEqual(
         credential.type === "api_key"
@@ -364,18 +365,16 @@ describe("personal model accounts", () => {
     },
     {
       name: "inline API-key reference",
-      credential: { type: "api_key", provider: "xai", key: "${XAI_API_KEY}" },
+      credential: apiKeyCredential("${XAI_API_KEY}"),
     },
     {
       name: "inline token reference",
-      credential: { type: "token", provider: "synthetic", token: "$SYNTHETIC_TOKEN" },
+      credential: tokenCredential("$SYNTHETIC_TOKEN", "synthetic"),
     },
     {
       name: "portable credential",
       credential: {
-        type: "api_key",
-        provider: "xai",
-        key: "synthetic-personal-key",
+        ...apiKeyCredential("synthetic-personal-key"),
         copyToAgents: true,
       },
     },
@@ -384,12 +383,7 @@ describe("personal model accounts", () => {
     ({ credential }) => {
       const options = stateOptions();
       const owner = ensureProfileForEmail("inline-owner@example.test", options);
-      expect(() =>
-        connectUserModelAccount(
-          { ownerProfileId: owner.id, credential, assertCurrent() {} },
-          options,
-        ),
-      ).toThrow();
+      expect(() => connect(owner.id, credential, options)).toThrow();
       expect(listUserProfileAuthLinks(owner.id, options)).toEqual([]);
       expect(hasPrivateAccountState(owner.id, options)).toBe(false);
     },
@@ -399,21 +393,18 @@ describe("personal model accounts", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("inventory-alice@example.test", options);
     const bob = ensureProfileForEmail("inventory-bob@example.test", options);
-    const first = connectUserModelAccount(
+    const first = connect(
+      alice.id,
       {
-        ownerProfileId: alice.id,
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          email: "account@example.test",
-          access: "synthetic-inventory-access",
-          refresh: "synthetic-inventory-refresh",
-          expires: 123,
-          clientId: "synthetic-client",
-          authorizationScope: "openid profile resource.invoke offline_access",
-          grantedScope: "openid offline_access",
-        },
-        assertCurrent() {},
+        type: "oauth",
+        provider: "openai",
+        email: "account@example.test",
+        access: "synthetic-inventory-access",
+        refresh: "synthetic-inventory-refresh",
+        expires: 123,
+        clientId: "synthetic-client",
+        authorizationScope: "openid profile resource.invoke offline_access",
+        grantedScope: "openid offline_access",
       },
       options,
     );
@@ -471,14 +462,7 @@ describe("personal model accounts", () => {
     const ids = Array.from(
       { length: 51 },
       (_, index) =>
-        connectUserModelAccount(
-          {
-            ownerProfileId: alice.id,
-            credential: { type: "token", provider: "anthropic", token: `synthetic-page-${index}` },
-            assertCurrent() {},
-          },
-          options,
-        ).authProfileId,
+        connect(alice.id, tokenCredential(`synthetic-page-${index}`), options).authProfileId,
     );
     const first = listUserModelAccounts({ profileId: alice.id }, options);
     expect(first.accounts).toHaveLength(50);
@@ -554,11 +538,7 @@ describe("personal model accounts", () => {
       updateUserModelAuthProfile(
         authProfileId,
         (current) => {
-          current.credential = {
-            type: "token",
-            provider: "anthropic",
-            token: "synthetic-rotated-token",
-          };
+          current.credential = tokenCredential("synthetic-rotated-token");
           current.usageStats = { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" };
           return true;
         },
@@ -569,11 +549,7 @@ describe("personal model accounts", () => {
       updateUserModelAuthProfile(
         authProfileId,
         (current) => {
-          current.credential = {
-            type: "token",
-            provider: "anthropic",
-            token: "synthetic-stale-token",
-          };
+          current.credential = tokenCredential("synthetic-stale-token");
           return false;
         },
         options,
