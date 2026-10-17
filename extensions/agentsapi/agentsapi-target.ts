@@ -1,6 +1,6 @@
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
-export function requireAgentsApiSessionTarget(params: AgentHarnessAttemptParamsV2) {
+export function requireAgentsApiSessionTarget(params: AgentHarnessAttemptParamsV3) {
   const target = params.sessionTarget;
   if (
     !target?.agentId ||

@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi } from "vitest";
 import {

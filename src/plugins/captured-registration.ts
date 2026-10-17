@@ -2,6 +2,7 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import type { AgentHarnessRuntime } from "../agents/harness/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StorageProvider } from "../storage/types.js";
 import type { AgentExecutorController } from "./agent-executor-controller.types.js";
@@ -35,7 +36,6 @@ import type { SessionCatalogProvider } from "./session-catalog.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type {
   AnyAgentTool,
-  AgentHarness,
   CliBackendPlugin,
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
@@ -90,7 +90,7 @@ export function createCapturedPluginRegistration(params?: {
 }) {
   const captured = {
     providers: new Array<ProviderPlugin>(),
-    agentHarnesses: new Array<AgentHarness>(),
+    agentHarnesses: new Array<AgentHarnessRuntime>(),
     agentExecutorControllers: new Array<AgentExecutorController>(),
     cliRegistrars: new Array<CapturedPluginCliRegistration>(),
     cliBackends: new Array<CliBackendPlugin>(),

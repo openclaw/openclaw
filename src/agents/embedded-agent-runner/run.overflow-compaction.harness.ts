@@ -419,7 +419,7 @@ function resetMockAgentHarness(): void {
       ctx.provider === "codex" || ctx.provider === "openai"
         ? { supported: true, priority: 100 }
         : { supported: false },
-    runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    runAttempt: async (params: AgentHarnessAttemptParams) => await mockedRunEmbeddedAttempt(params),
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await mockedRunEmbeddedAttempt({ ...attempt, disableTools: true });
       const assistant =

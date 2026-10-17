@@ -23,7 +23,7 @@ import {
   registerAgentHarnessQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
-import type { AgentHarnessAttemptParamsV2 } from "./types.js";
+import type { AgentHarnessRuntimeAttemptParams as AgentHarnessAttemptParamsV2 } from "./types.js";
 
 type ToolAuthorityAttempt = Pick<
   AgentHarnessAttemptParamsV2,

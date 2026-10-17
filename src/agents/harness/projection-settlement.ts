@@ -1,5 +1,5 @@
 import { log as embeddedAgentLog } from "../embedded-agent-runner/logger.js";
-import type { AgentHarnessAttemptParamsV2 } from "./types.js";
+import type { AgentHarnessRuntimeAttemptParams as AgentHarnessAttemptParamsV2 } from "./types.js";
 
 type PresentationStage =
   | "onAssistantMessageStart"

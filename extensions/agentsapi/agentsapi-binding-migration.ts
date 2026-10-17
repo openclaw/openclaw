@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentsApiBinding, LegacyAgentsApiBinding } from "./agentsapi-binding-record.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
@@ -14,7 +14,7 @@ import {
 /** The binding owner calls this once, under its lease, before admitting legacy state. */
 export async function migrateAgentsApiBinding(
   binding: LegacyAgentsApiBinding,
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   readPluginConfig: () => unknown,
   assertCurrent: () => void,
 ): Promise<AgentsApiBinding> {

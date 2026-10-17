@@ -259,7 +259,6 @@ it.each([
   await upsertSessionEntry({
     ...sessionTarget,
     entry: {
-      sessionFile: params.sessionFile,
       sessionId: params.sessionId,
       updatedAt: Date.now(),
     },

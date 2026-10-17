@@ -4,7 +4,7 @@ import {
   formatErrorMessage,
   type AgentHarnessRuntimeArtifactBinding,
   type CodexBundleMcpThreadConfig,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";

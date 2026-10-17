@@ -2,7 +2,7 @@ import {
   createStreamingDirectiveAccumulator,
   prepareAgentRunTerminalReply,
   type StreamingDirectiveAccumulator,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveWebSearchToolPolicy } from "openclaw/plugin-sdk/agent-harness";
 import { reviewExecRequestWithConfiguredModel } from "openclaw/plugin-sdk/agent-harness-exec-review-runtime";
 import {
   callGatewayTool,
@@ -7,7 +8,7 @@ import {
   invokeNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
   runBeforeToolCallHook,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { prepareSystemRunMutableFileApproval } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -121,9 +122,10 @@ function createParams() {
   } as unknown as EmbeddedRunAttemptParams;
   const hostCapabilities: AgentHarnessHostCapabilities = {
     kind: "agent-harness-host-capability",
-    version: 1,
+    version: 2,
     assertActive: () => {},
     bindToolSurface: (tools) => tools,
+    prepareWebSearchToolPolicy: async (options) => resolveWebSearchToolPolicy(options),
     prepareMutableFileApproval: prepareSystemRunMutableFileApproval,
     runBeforeToolCall: async ({ approvalMode = "request", ...request }) =>
       runBeforeToolCallHook({

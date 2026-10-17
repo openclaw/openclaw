@@ -3,7 +3,7 @@ import {
   formatErrorMessage,
   projectAgentHarnessTranscriptMessageForDisplay,
   type AgentMessage,
-  type EmbeddedRunAttemptParamsV2,
+  type EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
@@ -25,7 +25,7 @@ export class CodexTranscriptCheckpoint {
   private state: "open" | "closed" | "abandoned" = "open";
 
   constructor(
-    private readonly params: EmbeddedRunAttemptParamsV2,
+    private readonly params: EmbeddedRunAttemptParamsV3,
     private readonly threadId: string,
     private readonly turnId: string,
   ) {}

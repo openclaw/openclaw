@@ -27,7 +27,10 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
+  AgentHarnessHostCapabilities as LegacyHostCapabilities,
+  AgentHarnessHostCapabilitiesV2,
+} from "./host-capability-types.js";
 import {
   captureAgentQuestionAnswerAuthority,
   prepareQuestionCallerAuthority,
@@ -44,6 +47,8 @@ import {
   type AgentHarnessUserInputPromptOptions,
 } from "./user-input-bridge.js";
 import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
+
+type AgentHarnessHostCapabilities = LegacyHostCapabilities | AgentHarnessHostCapabilitiesV2;
 
 const QUESTION_RPC_GRACE_MS = 10_000;
 

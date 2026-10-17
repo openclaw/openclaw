@@ -1,13 +1,13 @@
 import { makeZeroUsageSnapshot } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   normalizeUsage,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 
 export function aggregateAgentsApiUsage(
-  model: AgentHarnessAttemptParamsV2["model"],
+  model: AgentHarnessAttemptParamsV3["model"],
   contributions: Iterable<NormalizedUsage>,
 ): { usage: NormalizedUsage; assistantUsage: AssistantMessage["usage"] } {
   const usage = makeAgentsApiZeroUsage();

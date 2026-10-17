@@ -1,5 +1,5 @@
 import { hostname as readHostName } from "node:os";
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   CodexAppServerManagedApprovalPolicy,
@@ -17,7 +17,7 @@ import {
 import { resolveCodexAppServerNetworkProxy } from "./config-security.js";
 import type { CodexApprovalsReviewer, CodexSandboxMode } from "./protocol.js";
 
-type SessionPermissionMode = NonNullable<EmbeddedRunAttemptParamsV2["permissionMode"]>;
+type SessionPermissionMode = NonNullable<EmbeddedRunAttemptParamsV3["permissionMode"]>;
 
 export type CodexEffectiveSessionPermissionPolicy = {
   mode: SessionPermissionMode;

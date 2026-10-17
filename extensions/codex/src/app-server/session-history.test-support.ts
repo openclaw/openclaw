@@ -48,7 +48,7 @@ export function setupSessionHistoryFixtures() {
   }
 
   async function writeSqliteSession(
-    params: { storedSessionFile?: string; incognito?: boolean; sessionKey?: string } = {},
+    params: { incognito?: boolean; sessionKey?: string } = {},
   ): Promise<{
     marker: string;
     sessionKey: string;
@@ -89,7 +89,6 @@ export function setupSessionHistoryFixtures() {
     await upsertSessionEntry({
       ...scope,
       entry: {
-        sessionFile: params.storedSessionFile ?? marker,
         ...(params.incognito ? { incognito: true } : {}),
         sessionId,
         updatedAt: 1,

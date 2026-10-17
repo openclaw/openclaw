@@ -104,7 +104,7 @@ describe("CodexAppServerEventProjector async delivery", () => {
     params.sessionTarget = sessionTarget;
     await upsertSessionEntry({
       ...sessionTarget,
-      entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+      entry: { sessionId, updatedAt: Date.now() },
     });
     const projector = await createDeliveringProjector(params, onBlockReply, onAgentEvent);
     const questions = [

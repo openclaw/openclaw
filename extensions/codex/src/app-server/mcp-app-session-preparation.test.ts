@@ -1,4 +1,4 @@
-import type { AgentHarnessSessionPreparationV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { AgentHarnessSessionPreparationV2 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { prepareCodexMcpAppSession } from "./mcp-app-session-preparation.js";
@@ -82,8 +82,8 @@ vi.mock("./thread-ownership.js", () => ({
   rollbackCodexAppServerBindingSubscription: mocks.rollback,
 }));
 function fixture() {
-  const preparation: AgentHarnessSessionPreparationV1 = {
-    version: 1,
+  const preparation: AgentHarnessSessionPreparationV2 = {
+    version: 2,
     purpose: "mcp-app",
     params: {
       sessionId: "session",
@@ -147,6 +147,16 @@ beforeEach(() => {
   mocks.start.mockResolvedValue({ threadId: "native-thread", clientId: "native-client" });
 });
 describe("cold native MCP App session preparation", () => {
+  it("rejects legacy session preparation before starting native lifecycle work", async () => {
+    const fixtureParams = fixture();
+    // Deliberately emulate a legacy host crossing the runtime capability boundary.
+    Object.assign(fixtureParams.preparation, { version: 1 });
+    await expect(prepareCodexMcpAppSession(fixtureParams)).rejects.toThrow(
+      "Codex requires native session preparation version 2; upgrade the OpenClaw host.",
+    );
+    expect(mocks.acquire).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
   it("uses the existing client and thread lifecycle without sending a model turn", async () => {
     const fixtureParams = fixture();
     await expect(prepareCodexMcpAppSession(fixtureParams)).resolves.toMatchObject({

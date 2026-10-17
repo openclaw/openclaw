@@ -1,4 +1,7 @@
-import type { AgentHarness, AgentHarnessNativeCompaction } from "../agents/harness/types.js";
+import type {
+  AgentHarnessRuntime as AgentHarness,
+  AgentHarnessNativeCompaction,
+} from "../agents/harness/types.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";

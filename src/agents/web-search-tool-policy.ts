@@ -1,50 +1,15 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
-import {
-  resolveScheduledToolCallerContext,
-  type ScheduledToolPolicyContext,
-} from "./scheduled-tool-policy.js";
+import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
-import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
+import type {
+  WebSearchToolPolicyParams,
+  WebSearchToolPolicyResolution,
+} from "./web-search-tool-policy.types.js";
 
-export type WebSearchToolPolicyParams = {
-  webSearchEnabled?: boolean;
-  config?: OpenClawConfig;
-  modelProvider?: string;
-  modelId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  sandboxToolPolicy?: SandboxToolPolicy;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  inputProvenance?: InputProvenance;
-  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
-  scheduledToolPolicy?: ScheduledToolPolicyContext;
-  runtimeToolAllowlist?: string[];
-  preparedRequesterPolicy?: Pick<
-    ReturnType<typeof resolveRequesterToolPolicies>,
-    "delegated" | "groupPolicy" | "senderPolicy" | "subagentPolicy" | "inheritedToolPolicy"
-  >;
-};
-
-type WebSearchToolPolicyResolution = {
-  allowed: boolean;
-  persistentAllowed: boolean;
-};
+export type { WebSearchToolPolicyParams } from "./web-search-tool-policy.types.js";
 
 /** Resolves current and sender-independent policy for the managed web_search tool. */
 export function resolveWebSearchToolPolicy(
@@ -113,7 +78,6 @@ export function resolveWebSearchToolPolicy(
       sessionId: params.sessionId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
-      senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
       groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
       requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     });

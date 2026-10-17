@@ -96,7 +96,10 @@ export async function fixture() {
       runId: `inventory-${sequence}`,
     });
     params.agentId = identity.agentId;
-    const host = await createAdmittedHostCapabilityTestFixture(params, { gatewayContext: true });
+    const host = await createAdmittedHostCapabilityTestFixture(params, {
+      hostCapabilityVersion: 2,
+      gatewayContext: true,
+    });
     onTestFinished(() => {
       host.closeHost();
       host.closeAdmission();

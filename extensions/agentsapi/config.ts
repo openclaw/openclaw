@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AgentToolParam, EnvironmentParam } from "openai/resources/beta/agents/agents";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { z } from "zod";
 
 export const DEFAULT_NATIVE_TOOLS = [
@@ -132,7 +132,7 @@ export function requireAgentsApiSessionFingerprint({
 }
 
 export function resolveAgentsApiNativeToolPolicy(
-  params: Pick<AgentHarnessAttemptParamsV2, "config" | "toolOverrides">,
+  params: Pick<AgentHarnessAttemptParamsV3, "config" | "toolOverrides">,
   pluginConfig: AgentsApiConfig,
 ) {
   const webSearchEnabled =

@@ -446,6 +446,7 @@ describe("Codex native Task assignment upgrade", () => {
         assert(params.config);
         setRuntimeConfigSnapshot(params.config);
         const host = await createAdmittedHostCapabilityTestFixture(params, {
+          hostCapabilityVersion: 2,
           gatewayContext: true,
         });
         const client = createClient();

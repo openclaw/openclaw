@@ -1,14 +1,14 @@
 import type {
-  AgentHarnessSideQuestionParamsV2,
-  EmbeddedRunAttemptParamsV2,
+  AgentHarnessSideQuestionParamsV3,
+  EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
 
 /** Side runs inherit the native binding's model without carrying outer model metadata. */
 export function applySideQuestionModelSelection(
-  params: AgentHarnessSideQuestionParamsV2,
+  params: AgentHarnessSideQuestionParamsV3,
   selection: { model: string; modelProvider: string } | undefined,
-): AgentHarnessSideQuestionParamsV2 {
+): AgentHarnessSideQuestionParamsV3 {
   return selection
     ? {
         ...params,
@@ -23,13 +23,13 @@ export function applySideQuestionModelSelection(
           input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           // SAFETY: native side runs consume binding capabilities, not generic model token limits.
-        } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>,
+        } as NonNullable<AgentHarnessSideQuestionParamsV3["runtimeModel"]>,
       }
     : params;
 }
 
 export function buildSideRunAttemptParams(
-  params: AgentHarnessSideQuestionParamsV2,
+  params: AgentHarnessSideQuestionParamsV3,
   options: {
     cwd: string;
     authProfileId?: string;
@@ -37,7 +37,7 @@ export function buildSideRunAttemptParams(
     timeoutMs: number;
     permissionPolicy?: CodexEffectiveSessionPermissionPolicy;
   },
-): EmbeddedRunAttemptParamsV2 {
+): EmbeddedRunAttemptParamsV3 {
   const sideParams = {
     params,
     config: params.cfg,
@@ -117,6 +117,6 @@ export function buildSideRunAttemptParams(
     hostCapabilities: params.hostCapabilities,
     sandbox: params.sandbox,
   };
-  // SAFETY: this builder maps the complete V2 run-attempt contract from the V2 side-question input.
-  return sideParams as EmbeddedRunAttemptParamsV2;
+  // SAFETY: this builder maps the complete V3 run-attempt contract from the V3 side-question input.
+  return sideParams as EmbeddedRunAttemptParamsV3;
 }

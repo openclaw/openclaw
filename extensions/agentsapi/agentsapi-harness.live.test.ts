@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import OpenAI from "openai";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -100,7 +100,7 @@ describeLive("Agents API isolated hosted execution", () => {
         env: state.env,
       });
       const harness = registerHarness(state.env, () => config);
-      const run = async (input: Pick<AgentHarnessAttemptParamsV2, "prompt" | "media">) => {
+      const run = async (input: Pick<AgentHarnessAttemptParamsV3, "prompt" | "media">) => {
         const runId = randomUUID();
         const host = await createAgentHarnessHostCapabilitiesForTest({
           attempt: { ...attempt, ...input, runId },

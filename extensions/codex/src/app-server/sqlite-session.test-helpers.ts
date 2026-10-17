@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -24,7 +24,7 @@ export async function attachSqliteSessionTarget(
     agentId: "main",
     sessionKey: params.sessionKey,
     storePath,
-    entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+    entry: { sessionId, updatedAt: Date.now() },
   });
 }
 export async function appendSqliteHistoryMessage(

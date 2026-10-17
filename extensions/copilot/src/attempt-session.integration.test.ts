@@ -1,7 +1,7 @@
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -172,7 +172,7 @@ describe("Copilot canonical session persistence", () => {
         },
         // Raw prompts omit SDK tools; this fixture exercises the ordinary tool bridge.
         promptMode: "minimal",
-      } satisfies AgentHarnessAttemptParamsV2 & Pick<AttemptParamsLike, "auth">;
+      } satisfies AgentHarnessAttemptParamsV3 & Pick<AttemptParamsLike, "auth">;
       const pending = runCopilotAttempt(params, { pool }).finally(() => {
         attemptSettled = true;
       });
@@ -303,7 +303,7 @@ describe("Copilot canonical session persistence", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
         maxTokens: 4096,
-      } satisfies AgentHarnessAttemptParamsV2["model"],
+      } satisfies AgentHarnessAttemptParamsV3["model"],
       auth: { useLoggedInUser: true },
       hostCapabilities: createCopilotTestHostCapabilities(),
       promptMode: "none" as const,

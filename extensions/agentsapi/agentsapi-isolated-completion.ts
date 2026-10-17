@@ -1,5 +1,5 @@
 import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeUsage, type AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
@@ -8,7 +8,7 @@ import { aggregateAgentsApiUsage } from "./agentsapi-usage.js";
 
 /** Fresh native inference without an executor, supplied functions, or attached credentials. */
 export async function runAgentsApiIsolatedCompletion(
-  params: Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0],
+  params: Parameters<NonNullable<AgentHarnessV3["runIsolatedCompletionV2"]>>[0],
   assertHarnessCurrent: () => void,
 ) {
   assertHarnessCurrent();

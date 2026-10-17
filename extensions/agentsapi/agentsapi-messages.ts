@@ -4,7 +4,7 @@ import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
   normalizeUsage,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type AgentHarnessAttemptResult,
   type AgentMessage,
   type NormalizedUsage,
@@ -26,7 +26,7 @@ import {
 } from "./agentsapi-transcript.js";
 import { aggregateAgentsApiUsage, makeAgentsApiZeroUsage } from "./agentsapi-usage.js";
 
-type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
+type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV3["onAgentEvent"]>>[0];
 type NativeTurn = SDKTurn | NonNullable<AgentsApiEvent["turn"]>;
 type AgentsApiReply = {
   lastAssistant?: AssistantMessage;
@@ -65,7 +65,7 @@ export class AgentsApiMessageProjection {
   private readonly recordedGatewayCallIds = new Set<string>();
 
   constructor(
-    private readonly params: AgentHarnessAttemptParamsV2,
+    private readonly params: AgentHarnessAttemptParamsV3,
     private readonly remoteSessionId: string,
     private readonly emitEvent: (event: AgentEvent) => void | Promise<void>,
     private readonly assertCurrent: () => void,
@@ -103,7 +103,7 @@ export class AgentsApiMessageProjection {
     return this.classification;
   }
 
-  recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: SDKTurn[]): void {
+  recordUsage(model: AgentHarnessAttemptParamsV3["model"], turns: SDKTurn[]): void {
     // Canonical usage replaces observed usage by admitted turn identity. A failed
     // or partial REST read cannot discard terminal-event usage for omitted turns.
     const contributions = new Map(this.usageByTurn);

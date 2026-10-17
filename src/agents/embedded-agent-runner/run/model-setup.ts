@@ -34,7 +34,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.j
 import { selectAgentHarness } from "../../harness/selection.js";
 import { readSessionRuntimeOwnershipAsync } from "../../harness/session-runtime-ownership.js";
 import { assertPluginHarnessConversationToolPolicySupport } from "../../harness/support.js";
-import type { AgentHarness } from "../../harness/types.js";
+import type { AgentHarnessRuntime as AgentHarness } from "../../harness/types.js";
 import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,

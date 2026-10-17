@@ -267,7 +267,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         ...sessionTarget,
         entry: {
           sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
           updatedAt: Date.now(),
         },
       });

@@ -82,6 +82,7 @@ async function yieldParams(childThreadId: string) {
   params.runtimePlan = createCodexRuntimePlanFixture();
   setCodexTestModelSupportsTools(params, true);
   const fixture = await createAdmittedHostCapabilityTestFixture(params, {
+    hostCapabilityVersion: 2,
     nativeModelPolicySupport: "exact",
   });
   params.hostCapabilities = fixture.hostCapabilities;
@@ -155,7 +156,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   });
 
   it("reports remote cleanup failure once without rejecting relay drain", async () => {
-    const host = await createAdmittedHostCapabilityTestFixture({ runId: "remote-cleanup" });
+    const host = await createAdmittedHostCapabilityTestFixture(
+      { runId: "remote-cleanup" },
+      { hostCapabilityVersion: 2 },
+    );
     const client = createClient();
     const request = vi.spyOn(client.client, "request").mockResolvedValue({});
     const onCleanupFailure = vi.fn();
@@ -237,7 +241,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       parentThreadId: "reserved-root",
       modelSource: { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() },
     });
-    const host = await createAdmittedHostCapabilityTestFixture({ runId: "active-input" });
+    const host = await createAdmittedHostCapabilityTestFixture(
+      { runId: "active-input" },
+      { hostCapabilityVersion: 2 },
+    );
     const lateAdmissionSettled = createDeferred<void>();
     const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
     const observeAdmission = vi
@@ -500,9 +507,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   });
 
   it("releases abandoned admission capacity while preserving duplicate waiters and retained children", async () => {
-    const host = await createAdmittedHostCapabilityTestFixture({
-      runId: "admission-cancellation",
-    });
+    const host = await createAdmittedHostCapabilityTestFixture(
+      {
+        runId: "admission-cancellation",
+      },
+      { hostCapabilityVersion: 2 },
+    );
     const source = new AbortController();
     const admissionWaits = new Map<string, Promise<unknown>[]>();
     const register = relayRuntime.registerNativeHookRelayForBundledRuntime;

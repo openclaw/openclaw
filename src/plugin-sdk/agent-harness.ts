@@ -11,11 +11,13 @@ export {
 export type {
   AgentHarness,
   AgentHarnessV2,
+  AgentHarnessV3,
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareEvent,
   AnyAgentTool,
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
+  EmbeddedRunAttemptParamsV3,
   OpenClawAgentToolResult,
 } from "./agent-harness-runtime.js";
 export {

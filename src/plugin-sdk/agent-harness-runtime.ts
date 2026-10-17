@@ -120,9 +120,11 @@ export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
   AgentHarnessV2,
+  AgentHarnessV3,
   AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
@@ -136,6 +138,7 @@ export type {
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionParamsV2,
+  AgentHarnessSideQuestionParamsV3,
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
@@ -181,6 +184,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "onContextEngineTurnCandidate"
   | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
+  | "hostCapabilities"
 > & {
   /** Per-model context cap authored by the operator and forwarded to harness runtimes. */
   authoredContextTokenCap?: number;
@@ -194,10 +198,21 @@ type EmbeddedRunAttemptParamsBase = Omit<
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptParamsBase & {
   hostCapabilities?: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
 };
-/** Current host-prepared attempt contract for agent harnesses. */
+/**
+ * @deprecated Use EmbeddedRunAttemptParamsV3 for required web-search authority.
+ * Retained until a separately announced stable-release removal window.
+ */
 export type EmbeddedRunAttemptParamsV2 = EmbeddedRunAttemptParamsBase & {
   hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
 };
+/** Current attempt contract, including required native web-search authority. */
+export type EmbeddedRunAttemptParamsV3 = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilitiesV2;
+};
+export type {
+  AgentHarnessHostCapabilities,
+  AgentHarnessHostCapabilitiesV2,
+} from "../agents/harness/host-capability-types.js";
 export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,

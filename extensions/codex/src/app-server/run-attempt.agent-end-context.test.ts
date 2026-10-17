@@ -32,7 +32,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
       const sessionFile = formatSqliteSessionFileMarker(source);
       await upsertSessionEntry({
         ...source,
-        entry: { sessionFile, sessionId: source.sessionId, updatedAt: Date.now() },
+        entry: { sessionId: source.sessionId, updatedAt: Date.now() },
       });
       const workspaceDir = path.join(tempDir, "agent-end-context-workspace");
       const responsesProjected = createDeferred<void>();

@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";

@@ -323,9 +323,10 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it("observes completed V1 children again when a parent starts follow-up work", async () => {
     const { client, runtime, monitor } = monitorFixture();
-    const host = await createAdmittedHostCapabilityTestFixture({
-      runId: "native-followup-v1",
-    });
+    const host = await createAdmittedHostCapabilityTestFixture(
+      { runId: "native-followup-v1" },
+      { hostCapabilityVersion: 2 },
+    );
     const relay = createCodexNativeHookRelay({
       options: { enabled: true },
       events: ["pre_tool_use"],

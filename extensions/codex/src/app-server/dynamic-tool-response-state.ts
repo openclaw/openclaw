@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type {
   captureToolAuthoredSourceReply,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexDynamicToolCallResponse,

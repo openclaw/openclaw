@@ -2,6 +2,11 @@
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type {
+  AdmittedHostCapabilityTestFixture,
+  HostCapabilityTestOptions,
+  createAdmittedHostCapabilityTestFixture as createCoreHostFixture,
+} from "../agents/harness/host-capability.test-support.js";
+import type {
   IsolatedCompletionBoundaryFixture,
   IsolatedCompletionBoundaryFixtureParams,
 } from "../agents/isolated-completion.adapter.test-support.js";
@@ -112,6 +117,7 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
   });
   const admittedRunContext = await admission.admit("plugin-harness", params.pluginId);
   const host = createAgentHarnessHostCapabilities({
+    version: 2,
     attempt: { ...params.attempt, admittedRunContext },
     pluginId: params.pluginId,
     nativeModelPolicySupport: params.nativeModelPolicySupport,
@@ -226,13 +232,21 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-type AdmittedHostCapabilityTestFixtureFactory =
-  typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
-
 // Keep unrelated consumers of this test barrel out of the host capability runtime.
+export function createAdmittedHostCapabilityTestFixture(
+  attempt: Parameters<typeof createCoreHostFixture>[0],
+  options: HostCapabilityTestOptions & { hostCapabilityVersion: 2 },
+): Promise<AdmittedHostCapabilityTestFixture<2>>;
+export function createAdmittedHostCapabilityTestFixture(
+  attempt: Parameters<typeof createCoreHostFixture>[0],
+  options?: HostCapabilityTestOptions & { hostCapabilityVersion?: 1 },
+): Promise<AdmittedHostCapabilityTestFixture<1>>;
+export function createAdmittedHostCapabilityTestFixture(
+  ...args: Parameters<typeof createCoreHostFixture>
+): ReturnType<typeof createCoreHostFixture>;
 export async function createAdmittedHostCapabilityTestFixture(
-  ...args: Parameters<AdmittedHostCapabilityTestFixtureFactory>
-): ReturnType<AdmittedHostCapabilityTestFixtureFactory> {
+  ...args: Parameters<typeof createCoreHostFixture>
+): ReturnType<typeof createCoreHostFixture> {
   const fixture = await import("../agents/harness/host-capability.test-support.js");
   return fixture.createAdmittedHostCapabilityTestFixture(...args);
 }

@@ -9,7 +9,11 @@ import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { registerCodexManagedAppServerDoctorChecks } from "./doctor.js";
 
 const command = process.argv[2];
-const cfg: OpenClawConfig = JSON.parse(process.argv[3]);
+const configJson = process.argv[3];
+if (!command || !configJson) {
+  throw new Error("Expected the Codex app-server fixture command and config");
+}
+const cfg: OpenClawConfig = JSON.parse(configJson);
 const checks: HealthCheck[] = [];
 registerCodexManagedAppServerDoctorChecks(
   {

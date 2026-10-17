@@ -1,3 +1,4 @@
+import { resolveWebSearchToolPolicy } from "openclaw/plugin-sdk/agent-harness";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -241,9 +242,10 @@ type SideQuestionParams = Parameters<typeof runCodexAppServerSideQuestion>[0];
 
 export const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.freeze({
   kind: "agent-harness-host-capability",
-  version: 1,
+  version: 2,
   assertActive: () => {},
   bindToolSurface: (tools) => tools,
+  prepareWebSearchToolPolicy: async (options) => resolveWebSearchToolPolicy(options),
   runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
   requestApproval: async () => undefined,
   waitForApproval: async () => undefined,
@@ -295,7 +297,6 @@ export function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQue
     question: "What changed?",
     sessionEntry: {
       sessionId: "session-1",
-      sessionFile: "/tmp/session-1.jsonl",
       updatedAt: 1,
     },
     resolvedReasoningLevel: "off",

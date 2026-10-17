@@ -1,4 +1,4 @@
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../runtime-api.js";
 import { resolveAcpxPluginConfig } from "./config.js";
@@ -74,7 +74,7 @@ export function createAcpAgentHarness(params: {
   shutdown: () => Promise<void> | void;
   api: OpenClawPluginApi;
   getRuntime: (context: OpenClawPluginServiceContext) => Promise<CompleteAcpRuntime>;
-}): AgentHarnessV2 {
+}): AgentHarnessV3 {
   const id = `acp-${params.agent}`;
   const generation = new AbortController();
   let agentRegistry: ReturnType<typeof createAcpxAgentRegistry> | undefined;
@@ -111,6 +111,7 @@ export function createAcpAgentHarness(params: {
   };
   return {
     id,
+    hostCapabilityVersion: 2,
     label: params.label,
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",

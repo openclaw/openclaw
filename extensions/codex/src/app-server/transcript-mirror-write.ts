@@ -5,7 +5,7 @@ import {
   restorePreparedUserTurnOperationalMetaForRuntime,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { withCodexSessionTranscriptMirrorWrite } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {

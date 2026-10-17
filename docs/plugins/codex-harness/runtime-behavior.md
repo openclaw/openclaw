@@ -59,6 +59,11 @@ native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
+Requester policy and parent lineage remain bound to preparation: revoking or
+reassigning the requester before native thread or turn dispatch rejects the
+operation before that request reaches Codex. This also applies to `/btw`. Hosted
+search runs inside Codex; OpenClaw validates admission of the search-enabled
+native turn, rather than receiving a separate callback for each hosted search.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
 direct because they are turn-control or delegation contracts. Guidance still

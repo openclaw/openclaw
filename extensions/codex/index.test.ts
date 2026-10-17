@@ -25,6 +25,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
+import { createCodexTestHostCapabilities } from "./src/app-server/host-capability.test-support.js";
 import {
   CODEX_MANAGED_THREAD_NAMESPACE,
   CODEX_MANAGED_THREAD_MAX_ENTRIES,
@@ -641,16 +642,14 @@ describe("codex plugin", () => {
     const result = { terminal: { kind: "ok" as const } };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
-    await expect(harness.runAttempt({ prompt: "hello" } as never)).resolves.toBe(result);
+    const params = { prompt: "hello", hostCapabilities: createCodexTestHostCapabilities() };
+    await expect(harness.runAttempt(params as never)).resolves.toBe(result);
 
-    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
-      { prompt: "hello" },
-      {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: {} },
-        nativeHookRelay: { enabled: true },
-      },
-    );
+    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(params, {
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: {} },
+      nativeHookRelay: { enabled: true },
+    });
   });
 
   it("passes live Codex plugin config into public Codex app-server attempts", async () => {
@@ -689,18 +688,16 @@ describe("codex plugin", () => {
     const result = { terminal: { kind: "ok" as const } };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
-    await expect(harness.runAttempt({ prompt: "calendar" } as never)).resolves.toBe(result);
+    const params = { prompt: "calendar", hostCapabilities: createCodexTestHostCapabilities() };
+    await expect(harness.runAttempt(params as never)).resolves.toBe(result);
 
-    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
-      { prompt: "calendar" },
-      {
-        bindingStore: expect.any(Object),
-        pluginConfig: liveConfig.plugins.entries.codex.config,
-        runtime,
-        runtimeModelId: undefined,
-        nativeHookRelay: { enabled: true },
-      },
-    );
+    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(params, {
+      bindingStore: expect.any(Object),
+      pluginConfig: liveConfig.plugins.entries.codex.config,
+      runtime,
+      runtimeModelId: undefined,
+      nativeHookRelay: { enabled: true },
+    });
   });
 
   it("enables the native hook relay for public Codex side questions", async () => {
@@ -715,15 +712,13 @@ describe("codex plugin", () => {
     if (!runSideQuestion) {
       throw new Error("Expected Codex harness to expose side questions");
     }
-    await expect(runSideQuestion({ question: "btw" } as never)).resolves.toBe(result);
+    const params = { question: "btw", hostCapabilities: createCodexTestHostCapabilities() };
+    await expect(runSideQuestion(params as never)).resolves.toBe(result);
 
-    expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(
-      { question: "btw" },
-      {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: {} },
-        nativeHookRelay: { enabled: true },
-      },
-    );
+    expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(params, {
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: {} },
+      nativeHookRelay: { enabled: true },
+    });
   });
 });

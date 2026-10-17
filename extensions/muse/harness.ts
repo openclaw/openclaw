@@ -11,9 +11,9 @@ import {
   embeddedAgentLog,
   execPolicy,
   setActiveEmbeddedRun,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type AgentHarnessAttemptResult,
-  type AgentHarnessV2,
+  type AgentHarnessV3,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionCommitFinalizer } from "openclaw/plugin-sdk/agent-harness-session-runtime";
@@ -55,7 +55,7 @@ function museRefusal(message: string): AgentHarnessPreflightError {
   return new AgentHarnessPreflightError(message, { scope: "harness", userMessage: message });
 }
 
-export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnessV2 {
+export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnessV3 {
   const pool = new MusePool(options.binaryPath);
   const catalogReader = new MuseCatalogReader();
   const queue = new KeyedAsyncQueue();
@@ -66,7 +66,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
   let disposed = false;
 
   async function runAttempt(
-    params: AgentHarnessAttemptParamsV2,
+    params: AgentHarnessAttemptParamsV3,
   ): Promise<AgentHarnessAttemptResult> {
     const operation = queue.enqueue(params.sessionId, async () => {
       if (disposed) {
@@ -514,6 +514,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
 
   return {
     id: "muse",
+    hostCapabilityVersion: 2,
     label: "Muse Code",
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",

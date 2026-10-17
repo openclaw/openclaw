@@ -3,7 +3,7 @@ import {
   embeddedAgentLog,
   runAgentHarnessGatewayQuestion,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParamsV2,
+  type EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   escapeChatDisplayText as escapeCopilotChatText,
@@ -23,7 +23,7 @@ const COPILOT_USER_INPUT_QUESTION_ID = "answer";
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
 
 export function createCopilotUserInputBridge(params: {
-  paramsForRun: EmbeddedRunAttemptParamsV2;
+  paramsForRun: EmbeddedRunAttemptParamsV3;
   signal?: AbortSignal;
   gatewayCall?: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"];
 }): CopilotUserInputBridge {

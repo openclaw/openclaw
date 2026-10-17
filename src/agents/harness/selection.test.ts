@@ -105,6 +105,7 @@ import {
 import { buildAgentHarnessSupportContext } from "./support.js";
 import type {
   AgentHarness,
+  AgentHarnessRuntime,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
 } from "./types.js";
@@ -1705,6 +1706,30 @@ describe("runAgentHarnessAttempt", () => {
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
+
+  it.each([1, 2] as const)(
+    "supplies the registered host capability version %s",
+    async (version) => {
+      let retained: (() => void) | undefined;
+      const harness: AgentHarnessRuntime = {
+        id: "codex",
+        label: "Versioned fixture",
+        hostCapabilityVersion: version,
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          expect(attempt.hostCapabilities?.version).toBe(version);
+          expect(attempt.hostCapabilities?.prepareWebSearchToolPolicy).toBeTypeOf("function");
+          retained = attempt.hostCapabilities?.assertActive;
+          retained?.();
+          return createAttemptResult("codex");
+        },
+      };
+      registerAgentHarness(harness, { ownerPluginId: "codex" });
+      await runAgentHarnessAttempt(createAttemptParams());
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("no longer active");
+    },
+  );
 
   it("unwraps sentinels only at the plugin harness handoff", async () => {
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>

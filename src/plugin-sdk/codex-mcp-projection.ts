@@ -1,7 +1,10 @@
 // Private MCP configuration and App bridge operations for the bundled Codex plugin.
 // Workspace preparation and MCP metadata remain separate from live run resources.
 import { pinExecToolTarget } from "../agents/exec-tool-target-pinning.js";
-import type { AgentHarnessHostCapabilities } from "../agents/harness/host-capability-types.js";
+import type {
+  AgentHarnessHostCapabilities,
+  AgentHarnessHostCapabilitiesV2,
+} from "../agents/harness/host-capability-types.js";
 import {
   resolveAgentHarnessScheduledToolProjectionCapability,
   resolveAgentHarnessTtsProvenanceTransferCapability,
@@ -33,7 +36,7 @@ const CODEX_NATIVE_CRON_CREATOR_AUTHORITY = ["read", "exec"] as const;
 
 /** Resolve the private scheduled-tool projection issuer for the Codex harness owner. */
 export function resolveCodexScheduledToolProjectionFactory(
-  hostCapabilities: AgentHarnessHostCapabilities,
+  hostCapabilities: AgentHarnessHostCapabilities | AgentHarnessHostCapabilitiesV2,
 ): CodexScheduledToolProjectionFactory | undefined {
   return resolveAgentHarnessScheduledToolProjectionCapability({
     hostCapabilities,
@@ -43,7 +46,7 @@ export function resolveCodexScheduledToolProjectionFactory(
 
 /** Resolve private TTS delivery transfer for the bundled Codex harness owner. */
 export function resolveCodexTtsProvenanceTransfer(
-  hostCapabilities: AgentHarnessHostCapabilities,
+  hostCapabilities: AgentHarnessHostCapabilities | AgentHarnessHostCapabilitiesV2,
 ): CodexTtsProvenanceTransfer | undefined {
   return resolveAgentHarnessTtsProvenanceTransferCapability({
     hostCapabilities,
@@ -137,7 +140,9 @@ export async function createHarnessMcpFormResourceContext(
 
 export type {
   AgentHarnessSessionRuntimeParamsV1,
+  AgentHarnessSessionRuntimeParamsV2,
   AgentHarnessSessionPreparationV1,
+  AgentHarnessSessionPreparationV2,
 } from "../agents/harness/types.js";
 export { captureMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
 export {

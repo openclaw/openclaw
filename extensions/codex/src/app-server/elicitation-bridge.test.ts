@@ -1,8 +1,9 @@
 // Codex tests cover elicitation bridge plugin behavior.
+import { resolveWebSearchToolPolicy } from "openclaw/plugin-sdk/agent-harness";
 import {
   callGatewayTool,
   embeddedAgentLog,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -55,9 +56,10 @@ function mockApprovalDecision(id: string, decision: "allow-once" | "allow-always
 function createParams(): EmbeddedRunAttemptParams {
   const hostCapabilities: AgentHarnessHostCapabilities = {
     kind: "agent-harness-host-capability",
-    version: 1,
+    version: 2,
     assertActive: () => {},
     bindToolSurface: (tools) => tools,
+    prepareWebSearchToolPolicy: async (options) => resolveWebSearchToolPolicy(options),
     runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
     requestApproval: async (request) =>
       (await callGatewayTool(

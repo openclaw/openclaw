@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   CodexBundleMcpThreadConfig,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, vi } from "vitest";

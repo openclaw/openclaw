@@ -252,7 +252,7 @@ describe("native compaction model policy", () => {
             abortSignal: controller.signal,
             hostCapabilities: {
               kind: host.capabilities.kind,
-              version: host.capabilities.version,
+              version: 1,
               assertActive: host.capabilities.assertActive,
               retainSourceAuthority,
             },

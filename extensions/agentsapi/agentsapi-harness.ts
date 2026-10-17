@@ -7,10 +7,10 @@ import {
   AgentHarnessSessionSupersededError,
   formatErrorMessage,
   toolPolicy,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type AgentHarnessSessionDeletionMutation,
   type AgentHarnessSessionDeletionParams,
-  type AgentHarnessV2,
+  type AgentHarnessV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   combinePreparedNativeSessionBindingAuthority,
@@ -40,7 +40,7 @@ const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
 ] as const;
 
 /** Agents API owns native protocol; the host harness runtime owns coordination. */
-export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
+export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV3 {
   let disposed = false;
   let closing = false;
   const runningSessions = new Map<string, number>();
@@ -113,6 +113,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   };
   return {
     id: "agentsapi",
+    hostCapabilityVersion: 2,
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
     contextManagement: "native",
@@ -419,7 +420,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   }
 }
 
-function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
+function validateAgentsApiInput(params: AgentHarnessAttemptParamsV3) {
   const runtimeToolAllowed = toolPolicy.createToolPolicyMatcher({ allow: params.toolsAllow });
   if (
     params.disableTools ||

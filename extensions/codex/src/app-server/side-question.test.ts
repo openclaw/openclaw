@@ -441,7 +441,6 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionKey: "agent:main:session-1",
           sessionEntry: {
             sessionId: "session-1",
-            sessionFile: "/tmp/session-1.jsonl",
             updatedAt: 1,
             permissionMode: "guarded",
           },
@@ -1247,7 +1246,10 @@ describe("runCodexAppServerSideQuestion", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
-    const host = await createAdmittedHostCapabilityTestFixture({ runId: "run-side-1" });
+    const host = await createAdmittedHostCapabilityTestFixture(
+      { runId: "run-side-1" },
+      { hostCapabilityVersion: 2 },
+    );
     const client = createPendingClient();
     let relayIdDuringFork: string | undefined;
     const baseRequest = client.request.getMockImplementation()!;
@@ -2063,15 +2065,18 @@ describe("runCodexAppServerSideQuestion", () => {
     const runId = "side-gateway-shell";
     const sessionId = "side-gateway-session";
     const sessionKey = "agent:main:side-gateway-shell";
-    const host = await createAdmittedHostCapabilityTestFixture({
-      config,
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      runId,
-      workspaceDir,
-      cwd: workspaceDir,
-    });
+    const host = await createAdmittedHostCapabilityTestFixture(
+      {
+        config,
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        runId,
+        workspaceDir,
+        cwd: workspaceDir,
+      },
+      { hostCapabilityVersion: 2 },
+    );
     const turnStarted = createDeferred<void>();
     const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);

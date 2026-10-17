@@ -1,5 +1,5 @@
 import { selectSupportedReasoningEffort } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number] | "none" | "ultra";

@@ -183,11 +183,12 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
   // +1: owner-approved async tool construction retains the deprecated synchronous factory.
-  "agent-harness": 3,
+  "agent-harness": 5,
   // +1: owner-approved synchronous watched-session compatibility during async migration.
   // +1: owner-approved synchronous agent-end compatibility during async migration.
   // +1: synchronous model-auth selection during the auth worker migration.
-  "agent-harness-runtime": 13,
+  // Legacy host capability remains available during the version-2 migration window.
+  "agent-harness-runtime": 18,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 21,
   "inbound-envelope": 3,
@@ -284,7 +285,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
-      3800,
+      // +10: versioned host authority, current harness/attempt, and session-preparation types.
+      3810,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -345,7 +347,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +10: approved missing deprecations for retained synchronous transcript lookup,
       // proxy initialization, approval preparation, and command authorization.
       // +1: released snapshot publication remains during its approved async replacement.
-      219,
+      // +7: retained version-1 host and V2 harness/attempt contracts during stable deprecation.
+      226,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

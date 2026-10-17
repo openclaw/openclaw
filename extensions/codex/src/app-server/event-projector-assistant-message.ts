@@ -1,7 +1,7 @@
 import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type {
   NormalizedUsage,
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { CodexAsyncQuestion } from "./async-questions.js";
@@ -15,7 +15,7 @@ import {
 } from "./local-runtime-attribution.js";
 
 type CodexAssistantMessageParams = CodexLocalRuntimeAttributionParams &
-  Pick<AgentHarnessAttemptParamsV2, "modelId">;
+  Pick<AgentHarnessAttemptParamsV3, "modelId">;
 type CodexAssistantAttribution = {
   provider: string;
   modelId: string;

@@ -10,10 +10,10 @@ import {
   applyEmbeddedAttemptToolsAllow,
   attachModelProviderRequestTransport,
   queueAgentHarnessMessage,
-  type AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV3 as AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   type AgentHarnessQuestionGatewayCall,
-  type AgentHarnessV2,
+  type AgentHarnessV3,
   type AgentMessage,
   type AnyAgentTool,
   type SandboxContext,
@@ -48,7 +48,7 @@ import type { createCopilotToolBridge } from "./tool-bridge.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
 type SettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+  NonNullable<AgentHarnessV3["finalizeSettledTurn"]>
 >[0]["attempt"];
 
 const gatewayQuestionMock = vi.hoisted(() => ({

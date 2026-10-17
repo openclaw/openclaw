@@ -1,12 +1,12 @@
 import { resolveAgentHarnessHistoryLimits } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveBootstrapContextForRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 
 /** MSP has no history import or system field; transfer the retained branch once as context. */
 export async function prepareMuseSessionContext(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   target: Parameters<typeof SessionManager.openModelContextAsync>[0],
   warn?: PluginLogger["warn"],
 ): Promise<string> {

@@ -183,9 +183,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
 
 /** Prepares canonical native MCP policy and projects it into Codex before thread creation. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
-  run:
-    | import("../harness/types.js").AgentHarnessAttemptParams
-    | import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1;
+  run: Omit<import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1, "hostCapabilities">;
   cwd: string;
   agentId?: string;
   allowLiteralOAuthProjection?: boolean;

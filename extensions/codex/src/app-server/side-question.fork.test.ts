@@ -43,7 +43,7 @@ useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 async function createDeniedSideQuestion(options: Parameters<typeof createFakeClient>[0] = {}) {
   const host = await createAdmittedHostCapabilityTestFixture(
     { runId: "run-side-1" },
-    { toolCalls: "deny" },
+    { toolCalls: "deny", hostCapabilityVersion: 2 },
   );
   const client = createFakeClient(options);
   ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });

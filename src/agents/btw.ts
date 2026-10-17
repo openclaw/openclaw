@@ -46,7 +46,7 @@ import {
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
 } from "./harness/support.js";
-import type { AgentHarness } from "./harness/types.js";
+import type { AgentHarnessRuntime as AgentHarness } from "./harness/types.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { applySecretRefHeaderSentinels, requireApiKey } from "./model-auth.js";
 import {
@@ -357,7 +357,6 @@ export async function runBtwSideQuestion(
         runtimeAuthPlan.modelRoute?.authRequirement === "api-key" && "auth" in resolvedAttempt
           ? resolvedAttempt.auth.apiKey?.trim()
           : undefined;
-      const sideRunId = params.authorityRunId;
       using placement = await prepareSessionPlacementSandbox({
         agentId: sessionAgentId,
         config: params.cfg,
@@ -388,7 +387,7 @@ export async function runBtwSideQuestion(
       void sandboxLifetime;
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         params.cfg,
-        sideRunId,
+        params.authorityRunId,
         sessionAgentId,
         "btw.side-question",
         params.assertCurrent,
@@ -398,6 +397,7 @@ export async function runBtwSideQuestion(
       try {
         const { model: _sideModel, authorityRunId: _authorityRunId, ...hostAttempt } = params;
         const host = createAgentHarnessHostCapabilities({
+          version: selectedHarness.hostCapabilityVersion ?? 1,
           attempt: {
             ...hostAttempt,
             admittedRunContext,
@@ -407,7 +407,7 @@ export async function runBtwSideQuestion(
             sessionKey: params.sessionKey,
             sandbox,
             workspaceDir,
-            runId: sideRunId,
+            runId: params.authorityRunId,
             currentMessagingTarget: params.messageTo,
             currentThreadTs:
               params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
@@ -450,7 +450,7 @@ export async function runBtwSideQuestion(
             runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
               ? undefined
               : runtimeAuthPlan.forwardedAuthProfileId,
-          opts: { ...params.opts, runId: sideRunId },
+          opts: { ...params.opts, runId: params.authorityRunId },
           authProfileIdSource:
             runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
               ? undefined

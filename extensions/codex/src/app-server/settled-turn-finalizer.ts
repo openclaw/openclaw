@@ -1,6 +1,6 @@
 import {
   prepareAgentRunTerminalReply,
-  type AgentHarnessV2,
+  type AgentHarnessV3,
   type AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
@@ -27,7 +27,7 @@ const FINALIZER_DEVELOPER_INSTRUCTIONS =
   "support success.";
 
 type CodexSettledTurnFinalization = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+  NonNullable<AgentHarnessV3["finalizeSettledTurn"]>
 >[0];
 
 export async function runCodexSettledTurnFinalization(

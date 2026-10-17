@@ -1,5 +1,8 @@
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  createOpenClawCodingTools,
+  resolveWebSearchToolPolicy,
+} from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type ToolsFactory = typeof createOpenClawCodingTools;
 type HostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
@@ -30,7 +33,7 @@ export function createCodexTestHostCapabilities(
 ): HostCapabilities {
   const host: HostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability",
-    version: 1,
+    version: 2,
     assertActive: () => {},
     retainSourceAuthority: () => undefined,
     bindModelExecution: () => ({
@@ -44,6 +47,7 @@ export function createCodexTestHostCapabilities(
         (toolFactories.get(host) ?? createOpenClawCodingTools)(options),
         bindingOptions,
       ),
+    prepareWebSearchToolPolicy: async (options) => resolveWebSearchToolPolicy(options),
     runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
     requestApproval: async () => undefined,
     waitForApproval: async () => undefined,

@@ -1,5 +1,5 @@
 import type {
-  EmbeddedRunAttemptParamsV2,
+  EmbeddedRunAttemptParamsV3,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
@@ -15,7 +15,7 @@ type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 /** Constructs through the live host while preserving the originating cron authority scope. */
 export function createCodexHostToolSurface(
   params: Pick<
-    EmbeddedRunAttemptParamsV2,
+    EmbeddedRunAttemptParamsV3,
     "hostCapabilities" | "cronCreatorAuthorityCapability" | "runId"
   >,
   options: OpenClawCodingToolsOptions,

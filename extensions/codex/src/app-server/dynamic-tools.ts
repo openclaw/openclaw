@@ -11,7 +11,7 @@ import {
   getChannelAgentToolMeta,
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   isDeliveredMessagingToolSendToCurrentSource,

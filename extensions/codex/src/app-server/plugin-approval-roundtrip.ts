@@ -3,7 +3,7 @@
  * approval tool and maps gateway decisions back to Codex outcomes.
  */
 import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";

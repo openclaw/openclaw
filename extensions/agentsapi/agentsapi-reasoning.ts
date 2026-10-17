@@ -1,6 +1,6 @@
 import type { AgentReasoningParam } from "openai/resources/beta/agents/agents";
 import { selectSupportedReasoningEffort } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveOpenAIModelReasoningEfforts,
   resolveOpenAIReasoningEffortMap,
@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 
 export function resolveAgentsApiReasoningEffort(
-  params: Pick<AgentHarnessAttemptParamsV2, "model" | "thinkLevel">,
+  params: Pick<AgentHarnessAttemptParamsV3, "model" | "thinkLevel">,
 ): AgentReasoningParam["effort"] {
   if (params.thinkLevel === "ultra") {
     throw new Error("Agents API MVP does not support the ultra delegation mode");

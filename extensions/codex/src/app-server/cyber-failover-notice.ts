@@ -5,13 +5,13 @@
  * for cyber review, block, and reroute, so the Control UI keeps one card and one
  * lifecycle for every cyber outcome.
  */
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 
 export type CodexCyberNoticeState = "escalated" | "unavailable";
 
 export async function emitCodexCyberNotice(
-  params: EmbeddedRunAttemptParamsV2,
+  params: EmbeddedRunAttemptParamsV3,
   notice: { state: CodexCyberNoticeState; model?: string; fallbackModel: string },
 ): Promise<void> {
   await emitCodexAppServerEvent(params, {

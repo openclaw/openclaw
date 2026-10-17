@@ -1,4 +1,4 @@
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -7,7 +7,7 @@ describe("Agents API environment metadata", () => {
   it.each([undefined, "openai_hosted", "self_hosted"] as const)(
     "projects only the configured hosted workspace: %s",
     (environment) => {
-      const registerAgentHarness = vi.fn<(harness: AgentHarness) => void>();
+      const registerAgentHarness = vi.fn<(harness: AgentHarnessV3) => void>();
       plugin.register(
         createTestPluginApi({
           id: "agentsapi",

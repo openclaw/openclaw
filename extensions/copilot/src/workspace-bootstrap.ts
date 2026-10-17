@@ -1,6 +1,6 @@
 import path from "node:path";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveBootstrapContextForRun } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -22,7 +22,7 @@ const COPILOT_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
 ]);
 
 export async function loadCopilotWorkspaceInstructions(params: {
-  attempt: AgentHarnessAttemptParamsV2;
+  attempt: AgentHarnessAttemptParamsV3;
   /** SDK workspace after sandbox resolution; undefined before resolution. */
   effectiveWorkspaceDir: string | undefined;
   warn?: (message: string) => void;

@@ -171,7 +171,6 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
     sessionKey: target.sessionKey,
     storePath: target.storePath,
     entry: {
-      sessionFile: `sqlite:${target.agentId}:${target.sessionId}:${target.storePath}`,
       sessionId: target.sessionId,
       updatedAt: 1,
     },

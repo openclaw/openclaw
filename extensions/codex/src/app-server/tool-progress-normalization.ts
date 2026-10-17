@@ -1,5 +1,5 @@
 import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isJsonObject, type JsonValue } from "./protocol.js";

@@ -3,7 +3,8 @@ import os from "node:os";
 import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
 import type { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,6 +15,7 @@ import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 
 const {
+  bindProductionCodexHostCapabilities,
   buildDynamicToolsForTest,
   cleanupDynamicToolBuildFixture,
   createCodexRuntimePlanFixture,
@@ -42,7 +44,7 @@ describe("Codex app-server dynamic tool search policy", () => {
       isAvailable: () => true,
     });
     hoisted.normalizeAgentRuntimeTools.mockClear();
-    hoisted.resolveWebSearchToolPolicy.mockClear();
+    hoisted.prepareWebSearchToolPolicy.mockClear();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-search-tools-"));
   });
 
@@ -50,6 +52,62 @@ describe("Codex app-server dynamic tool search policy", () => {
     await cleanupDynamicToolBuildFixture(tempDir, []);
     clearRuntimeConfigSnapshot();
   });
+
+  it.each(["active", "aborted during preparation", "closed before publication"])(
+    "publishes prepared search policy only while the builder attempt is %s",
+    async (lifetime) => {
+      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+      const abort = new AbortController();
+      params.abortSignal = abort.signal;
+      const closers: Array<() => void> = [];
+      await bindProductionCodexHostCapabilities(params, closers);
+      const host = params.hostCapabilities;
+      const prepare = host.prepareWebSearchToolPolicy!;
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      params.hostCapabilities = {
+        ...host,
+        createToolSurfaceAsync: async () => [createRuntimeDynamicTool("message")],
+        async prepareWebSearchToolPolicy(options) {
+          const policy = await prepare(options);
+          entered.resolve();
+          await resume.promise;
+          return policy;
+        },
+      };
+      const persistent = vi.fn();
+      const allowed = vi.fn();
+      const build = buildDynamicToolsForTest(params, tempDir, {
+        onPersistentWebSearchPolicyResolved: persistent,
+        onWebSearchPolicyResolved: allowed,
+      });
+      try {
+        await entered.promise;
+        if (lifetime === "aborted during preparation") {
+          abort.abort(new Error("attempt aborted during preparation"));
+        } else if (lifetime === "closed before publication") {
+          closers.forEach((close) => close());
+        }
+        resume.resolve();
+        if (lifetime === "active") {
+          expect((await build).map((tool) => tool.name)).toEqual(["message"]);
+          expect(persistent).toHaveBeenCalledExactlyOnceWith(true);
+          expect(allowed).toHaveBeenCalledExactlyOnceWith(true);
+        } else {
+          await expect(build).rejects.toThrow(
+            lifetime === "aborted during preparation"
+              ? "attempt aborted during preparation"
+              : "no longer active",
+          );
+          expect(persistent).not.toHaveBeenCalled();
+          expect(allowed).not.toHaveBeenCalled();
+        }
+      } finally {
+        resume.resolve();
+        closers.forEach((close) => close());
+      }
+    },
+  );
 
   it.each<{
     name: string;
@@ -206,7 +264,7 @@ describe("Codex app-server dynamic tool search policy", () => {
     expect(persistent).toHaveBeenCalledExactlyOnceWith(testCase.persistent);
     expect(allowed).toHaveBeenCalledExactlyOnceWith(testCase.allowed);
     if (testCase.skipsPolicyLookup) {
-      expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
+      expect(hoisted.prepareWebSearchToolPolicy).not.toHaveBeenCalled();
     }
   });
 

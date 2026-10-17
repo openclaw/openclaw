@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
-  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV3 as AgentHarnessAttemptParams,
   AgentHarnessCompactParams,
-  AgentHarnessV2,
+  AgentHarnessV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -54,7 +54,7 @@ export function createCopilotAgentHarness(
           ...params,
           hostCapabilities: {
             kind: host.capabilities.kind,
-            version: host.capabilities.version,
+            version: 1 as const,
             assertActive: host.capabilities.assertActive,
             retainSourceAuthority,
           },
@@ -66,7 +66,7 @@ export function createCopilotAgentHarness(
 }
 
 type SettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+  NonNullable<AgentHarnessV3["finalizeSettledTurn"]>
 >[0]["attempt"];
 
 export function asFinalizationAttempt(

@@ -1,5 +1,6 @@
 import type {
-  AgentHarnessV2,
+  AgentHarnessV3,
+  AgentHarnessHostCapabilitiesV2,
   AgentHarnessCompactParams,
   AgentHarnessNativeCompaction,
   AgentHarnessNativeCompactionParams,
@@ -22,6 +23,15 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+
+function requireCodexHostCapabilities(capabilities: AgentHarnessHostCapabilitiesV2): void {
+  if (capabilities?.version !== 2) {
+    throw new Error(
+      "Codex requires host capability version 2 for web-search policy. Update OpenClaw before starting this session.",
+    );
+  }
+  capabilities.assertActive();
+}
 
 /** Keep the shipped callback loadable on older hosts without inventing source authority. */
 function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>(
@@ -79,7 +89,7 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
 
 export function createCodexAppServerAgentHarness(
   options: CodexAppServerAgentHarnessOptions,
-): AgentHarnessV2 {
+): AgentHarnessV3 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
   const providerIds = new Set(
@@ -100,7 +110,7 @@ export function createCodexAppServerAgentHarness(
     options.resolvePluginConfig?.() ??
     options.pluginConfig;
   const resolveIsolatedCompletionRuntime: NonNullable<
-    AgentHarnessV2["resolveIsolatedCompletionRuntime"]
+    AgentHarnessV3["resolveIsolatedCompletionRuntime"]
   > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
   const assertOwnershipCurrent = (params: { assertCurrent: () => void }) => {
     params.assertCurrent();
@@ -110,7 +120,7 @@ export function createCodexAppServerAgentHarness(
   };
   const projectOwnership = (
     binding: ReturnType<CodexAppServerBindingStore["read"]>,
-  ): ReturnType<NonNullable<AgentHarnessV2["resolveSessionRuntimeOwnership"]>> =>
+  ): ReturnType<NonNullable<AgentHarnessV3["resolveSessionRuntimeOwnership"]>> =>
     binding?.preserveNativeModel === true
       ? {
           model: "native",
@@ -120,7 +130,8 @@ export function createCodexAppServerAgentHarness(
             : {}),
         }
       : undefined;
-  const harness: AgentHarnessV2 = {
+  const harness: AgentHarnessV3 = {
+    hostCapabilityVersion: 2,
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
     autoSelection: { providerIds: [...providerIds] },
@@ -320,6 +331,7 @@ export function createCodexAppServerAgentHarness(
       return { supported: true, priority: 100 };
     },
     runAttempt: async (params) => {
+      requireCodexHostCapabilities(params.hostCapabilities);
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
@@ -460,6 +472,7 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runSideQuestion: async (params) => {
+      requireCodexHostCapabilities(params.hostCapabilities);
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,

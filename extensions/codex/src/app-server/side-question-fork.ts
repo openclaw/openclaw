@@ -1,5 +1,5 @@
 import type {
-  AgentHarnessSideQuestionParamsV2,
+  AgentHarnessSideQuestionParamsV3,
   NativeHookRelayEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildAgentHookContextChannelFields } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -94,7 +94,7 @@ export function registerCodexSideQuestionRelay(
     denyToolCalls: boolean;
     appServer: CodexAppServerRuntimeOptions;
     options: CodexRunAttemptOptions["nativeHookRelay"];
-    sideParams: AgentHarnessSideQuestionParamsV2;
+    sideParams: AgentHarnessSideQuestionParamsV3;
     agentId: string | undefined;
     completionTimeoutMs: number;
   },
@@ -190,7 +190,7 @@ export class CodexSideQuestionFork {
     };
   }
 
-  turnParams(threadId: string, params: AgentHarnessSideQuestionParamsV2) {
+  turnParams(threadId: string, params: AgentHarnessSideQuestionParamsV3) {
     return {
       ...this.settings.turn,
       threadId,
@@ -208,7 +208,7 @@ export class CodexSideQuestionFork {
   async registerChild(
     client: CodexAppServerClient,
     threadId: string,
-    hostCapabilities: AgentHarnessSideQuestionParamsV2["hostCapabilities"],
+    hostCapabilities: AgentHarnessSideQuestionParamsV3["hostCapabilities"],
     runAbortController: AbortController,
     assertCurrent: () => void,
     assertCurrentBinding: () => void,
@@ -247,7 +247,7 @@ export class CodexSideQuestionFork {
     }
   }
 
-  bindTurn(turnId: string, params: AgentHarnessSideQuestionParamsV2, fallbackModel: string) {
+  bindTurn(turnId: string, params: AgentHarnessSideQuestionParamsV3, fallbackModel: string) {
     this.modelRegistration?.bindTurn(turnId, {
       nativeModel: {
         provider: this.settings.thread.modelProvider ?? params.provider,

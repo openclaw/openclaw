@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -23,7 +23,7 @@ it("resets every registered ACP harness with a read-only package directory", asy
   await fs.mkdir(stateDir);
   vi.spyOn(process, "cwd").mockReturnValue(packageDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const harnesses: AgentHarnessV2[] = [];
+  const harnesses: Pick<AgentHarnessV3, "id" | "reset" | "dispose">[] = [];
   plugin.register(
     createTestPluginApi({
       runtime: createPluginRuntimeMock({

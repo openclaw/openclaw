@@ -7,8 +7,8 @@ import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type AgentHarness,
-  type AgentHarnessAttemptParamsV2,
-  type AgentHarnessV2,
+  type AgentHarnessAttemptParamsV3,
+  type AgentHarnessV3,
   type AgentHarnessAttemptResult,
   type AgentHarnessCompactParams,
   type AgentHarnessCompactResult,
@@ -48,7 +48,7 @@ type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompl
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
 type CopilotHarnessAttemptParams = CopilotAttemptParams & {
-  initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
+  initialReplayState?: AgentHarnessAttemptParamsV3["initialReplayState"] & {
     journalValidated?: boolean;
     sdkSessionId?: string;
   };
@@ -434,7 +434,7 @@ function failedCompaction(reason: string, rawError?: string): AgentHarnessCompac
 
 export function createCopilotAgentHarness(
   options?: CreateCopilotAgentHarnessOptions,
-): AgentHarnessV2 {
+): AgentHarnessV3 {
   let poolPromise: Promise<CopilotClientPool> | undefined;
   let createdPool: CopilotClientPool | undefined;
   let disposed = false;
@@ -726,6 +726,7 @@ export function createCopilotAgentHarness(
 
   return {
     id: options?.id ?? "copilot",
+    hostCapabilityVersion: 2,
     label: options?.label ?? "GitHub Copilot agent runtime",
     autoSelection: { providerIds: [] },
     conversationToolPolicySupport: "exact",

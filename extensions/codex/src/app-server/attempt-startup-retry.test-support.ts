@@ -1,7 +1,7 @@
 import path from "node:path";
 import type {
   CodexBundleMcpThreadConfig,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";

@@ -1,4 +1,4 @@
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +16,7 @@ vi.mock("./bounded-turn.js", () => ({
 
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
 
-type IsolatedParams = Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0];
+type IsolatedParams = Parameters<NonNullable<AgentHarnessV3["runIsolatedCompletionV2"]>>[0];
 
 const authProfileStore = {
   version: 1,

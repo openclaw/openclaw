@@ -5,7 +5,7 @@ import {
 import {
   inferToolMetaFromArgs,
   sanitizeToolResult,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiItem } from "./agentsapi-client.js";
@@ -27,7 +27,7 @@ export type AgentsApiNativeToolOutcome = {
 
 export function agentsApiNativeTool(
   item: AgentsApiItem,
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
 ): AgentsApiNativeTool | undefined {
   let name: string;
   let args: Record<string, unknown>;

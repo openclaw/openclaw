@@ -163,7 +163,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
   sandbox?: SandboxContext | null;
   /** Host-created authority available only after harness selection. */
-  hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
+  hostCapabilities?:
+    | import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities
+    | import("../../harness/host-capability-types.js").AgentHarnessHostCapabilitiesV2;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
   operation?: EmbeddedRunAttemptOperation;
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */

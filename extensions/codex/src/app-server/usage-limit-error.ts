@@ -1,7 +1,7 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";

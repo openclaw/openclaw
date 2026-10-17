@@ -1,4 +1,4 @@
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { codexModel, createClientFactory } from "./bounded-turn.test-harness.js";
 
@@ -8,7 +8,7 @@ vi.mock("./auth-bridge.js", () => ({
 
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
 
-type IsolatedParams = Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0];
+type IsolatedParams = Parameters<NonNullable<AgentHarnessV3["runIsolatedCompletionV2"]>>[0];
 
 function createParams(overrides: Partial<IsolatedParams> = {}): IsolatedParams {
   return {

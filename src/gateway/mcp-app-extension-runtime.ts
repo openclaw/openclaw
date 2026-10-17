@@ -106,7 +106,10 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
       source?: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     } = {};
     let preparing:
-      | Promise<import("../agents/harness/types.js").AgentHarnessSessionPreparationV1>
+      | Promise<
+          | import("../agents/harness/types.js").AgentHarnessSessionPreparationV1
+          | import("../agents/harness/types.js").AgentHarnessSessionPreparationV2
+        >
       | undefined;
     const prepareSession = () => {
       preparing ??= (async () => {
@@ -149,6 +152,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
           await import("../agents/harness/session-preparation.js");
         const setup = await prepareAgentHarnessSessionRuntime({
           ownerPluginId: registered.ownerPluginId,
+          hostCapabilityVersion: registered.harness.hostCapabilityVersion ?? 1,
           nativeModelPolicySupport: harness.nativeModelPolicySupport,
           sourceAuthority: source?.authority,
           assertCurrent: assertPreparationCurrent,

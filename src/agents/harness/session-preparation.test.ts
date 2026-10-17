@@ -23,7 +23,7 @@ beforeEach(() => {
   mocks.admit.mockResolvedValue({ operationalRunInstance: { runId: "prepared" } });
   mocks.credentials.mockResolvedValue({ version: 1, profiles: {} });
   mocks.createHost.mockReturnValue({
-    capabilities: { assertActive: mocks.assertHost },
+    capabilities: { version: 1, assertActive: mocks.assertHost },
     close: mocks.closeHost,
     runWithScope: (run: () => Promise<unknown>) => run(),
   });
@@ -39,24 +39,34 @@ const input = {
   modelId: "test-model",
 };
 describe("native session-only preparation admission", () => {
-  it("uses admitted host authority without manufacturing a model attempt or prompt", async () => {
-    const prepared = await prepareAgentHarnessSessionRuntime({
-      ownerPluginId: "codex",
-      input,
-      assertCurrent: () => {},
-    });
-    expect(mocks.admit).toHaveBeenCalledWith("plugin-harness");
-    expect(prepared.preparation.version).toBe(1);
-    expect(prepared.preparation.params).not.toHaveProperty("prompt");
-    expect(prepared.preparation.params).not.toHaveProperty("sessionFile");
-    expect(prepared.preparation.params.hostCapabilities).toBe(
-      mocks.createHost.mock.results[0]!.value.capabilities,
-    );
-    await expect(prepared.preparation.run(async () => "started")).resolves.toBe("started");
-    prepared.dispose();
-    expect(mocks.closeHost).toHaveBeenCalledOnce();
-    expect(mocks.closeAdmission).toHaveBeenCalledOnce();
-  });
+  it.each([1, 2] as const)(
+    "prepares admitted native session authority version %s without a model turn",
+    async (version) => {
+      mocks.createHost.mockImplementation(() => ({
+        capabilities: { version, assertActive: mocks.assertHost },
+        close: mocks.closeHost,
+        runWithScope: (run: () => Promise<unknown>) => run(),
+      }));
+      const prepared = await prepareAgentHarnessSessionRuntime({
+        ownerPluginId: "codex",
+        hostCapabilityVersion: version,
+        input,
+        assertCurrent: () => {},
+      });
+      expect(mocks.admit).toHaveBeenCalledWith("plugin-harness");
+      expect(prepared.preparation.version).toBe(version);
+      expect(mocks.createHost).toHaveBeenCalledWith(expect.objectContaining({ version }));
+      expect(prepared.preparation.params).not.toHaveProperty("prompt");
+      expect(prepared.preparation.params).not.toHaveProperty("sessionFile");
+      expect(prepared.preparation.params.hostCapabilities).toBe(
+        mocks.createHost.mock.results[0]!.value.capabilities,
+      );
+      await expect(prepared.preparation.run(async () => "started")).resolves.toBe("started");
+      prepared.dispose();
+      expect(mocks.closeHost).toHaveBeenCalledOnce();
+      expect(mocks.closeAdmission).toHaveBeenCalledOnce();
+    },
+  );
   it("closes admission when source authority disappears during credential preparation", async () => {
     const pending = createDeferred<undefined>();
     const reached = createDeferred();

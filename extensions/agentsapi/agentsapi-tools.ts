@@ -27,7 +27,7 @@ import {
   resolveToolExecutionErrorKind,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type AgentHarnessAttemptResult,
   type AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -79,7 +79,7 @@ export type AgentsApiToolSurface = {
 
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
 export async function buildAgentsApiToolSurface(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   signal: AbortSignal,
   assertCurrent: () => void,
   registerCleanup: (cleanup: (reason: string) => Promise<void>) => void,
@@ -550,7 +550,7 @@ function recordDelivery(
   tool: AnyAgentTool,
   args: Record<string, unknown>,
   raw: Awaited<ReturnType<AnyAgentTool["execute"]>>,
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   messagingContext: Parameters<typeof extractMessagingToolSend>[2],
   delivery: ToolDelivery,
   signal: AbortSignal,

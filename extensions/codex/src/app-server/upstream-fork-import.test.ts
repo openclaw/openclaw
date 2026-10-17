@@ -69,7 +69,6 @@ async function importHistory(turns: CodexTurn[], name?: string) {
   await upsertSessionEntry({
     ...target,
     entry: {
-      sessionFile: `sqlite:${target.agentId}:${target.sessionId}:${target.storePath}`,
       sessionId: target.sessionId,
       updatedAt: Date.now(),
       label: name,

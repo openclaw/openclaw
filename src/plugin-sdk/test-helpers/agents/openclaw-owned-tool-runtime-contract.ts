@@ -311,7 +311,10 @@ export async function createHostTtsRuntimeContract(
   audioPath: string,
   options: { nativeModelPolicySupport?: "exact" } = {},
 ) {
-  const host = await createAdmittedHostCapabilityTestFixture(attempt, options);
+  const host = await createAdmittedHostCapabilityTestFixture(attempt, {
+    ...options,
+    hostCapabilityVersion: 2,
+  });
   const synthesis = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue({
     success: true,
     audioPath,

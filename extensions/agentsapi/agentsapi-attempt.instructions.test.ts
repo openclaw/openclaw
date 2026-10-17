@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createMockPluginRegistry,
   initializeGlobalHookRunner,
@@ -483,7 +483,7 @@ type InstructionRequest = {
 };
 
 async function createFixture(
-  overrides: Partial<AgentHarnessAttemptParamsV2> = {},
+  overrides: Partial<AgentHarnessAttemptParamsV3> = {},
   pluginConfig: unknown = {},
 ) {
   const root = tempDirs.make("openclaw-agentsapi-instructions-");
@@ -524,8 +524,8 @@ async function createFixture(
     modelId: "model-fixture",
     model: createModel({ id: "model-fixture" }),
     // Credentials and catalog are unused by the stubbed Gateway tool surface.
-    authStorage: {} as AgentHarnessAttemptParamsV2["authStorage"],
-    modelRegistry: {} as AgentHarnessAttemptParamsV2["modelRegistry"],
+    authStorage: {} as AgentHarnessAttemptParamsV3["authStorage"],
+    modelRegistry: {} as AgentHarnessAttemptParamsV3["modelRegistry"],
     ...overrides,
   });
   return {
@@ -534,7 +534,7 @@ async function createFixture(
     requests,
     async run(
       binding?: AgentsApiBinding,
-      turnOverrides: Partial<AgentHarnessAttemptParamsV2> = {},
+      turnOverrides: Partial<AgentHarnessAttemptParamsV3> = {},
     ) {
       let saved = binding;
       const result = await runAgentsApiAttempt(

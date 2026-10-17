@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessV2,
+  AgentHarnessV3,
 } from "../../agents/harness/types.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { rewindSessionToMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
@@ -24,7 +25,7 @@ type Target = Parameters<NonNullable<AgentHarnessV2["withSessionContextReset"]>>
 /** Exercise plugin cleanup around a real host worker commit or compensated refusal. */
 export async function withNativeSessionMutationForTest(params: {
   pluginId: string;
-  harness: AgentHarnessV2;
+  harness: AgentHarnessV2 | AgentHarnessV3;
   hook: Hook;
   target: Target;
   run: (settle: (outcome?: "commit" | "rollback") => Promise<void>) => Promise<void>;

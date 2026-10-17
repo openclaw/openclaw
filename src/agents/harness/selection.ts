@@ -78,7 +78,7 @@ import {
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
 } from "./support.js";
-import type { AgentHarness } from "./types.js";
+import type { AgentHarnessRuntime as AgentHarness } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
 const WORKSPACE_EFFECT_HOOKS = [
@@ -576,7 +576,7 @@ function withoutInternalHarnessAuthority(
   builtIn: boolean,
   ownerPluginId: string | undefined,
 ): {
-  params: import("./types.js").AgentHarnessAttemptParamsV2;
+  params: import("./types.js").AgentHarnessRuntimeAttemptParams;
   closeHostCapabilities: () => void;
   setInputAttachmentReadAllowed: (allowed: boolean) => void;
   runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
@@ -588,7 +588,7 @@ function withoutInternalHarnessAuthority(
       params: {
         ...params,
         operationalRunInstance: params.admittedRunContext.operationalRunInstance,
-      } as import("./types.js").AgentHarnessAttemptParamsV2,
+      } as import("./types.js").AgentHarnessRuntimeAttemptParams,
       closeHostCapabilities: () => {},
       setInputAttachmentReadAllowed: () => {},
       runWithHostScope: (run) => run(),
@@ -596,6 +596,7 @@ function withoutInternalHarnessAuthority(
   }
   const pluginParams = withoutPluginHarnessPrivateState(params);
   const host = createAgentHarnessHostCapabilities({
+    version: harness.hostCapabilityVersion ?? 1,
     attempt: params,
     requiredNodeCommands: harness.cloudPlacement?.devicePlacement?.requiredNodeCommands,
     nativeModelPolicySupport: harness.nativeModelPolicySupport,
@@ -622,12 +623,12 @@ function withoutInternalHarnessAuthority(
 }
 
 async function preparePluginHarnessParams(
-  params: import("./types.js").AgentHarnessAttemptParamsV2,
+  params: import("./types.js").AgentHarnessRuntimeAttemptParams,
   harness: AgentHarness,
   nativePermissionsConsented: boolean,
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
   hasRuntimePluginToolGrant: boolean,
-): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
+): Promise<import("./types.js").AgentHarnessRuntimeAttemptParams> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
@@ -671,9 +672,9 @@ async function preparePluginHarnessParams(
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
-  params: import("./types.js").AgentHarnessAttemptParamsV2,
+  params: import("./types.js").AgentHarnessRuntimeAttemptParams,
   policies: ResolvedPluginHarnessToolPolicies,
-): import("./types.js").AgentHarnessAttemptParamsV2 {
+): import("./types.js").AgentHarnessRuntimeAttemptParams {
   if (isHostScopedAgentToolActive("openclaw") && isSystemAgentOnlyAllowlist(params.toolsAllow)) {
     return params;
   }

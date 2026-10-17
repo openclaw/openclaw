@@ -1,6 +1,6 @@
 import {
   isHostScopedAgentToolActive,
-  type EmbeddedRunAttemptParamsV2,
+  type EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { JsonObject } from "./protocol.js";
@@ -29,7 +29,7 @@ export function isTransientCodexRestrictedTurn(
 }
 
 export function resolveCodexProjectionStartupBinding(options: {
-  params: EmbeddedRunAttemptParamsV2;
+  params: EmbeddedRunAttemptParamsV3;
   binding: CodexAppServerThreadBinding | undefined;
   nativeToolSurfaceEnabled: boolean;
 }): CodexAppServerThreadBinding | undefined {

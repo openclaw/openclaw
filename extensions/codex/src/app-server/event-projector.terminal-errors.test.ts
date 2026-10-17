@@ -518,7 +518,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
     const callback = vi.fn();
     const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
     const createBoundProjector = async (attempt: typeof params) => {
-      const host = await createAdmittedHostCapabilityTestFixture(attempt);
+      const host = await createAdmittedHostCapabilityTestFixture(attempt, {
+        hostCapabilityVersion: 2,
+      });
       hosts.push(host);
       return {
         host,

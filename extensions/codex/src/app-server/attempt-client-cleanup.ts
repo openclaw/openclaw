@@ -1,7 +1,7 @@
 import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";

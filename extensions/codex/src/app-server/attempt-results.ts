@@ -1,7 +1,7 @@
 import type { AgentHarnessAttemptTimeout } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type {
   AgentMessage,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";

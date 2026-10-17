@@ -67,6 +67,22 @@ incognito owner during its separate migration.
 
 ### Retained helper contracts
 
+Agent harness host capability version 1 and the `AgentHarnessV2`,
+`AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
+`AgentHarnessSideQuestionParamsV2` contracts retain their existing source shapes.
+Use `AgentHarnessV3` with `hostCapabilityVersion: 2` and its corresponding V3
+parameter types when native execution needs the required
+`prepareWebSearchToolPolicy` authority. Core still supplies version 1 to legacy
+harnesses; current bundled harnesses use version 2. Both are issued by the same
+closure-bound host owner. No removal date is set: removal requires stable
+deprecation followed by a separately announced ordinary stable release window.
+`OpenClawPluginApi.registerAgentHarness` accepts both legacy and V3 harnesses;
+existing registration callbacks typed with `AgentHarness` remain assignable to
+that member. Its method signature preserves the same variance used by the
+versioned harness methods.
+Codex on a version-1 host rejects attempt or side-question admission with an
+actionable update message before loading its native runtime.
+
 The question-reaction helpers in `openclaw/plugin-sdk/question-gateway-runtime`
 remain available for existing third-party plugins without a contract change. Bundled
 channels no longer use question reactions. New integrations should declare

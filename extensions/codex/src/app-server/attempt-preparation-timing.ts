@@ -1,13 +1,13 @@
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParamsV2,
+  type EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createStageTimingTracker, formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 
 /** Records startup before the native turn owns inference and tool execution. */
 export function createCodexAttemptPreparationTiming(
-  params: Pick<EmbeddedRunAttemptParamsV2, "runId" | "sessionId" | "sessionKey" | "config">,
+  params: Pick<EmbeddedRunAttemptParamsV3, "runId" | "sessionId" | "sessionKey" | "config">,
 ) {
   const tracker = createStageTimingTracker();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);

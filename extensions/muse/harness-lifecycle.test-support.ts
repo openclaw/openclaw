@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import {
   onAgentEvent,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi, type Mock } from "vitest";
@@ -16,7 +16,7 @@ export function registerMuseLifecycleTests({
 }: {
   setup: () => {
     harness: ReturnType<typeof createMuseAgentHarness>;
-    params: AgentHarnessAttemptParamsV2;
+    params: AgentHarnessAttemptParamsV3;
     events: Array<{ stream: string; data: Record<string, unknown> }>;
     sessionStore: MuseHarnessOptions["sessionStore"];
   };

@@ -4,7 +4,7 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   loadAgentHarnessMcpConfig,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isRecord,
@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export async function buildAgentsApiMcpTools(
-  params: Pick<AgentHarnessAttemptParamsV2, "workspaceDir" | "config" | "toolOverrides">,
+  params: Pick<AgentHarnessAttemptParamsV3, "workspaceDir" | "config" | "toolOverrides">,
 ): Promise<AgentToolParam.AgentToolConfigParamMcp[]> {
   const loaded = await loadAgentHarnessMcpConfig({
     workspaceDir: params.workspaceDir,

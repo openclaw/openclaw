@@ -1,6 +1,6 @@
 import { loadCodexBundleMcpThreadConfig } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  type AgentHarnessSessionPreparationV1,
+  type AgentHarnessSessionPreparationV2,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
@@ -38,14 +38,16 @@ import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 
 /** Runs the existing thread lifecycle only. This path has no prompt or turn submission. */
 export async function prepareCodexMcpAppSession(params: {
-  preparation: AgentHarnessSessionPreparationV1;
+  preparation: AgentHarnessSessionPreparationV2;
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
   assertCurrent: () => void;
 }) {
   const { preparation } = params;
-  if (preparation.version !== 1 || preparation.purpose !== "mcp-app") {
-    throw new Error("Unsupported native session preparation capability");
+  if (preparation.version !== 2 || preparation.purpose !== "mcp-app") {
+    throw new Error(
+      "Codex requires native session preparation version 2; upgrade the OpenClaw host.",
+    );
   }
   return preparation.run(async () => {
     const input = preparation.params;

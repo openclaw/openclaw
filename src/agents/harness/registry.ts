@@ -16,7 +16,9 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { AgentHarnessSessionCleanupError } from "./errors.js";
 import type {
-  AgentHarness,
+  AgentHarnessRuntime as AgentHarness,
+  AgentHarness as LegacyAgentHarness,
+  AgentHarnessV3,
   AgentHarnessNativeCompaction,
   AgentHarnessRegistrationOptions,
   AgentHarnessResetParams,
@@ -45,6 +47,18 @@ function getAgentHarnesses() {
   return registry.agentHarnesses;
 }
 
+export function registerAgentHarness(
+  harness: LegacyAgentHarness | AgentHarnessV3,
+  options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
+): void;
+export function registerAgentHarness(
+  harness: AgentHarnessV3,
+  options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
+): void;
+export function registerAgentHarness(
+  harness: LegacyAgentHarness,
+  options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
+): void;
 export function registerAgentHarness(
   harness: AgentHarness,
   options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },

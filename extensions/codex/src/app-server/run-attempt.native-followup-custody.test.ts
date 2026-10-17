@@ -68,6 +68,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
     );
     const host = await createAdmittedHostCapabilityTestFixture(params, {
+      hostCapabilityVersion: 2,
       nativeModelPolicySupport: "exact",
     });
     assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
@@ -367,6 +368,7 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     const host = await createAdmittedHostCapabilityTestFixture(params, {
+      hostCapabilityVersion: 2,
       nativeModelPolicySupport: "exact",
     });
     hosts.push(host);

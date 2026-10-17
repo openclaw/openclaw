@@ -1,4 +1,4 @@
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -9,7 +9,7 @@ import type {
 import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
 
 type ProviderReviewAcknowledgment = NonNullable<
-  AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]
+  AgentHarnessAttemptParamsV3["providerReviewAcknowledgment"]
 >;
 type ReviewSnapshot = ReturnType<ProviderReviewAcknowledgment["read"]>;
 const sessionId = "session-1";

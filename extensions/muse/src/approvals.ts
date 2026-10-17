@@ -1,5 +1,5 @@
 import type { ApprovalHandler } from "@muse-code/sdk";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type MuseApprovalRequest = Parameters<ApprovalHandler>[0];
 
@@ -23,7 +23,7 @@ function selectApprovalChoice(request: MuseApprovalRequest, decision: string | n
 // Matches the Codex harness: a pending native approval should not hold a turn for hours.
 const APPROVAL_TIMEOUT_MS = 120_000;
 
-export function createApprovalHandler(params: AgentHarnessAttemptParamsV2): ApprovalHandler {
+export function createApprovalHandler(params: AgentHarnessAttemptParamsV3): ApprovalHandler {
   return async (request) => {
     params.hostCapabilities.assertActive();
     const timeoutMs = Math.min(APPROVAL_TIMEOUT_MS, params.timeoutMs);

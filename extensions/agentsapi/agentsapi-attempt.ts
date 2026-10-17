@@ -17,7 +17,7 @@ import {
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAgentExecutorController,
   setActiveEmbeddedRun,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -51,7 +51,7 @@ import {
 } from "./config.js";
 
 export async function runAgentsApiAttempt(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   binding: AgentsApiBinding | undefined,
   bind: (binding: AgentsApiBinding) => Promise<void>,
   assertOwnerCurrent: Parameters<typeof bindAgentsApiTranscriptAuthority>[0],
@@ -89,7 +89,7 @@ export async function runAgentsApiAttempt(
   let lastToolError: EmbeddedRunAttemptResult["lastToolError"];
   let toolTerminalObserved = false;
   const observeToolTerminal = params.observeToolTerminal;
-  const runParams: AgentHarnessAttemptParamsV2 = observeToolTerminal
+  const runParams: AgentHarnessAttemptParamsV3 = observeToolTerminal
     ? {
         ...params,
         observeToolTerminal: (observation) => {
@@ -129,7 +129,7 @@ export async function runAgentsApiAttempt(
     deadlines.beginSettlement(Date.now());
   };
   const emitEvent = (
-    event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
+    event: Parameters<NonNullable<AgentHarnessAttemptParamsV3["onAgentEvent"]>>[0],
   ) => emitAgentHarnessAttemptEvent(params, event, { label: "Agents API", log: embeddedAgentLog });
   const lifecycle = createAgentHarnessAttemptLifecycle({
     attempt: params,
@@ -716,6 +716,6 @@ type AgentsApiPromptHistory = {
 
 /** One bounded snapshot per original recorder, owned by the harness lifetime. */
 export type AgentsApiPromptHistories = WeakMap<
-  NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]>,
+  NonNullable<AgentHarnessAttemptParamsV3["userTurnTranscriptRecorder"]>,
   AgentsApiPromptHistory
 >;

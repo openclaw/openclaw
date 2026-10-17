@@ -1,5 +1,5 @@
 import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -100,7 +100,24 @@ export async function prepareCodexNativeExecutionPolicy(
     agentId: sourceAgentId,
     sessionKey: sourceSessionKey,
     storePath: captured.sessionTarget?.storePath ?? captured.storePath,
-    fields: ["sessionId", "lifecycleRevision", "execHost", "execNode", "sandbox", "sandboxMode"],
+    fields: [
+      "sessionId",
+      "lifecycleRevision",
+      "execHost",
+      "execNode",
+      "sandbox",
+      "sandboxMode",
+      "spawnedBy",
+      "spawnDepth",
+      "completionOwnerSessionKey",
+      "subagentRole",
+      "subagentControlScope",
+      "inheritedToolPolicyVersion",
+      "inheritedToolPolicySource",
+      "inheritedToolAllow",
+      "inheritedToolDeny",
+      "delegatedToolPolicy",
+    ],
     errorMessage: "Codex session execution policy changed; prepare the operation again.",
   });
   try {

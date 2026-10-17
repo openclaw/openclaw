@@ -184,18 +184,26 @@ capability as optional, send only structured non-secret facts, and await
 `flush()` before the attempt settles; do not infer storage paths or create a
 plugin-side fallback when the capability is absent.
 
-New harnesses should implement `AgentHarnessV2` and type prepared attempts as
-`AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
-`AgentHarnessSideQuestionParamsV2`; those contracts require
-`hostCapabilities`. Packages adopting V2 must declare
+New harnesses should implement `AgentHarnessV3`, declare
+`hostCapabilityVersion: 2`, and type prepared attempts as
+`AgentHarnessAttemptParamsV3`, `EmbeddedRunAttemptParamsV3`, and
+`AgentHarnessSideQuestionParamsV3`. These contracts require a version-2
+`hostCapabilities` with `prepareWebSearchToolPolicy`. Packages adopting V3 must
+declare `openclaw.compat.pluginApi` with a `>=` floor naming the first host
+release containing V3 and host capability version 2. V3 is currently unreleased:
+the published `2026.10.4` host does not include it, so `>=2026.10.4` is not a
+sufficient floor. Set the concrete supporting release before publishing a V3
+package, and align any `peerDependencies.openclaw` floor with it.
+
+Packages using the earlier V2 contracts must declare
 `openclaw.compat.pluginApi: ">=2026.8.1"` (or a newer floor) so older hosts
 reject them before load. Import the parameter types from the runtime subpath:
 
 ```typescript
 import type {
-  AgentHarnessAttemptParamsV2,
-  AgentHarnessSideQuestionParamsV2,
-  EmbeddedRunAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
+  AgentHarnessSideQuestionParamsV3,
+  EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 ```
 
@@ -208,6 +216,14 @@ and optional field. Core still supplies
 the capability on every selected attempt. Compatibility is type-level only:
 current harness code must not add a runtime path that operates without the
 host capability.
+
+The version-1 `AgentHarnessHostCapabilities` and V2 parameter and harness
+contracts also remain source-compatible. Their removal window has not been
+announced; they remain available until deprecation ships in stable and a later
+ordinary stable removal release is announced. The host supplies version 1 to
+legacy harnesses and version 2 to harnesses declaring `hostCapabilityVersion: 2`.
+Both versions share the same authority owner and closure checks. Current Codex
+requires version 2 and reports an update requirement at admission on older hosts.
 
 Compaction implementations use `AgentHarnessCompactParams<2>` (and the private
 native bridge's `AgentHarnessNativeCompactionParams<2>`) with a host-created view

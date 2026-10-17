@@ -1,11 +1,11 @@
 import type { Turn as SDKTurn } from "openai/resources/beta/agents/sessions/turns";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { createModel, createTurn } from "./agentsapi.test-support.js";
 
-type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
+type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV3["onAgentEvent"]>>[0];
 
 describe("Agents API commentary projection", () => {
   it.each(["added", "done"])(
@@ -138,7 +138,7 @@ describe("Agents API final usage accounting", () => {
 function createProjection() {
   const events: AgentEvent[] = [];
   // Observation needs no auth or transcript operations; final accounting receives the model.
-  const params = {} as AgentHarnessAttemptParamsV2;
+  const params = {} as AgentHarnessAttemptParamsV3;
   const projection = new AgentsApiMessageProjection(
     params,
     "session-fixture",

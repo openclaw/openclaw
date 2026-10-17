@@ -2,7 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 as AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { loadCopilotWorkspaceInstructions } from "./workspace-bootstrap.js";

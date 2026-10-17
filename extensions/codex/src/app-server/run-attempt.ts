@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
@@ -22,7 +22,7 @@ import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 
 export async function runCodexAppServerAttempt(
-  params: EmbeddedRunAttemptParamsV2,
+  params: EmbeddedRunAttemptParamsV3,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
   if (

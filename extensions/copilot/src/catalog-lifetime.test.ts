@@ -1,6 +1,6 @@
 import path from "node:path";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -31,7 +31,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   let aborts = 0;
   let nestedSignal: AbortSignal | undefined;
   type ToolOptions = NonNullable<
-    Parameters<NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurface"]>>[0]
+    Parameters<NonNullable<AgentHarnessAttemptParamsV3["hostCapabilities"]["createToolSurface"]>>[0]
   >;
   let catalog: ToolOptions["toolSearchCatalogRef"];
   let contextSignal: AbortSignal | undefined;
@@ -66,7 +66,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   };
   let persisted = false;
   let blocked = false;
-  const recorder: NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]> = {
+  const recorder: NonNullable<AgentHarnessAttemptParamsV3["userTurnTranscriptRecorder"]> = {
     message: userMessage,
     resolveMessage: async () => userMessage,
     markRuntimePersistencePending: () => {},
@@ -82,15 +82,18 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     persistFallback: async () => {},
   };
   const config = { tools: { codeMode: { enabled: true } } };
-  const host = await createAdmittedHostCapabilityTestFixture({
-    config,
-    runId,
-    agentId: "main",
-    sessionId,
-    sessionKey,
-    workspaceDir: state.workspaceDir,
-    abortSignal: callController.signal,
-  });
+  const host = await createAdmittedHostCapabilityTestFixture(
+    {
+      config,
+      runId,
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      workspaceDir: state.workspaceDir,
+      abortSignal: callController.signal,
+    },
+    { hostCapabilityVersion: 2 },
+  );
   let attempt: ReturnType<typeof harness.runAttempt> | undefined;
   const realCreateToolBridge = createCopilotToolBridge;
   const constructBridge = vi
@@ -145,7 +148,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       observeToolTerminal: createContractToolTerminalObserver(runId),
       userTurnTranscriptRecorder: recorder,
       onAgentToolResult: (event) => void observed.push(event),
-    } satisfies AgentHarnessAttemptParamsV2 & { auth: { useLoggedInUser: true } };
+    } satisfies AgentHarnessAttemptParamsV3 & { auth: { useLoggedInUser: true } };
     attempt = harness.runAttempt(params).finally(() => {
       host.closeHost();
       host.closeAdmission();

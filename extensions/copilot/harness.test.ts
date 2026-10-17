@@ -3,7 +3,7 @@ import type { CopilotClient, SessionConfig, SessionEvent } from "@github/copilot
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV3 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

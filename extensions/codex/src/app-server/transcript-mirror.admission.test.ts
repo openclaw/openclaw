@@ -94,7 +94,9 @@ it.each([
       userTurnTranscriptRecorder: recorder,
       onUserMessagePersisted,
     };
-    const host = await createAdmittedHostCapabilityTestFixture(attempt);
+    const host = await createAdmittedHostCapabilityTestFixture(attempt, {
+      hostCapabilityVersion: 2,
+    });
     const params = {
       ...attempt,
       hostCapabilities:

@@ -1,7 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -78,16 +78,16 @@ type ToolFixture = {
   outside: string;
   construction: ReturnType<
     typeof vi.fn<
-      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
+      NonNullable<AgentHarnessAttemptParamsV3["hostCapabilities"]["createToolSurfaceAsync"]>
     >
   >;
 };
 
 async function withToolSurface(
   options: {
-    permissionMode: NonNullable<AgentHarnessAttemptParamsV2["permissionMode"]>;
+    permissionMode: NonNullable<AgentHarnessAttemptParamsV3["permissionMode"]>;
     recordedRoot: boolean;
-    execOverrides?: AgentHarnessAttemptParamsV2["execOverrides"];
+    execOverrides?: AgentHarnessAttemptParamsV3["execOverrides"];
   },
   run: (fixture: ToolFixture) => Promise<void>,
 ) {
@@ -146,7 +146,7 @@ async function withToolSurface(
     const create = host.capabilities.createToolSurfaceAsync;
     assert(create);
     const construction = vi.fn(create);
-    const params: AgentHarnessAttemptParamsV2 = {
+    const params: AgentHarnessAttemptParamsV3 = {
       ...attempt,
       hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
     };

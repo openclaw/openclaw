@@ -1,7 +1,7 @@
 // Codex tests cover dynamic tool execution plugin behavior.
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildContractReplyPayloads,

@@ -1,6 +1,6 @@
 import type {
-  AgentHarness,
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessRuntime as AgentHarness,
+  AgentHarnessRuntimeAttemptParams as AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
 } from "./types.js";
 

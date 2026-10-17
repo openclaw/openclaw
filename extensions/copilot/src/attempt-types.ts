@@ -1,8 +1,8 @@
 import type { SessionConfig } from "@github/copilot-sdk";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
-  AgentHarnessV2,
+  AgentHarnessV3,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -27,10 +27,10 @@ export const COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE =
   "evidence does not support success.";
 export type CopilotAttemptOperation = "attempt" | "settled-tool-finalization";
 type CopilotSettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+  NonNullable<AgentHarnessV3["finalizeSettledTurn"]>
 >[0]["attempt"];
 export type CopilotAttemptParams =
-  | AgentHarnessAttemptParamsV2
+  | AgentHarnessAttemptParamsV3
   | CopilotSettledTurnFinalizationAttemptParams;
 export type AgentHarnessAttemptResult = Extract<
   AgentHarnessAttemptResultContract,
@@ -48,8 +48,8 @@ export function withPromptFailure(terminal: AttemptTerminal, error: unknown): At
     : { kind: "failed", source: "prompt", error };
 }
 export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
-export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> & {
-  hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"];
+export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV3, "hostCapabilities"> & {
+  hostCapabilities?: AgentHarnessAttemptParamsV3["hostCapabilities"];
   auth?: {
     gitHubToken?: string;
     profileId?: string;
@@ -61,7 +61,7 @@ export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilit
   enableSessionTelemetry?: boolean;
   hooksConfig?: CopilotHooksConfig;
   infiniteSessionConfig?: SessionConfig["infiniteSessions"];
-  initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
+  initialReplayState?: AgentHarnessAttemptParamsV3["initialReplayState"] & {
     journalValidated?: boolean;
     sdkSessionId?: string;
   };
@@ -76,7 +76,7 @@ export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilit
 
 export function assertCopilotAttemptHostCapabilities(
   params: AttemptParamsLike,
-): asserts params is AttemptParamsLike & Pick<AgentHarnessAttemptParamsV2, "hostCapabilities"> {
+): asserts params is AttemptParamsLike & Pick<AgentHarnessAttemptParamsV3, "hostCapabilities"> {
   if (!params.hostCapabilities) {
     throw new Error("[copilot-attempt] ordinary attempts require host capabilities");
   }

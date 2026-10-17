@@ -283,7 +283,7 @@ it(
         abortSignal: params.abortSignal,
         hostCapabilities: {
           kind: compactionHost.kind,
-          version: compactionHost.version,
+          version: 1,
           assertActive: compactionHost.assertActive,
           retainSourceAuthority,
         },

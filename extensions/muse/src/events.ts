@@ -6,7 +6,7 @@ import {
 import {
   embeddedAgentLog,
   projectAgentToolActivity,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type AgentHarnessAttemptResult,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -15,7 +15,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export type MuseAssistant = Extract<AgentMessage, { role: "assistant" }>;
 
 function assistantMessage(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   content: MuseAssistant["content"],
   stopReason: MuseAssistant["stopReason"] = "stop",
 ): MuseAssistant {
@@ -33,7 +33,7 @@ function assistantMessage(
 
 export async function consumeTurn(
   turn: Turn,
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   record: (itemId: string, messages: AgentMessage[]) => Promise<void>,
 ) {
   const items = new Map<string, FoldedItem>();
@@ -48,7 +48,7 @@ export async function consumeTurn(
   let messageStarted = false;
   let streamQueue = Promise.resolve();
   const emitEvent = (
-    event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
+    event: Parameters<NonNullable<AgentHarnessAttemptParamsV3["onAgentEvent"]>>[0],
   ) => emitAgentHarnessAttemptEvent(params, event, { label: "Muse", log: embeddedAgentLog });
   const emitField = (item: FoldedItem, field: string, value: string) => {
     streamQueue = streamQueue.then(async () => {

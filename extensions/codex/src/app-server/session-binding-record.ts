@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { NativeSessionBindingStateStoreV2 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -306,7 +306,7 @@ export class CodexSupervisionBindingReplacementError extends Error {
 export function assertCodexBindingMayBeReplaced(
   binding: CodexAppServerThreadBinding | undefined,
   operation: string,
-  expected?: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
+  expected?: EmbeddedRunAttemptParamsV3["expectedSessionRuntimeOwnership"],
 ): void {
   // A native-prepared attempt has no host-selected model for a replacement thread.
   if (expected) {

@@ -1,9 +1,9 @@
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexNativeHookRelay } from "./src/app-server/native-hook-relay.js";
 import { resolveCodexNativeModelInputTools } from "./src/app-server/native-model-input-tools.js";
 
 export function createCodexNativeSpawnRelayForTest(params: {
-  hostCapabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
+  hostCapabilities: EmbeddedRunAttemptParamsV3["hostCapabilities"];
   runId: string;
   sessionKey: string;
   namespace: string;

@@ -1,8 +1,8 @@
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeLowercaseStringOrEmpty as normalizeRuntimeId } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type CodexLocalRuntimeAttributionParams = Pick<
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   "model" | "provider" | "runtimePlan"
 >;
 

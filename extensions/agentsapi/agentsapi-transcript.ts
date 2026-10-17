@@ -4,7 +4,7 @@ import {
   createAgentHarnessToolResultMessage,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   AgentMessage,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -57,7 +57,7 @@ export function bindAgentsApiTranscriptAuthority(
 
 /** Canonical native facts use the same durable identities during live and historical repair. */
 export async function recordAgentsApiNativeToolTranscript(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   sessionId: string,
   turnId: string,
   item: AgentsApiItem,
@@ -128,7 +128,7 @@ export async function recordAgentsApiNativeToolTranscript(
 
 /** Canonical invocation facts can precede completion of the native tool. */
 export async function recordAgentsApiNativeToolInvocation(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   sessionId: string,
   turnId: string,
   item: AgentsApiItem,
@@ -161,7 +161,7 @@ export async function recordAgentsApiNativeToolInvocation(
 
 /** Persist host tool evidence before its result is acknowledged by the native session. */
 export async function recordAgentsApiToolTranscript(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   call: AgentsApiFunctionCall,
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>,
   isError: boolean,
@@ -199,7 +199,7 @@ export async function recordAgentsApiToolTranscript(
 }
 
 export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMessage>(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   message: TMessage,
   assertCurrent: TranscriptAssertion,
   assistantItemIds?: readonly string[],
@@ -394,7 +394,7 @@ export function joinTextParts(parts: Map<number, string>): string {
 
 /** Historical items keep their native identity without acquiring the current run's attribution. */
 export async function recordAgentsApiNativeHistory(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   nativeSessionId: string,
   entries: Array<{ turn: Turn; items: AgentsApiItem[] }>,
   assertCurrent: () => void,

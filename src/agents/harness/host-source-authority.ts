@@ -20,10 +20,12 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import {
   captureGatewayToolReceiptAssertion,
   type getGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
+import { resolveWebSearchToolPolicy } from "../web-search-tool-policy.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 /** Keep the original run and caller predicates attached to every host capability. */
@@ -96,6 +98,25 @@ export function bindHarnessHostSourceAuthority(params: {
       checkCaller(() => (assertReceipt?.assertScopeCurrent ?? assertReceipt)?.());
     },
   });
+}
+
+export function bindHarnessWebSearchToolPolicy(
+  assertActive: () => void,
+  signal?: AbortSignal,
+): NonNullable<AgentHarnessHostCapabilities["prepareWebSearchToolPolicy"]> {
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertActive();
+  };
+  return async (options) => {
+    assertCurrent();
+    const policy = await withPreparedSessionCapabilityRead(() => {
+      assertCurrent();
+      return resolveWebSearchToolPolicy(options);
+    });
+    assertCurrent();
+    return policy;
+  };
 }
 
 export function bindHarnessSettledTurnCallback(

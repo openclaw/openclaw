@@ -12,7 +12,7 @@ import {
   resolveModelAuthModeAsync,
   resolveSandboxContext,
   supportsModelTools,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
@@ -147,6 +147,14 @@ export async function buildDynamicTools(
   input: DynamicToolBuildParams,
 ): Promise<OpenClawDynamicTool[]> {
   const { params } = input;
+  const { hostCapabilities, abortSignal } = params;
+  const signal = input.runAbortController.signal;
+  const assertCurrent = () => {
+    abortSignal?.throwIfAborted();
+    signal.throwIfAborted();
+    hostCapabilities.assertActive();
+  };
+  assertCurrent();
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
@@ -291,6 +299,7 @@ export async function buildDynamicTools(
       cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
     };
 
+    assertCurrent();
     input.onMessageToolTargetResolved?.(options.requireExplicitMessageTarget === true);
     const allTools = await createCodexHostToolSurface(
       params,
@@ -362,9 +371,7 @@ export async function buildDynamicTools(
       !webSearchPresent &&
       persistentCodexWebSearchSurface
     ) {
-      const webSearchPolicy = (
-        await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
+      const webSearchPolicy = await hostCapabilities.prepareWebSearchToolPolicy({
         config: params.config,
         modelProvider: params.model.provider,
         modelId: params.modelId,
@@ -399,6 +406,7 @@ export async function buildDynamicTools(
         webSearchPolicy.allowed &&
         !isCodexMemoryFlushRun(params);
     }
+    assertCurrent();
     input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
     const filteredTools = applyEmbeddedAttemptToolsAllow(
       visionFilteredTools,
@@ -440,6 +448,7 @@ export async function buildDynamicTools(
     // same effective policy, while only one search implementation is exposed.
     const webSearchAllowed =
       nativeWebSearchAllowed || normalizedTools.some((tool) => tool.name === "web_search");
+    assertCurrent();
     webFetchHostnameAllowlistRef.value = webSearchAllowed
       ? webSearchPlan.webFetchHostnameAllowlist
       : undefined;
@@ -488,6 +497,7 @@ export async function buildDynamicTools(
         },
       );
     }
+    assertCurrent();
     return exposedTools;
   } finally {
     if (!input.nativeExecutionPolicy) {

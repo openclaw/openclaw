@@ -1,6 +1,9 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
+import type {
+  AgentHarnessRuntime as AgentHarness,
+  AgentHarnessRegistrationOptions,
+} from "../agents/harness/types.js";
 import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import { warnOnMissingCliBackendModelProvider } from "./cli-backend-registration.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";

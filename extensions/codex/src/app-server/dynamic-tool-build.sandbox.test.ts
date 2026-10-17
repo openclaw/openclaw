@@ -42,7 +42,7 @@ describe("Codex app-server sandbox shell tools", () => {
       isAvailable: () => true,
     });
     hoisted.normalizeAgentRuntimeTools.mockClear();
-    hoisted.resolveWebSearchToolPolicy.mockClear();
+    hoisted.prepareWebSearchToolPolicy.mockClear();
     tempDir = tempDirs.make("openclaw-codex-sandbox-tools-");
   });
 

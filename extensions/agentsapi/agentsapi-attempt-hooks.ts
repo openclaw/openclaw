@@ -6,12 +6,12 @@ import {
   resolveAgentDir,
   runAgentEndSideEffectsAsync,
   runAgentHarnessLlmOutputHook,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export function createAgentsApiAttemptHooks(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   agentId: string,
   startedAtMs: number,
 ) {

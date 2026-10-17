@@ -2,7 +2,7 @@ import {
   embeddedAgentLog,
   type CodexBundleMcpThreadConfig,
   type ExecApprovalDecision,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   formatMcpCodexApprovalRemedy,

@@ -15,7 +15,7 @@ import {
   prepareWatchedSessionsHarnessContext,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentsApiEnvironment } from "./config.js";
 
@@ -63,7 +63,7 @@ const IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS = [
 
 /** The native session owns this snapshot until OpenClaw resets its binding. */
 export async function buildAgentsApiInstructions(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
   environment: AgentsApiEnvironment,
 ): Promise<string> {
@@ -161,7 +161,7 @@ export async function buildAgentsApiInstructions(
 }
 
 export async function buildAgentsApiTurnInput(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
   prompt: string,
   mappingText: string,
@@ -190,7 +190,7 @@ export async function buildAgentsApiTurnInput(
 
 /** Current facts use the existing input carrier, not immutable session instructions. */
 async function buildAgentsApiTurnContext(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
   assertCurrent: () => void,
 ): Promise<string | undefined> {

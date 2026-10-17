@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -26,7 +27,9 @@ function guardedResponse(finalUrl: string, response: Response) {
   return { finalUrl, response, release: async () => {} };
 }
 
-function migrationStore<T = StoredBinding>(env: NodeJS.ProcessEnv) {
+function migrationStore<T = StoredBinding>(
+  env: NodeJS.ProcessEnv,
+): Required<PluginStateKeyedStore<T>> {
   return createPluginStateKeyedStoreForTests<T>("agentsapi", {
     namespace: "agentsapi-sessions",
     maxEntries: 100_000,
@@ -107,7 +110,7 @@ export function registerMigrationTests(
     withMigration(async ({ params, store, client, harness, config }) => {
       await store.register(params.sessionId, legacy);
       const changed = { transport: "streamable-http" as const, url: "https://mcp.example.test" };
-      const cases: Array<[string, Partial<AgentHarnessAttemptParamsV2>, OpenClawConfig?]> = [
+      const cases: Array<[string, Partial<AgentHarnessAttemptParamsV3>, OpenClawConfig?]> = [
         ["rotated key", { resolvedApiKey: "fixture-rotated-key" }],
         ["model", { model: { ...params.model, id: "different-model" } }],
         ["environment", {}, pluginConfig({ environment: "self_hosted" })],

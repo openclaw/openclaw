@@ -542,9 +542,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
   });
 
   it("replays SQLite history from the canonical typed session target", async () => {
-    const { sessionKey, sessionTarget } = await writeSqliteSession({
-      storedSessionFile: "agent:main:codex-sqlite",
-    });
+    const { sessionKey, sessionTarget } = await writeSqliteSession();
 
     await expect(
       readCodexMirroredSessionHistoryMessages({
@@ -624,24 +622,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
-  it("resolves synthesized SQLite markers for stale file-backed session metadata", async () => {
-    const { marker } = await writeSqliteSession({
-      storedSessionFile: "/tmp/legacy-session.jsonl",
-    });
-
-    await expect(
-      readCodexMirroredSessionHistoryMessages({
-        agentId: "main",
-        sessionFile: marker,
-        sessionId: "codex-sqlite-session",
-      }),
-    ).resolves.toMatchObject([
-      { role: "user", content: "sqlite prompt" },
-      { role: "assistant", content: "sqlite answer" },
-    ]);
-  });
-
-  it("applies the admission fence when session metadata still points to a legacy file", async () => {
+  it("applies the admission fence when the request still points to a legacy file", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "prior", parentId: null, role: "user", content: "legacy prior prompt" }),
       messageEntry({
@@ -651,9 +632,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         content: "legacy current prompt",
       }),
     ]);
-    const { sessionKey, sessionTarget } = await writeSqliteSession({
-      storedSessionFile: sessionFile,
-    });
+    const { sessionKey, sessionTarget } = await writeSqliteSession();
     const admitted = await appendSessionTranscriptMessageByIdentity({
       ...sessionTarget,
       message: { role: "user", content: "sqlite current prompt", timestamp: 3 },

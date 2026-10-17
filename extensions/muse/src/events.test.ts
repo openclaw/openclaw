@@ -1,5 +1,5 @@
 import type { FoldedItem, Turn, TurnOutcome } from "@muse-code/sdk";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
@@ -15,7 +15,7 @@ describe("Muse post-answer finalization", () => {
       const completed = createDeferred<TurnOutcome>();
       const order: string[] = [];
       const authStorage = AuthStorage.inMemory();
-      const params: AgentHarnessAttemptParamsV2 = {
+      const params: AgentHarnessAttemptParamsV3 = {
         runId: "run-finalization",
         sessionId: "session-finalization",
         sessionKey: "agent:main:finalization",
@@ -49,7 +49,8 @@ describe("Muse post-answer finalization", () => {
         },
         hostCapabilities: {
           kind: "agent-harness-host-capability",
-          version: 1,
+          version: 2,
+          prepareWebSearchToolPolicy: async () => ({ allowed: false, persistentAllowed: false }),
           assertActive: () => undefined,
           bindToolSurface: (tools) => tools,
           runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),

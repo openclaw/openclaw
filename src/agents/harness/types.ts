@@ -12,7 +12,10 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
 import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
+  AgentHarnessHostCapabilities,
+  AgentHarnessHostCapabilitiesV2,
+} from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -110,6 +113,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "inputAttachmentMedia"
   | "supportsTurnScopedToolRestrictions"
   | "onSettledTurn"
+  | "hostCapabilities"
 > & {
   /** Awaited in the original attempt scope; core alone decides whether to capture. */
   onSettledTurn?: (
@@ -126,9 +130,13 @@ type AgentHarnessAttemptParamsBase = Omit<
 export type AgentHarnessAttemptParams = AgentHarnessAttemptParamsBase & {
   hostCapabilities?: AgentHarnessHostCapabilities;
 };
-/** Current host-prepared attempt contract for agent harnesses. */
+/** @deprecated Use AgentHarnessAttemptParamsV3. Retained until a separately announced stable-release removal window. */
 export type AgentHarnessAttemptParamsV2 = AgentHarnessAttemptParamsBase & {
   hostCapabilities: AgentHarnessHostCapabilities;
+};
+/** Current attempt contract, including required native web-search authority. */
+export type AgentHarnessAttemptParamsV3 = AgentHarnessAttemptParamsBase & {
+  hostCapabilities: AgentHarnessHostCapabilitiesV2;
 };
 /** Data and admitted authority needed to prepare a native session, without a model turn. */
 export type AgentHarnessSessionRuntimeParamsV1 = Omit<
@@ -144,16 +152,31 @@ export type AgentHarnessSessionPreparationV1 = {
   run: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
+/** Native session preparation with required web-search authority. */
+export type AgentHarnessSessionRuntimeParamsV2 = Omit<
+  AgentHarnessSessionRuntimeParamsV1,
+  "hostCapabilities"
+> & { hostCapabilities: AgentHarnessHostCapabilitiesV2 };
+export type AgentHarnessSessionPreparationV2 = Omit<
+  AgentHarnessSessionPreparationV1,
+  "version" | "params"
+> & {
+  version: 2;
+  params: AgentHarnessSessionRuntimeParamsV2;
+};
+
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
 export type AgentHarnessSettledTurnFinalizationAttemptParams<
-  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+  TAttemptParams extends Omit<AgentHarnessAttemptParams, "hostCapabilities"> =
+    AgentHarnessAttemptParams,
 > = Omit<TAttemptParams, "hostCapabilities" | "onSettledTurn"> & {
   hostCapabilities?: never;
 };
 type AgentHarnessSettledTurnFinalizationParams<
-  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+  TAttemptParams extends Omit<AgentHarnessAttemptParams, "hostCapabilities"> =
+    AgentHarnessAttemptParams,
 > = {
   /** Fully prepared attempt context for the isolated finalization operation. */
   attempt: AgentHarnessSettledTurnFinalizationAttemptParams<TAttemptParams>;
@@ -305,10 +328,15 @@ export type AgentHarnessSideQuestionParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
-/** Current side-question contract for hosts that always provide closure-bound authority. */
+/** @deprecated Use AgentHarnessSideQuestionParamsV3. Retained until a separately announced stable-release removal window. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
 };
+/** Current side-question contract, including required native web-search authority. */
+export type AgentHarnessSideQuestionParamsV3 = Omit<
+  AgentHarnessSideQuestionParams,
+  "hostCapabilities"
+> & { hostCapabilities: AgentHarnessHostCapabilitiesV2 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
   /** Aggregate billed usage for the side question, including native tool-loop calls. */
@@ -503,8 +531,11 @@ type AgentHarnessSetupVerificationContext = {
 };
 
 type AgentHarnessContract<
-  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
-  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
+  TAttemptParams extends Omit<AgentHarnessAttemptParams, "hostCapabilities"> =
+    AgentHarnessAttemptParams,
+  TSideQuestionParams extends Omit<AgentHarnessSideQuestionParams, "hostCapabilities"> =
+    AgentHarnessSideQuestionParams,
+  TSessionPreparation = AgentHarnessSessionPreparationV1,
 > = {
   id: string;
   label: string;
@@ -698,7 +729,7 @@ type AgentHarnessContract<
       assertCurrent: () => void;
       appRequester?: import("../agent-bundle-mcp-types.js").McpAppRequesterIdentity;
       /** Lazy: warm sessions never acquire preparation authority. */
-      prepareSession?: () => Promise<AgentHarnessSessionPreparationV1>;
+      prepareSession?: () => Promise<TSessionPreparation>;
     },
   ): Promise<import("../agent-bundle-mcp-types.js").SessionMcpRuntimeLease | undefined>;
 
@@ -734,14 +765,35 @@ type AgentHarnessContract<
  */
 export type AgentHarness = AgentHarnessContract;
 
-/** Current harness contract for hosts that always supply versioned capabilities. */
+/** @deprecated Use AgentHarnessV3. Retained until a separately announced stable-release removal window. */
 export type AgentHarnessV2 = AgentHarnessContract<
   AgentHarnessAttemptParamsV2,
   AgentHarnessSideQuestionParamsV2
 >;
 
+/** Current harness contract for hosts with required native web-search authority. */
+export type AgentHarnessV3 = AgentHarnessContract<
+  AgentHarnessAttemptParamsV3,
+  AgentHarnessSideQuestionParamsV3,
+  AgentHarnessSessionPreparationV2
+> & { hostCapabilityVersion: 2 };
+
+/** Host-internal dispatch accepts either registered capability generation. */
+export type AgentHarnessRuntimeAttemptParams = AgentHarnessAttemptParamsBase & {
+  hostCapabilities: AgentHarnessHostCapabilities | AgentHarnessHostCapabilitiesV2;
+};
+export type AgentHarnessRuntime = AgentHarnessContract<
+  Omit<AgentHarnessAttemptParams, "hostCapabilities"> & {
+    hostCapabilities?: AgentHarnessHostCapabilities | AgentHarnessHostCapabilitiesV2;
+  },
+  Omit<AgentHarnessSideQuestionParams, "hostCapabilities"> & {
+    hostCapabilities?: AgentHarnessHostCapabilities | AgentHarnessHostCapabilitiesV2;
+  },
+  AgentHarnessSessionPreparationV1 | AgentHarnessSessionPreparationV2
+> & { hostCapabilityVersion?: 1 | 2 };
+
 export type RegisteredAgentHarness = {
-  harness: AgentHarness;
+  harness: AgentHarnessRuntime;
   ownerPluginId?: string;
 };
 

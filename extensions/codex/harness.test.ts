@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { AgentHarnessHostCapabilities } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import {
   getSessionEntry,
@@ -31,6 +32,7 @@ import {
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import codexPluginPackage from "./package.json" with { type: "json" };
+import { createCodexTestHostCapabilities } from "./src/app-server/host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
 import {
@@ -73,6 +75,26 @@ describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
+
+  it.each(["runAttempt", "runSideQuestion"] as const)(
+    "rejects a legacy host at %s admission before loading the native runtime",
+    async (operation) => {
+      const hostCapabilities: AgentHarnessHostCapabilities = {
+        kind: "agent-harness-host-capability",
+        version: 1,
+        assertActive() {},
+        bindToolSurface: (tools) => tools,
+        runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+        requestApproval: async () => undefined,
+        waitForApproval: async () => undefined,
+      };
+      const calls = runCodexAppServerAttempt.mock.calls.length;
+      await expect(
+        Reflect.apply(harness[operation]!, harness, [{ hostCapabilities }]),
+      ).rejects.toThrow("Codex requires host capability version 2 for web-search policy");
+      expect(runCodexAppServerAttempt).toHaveBeenCalledTimes(calls);
+    },
+  );
 
   it.each([
     { enableUltrafast: false, expected: ["priority", "flex"] },
@@ -169,6 +191,7 @@ describe("Codex agent harness supports()", () => {
       resolvePluginConfig: () => ({ appServer: { homeScope: "agent" } }),
     });
     const params = {
+      hostCapabilities: createCodexTestHostCapabilities(),
       config: {
         plugins: {
           entries: {

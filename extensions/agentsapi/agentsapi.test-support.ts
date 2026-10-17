@@ -1,10 +1,10 @@
 import type { AgentSession } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export function createModel(
-  overrides: Partial<AgentHarnessAttemptParamsV2["model"]> = {},
-): AgentHarnessAttemptParamsV2["model"] {
+  overrides: Partial<AgentHarnessAttemptParamsV3["model"]> = {},
+): AgentHarnessAttemptParamsV3["model"] {
   return {
     id: "fixture-model",
     name: "Fixture Model",

@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   queueAgentHarnessMessage,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -256,7 +256,7 @@ describe("Agents API completed reply settlement", () => {
 
   it("publishes exact committed item identities without acquiring a newer preview", async () => {
     const fixture = await createAttempt();
-    const events = vi.fn<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>();
+    const events = vi.fn<NonNullable<AgentHarnessAttemptParamsV3["onAgentEvent"]>>();
     const projection = new AgentsApiMessageProjection(
       fixture.params,
       "session-fixture",
@@ -559,7 +559,7 @@ async function createAttempt(pluginConfig: unknown = {}) {
       throw revocation;
     }
   };
-  const onPartialReply = vi.fn<NonNullable<AgentHarnessAttemptParamsV2["onPartialReply"]>>();
+  const onPartialReply = vi.fn<NonNullable<AgentHarnessAttemptParamsV3["onPartialReply"]>>();
   const promptHistories: AgentsApiPromptHistories = new WeakMap();
   let binding: AgentsApiBinding | undefined;
   const params = createAttemptParams({
@@ -602,7 +602,7 @@ async function createAttempt(pluginConfig: unknown = {}) {
     async recorder(
       text: string,
       idempotencyKey: string,
-      media?: AgentHarnessAttemptParamsV2["media"],
+      media?: AgentHarnessAttemptParamsV3["media"],
     ) {
       const create = await loadUserTurnTranscriptRecorderFactoryForTest();
       return create({ target, input: { text, idempotencyKey, media } });

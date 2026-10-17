@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   type HarnessContextEngine as ContextEngine,
@@ -59,7 +59,7 @@ async function createSqliteParams(
     agentId: "main",
     sessionKey,
     storePath,
-    entry: { sessionFile, sessionId, updatedAt: Date.now() },
+    entry: { sessionId, updatedAt: Date.now() },
   });
   params.sessionTarget = {
     agentId: "main",

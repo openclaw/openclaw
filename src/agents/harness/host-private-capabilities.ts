@@ -13,7 +13,11 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
+  AgentHarnessHostCapabilities as LegacyHostCapabilities,
+  AgentHarnessHostCapabilitiesV2,
+} from "./host-capability-types.js";
+type AgentHarnessHostCapabilities = LegacyHostCapabilities | AgentHarnessHostCapabilitiesV2;
 
 export type AgentHarnessScheduledToolProjectionFactory = (
   sourceTool: AnyAgentTool,

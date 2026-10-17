@@ -10,7 +10,7 @@ import {
   resolveBootstrapContextForRun,
   resolveAgentHarnessBeforePromptBuildResult,
   setActiveEmbeddedRun,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
   type EmbeddedRunAttemptResult,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -24,7 +24,7 @@ import type { AcpRuntimeHandle, AcpRuntimeTurnInput } from "../runtime-api.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 
 export async function runAcpHarnessAttempt(params: {
-  input: AgentHarnessAttemptParamsV2;
+  input: AgentHarnessAttemptParamsV3;
   runtime: CompleteAcpRuntime;
   agent: string;
   harnessId: string;

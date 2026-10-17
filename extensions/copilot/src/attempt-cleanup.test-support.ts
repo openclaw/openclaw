@@ -1,6 +1,6 @@
 import { getEventListeners } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
@@ -19,8 +19,8 @@ export function registerCopilotCleanupTests({
   requireSession,
 }: {
   makeParams: (
-    overrides?: Pick<AgentHarnessAttemptParamsV2, "onAgentEvent">,
-  ) => AgentHarnessAttemptParamsV2;
+    overrides?: Pick<AgentHarnessAttemptParamsV3, "onAgentEvent">,
+  ) => AgentHarnessAttemptParamsV3;
   requireSession: (sdk: FakeSdk) => FakeSession;
 }) {
   it.each(["auth", "proxy"] as const)(

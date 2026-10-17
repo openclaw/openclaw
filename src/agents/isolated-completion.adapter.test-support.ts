@@ -6,7 +6,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as modelResolution from "./embedded-agent-runner/model.js";
 import * as runtimePlugin from "./harness/runtime-plugin.js";
 import * as selection from "./harness/selection-decision.js";
-import type { AgentHarness } from "./harness/types.js";
+import type { AgentHarnessRuntime } from "./harness/types.js";
 import { runIsolatedCompletion, type IsolatedCompletionResult } from "./isolated-completion.js";
 import * as modelAuth from "./model-auth.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -18,7 +18,7 @@ export type IsolatedCompletionBoundaryFixtureParams = {
   root: string;
   catalog: ModelCatalogSnapshot;
   authStore: AuthProfileStore;
-  harness: AgentHarness;
+  harness: AgentHarnessRuntime;
   resolveModel: (call: number) => Promise<Model>;
 };
 

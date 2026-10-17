@@ -3,7 +3,7 @@ import {
   formatToolExecutionErrorMessage,
   normalizeQuestionTimeoutSeconds,
   resolveToolExecutionErrorKind,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   copyInternalToolResultState,

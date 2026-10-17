@@ -207,12 +207,15 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
           `#!/bin/sh\necho SELECTED=${phase}\n`,
           { mode: 0o755 },
         );
-        const host = await createAdmittedHostCapabilityTestFixture({
-          runId: `native-path-${phase}`,
-          agentId: "main",
-          sessionKey: "agent:main:native-path",
-          config: configured ? { tools: { exec: { pathPrepend: [bin] } } } : {},
-        });
+        const host = await createAdmittedHostCapabilityTestFixture(
+          {
+            runId: `native-path-${phase}`,
+            agentId: "main",
+            sessionKey: "agent:main:native-path",
+            config: configured ? { tools: { exec: { pathPrepend: [bin] } } } : {},
+          },
+          { hostCapabilityVersion: 2 },
+        );
         context.onTestFinished(() => {
           host.closeHost();
           host.closeAdmission();

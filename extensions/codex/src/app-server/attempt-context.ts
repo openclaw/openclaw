@@ -5,7 +5,7 @@ import {
   type AgentMessage,
   type ContextEngineProjection,
   type EmbeddedContextFile,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";

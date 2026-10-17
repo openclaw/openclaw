@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import type {
   AgentHarness,
-  EmbeddedRunAttemptParamsV2,
+  EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
@@ -38,7 +38,7 @@ export type NativeSubagentMonitorClient = Pick<
 >;
 
 export type NativeModelSource = NonNullable<
-  ReturnType<NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["retainSourceAuthority"]>>
+  ReturnType<NonNullable<EmbeddedRunAttemptParamsV3["hostCapabilities"]["retainSourceAuthority"]>>
 >;
 export type NativeModelBinding = NonNullable<
   ReturnType<NonNullable<NativeModelSource["bindModelExecution"]>>

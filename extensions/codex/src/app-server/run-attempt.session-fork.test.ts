@@ -1,4 +1,4 @@
-import type { AgentHarnessSideQuestionParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSideQuestionParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -138,7 +138,7 @@ describe("parent session fork", () => {
         authRequirement: "api-key",
         requestTransportOverrides: "none",
       },
-    } satisfies AgentHarnessSideQuestionParamsV2["preparedRuntimeAuth"]["plan"];
+    } satisfies AgentHarnessSideQuestionParamsV3["preparedRuntimeAuth"]["plan"];
     params.runtimePlan = { ...createCodexRuntimePlanFixture(), auth: authPlan };
     setRuntimeConfigSnapshot(params.config ?? {});
     const closeParentHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
@@ -206,9 +206,9 @@ describe("parent session fork", () => {
       .mockRejectedValue(new Error("Session fork attempted to acquire a replacement client"));
     const host = await createAdmittedHostCapabilityTestFixture(
       { runId: "session-fork" },
-      { toolCalls: "deny" },
+      { toolCalls: "deny", hostCapabilityVersion: 2 },
     );
-    const side: AgentHarnessSideQuestionParamsV2 = {
+    const side: AgentHarnessSideQuestionParamsV3 = {
       cfg: params.config ?? {},
       agentDir: params.agentDir ?? params.workspaceDir,
       agentId: params.agentId,

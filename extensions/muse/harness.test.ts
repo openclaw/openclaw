@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -69,7 +69,7 @@ function setup() {
   const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore });
   const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
   const authStorage = AuthStorage.inMemory();
-  const params: AgentHarnessAttemptParamsV2 = {
+  const params: AgentHarnessAttemptParamsV3 = {
     runId: crypto.randomUUID(),
     sessionId: crypto.randomUUID(),
     sessionKey: "agent:main:muse-test",
@@ -106,7 +106,8 @@ function setup() {
     },
     hostCapabilities: {
       kind: "agent-harness-host-capability",
-      version: 1,
+      version: 2,
+      prepareWebSearchToolPolicy: async () => ({ allowed: false, persistentAllowed: false }),
       assertActive: () => undefined,
       bindToolSurface: (tools) => tools,
       runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
@@ -164,7 +165,7 @@ describe("Muse native MSP harness", () => {
         },
       },
     ],
-  ] satisfies Array<[string, Partial<AgentHarnessAttemptParamsV2>]>)(
+  ] satisfies Array<[string, Partial<AgentHarnessAttemptParamsV3>]>)(
     "launches a read-only host for %s",
     async (_name, policy) => {
       const { harness, params } = setup();
@@ -442,7 +443,7 @@ describe("Muse native MSP harness", () => {
     const { harness, params } = setup();
     const lastToolError = { toolName: "read_file", error: "file unavailable" };
     const observeToolTerminal = vi.fn<
-      NonNullable<AgentHarnessAttemptParamsV2["observeToolTerminal"]>
+      NonNullable<AgentHarnessAttemptParamsV3["observeToolTerminal"]>
     >(() => ({
       lastToolError,
       executionStarted: true,

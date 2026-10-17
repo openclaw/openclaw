@@ -38,13 +38,14 @@ import {
 } from "./settled-turn-finalization-outcome.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
-  AgentHarness,
-  AgentHarnessAttemptParams,
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessRuntime as AgentHarness,
+  AgentHarnessRuntimeAttemptParams as AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationAttemptParams,
   AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
+
+type AgentHarnessAttemptParams = Parameters<AgentHarness["runAttempt"]>[0];
 
 type AgentHarnessLifecycleFinalizationOutcome = {
   outcome: "answered" | "empty";

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { AgentHarnessSessionRuntimeParamsV2 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerClient } from "./client.js";
@@ -138,7 +138,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
   Pick<
-    AgentHarnessSessionRuntimeParamsV1,
+    AgentHarnessSessionRuntimeParamsV2,
     | "pluginHarnessToolPolicyRestricted"
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
@@ -183,7 +183,7 @@ export function buildCodexThreadConfiguration(
 }
 
 export async function buildThreadStartParams(
-  params: AgentHarnessSessionRuntimeParamsV1,
+  params: AgentHarnessSessionRuntimeParamsV2,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): Promise<CodexThreadStartParams> {
   const resolvedModelProvider = await resolveCodexAppServerModelProvider({
@@ -222,7 +222,7 @@ export async function buildThreadStartParams(
 }
 
 export async function buildThreadResumeParams(
-  params: AgentHarnessSessionRuntimeParamsV1,
+  params: AgentHarnessSessionRuntimeParamsV2,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
@@ -468,7 +468,7 @@ export function buildCodexRuntimeThreadConfigForRun(
 }
 
 export function buildCodexRingZeroThreadConfigPatch(
-  params: Pick<AgentHarnessSessionRuntimeParamsV1, "toolsAllow">,
+  params: Pick<AgentHarnessSessionRuntimeParamsV2, "toolsAllow">,
   hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
   inheritedMcpServerNames: readonly string[] = [],
 ): JsonObject | undefined {

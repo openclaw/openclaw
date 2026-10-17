@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   AgentHarnessPreflightError,
-  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as harnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -128,7 +128,7 @@ it.each([
       };
     });
     const construct = vi.fn<
-      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
+      NonNullable<AgentHarnessAttemptParamsV3["hostCapabilities"]["createToolSurfaceAsync"]>
     >(async () => {
       if (!gateway) {
         throw new Error("Disabled Gateway tools must not be constructed");
@@ -377,7 +377,7 @@ it("skips canonical empty media slots while preserving numbered originals and so
       .mockResolvedValue({ status: "uploaded" });
     // Canonical hydration keeps serialized null slots as empty positional facts.
     const empty = { transcribed: false };
-    let media: NonNullable<AgentHarnessAttemptParamsV2["media"]> = Array.from(
+    let media: NonNullable<AgentHarnessAttemptParamsV3["media"]> = Array.from(
       { length: 51 },
       () => empty,
     );

@@ -1,4 +1,4 @@
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness";
 import {
   assignMcpCatalogSafeServerNames,
   type McpToolCatalog,
@@ -14,7 +14,9 @@ import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 
-type AgentHarnessMcpCatalogParams = Parameters<NonNullable<AgentHarness["loadMcpToolCatalog"]>>[0];
+type AgentHarnessMcpCatalogParams = Parameters<
+  NonNullable<AgentHarnessV3["loadMcpToolCatalog"]>
+>[0];
 
 function catalogTool(params: {
   serverName: string;
@@ -147,7 +149,7 @@ export async function loadCodexEffectiveMcpCatalog(
 
 /** Explicit App requests retain the thread owner, never start a second MCP client. */
 export async function acquireCodexMcpAppRuntime(
-  params: Parameters<NonNullable<AgentHarness["acquireMcpAppRuntime"]>>[0],
+  params: Parameters<NonNullable<AgentHarnessV3["acquireMcpAppRuntime"]>>[0],
   options: { bindingStore: CodexAppServerBindingStore; pluginConfig?: unknown },
 ) {
   const identity = sessionBindingIdentity(params);

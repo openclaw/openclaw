@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi, type Mock } from "vitest";
@@ -19,7 +19,7 @@ export function registerCopilotWorkspaceTests({
   requireCreateSessionConfig,
   workspaceBootstrapMock,
 }: {
-  makeParams: (overrides: Partial<AgentHarnessAttemptParamsV2>) => AgentHarnessAttemptParamsV2;
+  makeParams: (overrides: Partial<AgentHarnessAttemptParamsV3>) => AgentHarnessAttemptParamsV3;
   makeSandboxStub: (overrides?: Partial<SandboxContext>) => SandboxContext;
   createStubToolBridge: () => Awaited<ReturnType<typeof createCopilotToolBridge>>;
   requireCreateSessionConfig: (sdk: FakeSdk) => Record<string, unknown>;

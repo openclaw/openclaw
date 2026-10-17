@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import { readCodexProviderRefusal } from "./event-projector-values.js";
 import { isJsonObject, type CodexTurnStartParams } from "./protocol.js";
 
 type ProviderReviewAcknowledgment = NonNullable<
-  AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]
+  AgentHarnessAttemptParamsV3["providerReviewAcknowledgment"]
 >;
 
 /** Reconcile the acknowledged failure with the native thread immediately before turn/start. */

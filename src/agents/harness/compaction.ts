@@ -608,6 +608,8 @@ async function maybeCompactAgentHarnessSessionInGeneration(
     // Compaction reasons are not agent-run triggers.
     const { model: modelId, trigger: _compactionTrigger, ...hostAttempt } = resolvedCompactParams;
     const host = createAgentHarnessHostCapabilities({
+      // Compaction retains its independently versioned v1 authority projection.
+      version: 1,
       attempt: { ...hostAttempt, modelId, runId, admittedRunContext },
       pluginId: resolveAgentHarnessOwnerPluginId(harness),
       nativeModelPolicySupport: harness.nativeModelPolicySupport,

@@ -1,6 +1,6 @@
 // Codex helper module selects an app-server connection from private binding ownership.
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { CodexCatalogHome } from "../session-catalog-types.js";
 import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
@@ -49,7 +49,7 @@ export function assertCodexSessionRuntimeOwnership(
         "preserveNativeModel" | "connectionScope" | "model" | "modelProvider"
       >
     | undefined,
-  expected: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
+  expected: EmbeddedRunAttemptParamsV3["expectedSessionRuntimeOwnership"],
 ): void {
   if (!expected) {
     return;

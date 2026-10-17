@@ -1,6 +1,6 @@
 import {
   execPolicy,
-  type EmbeddedRunAttemptParamsV2,
+  type EmbeddedRunAttemptParamsV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -16,7 +16,7 @@ import type {
 import { readExecAsk, readExecSecurity, readRecord } from "./config-utils.js";
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
-  permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
+  permissionMode?: EmbeddedRunAttemptParamsV3["permissionMode"];
   execOverrides?: {
     mode?: unknown;
     security?: unknown;

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentHarnessSessionPreparationV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { AgentHarnessSessionPreparationV2 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as bindingConnection from "./binding-connection.js";
@@ -88,8 +88,8 @@ async function fixture() {
         throw new Error("caller selection revoked");
       }
     };
-    const preparation: AgentHarnessSessionPreparationV1 = {
-      version: 1,
+    const preparation: AgentHarnessSessionPreparationV2 = {
+      version: 2,
       purpose: "mcp-app",
       params: {
         sessionId: "cold-session",

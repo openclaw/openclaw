@@ -7,7 +7,7 @@ import {
 } from "@github/copilot-sdk";
 import type {
   AnyAgentTool,
-  EmbeddedRunAttemptParamsV2,
+  EmbeddedRunAttemptParamsV3,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -47,8 +47,8 @@ interface CopilotSessionHolder {
   current: { abort?: () => unknown } | undefined;
 }
 
-type CopilotToolAttemptParams = Partial<Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities">> &
-  Pick<EmbeddedRunAttemptParamsV2, "hostCapabilities">;
+type CopilotToolAttemptParams = Partial<Omit<EmbeddedRunAttemptParamsV3, "hostCapabilities">> &
+  Pick<EmbeddedRunAttemptParamsV3, "hostCapabilities">;
 
 type CopilotToolCompletion = {
   toolName: string;

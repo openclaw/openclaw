@@ -129,7 +129,7 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
   params.sessionTarget = target;
   await upsertSessionEntry({
     ...target,
-    entry: { sessionId: params.sessionId, sessionFile: params.sessionFile, updatedAt: Date.now() },
+    entry: { sessionId: params.sessionId, updatedAt: Date.now() },
   });
   let persisted = false;
   const recorder = {

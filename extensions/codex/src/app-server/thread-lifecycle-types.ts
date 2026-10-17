@@ -1,4 +1,4 @@
-import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { AgentHarnessSessionRuntimeParamsV2 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import type {
   CodexAppServerLiveThreadOwnership,
   CodexEphemeralThreadPolicy,
@@ -69,7 +69,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
-  params: AgentHarnessSessionRuntimeParamsV1;
+  params: AgentHarnessSessionRuntimeParamsV2;
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;

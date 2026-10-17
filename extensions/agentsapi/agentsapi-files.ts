@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createStagedInputPathMatcher, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { readMediaBuffer, resolveMediaBufferPath } from "openclaw/plugin-sdk/media-store";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
@@ -22,7 +22,7 @@ type PreparedInputAttachments = {
 
 /** The registered workspace provider owns self-hosted attachment staging. */
 export async function prepareSelfHostedInputs(
-  params: AgentHarnessAttemptParamsV2,
+  params: AgentHarnessAttemptParamsV3,
   assertCurrent: () => void,
   signal: AbortSignal,
 ): Promise<PreparedInputAttachments> {
@@ -50,7 +50,7 @@ export async function prepareSelfHostedInputs(
 
 /** Only host-prepared attachments are copied into the hosted workspace. */
 export async function prepareInputs(
-  media: Readonly<AgentHarnessAttemptParamsV2["media"]>,
+  media: Readonly<AgentHarnessAttemptParamsV3["media"]>,
   workspaceDir: string,
   assertCurrent: () => void,
   signal: AbortSignal,
@@ -224,7 +224,7 @@ export async function collectOutputs(
   rootTurnId: string,
   assertCurrent: () => void,
   signal: AbortSignal,
-  prepareReplyMedia: AgentHarnessAttemptParamsV2["hostCapabilities"]["prepareReplyMedia"],
+  prepareReplyMedia: AgentHarnessAttemptParamsV3["hostCapabilities"]["prepareReplyMedia"],
 ): Promise<string[]> {
   assertCurrent();
   signal.throwIfAborted();
@@ -288,7 +288,7 @@ export async function collectOutputs(
   return toolMediaUrls;
 }
 
-function managedMediaIdentity(fact: NonNullable<AgentHarnessAttemptParamsV2["media"]>[number]):
+function managedMediaIdentity(fact: NonNullable<AgentHarnessAttemptParamsV3["media"]>[number]):
   | {
       id: string;
       subdir: "inbound" | "outbound";

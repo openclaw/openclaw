@@ -1,11 +1,13 @@
 import path from "node:path";
 import type {
   AgentExecutorController,
-  AgentHarnessAttemptParamsV2,
+  AgentHarnessAttemptParamsV3,
+  AgentHarnessV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as harnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -99,7 +101,7 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
 }
 
 export function requireExecutorHarness(runtime: PluginRuntime) {
-  const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
+  const registerAgentHarness = vi.fn<(harness: AgentHarnessV3) => void>();
   plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
   const harness = registerAgentHarness.mock.calls[0]?.[0];
   assert(
@@ -132,7 +134,7 @@ function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawCon
   runtime.state.openKeyedStoreV2 = <T>(
     options: Parameters<typeof runtime.state.openKeyedStoreV2>[0],
     authority?: Parameters<typeof runtime.state.openKeyedStoreV2>[1],
-  ) => {
+  ): PluginStateKeyedStore<T, 2> => {
     const store = createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
     return authority ? store.withCurrent(authority) : store;
   };
@@ -181,7 +183,7 @@ export async function createAttempt(stateDir: string) {
     timeoutMs: 5_000,
     resolvedApiKey: "fixture-not-a-real-api-key",
     hostCapabilities: { ...params.hostCapabilities, createToolSurfaceAsync: async () => [] },
-  } satisfies AgentHarnessAttemptParamsV2;
+  } satisfies AgentHarnessAttemptParamsV3;
 }
 
 export function mockClient(sessionId: string) {

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { AgentHarnessSessionRuntimeParamsV2 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -59,7 +59,7 @@ type PendingSupervisionMaterializationParams = Omit<
   binding: CodexAppServerThreadBinding & {
     pendingSupervisionBranch: CodexAppServerPendingSupervisionBranch;
   };
-  attempt: AgentHarnessSessionRuntimeParamsV1;
+  attempt: AgentHarnessSessionRuntimeParamsV2;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   hostSystemAgentActive: boolean;

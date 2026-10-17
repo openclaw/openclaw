@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,7 @@ import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-su
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-type IsolatedParams = Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0];
+type IsolatedParams = Parameters<NonNullable<AgentHarnessV3["runIsolatedCompletionV2"]>>[0];
 
 const nativeAccount = "native-account-a";
 const profileAccount = "stored-account-b";

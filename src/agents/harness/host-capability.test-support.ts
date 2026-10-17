@@ -7,13 +7,14 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../agent-harness-completion-scope.js";
+import type { HostCapabilityOwner } from "./host-capability-owner.types.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
-type AdmittedHostCapabilityTestFixture = Readonly<{
+export type AdmittedHostCapabilityTestFixture<Version extends 1 | 2 = 1 | 2> = Readonly<{
   admittedRunContext: AdmittedRunContext;
-  hostCapabilities: ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"];
+  hostCapabilities: HostCapabilityOwner<Version>["capabilities"];
   agentHarnessCompletionScope?: ReturnType<typeof createAgentHarnessCompletionScope>;
   closeHost: () => void;
   closeAdmission: () => void;
@@ -21,15 +22,30 @@ type AdmittedHostCapabilityTestFixture = Readonly<{
   closeGateway: () => void;
 }>;
 
+export type HostCapabilityTestOptions = {
+  hostCapabilityVersion?: 1 | 2;
+  nativeModelPolicySupport?: "exact";
+  toolCalls?: "deny";
+  gatewayContext?: true;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+};
+
 /** Creates the same admitted authority and closure-bound host used by a real harness attempt. */
+export function createAdmittedHostCapabilityTestFixture(
+  attempt: Omit<HostAttempt, "admittedRunContext">,
+  options: HostCapabilityTestOptions & { hostCapabilityVersion: 2 },
+): Promise<AdmittedHostCapabilityTestFixture<2>>;
+export function createAdmittedHostCapabilityTestFixture(
+  attempt: Omit<HostAttempt, "admittedRunContext">,
+  options?: HostCapabilityTestOptions & { hostCapabilityVersion?: 1 },
+): Promise<AdmittedHostCapabilityTestFixture<1>>;
+export function createAdmittedHostCapabilityTestFixture(
+  attempt: Omit<HostAttempt, "admittedRunContext">,
+  options?: HostCapabilityTestOptions,
+): Promise<AdmittedHostCapabilityTestFixture>;
 export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
-  options: {
-    nativeModelPolicySupport?: "exact";
-    toolCalls?: "deny";
-    gatewayContext?: true;
-    operatorAuthority?: AdmittedRunOperatorAuthority;
-  } = {},
+  options: HostCapabilityTestOptions = {},
 ): Promise<AdmittedHostCapabilityTestFixture> {
   let resolveGatewayContext: GatewayContextResolver | undefined;
   let runWithGatewayScope = <T>(run: () => T): T => run();
@@ -72,6 +88,7 @@ export async function createAdmittedHostCapabilityTestFixture(
   }
   const host = runWithGatewayScope(() =>
     createAgentHarnessHostCapabilities({
+      version: options.hostCapabilityVersion,
       attempt: { ...attempt, admittedRunContext },
       pluginId: "codex",
       nativeModelPolicySupport: options.nativeModelPolicySupport,

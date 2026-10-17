@@ -1,13 +1,14 @@
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveWebSearchToolPolicy } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createModel } from "./agentsapi.test-support.js";
 
 export function createAttemptParams({
   hostCapabilities,
   ...overrides
-}: Omit<Partial<AgentHarnessAttemptParamsV2>, "hostCapabilities"> & {
-  hostCapabilities?: Partial<AgentHarnessAttemptParamsV2["hostCapabilities"]>;
-} = {}): AgentHarnessAttemptParamsV2 {
+}: Omit<Partial<AgentHarnessAttemptParamsV3>, "hostCapabilities"> & {
+  hostCapabilities?: Partial<AgentHarnessAttemptParamsV3["hostCapabilities"]>;
+} = {}): AgentHarnessAttemptParamsV3 {
   const authStorage = overrides.authStorage ?? AuthStorage.inMemory();
   return {
     sessionId: "local-fixture",
@@ -28,8 +29,9 @@ export function createAttemptParams({
     resolvedApiKey: "fixture-not-a-real-api-key",
     hostCapabilities: {
       kind: "agent-harness-host-capability",
-      version: 1,
+      version: 2,
       assertActive: () => {},
+      prepareWebSearchToolPolicy: async (params) => resolveWebSearchToolPolicy(params),
       bindToolSurface: (tools) => tools,
       runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
       requestApproval: async () => undefined,

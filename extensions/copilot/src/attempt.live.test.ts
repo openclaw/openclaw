@@ -7,8 +7,8 @@ import type { SessionConfig } from "@github/copilot-sdk";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   AgentMessage,
-  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
-  AgentHarnessV2,
+  AgentHarnessAttemptParamsV3 as AgentHarnessAttemptParams,
+  AgentHarnessV3,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
@@ -17,7 +17,7 @@ import { createCopilotAgentHarness } from "../harness.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 
 type SettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+  NonNullable<AgentHarnessV3["finalizeSettledTurn"]>
 >[0]["attempt"];
 import type { CopilotClientPool } from "./runtime.js";
 

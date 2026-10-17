@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { NativeModelSource } from "./native-subagent-monitor-types.js";
@@ -283,7 +283,7 @@ export class CodexNativeProcessAuthority {
   };
 
   constructor(
-    host: EmbeddedRunAttemptParamsV2["hostCapabilities"],
+    host: EmbeddedRunAttemptParamsV3["hostCapabilities"],
     private readonly onCleanupFailure: (error: unknown) => void,
     readonly requiresProcessAdmission = true,
   ) {
@@ -308,7 +308,7 @@ export class CodexNativeProcessAuthority {
 
   static assertCleanup(
     authority: CodexNativeProcessAuthority | undefined,
-    host: EmbeddedRunAttemptParamsV2["hostCapabilities"],
+    host: EmbeddedRunAttemptParamsV3["hostCapabilities"],
   ): void {
     if (authority?.source) {
       authority.assertCurrent();

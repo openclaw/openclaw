@@ -32,7 +32,6 @@ import {
   createOpenClawCodingToolsInternalAsync,
 } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
-import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -51,7 +50,13 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import { bindHostToolSurface } from "./host-bound-tool.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
+  AgentHarnessHostApprovalResult,
+  HostToolSurfaceOptions,
+  HostCapabilities,
+  HostCapabilityOptions,
+  HostCapabilityOwner,
+} from "./host-capability-owner.types.js";
 import {
   bindHostContinuationRetryCount,
   captureRequiredWorkspaceToolFloor,
@@ -73,34 +78,26 @@ import {
   bindHarnessHostSourceAuthority,
   bindHarnessModelExecution,
   bindHarnessNativeSpawnAuthority,
+  bindHarnessWebSearchToolPolicy,
   retainHarnessSource,
 } from "./host-source-authority.js";
 import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
-type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptInternalParams> &
-  Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "runId">;
-type AgentHarnessHostApprovalResult = NonNullable<
-  Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
->;
-type HostToolSurfaceOptions = Parameters<
-  NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
->[0];
-
-/** Creates a closure-bound capability before plugin invocation. */
-export function createAgentHarnessHostCapabilities(params: {
-  attempt: AgentHarnessHostAttempt;
-  pluginId: string;
-  requiredNodeCommands?: readonly string[];
-  nativeModelPolicySupport?: "exact";
-  toolCalls?: "deny";
-}): {
-  capabilities: AgentHarnessHostCapabilities;
-  close: () => void;
-  setInputAttachmentReadAllowed: (allowed: boolean) => void;
-  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
-} {
+/** Creates one closure-bound capability in the registered harness's generation. */
+export function createAgentHarnessHostCapabilities(
+  params: HostCapabilityOptions & { version: 2 },
+): HostCapabilityOwner<2>;
+export function createAgentHarnessHostCapabilities(
+  params: HostCapabilityOptions & { version?: 1 },
+): HostCapabilityOwner<1>;
+export function createAgentHarnessHostCapabilities(
+  params: HostCapabilityOptions & { version?: 1 | 2 },
+): HostCapabilityOwner<1 | 2>;
+export function createAgentHarnessHostCapabilities(
+  params: HostCapabilityOptions & { version?: 1 | 2 },
+): HostCapabilityOwner<1 | 2> {
   const attempt = params.attempt;
   const prepareContinuationRetryCount = attempt.prepareContinuationRetryCount;
   const requestCustody = captureExecRequestCustody(attempt);
@@ -323,7 +320,7 @@ export function createAgentHarnessHostCapabilities(params: {
       nativeOperation,
       approvalMode,
       ...request
-    }: Parameters<AgentHarnessHostCapabilities["runBeforeToolCall"]>[0],
+    }: Parameters<HostCapabilities["runBeforeToolCall"]>[0],
   ) => {
     assertCurrent();
     if (denyToolCalls) {
@@ -346,7 +343,7 @@ export function createAgentHarnessHostCapabilities(params: {
     assertCurrent();
     return result;
   };
-  const runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"] = async (request) =>
+  const runBeforeToolCall: HostCapabilities["runBeforeToolCall"] = async (request) =>
     await withCaller(
       async () => await runBeforeToolCallWithAssertion(assertActive, request),
       request.signal,
@@ -391,12 +388,11 @@ export function createAgentHarnessHostCapabilities(params: {
       abortSignal: bindAbortSignal(attempt.abortSignal),
       workspaceReadiness: workspaceReadiness.readiness,
     });
-  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
+  const bindToolSurface: HostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
-  const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
-    nativeModelPolicySupported
-      ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
-      : undefined;
+  const bindModelExecution: HostCapabilities["bindModelExecution"] = nativeModelPolicySupported
+    ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
+    : undefined;
   // Sandboxes use their materialized snapshot paths, never host library pins.
   const skillResourceSnapshot = (options: HostToolSurfaceOptions) =>
     !requiredWorkspace &&
@@ -457,9 +453,9 @@ export function createAgentHarnessHostCapabilities(params: {
     withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
       withInstallationTarget(installationTarget, run),
     );
-  const capabilities: AgentHarnessHostCapabilities = Object.freeze({
+  const capabilities = Object.freeze<HostCapabilities>({
     kind: "agent-harness-host-capability" as const,
-    version: 1 as const,
+    version: params.version ?? 1,
     assertActive,
     ...bindHostContinuationRetryCount(prepareContinuationRetryCount, assertActive),
     captureRequestCustody: () => {
@@ -544,6 +540,7 @@ export function createAgentHarnessHostCapabilities(params: {
       );
       return bindCreatedTools(sourceTools, bindingOptions);
     },
+    prepareWebSearchToolPolicy: bindHarnessWebSearchToolPolicy(assertActive, attemptSignal),
     prepareMutableFileApproval: async (request) => {
       assertActive();
       const prepared = await prepareSystemRunMutableFileApproval(request);
@@ -601,7 +598,11 @@ export function createAgentHarnessHostCapabilities(params: {
                       ? { allowedDecisions: request.allowedDecisions }
                       : {}),
                   },
-                  { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
+                  {
+                    expectFinal: false,
+                    requireAgentRuntimeIdentity: true,
+                    signal: request.signal,
+                  },
                 ),
             ),
           request.signal,

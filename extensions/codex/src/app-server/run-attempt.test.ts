@@ -7,7 +7,7 @@ import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
   resolveActiveEmbeddedRunSessionId,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV3 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -2434,7 +2434,6 @@ describe("runCodexAppServerAttempt", () => {
         storePath,
         entry: {
           sessionId: node,
-          sessionFile: sessionKey,
           createdVia: via,
           parentSessionKey,
           forkedFromParent: true,

@@ -1,4 +1,4 @@
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as agentAuth from "openclaw/plugin-sdk/agent-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +27,7 @@ vi.mock("./transcript-mirror.js", () => ({
 const { runCodexSettledTurnFinalization } = await import("./settled-turn-finalizer.js");
 
 type SettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+  NonNullable<AgentHarnessV3["finalizeSettledTurn"]>
 >[0]["attempt"];
 
 function createAttempt(

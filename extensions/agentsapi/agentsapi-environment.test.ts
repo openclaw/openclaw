@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV3 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createWorkspaceAttachmentPreparer,
   prepareAgentWorkspaceAttachments,
@@ -54,7 +54,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
   shouldIncludeAgentHarnessRuntimeContext: () => true,
   selectSupportedReasoningEffort: vi.fn(),
   AgentHarnessProjectionSettlement: class {
-    constructor(readonly params: AgentHarnessAttemptParamsV2) {}
+    constructor(readonly params: AgentHarnessAttemptParamsV3) {}
     async drain() {}
   },
   racePromiseWithAbortSignal: (promise: Promise<unknown>) => promise,
@@ -173,7 +173,7 @@ afterEach(() => {
 });
 
 describe("Agents API attempt environment selection", () => {
-  it.each<Partial<AgentHarnessAttemptParamsV2>>([
+  it.each<Partial<AgentHarnessAttemptParamsV3>>([
     { config: { tools: { web: { search: { enabled: false } } } } },
     { toolOverrides: { webSearch: false } },
   ])("enforces the effective search disable on creation and resume (%j)", async (overrides) => {
@@ -543,7 +543,7 @@ async function attempt({
   binding,
   pluginConfig,
   ...overrides
-}: Partial<AgentHarnessAttemptParamsV2> & {
+}: Partial<AgentHarnessAttemptParamsV3> & {
   environment?: string;
   binding?: AgentsApiBinding;
   pluginConfig?: Record<string, unknown>;

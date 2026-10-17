@@ -163,6 +163,26 @@ permission to remove a required sandbox or other configured restrictions.
 
 ### Native tool-policy enforcement
 
+For native web search, await
+`params.hostCapabilities.prepareWebSearchToolPolicy(options)`. This member of
+the version-2 host capability prepares requester metadata through the core
+worker-read protocol and returns `{ allowed, persistentAllowed }`. It checks
+the original host authority and captured attempt abort signal before preparation,
+on each worker-read replay, and before returning. Retained calls reject after
+the attempt closes; harnesses must also check currentness before publishing the result.
+`allowed` includes this turn's runtime tool allowlist; `persistentAllowed` keeps
+sender-independent policy for reusable native sessions. Preparation remains safe
+when another agent's deletion temporarily invalidates the shared session projection.
+Version 2 requires this member. Harnesses select it with
+`hostCapabilityVersion: 2` and use the V3 attempt and side-question contracts.
+Bundled Codex rejects a version-1 host at attempt or side-question admission with
+an instruction to update OpenClaw, before loading the native runtime. There is no
+ambient preparer or synchronous fallback. The legacy version-1 type and V2
+parameter contracts remain source-compatible until a separately announced
+stable-release removal window; legacy harnesses continue receiving version 1.
+The synchronous `resolveWebSearchToolPolicy(params)` signature is unchanged for
+callers that already provide prepared requester facts or a prepared capability-read scope.
+
 Set `conversationToolPolicySupport: "exact"` only when `runAttempt` enforces every
 explicit OpenClaw tool-policy layer across native and built-in tools, OpenClaw
 tools, requester and configured MCP servers, apps, delegation, and resumed
