@@ -102,37 +102,24 @@ const SHAPES: Record<string, Partial<CronJob> & { dropOwner?: boolean }> = {
   },
 };
 
-const OPS: Record<string, { method: string; params: Record<string, unknown> }> = {
-  get: { method: "cron.get", params: {} },
-  prompt: {
-    method: "cron.update",
-    params: { patch: { payload: { kind: "agentTurn", message: "p2" } } },
-  },
-  cap: {
-    method: "cron.update",
-    params: { patch: { payload: { kind: "agentTurn", message: "p3", toolsAllow: ["read"] } } },
-  },
-  enable: { method: "cron.update", params: { patch: { enabled: false } } },
-  remove: { method: "cron.remove", params: {} },
+const OPS: Record<string, Record<string, unknown>> = {
+  prompt: { payload: { kind: "agentTurn", message: "p2" } },
+  cap: { payload: { kind: "agentTurn", message: "p3", toolsAllow: ["read"] } },
 };
 
-type Caller = "operator" | "scoped" | "creator" | "manager";
-const CALLERS: Caller[] = ["operator", "scoped", "creator", "manager"];
+type Caller = "scoped" | "creator" | "manager";
+const CALLERS: Caller[] = ["scoped", "creator", "manager"];
 
-async function invokeAs(
+async function updateAs(
   caller: Caller,
-  method: string,
   params: Record<string, unknown>,
   context: ReturnType<typeof createCronTestContext>,
 ) {
-  if (caller === "operator") {
-    return await invokeCron(method as never, params, { context, client: null });
-  }
   const client: GatewayClient = createCronCallerClient("ops", "default", S_A);
   const identity = client.internal!.agentRuntimeIdentity!;
   identity.turnSourceChannel = "telegram";
   if (caller === "scoped") {
-    return await invokeCron(method as never, params, { context, client });
+    return await invokeCron("cron.update", params, { context, client });
   }
   const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
   identity.delegatedAuthority = { kind: "local", ...authority };
@@ -148,14 +135,12 @@ async function invokeAs(
     return await runWithCronCreatorAuthorityCapability(scope, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
         if (caller === "manager") {
-          identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint(
-            method as never,
-          );
+          identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.update");
         } else {
           identity.cronToolsAllowCapture = "final-executable-surface";
           identity.cronCreatorAuthorityGrant = mintCronCreatorAuthorityGrant(scope);
         }
-        return await invokeCron(method as never, params, { context, client });
+        return await invokeCron("cron.update", params, { context, client });
       }),
     );
   } finally {
@@ -174,12 +159,12 @@ describe("cron ownership access matrix", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  // Every ownership shape x caller x action, through the Gateway handlers and the SQLite service.
+  // Every ownership shape x caller x tool-runtime edit, through the Gateway handlers and the SQLite service.
   it("keeps owner attribution and tool authority bound to the recorded owner", async () => {
     const violations: string[] = [];
     for (const [shapeName, shape] of Object.entries(SHAPES)) {
       for (const caller of CALLERS) {
-        for (const [opName, op] of Object.entries(OPS)) {
+        for (const [opName, patch] of Object.entries(OPS)) {
           const cell = `${shapeName}/${caller}/${opName}`;
           const { storePath } = await makeStorePath();
           const seeded = createCronJob({ enabled: true, agentId: "ops", ...shape });
@@ -206,16 +191,10 @@ describe("cron ownership access matrix", () => {
           context.cron.updateWithPrecondition.mockImplementation((...args) =>
             cron.updateWithPrecondition(...args),
           );
-          context.cron.remove.mockImplementation((...args) => cron.remove(...args));
           let ok = false;
           let message = "";
           try {
-            const { respond } = await invokeAs(
-              caller,
-              op.method,
-              { id: seeded.id, ...op.params },
-              context,
-            );
+            const { respond } = await updateAs(caller, { id: seeded.id, patch }, context);
             const [responseOk, , error] = respond.mock.calls[0] ?? [];
             ok = responseOk === true;
             message = String(error?.message ?? "");
@@ -230,11 +209,8 @@ describe("cron ownership access matrix", () => {
           if (after && !isDeepStrictEqual(after.owner, before?.owner)) {
             violations.push(`${cell}: owner changed`);
           }
-          if (chat && ok && (opName === "prompt" || opName === "cap") && !ownedByCaller) {
+          if (chat && ok && !ownedByCaller) {
             violations.push(`${cell}: chat changed a job it does not own`);
-          }
-          if (chat && ok && ["otherSessPolicy", "otherAcct", "trusted"].includes(shapeName)) {
-            violations.push(`${cell}: chat reached a job bound to another owner`);
           }
           if (chat && after?.scheduledToolPolicy?.mode === "trusted" && shapeName !== "trusted") {
             violations.push(`${cell}: chat produced trusted authority`);

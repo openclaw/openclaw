@@ -16,6 +16,7 @@ import {
   readCronCallerScope,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
+import { requiresExplicitAgentRuntimeToolsAllow } from "./cron-input-validation.js";
 import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
@@ -60,9 +61,8 @@ export function resolveCronScopedToolEditRefusal(params: {
           "its prompt or tools (for example on the Automations page). You can still enable, " +
           "disable, reschedule or remove it, or create a new automation here.";
   }
-  const needsCap =
-    nextJob.payload.toolsAllow === undefined && !isLegacyCreatorPromptUpdate(job, patch);
-  return needsCap
+  return requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
+    !isLegacyCreatorPromptUpdate(job, patch)
     ? "Include payload.toolsAllow listing the tools this automation needs (use [] for none)."
     : undefined;
 }

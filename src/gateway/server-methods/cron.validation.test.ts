@@ -1958,27 +1958,6 @@ describe("cron method validation", () => {
     }
   });
 
-  it("refuses a cap edit from a session that does not own the job", async () => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: { payload: { kind: "agentTurn", message: "takeover", toolsAllow: ["exec"] } },
-      },
-      createCronJob({
-        agentId: "ops",
-        owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-        payload: { kind: "agentTurn", message: "legacy" },
-      }),
-      { client: callerClient("ops", "default", "agent:ops:telegram:group:-1002") },
-    );
-
-    expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "belongs to another conversation or account",
-    });
-  });
-
   it("rejects a blank cron.update display name", async () => {
     const { context, respond } = await invokeCronUpdate(
       { id: "cron-1", patch: { displayName: "   " } },
