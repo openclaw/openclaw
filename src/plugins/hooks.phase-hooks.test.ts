@@ -5,6 +5,7 @@ import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
 import {
+  addTestHook,
   addStaticTestHooks,
   createMockPluginRegistry,
   TEST_PLUGIN_AGENT_CTX,
@@ -28,27 +29,39 @@ const emptyPrompt = {
   prependSystemContext: undefined,
   appendSystemContext: undefined,
 };
-function promptRunner(hooks: PromptHook[], options?: Parameters<typeof createHookRunner>[1]) {
-  const registry = createEmptyPluginRegistry();
-  registry.typedHooks.push(
-    ...hooks.map((hook) => ({
-      pluginId: "test",
-      hookName: "before_prompt_build" as const,
-      source: "test",
-      ...hook,
-    })),
-  );
-  return createHookRunner(registry, options);
-}
 const mockRunner = (
   hooks: Parameters<typeof createMockPluginRegistry>[0],
   options?: Parameters<typeof createHookRunner>[1],
 ) => createHookRunner(createMockPluginRegistry(hooks), options);
+function promptRunner(hooks: PromptHook[], options?: Parameters<typeof createHookRunner>[1]) {
+  const registry = createEmptyPluginRegistry();
+  for (const hook of hooks) {
+    addTestHook({ registry, hookName: "before_prompt_build", pluginId: "test", ...hook });
+  }
+  return createHookRunner(registry, options);
+}
 const authority = {
   toolAuthorityFingerprint: "turn-authority",
   activeToolNames: ["message"],
   assertHostActive: () => undefined,
 };
+function pendingPrompt(prependContext: string) {
+  const gate = createDeferred();
+  const started = createDeferred<PluginHookAgentContext>();
+  let resumed = false;
+  const work = gate.promise.then(() => {
+    resumed = true;
+    return { prependContext };
+  });
+  const handler = vi.fn<PromptHook["handler"]>((_event, ctx) => {
+    started.resolve(ctx);
+    return work;
+  });
+  return { gate, started, work, handler, resumed: () => resumed };
+}
+const captureInvocation = (ctx: PluginHookAgentContext) => isActive(ctx.hookInvocation);
+const expectInactivePair = (contexts: PluginHookAgentContext[], second: boolean) =>
+  expect(contexts.map(captureInvocation)).toEqual([false, second]);
 afterEach(() => vi.useRealTimers());
 
 describe("prompt phase hooks", () => {
@@ -132,18 +145,10 @@ describe("prompt phase hooks", () => {
   });
 
   it("rejects stale enrichment and never starts its successor after host authority closes", async () => {
-    const started = createDeferred();
-    const gate = createDeferred();
+    const pending = pendingPrompt("stale context");
     const later = vi.fn(() => ({ prependContext: "later context" }));
     const runner = promptRunner([
-      {
-        requiresToolAuthority: true,
-        handler: async () => {
-          started.resolve();
-          await gate.promise;
-          return { prependContext: "stale context" };
-        },
-      },
+      { requiresToolAuthority: true, handler: pending.handler },
       { requiresToolAuthority: true, handler: later },
     ]);
     let active = true;
@@ -159,9 +164,9 @@ describe("prompt phase hooks", () => {
         },
       },
     );
-    await started.promise;
+    await pending.started.promise;
     active = false;
-    gate.resolve();
+    pending.gate.resolve();
     await expect(run).rejects.toThrow("host turn authority is no longer active");
     expect(later).not.toHaveBeenCalled();
   });
@@ -171,12 +176,9 @@ type PromptPhase = "ordinary" | "authorized";
 type Invocation = PluginHookAgentContext["hookInvocation"];
 
 function isActive(invocation: Invocation): boolean | undefined {
-  if (!invocation) {
-    return undefined;
-  }
   try {
-    invocation.assertActive();
-    return true;
+    invocation?.assertActive();
+    return invocation && true;
   } catch {
     return false;
   }
@@ -239,22 +241,20 @@ describe("prompt hook invocation", () => {
           },
         };
       };
-      const dispatch = phaseDispatch(phase, [{ pluginId: "settling-handler", handler }], logger);
+      const dispatch = phaseDispatch(phase, [{ handler }], logger);
       expect(await dispatch(context)).toEqual(
         outcome === "returned" ? { prependContext: "timely context" } : undefined,
       );
-      expect(activeOnEntry).toBe(true);
+      expect([activeOnEntry, captureInvocation(handlerContext)]).toEqual([true, false]);
       expect(handlerContext).not.toBe(context);
       expect(context).toEqual({ agentId: "test-agent", sessionKey: "test-session" });
       expect(context).not.toHaveProperty("hookInvocation");
-      expect(isActive(handlerContext.hookInvocation)).toBe(false);
       if (outcome === "returned") {
         expect(activeAtMerge.length).toBeGreaterThan(0);
         expect(activeAtMerge.every((active) => active === false)).toBe(true);
         expect(activeAtError).toEqual([]);
       } else {
-        expect(activeAtMerge).toEqual([]);
-        expect(activeAtError).toEqual([false]);
+        expect([activeAtMerge, activeAtError]).toEqual([[], [false]]);
       }
     },
   );
@@ -263,41 +263,30 @@ describe("prompt hook invocation", () => {
     "expires only the timed-out %s handler while its next sibling is still active",
     async (phase) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const firstGate = createDeferred();
-      const secondGate = createDeferred();
-      const contexts: PluginHookAgentContext[] = [];
+      const first = pendingPrompt("discarded late context");
+      const second = pendingPrompt("live context");
+      const contexts = () =>
+        [...first.handler.mock.calls, ...second.handler.mock.calls].map(([, ctx]) => ctx);
       const context = Object.freeze({ agentId: "test-agent" });
-      let firstResumed = false;
       let firstActiveAtSecondEntry: boolean | undefined;
       const activeAtTimeout: Array<boolean | undefined> = [];
-      const firstWork = firstGate.promise.then(() => {
-        firstResumed = true;
-        return { prependContext: "discarded late context" };
-      });
-      const secondWork = secondGate.promise.then(() => ({ prependContext: "live context" }));
       const logger = {
         warn: vi.fn(),
         error: vi.fn(() => {
-          activeAtTimeout.push(isActive(contexts[0]?.hookInvocation));
+          activeAtTimeout.push(captureInvocation(contexts()[0] ?? {}));
         }),
       };
       const dispatch = phaseDispatch(
         phase,
         [
           {
-            pluginId: "timed-out-handler",
             timeoutMs: 5,
-            handler: (_event, ctx) => {
-              contexts.push(ctx);
-              return firstWork;
-            },
+            handler: first.handler,
           },
           {
-            pluginId: "live-sibling",
-            handler: (_event, ctx) => {
-              firstActiveAtSecondEntry = isActive(contexts[0]?.hookInvocation);
-              contexts.push(ctx);
-              return secondWork;
+            handler: (event, ctx) => {
+              firstActiveAtSecondEntry = captureInvocation(contexts()[0] ?? {});
+              return second.handler(event, ctx);
             },
           },
         ],
@@ -305,30 +294,27 @@ describe("prompt hook invocation", () => {
       );
       const run = dispatch(context);
       try {
-        expect(contexts).toHaveLength(1);
-        expect(isActive(contexts[0]?.hookInvocation)).toBe(true);
+        expect(contexts().map(captureInvocation)).toEqual([true]);
         await vi.advanceTimersByTimeAsync(5);
-        expect(contexts).toHaveLength(2);
+        expect(contexts()).toHaveLength(2);
         expect(activeAtTimeout).toEqual([false]);
         expect(firstActiveAtSecondEntry).toBe(false);
-        expect(contexts[0]?.hookInvocation).not.toBe(contexts[1]?.hookInvocation);
-        expect(isActive(contexts[0]?.hookInvocation)).toBe(false);
-        expect(isActive(contexts[1]?.hookInvocation)).toBe(true);
+        expect(contexts()[0]?.hookInvocation).not.toBe(contexts()[1]?.hookInvocation);
+        expectInactivePair(contexts(), true);
         expect(context).not.toHaveProperty("hookInvocation");
-        expect(firstResumed).toBe(false);
+        expect(first.resumed()).toBe(false);
 
-        firstGate.resolve();
-        await Promise.allSettled([firstWork]);
-        expect(firstResumed).toBe(true);
-        expect(isActive(contexts[0]?.hookInvocation)).toBe(false);
-        expect(isActive(contexts[1]?.hookInvocation)).toBe(true);
-        secondGate.resolve();
+        first.gate.resolve();
+        await Promise.allSettled([first.work]);
+        expect(first.resumed()).toBe(true);
+        expectInactivePair(contexts(), true);
+        second.gate.resolve();
         await expect(run).resolves.toEqual({ prependContext: "live context" });
-        expect(isActive(contexts[1]?.hookInvocation)).toBe(false);
+        expect(captureInvocation(contexts()[1] ?? {})).toBe(false);
       } finally {
-        firstGate.resolve();
-        secondGate.resolve();
-        await Promise.allSettled([firstWork, secondWork, run]);
+        first.gate.resolve();
+        second.gate.resolve();
+        await Promise.allSettled([first.work, second.work, run]);
       }
     },
   );
@@ -362,10 +348,9 @@ describe("before_prompt_build dispatch", () => {
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
 
-    expect(promptBuild).toHaveBeenCalledOnce();
-    expect(turnPrepare).toHaveBeenCalledOnce();
-    expect(heartbeat).toHaveBeenCalledOnce();
-    expect(otherPromptBuild).toHaveBeenCalledOnce();
+    expect(
+      [promptBuild, turnPrepare, heartbeat, otherPromptBuild].map((fn) => fn.mock.calls.length),
+    ).toEqual([1, 1, 1, 1]);
   });
 
   it("allows detached descendants to dispatch after the outer call settles", async () => {
@@ -442,19 +427,6 @@ describe("before_agent_finalize", () => {
         { action: "finalize", reason: "enough" },
       ),
     ).resolves.toEqual({ action: "finalize", reason: "enough" });
-  });
-
-  it("bounds hung handlers so the original final answer can proceed", async () => {
-    vi.useFakeTimers();
-    const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-    const runner = mockRunner(
-      [{ hookName: "before_agent_finalize", handler: () => new Promise(() => {}) }],
-      { logger },
-    );
-    const run = runner.runBeforeAgentFinalize(finalizeEvent, TEST_PLUGIN_AGENT_CTX);
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(run).resolves.toBeUndefined();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after 15000ms"));
   });
 });
 

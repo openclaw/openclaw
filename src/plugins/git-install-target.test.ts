@@ -31,7 +31,7 @@ describe("git install target ownership", () => {
     return result.stdout.trim();
   }
   const head = (dir = sourceDir) => git(dir, "rev-parse", "HEAD");
-  async function commitPluginAt(root: string, pluginId: string, version: string) {
+  async function commitPlugin(pluginId: string, version: string, root = sourceDir) {
     await fs.writeFile(
       path.join(root, "package.json"),
       JSON.stringify({ name: "git-fixture", version, openclaw: { extensions: ["index.js"] } }),
@@ -45,9 +45,6 @@ describe("git install target ownership", () => {
     await git(root, "-c", "commit.gpgsign=false", "commit", "-m", version);
     return await head(root);
   }
-
-  const commitPlugin = (pluginId: string, version: string) =>
-    commitPluginAt(sourceDir, pluginId, version);
 
   async function install(options: Partial<Parameters<typeof installPluginFromGitSpec>[0]> = {}) {
     const result = await installPluginFromGitSpec({ spec, ...options });
@@ -63,13 +60,12 @@ describe("git install target ownership", () => {
     await git(sourceSeed, "init", "--initial-branch=main");
     await git(sourceSeed, "config", "user.name", "OpenClaw Test");
     await git(sourceSeed, "config", "user.email", "test@openclaw.invalid");
-    await commitPluginAt(sourceSeed, "demo", "1.0.0");
+    await commitPlugin("demo", "1.0.0", sourceSeed);
   });
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "git-install-target" });
-    const globalConfig = await state.writeText("global-npmrc", "");
-    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", await state.writeText("global-npmrc", ""));
     sourceDir = state.path("source");
     await fs.cp(sourceSeed, sourceDir, { recursive: true });
     spec = `git:${pathToFileURL(sourceDir).href}`;
