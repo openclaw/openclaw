@@ -81,8 +81,6 @@ type History = {
 type ProviderRequest = {
   model: string;
   input: Array<{ type?: string; role?: string; call_id?: string; output?: string }>;
-  tools?: unknown[];
-  instructions?: string;
 };
 type Scenario = {
   name: string;
@@ -102,8 +100,6 @@ async function startProvider(scenario: Scenario) {
     model: string;
     child: boolean;
     authorization?: string;
-    toolCount: number;
-    hasInstructions: boolean;
   }> = [];
   const errors: unknown[] = [];
   let spawn: Receipt | undefined;
@@ -125,8 +121,6 @@ async function startProvider(scenario: Scenario) {
       requests.push({
         model: body.model,
         child: child && !title,
-        toolCount: body.tools?.length ?? 0,
-        hasInstructions: typeof body.instructions === "string",
         authorization: request.headers.authorization,
       });
       if (child && !title && body.model === "primary" && primaryRateLimited) {
@@ -252,6 +246,101 @@ function providerConfig(baseUrl: string, ids: string[]) {
   };
 }
 
+async function withProofGateway(
+  scenario: Scenario,
+  prefix: string,
+  verify: (fixture: {
+    cfg: OpenClawConfig;
+    home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
+    provider: Awaited<ReturnType<typeof startProvider>>;
+    port: number;
+    start: (
+      options?: Pick<
+        Parameters<typeof startGatewayWithClient>[0],
+        "clientName" | "mode" | "origin" | "onEvent"
+      >,
+    ) => ReturnType<typeof startGatewayWithClient>;
+  }) => Promise<void>,
+) {
+  resetGatewayTestState();
+  const home = await setupGatewayTempHome({ prefix });
+  let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
+  let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  await runQaGatewayFixture(
+    async () => {
+      provider = await startProvider(scenario);
+      const token = randomUUID();
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      const claim = await acquireGatewayE2ePortBlock();
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: home.workspaceDir,
+            skipBootstrap: true,
+            heartbeat: { every: "0m" },
+            models: Object.fromEntries(
+              [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
+                ref,
+                { params: { transport: "sse", openaiWsWarmup: false } },
+              ]),
+            ),
+            subagents: { allowAgents: ["*"] },
+          },
+        },
+        models: {
+          mode: "replace",
+          providers: {
+            "proof-primary": providerConfig(provider.baseUrl, ["primary"]),
+            "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
+          },
+        },
+        tools: { profile: "coding" },
+        gateway: { auth: { mode: "token", token } },
+        hooks: { enabled: false },
+      };
+      await verify({
+        cfg,
+        home,
+        provider,
+        port: claim.port,
+        start: async (options = {}) => {
+          gateway = await startGatewayWithClient({
+            cfg,
+            portClaim: claim,
+            token,
+            configPath: await createGatewayConfigPath(home.tempHome),
+            ...options,
+          });
+          await gateway.server.startupSettled;
+          return gateway;
+        },
+      });
+    },
+    () => gateway && drainHeartbeatWakes(),
+    () => gateway && disconnectGatewayClient(gateway.client),
+    () => gateway?.server.close({ reason: `${prefix} complete` }),
+    () => provider?.stop(),
+    () => removeGatewayTempHome(home.tempHome),
+    () => home.envSnapshot.restore(),
+    resetGatewayTestState,
+  );
+}
+
+type GatewayClient = Awaited<ReturnType<typeof startGatewayWithClient>>["client"];
+const waitForRun = (client: GatewayClient, runId: string) =>
+  client.request<{ status: string }>(
+    "agent.wait",
+    { runId, timeoutMs: 240_000 },
+    { timeoutMs: 245_000 },
+  );
+const readHistory = (client: GatewayClient, sessionKey: string) =>
+  client.request<History>("chat.history", { sessionKey, limit: 100 });
+const readEntry = (sessionKey: string) => loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+const assistantTexts = (messages: History["messages"]) =>
+  messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => extractTextFromChatContent(message.content));
+
 const scenarios: Scenario[] = [
   { name: "configured agent ladder", backup: "backup" },
   { name: "configured qualified alias", configuredAlias: true, backup: "backup" },
@@ -313,59 +402,34 @@ describe("sessions_spawn model fallback through the Gateway", () => {
   it.each([...scenarios, ...directAgentScenarios])(
     "$name",
     async (scenario) => {
-      resetGatewayTestState();
-      const home = await setupGatewayTempHome({ prefix: "openclaw-spawn-fallback-" });
-      let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      await runQaGatewayFixture(
-        async () => {
-          provider = await startProvider(scenario);
-          const token = randomUUID();
-          setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      await withProofGateway(
+        scenario,
+        "openclaw-spawn-fallback-",
+        async ({ cfg, provider, start, port }) => {
           const primary = scenario.configuredAlias
             ? "proof-primary/fast"
             : scenario.configuredProfile
               ? `${PRIMARY}@${PROFILE}`
               : PRIMARY;
           const ladder = { primary, fallbacks: [BACKUP] };
-          const cfg: OpenClawConfig = {
-            agents: {
-              defaults: {
-                workspace: home.workspaceDir,
-                skipBootstrap: true,
-                heartbeat: { every: "0m" },
-                ...(scenario.inherited ? { model: ladder } : {}),
-                subagents: {
-                  allowAgents: ["*"],
-                  maxConcurrent: 2,
-                  ...(scenario.inherited || scenario.emptyFallbacks || scenario.directAgent
-                    ? { model: { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] } }
-                    : {}),
-                },
-                models: Object.fromEntries(
-                  [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
-                    ref,
-                    {
-                      ...(scenario.configuredAlias && ref === PRIMARY ? { alias: "fast" } : {}),
-                      params: { transport: "sse", openaiWsWarmup: false },
-                    },
-                  ]),
-                ),
-              },
-              ...(!scenario.inherited ? { entries: { main: { model: ladder } } } : {}),
-            },
-            models: {
-              mode: "replace",
-              providers: {
-                "proof-primary": providerConfig(provider.baseUrl, ["primary"]),
-                "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
-              },
-            },
-            // The provider scripts a direct spawn to isolate the child's model fallback ladder.
-            tools: { profile: "coding", toolSearch: false },
-            gateway: { auth: { mode: "token", token } },
-            hooks: { enabled: false },
+          const defaults = cfg.agents!.defaults!;
+          if (scenario.inherited) {
+            defaults.model = ladder;
+          } else {
+            cfg.agents!.entries = { main: { model: ladder } };
+          }
+          defaults.subagents = {
+            allowAgents: ["*"],
+            maxConcurrent: 2,
+            ...(scenario.inherited || scenario.emptyFallbacks || scenario.directAgent
+              ? { model: { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] } }
+              : {}),
           };
+          if (scenario.configuredAlias) {
+            defaults.models![PRIMARY]!.alias = "fast";
+          }
+          // Script a direct spawn to isolate the child's model fallback ladder.
+          cfg.tools!.toolSearch = false;
           const agentDir = resolveAgentDir(cfg, "main");
           await fs.mkdir(agentDir, { recursive: true });
           // This proof owns model fallback, while transient retry pacing has focused coverage.
@@ -385,24 +449,17 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               },
             });
           }
-          const claim = await acquireGatewayE2ePortBlock();
           let onSessionChanged: (payload: unknown) => void = () => {};
-          gateway = await startGatewayWithClient({
-            cfg,
-            portClaim: claim,
+          const { client } = await start({
             clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
             mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            origin: `http://127.0.0.1:${claim.port}`,
-            configPath: await createGatewayConfigPath(home.tempHome),
-            token,
+            origin: `http://127.0.0.1:${port}`,
             onEvent: ({ event, payload }) => {
               if (event === "sessions.changed") {
                 onSessionChanged(payload);
               }
             },
           });
-          await gateway.server.startupSettled;
-          const { client } = gateway;
           const parentKey = `agent:main:proof-${randomUUID()}`;
           const accepted = await client.request<{ runId: string; status: string }>(
             "chat.send",
@@ -415,12 +472,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             { expectFinal: false },
           );
           expect(accepted.status).toBe("started");
-          const wait = (runId: string) =>
-            client.request<{ status: string }>(
-              "agent.wait",
-              { runId, timeoutMs: 240_000 },
-              { timeoutMs: 245_000 },
-            );
+          const wait = (runId: string) => waitForRun(client, runId);
           const parentTerminal = await wait(accepted.runId);
           expect(
             parentTerminal.status,
@@ -447,16 +499,8 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           let historyOffset = 0;
           if (scenario.directAgent) {
             expect(terminal.status).toBe("ok");
-            const initialHistory = await client.request<History>("chat.history", {
-              sessionKey: spawn.childSessionKey,
-              limit: 100,
-            });
-            const initialReplies = initialHistory.messages.filter(
-              (message) => message.role === "assistant",
-            );
-            expect(
-              initialReplies.map((message) => extractTextFromChatContent(message.content)),
-            ).toEqual([INITIAL_SUCCESS]);
+            const initialHistory = await readHistory(client, spawn.childSessionKey);
+            expect(assistantTexts(initialHistory.messages)).toEqual([INITIAL_SUCCESS]);
             expect(
               new Set(
                 provider.requests.filter((request) => request.child).map(({ model }) => model),
@@ -513,20 +557,9 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           if (scenario.visible !== false) {
             expect(child).toMatchObject({ parentSessionKey: parentKey });
           }
-          const history = await client.request<History>("chat.history", {
-            sessionKey: spawn.childSessionKey,
-            limit: 100,
-          });
-          const replies = history.messages
-            .slice(historyOffset)
-            .filter((message) => message.role === "assistant");
-          const text = replies
-            .map((message) => extractTextFromChatContent(message.content))
-            .join("\n");
-          const entry = loadSessionEntryReadOnly({
-            sessionKey: spawn.childSessionKey,
-            agentId: "main",
-          });
+          const history = await readHistory(client, spawn.childSessionKey);
+          const text = assistantTexts(history.messages.slice(historyOffset)).join("\n");
+          const entry = readEntry(spawn.childSessionKey);
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
@@ -583,13 +616,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             expect(entry?.modelOverride).not.toContain("@");
           }
         },
-        () => gateway && drainHeartbeatWakes(),
-        () => gateway && disconnectGatewayClient(gateway.client),
-        () => gateway?.server.close({ reason: "spawn fallback proof complete" }),
-        () => provider?.stop(),
-        () => removeGatewayTempHome(home.tempHome),
-        () => home.envSnapshot.restore(),
-        resetGatewayTestState,
       );
     },
     600_000,
@@ -728,61 +754,25 @@ describe("CLI model inheritance through MCP", () => {
   ])(
     "inherits the logical model with visible=$visible and native=$nativeModel",
     async (scenario) => {
-      resetGatewayTestState();
-      const home = await setupGatewayTempHome({ prefix: "openclaw-cli-model-inheritance-" });
-      let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      await runQaGatewayFixture(
-        async () => {
-          provider = await startProvider({ name: "CLI model inheritance", directAgent: true });
-          const token = randomUUID();
-          const claim = await acquireGatewayE2ePortBlock();
-          setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-          const cfg: OpenClawConfig = {
-            agents: {
-              defaults: {
-                workspace: home.workspaceDir,
-                skipBootstrap: true,
-                heartbeat: { every: "0m" },
-                model: CHILD_BACKUP,
-                models: {
-                  [PRIMARY]: { params: { transport: "sse", openaiWsWarmup: false } },
-                  [BACKUP]: { params: { transport: "sse", openaiWsWarmup: false } },
-                  [CHILD_BACKUP]: { params: { transport: "sse", openaiWsWarmup: false } },
-                },
-                subagents: { allowAgents: ["*"] },
-              },
-            },
-            models: {
-              mode: "replace",
-              providers: {
-                "proof-primary": providerConfig(provider.baseUrl, ["primary"]),
-                "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
-              },
-            },
-            tools: { profile: "coding" },
-            gateway: { port: claim.port, auth: { mode: "token", token } },
-            hooks: { enabled: false },
-          };
-          gateway = await startGatewayWithClient({
-            cfg,
-            portClaim: claim,
-            token,
-            configPath: await createGatewayConfigPath(home.tempHome),
-          });
-          await gateway.server.startupSettled;
-          const { client } = gateway;
+      await withProofGateway(
+        { name: "CLI model inheritance", directAgent: true },
+        "openclaw-cli-model-inheritance-",
+        async ({ cfg, home, provider, start, port }) => {
+          cfg.agents!.defaults!.model = CHILD_BACKUP;
+          cfg.gateway!.port = port;
+          const { client } = await start();
           const parentKey = `agent:main:cli-model-proof:${randomUUID()}`;
           await client.request("sessions.patch", { key: parentKey, model: BACKUP });
-          const parent = loadSessionEntryReadOnly({ agentId: "main", sessionKey: parentKey });
+          const parent = readEntry(parentKey);
           if (!parent?.sessionId) {
             throw new Error("CLI proof parent was not created");
           }
-          expect(parent).toMatchObject({
+          const parentOverride = {
             providerOverride: "proof-backup",
             modelOverride: "backup",
             modelOverrideSource: "user",
-          });
+          };
+          expect(parent).toMatchObject(parentOverride);
           const providerRequests = provider.requests;
           await withCliSpawnGrant(
             {
@@ -793,28 +783,15 @@ describe("CLI model inheritance through MCP", () => {
               ...scenario,
             },
             async (spawn) => {
-              const terminal = await client.request<{ status: string }>(
-                "agent.wait",
-                { runId: spawn.runId, timeoutMs: 240_000 },
-                { timeoutMs: 245_000 },
-              );
+              const terminal = await waitForRun(client, spawn.runId);
               expect(terminal.status).toBe("ok");
               const childRequests = providerRequests.filter((request) => request.child);
               expect(childRequests.length).toBeGreaterThan(0);
               expect(
                 childRequests.every((request) => request.model === "primary"),
-                JSON.stringify(
-                  childRequests.map(({ model, toolCount, hasInstructions }) => ({
-                    model,
-                    toolCount,
-                    hasInstructions,
-                  })),
-                ),
+                JSON.stringify(childRequests),
               ).toBe(true);
-              const child = loadSessionEntryReadOnly({
-                agentId: "main",
-                sessionKey: spawn.childSessionKey,
-              });
+              const child = readEntry(spawn.childSessionKey);
               expect(child).toMatchObject({
                 providerOverride: "proof-primary",
                 modelOverride: "primary",
@@ -822,33 +799,13 @@ describe("CLI model inheritance through MCP", () => {
                 spawnedBy: parentKey,
                 spawnDepth: 1,
               });
-              expect(
-                loadSessionEntryReadOnly({ agentId: "main", sessionKey: parentKey }),
-              ).toMatchObject({
-                providerOverride: "proof-backup",
-                modelOverride: "backup",
-                modelOverrideSource: "user",
-              });
-              const transcript = await client.request<History>("chat.history", {
-                sessionKey: spawn.childSessionKey,
-                limit: 100,
-              });
-              expect(
-                transcript.messages
-                  .filter((message) => message.role === "assistant")
-                  .map((message) => extractTextFromChatContent(message.content)),
-              ).toContain(INITIAL_SUCCESS);
+              expect(readEntry(parentKey)).toMatchObject(parentOverride);
+              const transcript = await readHistory(client, spawn.childSessionKey);
+              expect(assistantTexts(transcript.messages)).toContain(INITIAL_SUCCESS);
             },
           );
           expect(provider.errors).toEqual([]);
         },
-        () => gateway && drainHeartbeatWakes(),
-        () => gateway && disconnectGatewayClient(gateway.client),
-        () => gateway?.server.close({ reason: "CLI model inheritance proof complete" }),
-        () => provider?.stop(),
-        () => removeGatewayTempHome(home.tempHome),
-        () => home.envSnapshot.restore(),
-        resetGatewayTestState,
       );
     },
     600_000,

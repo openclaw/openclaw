@@ -113,6 +113,39 @@ afterEach(async () => {
 // Register after the resets so stacked teardown drains fixture stores first.
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
+const readReadme = (dir: string) => fs.readFile(path.join(dir, "README.md"), "utf8");
+const readEntry = (storePath: string, sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey, storePath });
+const removeWorktree = (id: string) =>
+  managedWorktrees.remove({ id, reason: "test-cleanup", allowSnapshotLoss: true });
+function mockDispatch() {
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+}
+function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(broadcast).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining(fields),
+    expect.anything(),
+  );
+}
+async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
+  prefix: string,
+) {
+  const root = tempDirs.make(prefix);
+  const workspace = await initializeRepository(root, "workspace");
+  const projectRoot = await initializeRepository(root, "project");
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+  const materialization = createDeferredCore<T>();
+  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  mockDispatch();
+  return { storePath, projectRoot, project, materialization };
+}
+
 function createRemoteSession(params: Record<string, unknown>, context: Record<string, unknown>) {
   return directSessionReq<{
     entry: SessionEntry;
@@ -202,7 +235,7 @@ test.each([
       expect(created.payload?.entry).not.toHaveProperty("pendingWorktree");
       const { runId, sessionId } = created.payload!;
       key = created.payload!.key;
-      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      expect(readEntry(storePath, key)).toMatchObject({
         sessionId,
         pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
         ...(worktree ? { pendingWorktree: { baseRef } } : {}),
@@ -278,7 +311,7 @@ test.each([
           readPersistedMediaFacts(pending.items[0]!.message),
         );
       }
-      const prepared = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+      const prepared = readEntry(storePath, key);
       expect(prepared).toMatchObject({
         sessionId,
         projectId: project.id,
@@ -292,14 +325,8 @@ test.each([
       if (worktree) {
         expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
         expect(prepared?.spawnedCwd).not.toBe(projectRoot);
-        expect(await fs.readFile(path.join(prepared!.spawnedCwd!, "README.md"), "utf8")).toBe(
-          "project\n",
-        );
-        await managedWorktrees.remove({
-          id: prepared!.worktree!.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
+        expect(await readReadme(prepared!.spawnedCwd!)).toBe("project\n");
+        await removeWorktree(prepared!.worktree!.id);
       }
     } finally {
       materialization.resolve(project);
@@ -310,18 +337,9 @@ test.each([
 );
 
 test("chat.abort cancels remote worktree project preparation without late binding or agent dispatch", async () => {
-  const root = tempDirs.make("openclaw-session-remote-project-abort-");
-  const workspace = await initializeRepository(root, "workspace");
-  const projectRoot = await initializeRepository(root, "project");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-  const materialization = createDeferredCore<typeof project>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
+  const { storePath, project, materialization } = await remoteProjectFixture(
+    "openclaw-session-remote-project-abort-",
+  );
   const broadcast = vi.fn();
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const context = {
@@ -361,11 +379,7 @@ test("chat.abort cancels remote worktree project preparation without late bindin
     expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
     expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
     expect(signal?.aborted).toBe(true);
-    expect(broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId, sessionKey: key, state: "aborted" }),
-      expect.anything(),
-    );
+    expectChatEvent(broadcast, { runId, sessionKey: key, state: "aborted" });
 
     materialization.resolve(project);
     await settleWorkspaceRuns(context, storePath, key);
@@ -373,13 +387,11 @@ test("chat.abort cancels remote worktree project preparation without late bindin
       payload: { runId, summary: "aborted" },
     });
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    expect(readEntry(storePath, key)).toMatchObject({
       sessionId,
       pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.projectId).toBe(
-      undefined,
-    );
+    expect(readEntry(storePath, key)?.projectId).toBe(undefined);
     expect(context.chatRunState.runs.get(runId)?.abortMarker).toBeDefined();
   } finally {
     materialization.resolve(project);
@@ -388,18 +400,9 @@ test("chat.abort cancels remote worktree project preparation without late bindin
 });
 
 test("sessions.create retries a failed remote project worktree in the same session after Gateway restart", async () => {
-  const root = tempDirs.make("openclaw-session-remote-project-failure-");
-  const workspace = await initializeRepository(root, "workspace");
-  const projectRoot = await initializeRepository(root, "project");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-  const materialization = createDeferredCore<never>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
+  const { storePath, projectRoot, project, materialization } = await remoteProjectFixture<never>(
+    "openclaw-session-remote-project-failure-",
+  );
   const broadcast = vi.fn();
   const context = { broadcast, chatAbortControllers: new Map(), dedupe: new Map() };
 
@@ -415,16 +418,12 @@ test("sessions.create retries a failed remote project worktree in the same sessi
     "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
   materialization.reject(new ProjectCloneError("network", failureMessage));
   await settleWorkspaceRuns(context, storePath, key);
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining({
-      runId,
-      sessionKey: key,
-      state: "error",
-      errorMessage: expect.stringContaining(failureMessage),
-    }),
-    expect.anything(),
-  );
+  expectChatEvent(broadcast, {
+    runId,
+    sessionKey: key,
+    state: "error",
+    errorMessage: expect.stringContaining(failureMessage),
+  });
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   // The first chat pane subscribes only after create-and-navigate. Its history
   // must recover the failure without receiving the already-emitted chat event.
@@ -473,11 +472,9 @@ test("sessions.create retries a failed remote project worktree in the same sessi
       status: "started",
     });
     await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.lastRunError).toBe(
-      undefined,
-    );
+    expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    expect(readEntry(storePath, key)).toMatchObject({
       sessionId,
       pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
     });
@@ -490,7 +487,7 @@ test("sessions.create retries a failed remote project worktree in the same sessi
     );
     expect(error?.[1]).toBeUndefined();
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    const preparedEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    const preparedEntry = readEntry(storePath, key);
     expect(preparedEntry).toMatchObject({
       sessionId,
       projectId: project.id,
@@ -499,11 +496,7 @@ test("sessions.create retries a failed remote project worktree in the same sessi
     expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
     expect(preparedEntry).not.toHaveProperty("pendingWorktree");
     if (preparedEntry?.worktree) {
-      await managedWorktrees.remove({
-        id: preparedEntry.worktree.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
+      await removeWorktree(preparedEntry.worktree.id);
     }
   } finally {
     retriedMaterialization.resolve(project);
@@ -551,10 +544,7 @@ sendReceipt(process.argv[2], "started");
       dedupe: new Map(),
     };
     const options = { client: { connect: { scopes: ["operator.admin"] } } as never, context };
-    dispatchInboundMessageMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
+    mockDispatch();
     let key: string | undefined;
     try {
       const created = await directSessionReq<{ key: string; runId: string; runStarted: boolean }>(
@@ -580,9 +570,10 @@ sendReceipt(process.argv[2], "started");
       );
       expect(await fs.readFile(starts, "utf8")).toBe("started\n");
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.pendingWorktree,
-      ).toMatchObject({ baseRef: "main", baseCommit: expect.any(String) });
+      expect(readEntry(storePath, key)?.pendingWorktree).toMatchObject({
+        baseRef: "main",
+        baseCommit: expect.any(String),
+      });
       const sent = await directSessionReq(
         "chat.send",
         {
@@ -613,14 +604,12 @@ sendReceipt(process.argv[2], "started");
       await fs.writeFile(release, "ready\n");
       await settleWorkspaceRuns(context, storePath, key);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(abortFirst ? 1 : 2);
-      const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+      const entry = readEntry(storePath, key);
       expect(entry).not.toHaveProperty("pendingWorktree");
       expect(entry?.worktree?.canonicalWorkspaceDir).toBe(workspace);
       const owned = await managedWorktrees.findLiveByOwner("session", key!);
       expect(owned?.id).toBe(entry?.worktree?.id);
-      await expect(fs.readFile(path.join(entry!.spawnedCwd!, "README.md"), "utf8")).resolves.toBe(
-        "workspace\n",
-      );
+      await expect(readReadme(entry!.spawnedCwd!)).resolves.toBe("workspace\n");
       expect(
         context.broadcast.mock.calls.filter(
           ([event, payload]) => event === "chat" && payload.state === "error",
@@ -631,11 +620,7 @@ sendReceipt(process.argv[2], "started");
       await settleWorkspaceRuns(context, storePath, key, true);
       const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
       if (owned) {
-        await managedWorktrees.remove({
-          id: owned.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
+        await removeWorktree(owned.id);
       }
     }
   },
@@ -689,7 +674,7 @@ test("chat.send visibly rejects corrupt persisted project intent without default
   );
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   const sessionKey = created.payload!.key;
-  const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+  const entry = readEntry(storePath, sessionKey);
   expect(entry).toBeDefined();
   await replaceSessionEntry(
     { agentId: "main", sessionKey, storePath },
@@ -711,16 +696,12 @@ test("chat.send visibly rejects corrupt persisted project intent without default
 
   expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
   await settleWorkspaceRuns(context, storePath, sessionKey);
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining({
-      runId: "corrupt-project-intent",
-      sessionKey,
-      state: "error",
-      errorMessage: expect.stringContaining("Saved project repository is invalid"),
-    }),
-    expect.anything(),
-  );
+  expectChatEvent(broadcast, {
+    runId: "corrupt-project-intent",
+    sessionKey,
+    state: "error",
+    errorMessage: expect.stringContaining("Saved project repository is invalid"),
+  });
   expect(projectCloneMocks.materialize).not.toHaveBeenCalled();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
@@ -796,7 +777,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
           await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
         ).toMatchObject({ removed: [] });
         expect(await managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("project\n");
+        expect(await readReadme(record.path)).toBe("project\n");
         return outcome;
       });
     const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
@@ -838,11 +819,11 @@ test("sessions.create with an empty message preserves its owned checkout above t
       expect(getRegistryWorktree(process.env, worktree.id)).toBeDefined();
       expect(await requireGit(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
       expect(await requireGit(worktree.path, ["branch", "--show-current"])).toBe(worktree.branch);
-      expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("project\n");
+      expect(await readReadme(worktree.path)).toBe("project\n");
       expect(await managedWorktrees.listRegistryRecords()).toHaveLength(101);
       for (const record of kept) {
         expect(getRegistryWorktree(process.env, record.id)).toEqual(record);
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("workspace\n");
+        expect(await readReadme(record.path)).toBe("workspace\n");
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
