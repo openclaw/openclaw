@@ -10,9 +10,7 @@ import {
 } from "./agents.bind.test-support.js";
 import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
-const pluginRegistryMocks = vi.hoisted(() => ({
-  listPluginContributionIds: vi.fn(() => ["external-chat"]),
-}));
+const listContributions = vi.hoisted(() => vi.fn(() => ["external-chat"]));
 vi.mock("../config/bindings.js", () => ({
   isRouteBinding: (binding: { match?: unknown }) => Boolean(binding.match),
   listRouteBindings: (cfg: OpenClawConfig) =>
@@ -20,7 +18,7 @@ vi.mock("../config/bindings.js", () => ({
 }));
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
+  listPluginContributionIds: listContributions,
 }));
 vi.mock("../channels/plugins/index.js", () => ({ getLoadedChannelPlugin: () => undefined }));
 type BindingPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
@@ -49,8 +47,10 @@ vi.mock("../channels/plugins/bundled.js", () => ({
 
 let commands: Awaited<ReturnType<typeof loadFreshAgentsBindCommandModuleForTest>>;
 type UpdateOptions = Parameters<typeof commands.agentsUpdateBindingsCommand>[1];
-const update = (operation: "bind" | "unbind", options: UpdateOptions, output = runtime) =>
-  commands.agentsUpdateBindingsCommand(operation, options, output);
+const update = (operation: "bind" | "unbind" | "list", options: UpdateOptions, output = runtime) =>
+  operation === "list"
+    ? commands.agentsBindingsCommand(options, output)
+    : commands.agentsUpdateBindingsCommand(operation, options, output);
 const setConfig = (config: OpenClawConfig) =>
   readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot, config });
 const route = (channel: string, accountId?: string, agentId = "main") => ({
@@ -63,14 +63,12 @@ const conflictConfig: OpenClawConfig = {
   bindings: [route("telegram", "ops")],
 };
 const jsonRuntime = () => ({ ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() });
-const expectNoCalls = (...mocks: ReturnType<typeof vi.fn>[]) => {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-};
+const expectNoCalls = (...mocks: ReturnType<typeof vi.fn>[]) =>
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
 const unknownAgent = (id: string) =>
   `Agent "${id}" not found. Run openclaw agents list to see configured agents.`;
 const explicitAgents = { ownership: "explicit" as const, entries: { main: {}, ops: {} } };
+type Rejection = [Parameters<typeof update>[0], UpdateOptions, string];
 
 describe("agents bind/unbind commands", () => {
   beforeAll(async () => {
@@ -78,13 +76,13 @@ describe("agents bind/unbind commands", () => {
   });
   beforeEach(() => {
     resetAgentsBindTestHarness();
-    pluginRegistryMocks.listPluginContributionIds.mockReset().mockReturnValue(["external-chat"]);
+    listContributions.mockReset().mockReturnValue(["external-chat"]);
     setConfig({});
   });
 
   it("lists routing bindings without plugin validation", async () => {
     setConfig({ bindings: [route("matrix"), route("telegram", "work", "ops")] });
-    await commands.agentsBindingsCommand({}, runtime);
+    await update("list", {});
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(runtime.log).toHaveBeenCalledWith(
       "Routing bindings:\n- main <- matrix\n- ops <- telegram accountId=work",
@@ -92,16 +90,12 @@ describe("agents bind/unbind commands", () => {
   });
 
   it("uses the persisted default ops for bind and unbind", async () => {
-    const agentId = "ops";
     const config: OpenClawConfig = {
-      agents: {
-        ...explicitAgents,
-        defaults: { systemAgent: { agentId } },
-      },
+      agents: { ...explicitAgents, defaults: { systemAgent: { agentId: "ops" } } },
     };
     setConfig(config);
     await update("bind", { bind: ["telegram:work"] });
-    const bound = { ...config, bindings: [route("telegram", "work", agentId)] };
+    const bound = { ...config, bindings: [route("telegram", "work", "ops")] };
     expect(writeConfigFileMock).toHaveBeenLastCalledWith(bound);
 
     setConfig(bound);
@@ -111,19 +105,16 @@ describe("agents bind/unbind commands", () => {
   });
 
   it("matches normalized account identities for conflicts, repeats, and removal", async () => {
-    const config: OpenClawConfig = {
-      agents: explicitAgents,
-      bindings: [route("telegram", "Work", "ops")],
-    };
+    const config = { agents: explicitAgents, bindings: [route("telegram", "Work", "ops")] };
     setConfig(config);
     const output = jsonRuntime();
     await update("bind", { agent: "main", bind: ["telegram:work"], json: true }, output);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(output.exit).toHaveBeenCalledWith(1);
-    expect(output.writeJson).toHaveBeenLastCalledWith(
+    expect(output.writeJson.mock.lastCall).toEqual([
       expect.objectContaining({ conflicts: ["telegram accountId=work (agent=ops)"] }),
       2,
-    );
+    ]);
 
     await update("bind", { agent: "ops", bind: ["telegram:WORK"] });
     expect(writeConfigFileMock).not.toHaveBeenCalled();
@@ -144,21 +135,21 @@ describe("agents bind/unbind commands", () => {
         route("external-chat", "home"),
       ],
     });
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledExactlyOnceWith({
+    expect(listContributions).toHaveBeenCalledExactlyOnceWith({
       contribution: "channels",
       includeDisabled: true,
       config: {},
       env: process.env,
     });
     expect(runtime.exit).not.toHaveBeenCalled();
-    pluginRegistryMocks.listPluginContributionIds.mockReturnValueOnce([]);
+    listContributions.mockReturnValueOnce([]);
     await expect(update("bind", { bind: ["external-chat:next"] })).rejects.toMatchObject({
       message: expect.stringContaining('Unknown channel "external-chat"'),
     });
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledTimes(2);
+    expect(listContributions).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
+  it.each<Rejection>([
     ["bind", { agent: "агент✨", bind: ["telegram"] }, unknownAgent("агент✨")],
     ["list", { agent: "ghost" }, unknownAgent("ghost")],
     ["bind", {}, "Provide at least one --bind <channel[:accountId]>."],
@@ -172,31 +163,22 @@ describe("agents bind/unbind commands", () => {
       ].join("\n"),
     ],
     ["unbind", { all: true, bind: ["telegram"] }, "Use either --all or --bind, not both."],
-  ] satisfies Array<["bind" | "list" | "unbind", UpdateOptions, string]>)(
-    "rejects %s %j before mutation",
-    async (command, input, message) => {
-      const options = { ...input, json: true };
-      const execution =
-        command === "list"
-          ? commands.agentsBindingsCommand(options, runtime)
-          : update(command, options);
-      await expect(execution).rejects.toMatchObject({
-        name: "ExpectedCliError",
-        message,
-        humanOutput: message,
-        machineOutput: message,
-      });
-      expectNoCalls(runtime.error, runtime.exit, writeConfigFileMock);
-    },
-  );
+  ])("rejects %s %j before mutation", async (command, input, message) => {
+    const options = { ...input, json: true };
+    await expect(update(command, options)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
+    expectNoCalls(runtime.error, runtime.exit, writeConfigFileMock);
+  });
 
   it("unbinds all routes for one agent while preserving the others", async () => {
     setConfig({ ...conflictConfig, bindings: [route("matrix"), route("telegram", "work", "ops")] });
     await update("unbind", { agent: "ops", all: true });
-    expect(writeConfigFileMock).toHaveBeenCalledExactlyOnceWith({
-      ...conflictConfig,
-      bindings: [route("matrix")],
-    });
+    const remaining = { ...conflictConfig, bindings: [route("matrix")] };
+    expect(writeConfigFileMock).toHaveBeenCalledExactlyOnceWith(remaining);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -204,10 +186,9 @@ describe("agents bind/unbind commands", () => {
     const output = jsonRuntime();
     await update("unbind", { agent: "main", all: true, json: true }, output);
     expectNoCalls(writeConfigFileMock, output.log, output.exit);
-    expect(output.writeJson).toHaveBeenCalledExactlyOnceWith(
-      { agentId: "main", removed: [], missing: [], conflicts: [] },
-      2,
-    );
+    expect(output.writeJson.mock.calls).toEqual([
+      [{ agentId: "main", removed: [], missing: [], conflicts: [] }, 2],
+    ]);
   });
 
   it("reports human unbind ownership conflicts without writing", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   createApiKeyCredential,
@@ -147,9 +147,20 @@ function expectUnused(...mocks: Array<{ mock: { calls: unknown[] } }>) {
   }
 }
 
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
+const it = baseIt.extend<{ state: { root: string; workspaceDir: string; agentDir: string } }>({
+  state: async ({ task: _task }, use) => {
+    const root = await suiteTempDirs.make("auth");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, () =>
+      use({
+        root,
+        workspaceDir: path.join(root, "workspace-work"),
+        agentDir: path.join(root, "agents", "work", "agent"),
+      }),
+    );
+  },
+});
 describe("agents add command", () => {
-  const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
-
   beforeAll(() => suiteTempDirs.setup());
 
   afterAll(async () => {
@@ -170,20 +181,6 @@ describe("agents add command", () => {
     persistAuth.mockReset().mockImplementation(persistAuthProfileBatch);
     setConfigSnapshot({ agents: { entries: { main: {} } } });
   });
-
-  async function withState(
-    prefix: string,
-    run: (state: { root: string; workspaceDir: string; agentDir: string }) => Promise<void>,
-  ): Promise<void> {
-    const root = await suiteTempDirs.make(prefix);
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      await run({
-        root,
-        workspaceDir: path.join(root, "workspace-work"),
-        agentDir: path.join(root, "agents", "work", "agent"),
-      });
-    });
-  }
 
   async function seedAuth(
     root: string,
@@ -356,9 +353,6 @@ describe("agents add command", () => {
     setConfigSnapshot({ agents: { entries: { robby: {} } } });
     const prompter = useWizard();
     creationGate.mockResolvedValueOnce({
-      status: "error",
-      reason: "legacy-session-migration-required",
-      agentId: "main",
       message: "Run openclaw doctor --fix, then retry.",
     });
 
@@ -369,233 +363,223 @@ describe("agents add command", () => {
     expectUnused(prompter.text, prepareAuth, createAgent);
   });
 
-  it("reports only portable profiles persisted from shared state-db auth", async () => {
-    await withState("auth-copy", async ({ workspaceDir, agentDir }) => {
-      const sourceStore: AuthProfileStore = {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:api-key": apiKey("sk-test"),
-          "openai:oauth": createOAuthRefreshCredential({ copyToAgents: true }),
-        },
-      };
-      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-      saveAuthProfileStore(sourceStore);
-      const wizard = useWizard(["work", workspaceDir], [true, false]);
-
-      await add();
-
-      expect(Object.keys(loadPersistedAuthProfileStore(agentDir)?.profiles ?? {})).toEqual([
-        "openai:api-key",
-      ]);
-      expect(wizard.note).toHaveBeenCalledWith(
-        'Copied 1 portable auth profile from "main". OAuth profiles stay shared from "main" unless this agent signs in separately.',
-        "Auth profiles",
-      );
-    });
-  });
-
-  it("copies auth from a selected agent in an explicit fleet", async () => {
-    await withState("explicit", async ({ root, workspaceDir, agentDir }) => {
-      const sourceAgentDir = await seedAuth(root, "ops", {
-        "openai:portable": apiKey("fixture-only-key"),
-      });
-      setConfigSnapshot({
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: { agentDir: sourceAgentDir } },
-        },
-      });
-      const wizard = useWizard(["work", workspaceDir], [true, false], ["ops"]);
-
-      await add();
-
-      expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
-      const copied = loadPersistedAuthProfileStore(agentDir);
-      expect(copied?.profiles["openai:portable"]).toBeDefined();
-      expect(setupChannels).toHaveBeenCalledWith(
-        expect.any(Object),
-        runtime,
-        wizard.prompter,
-        expect.objectContaining({ workspaceDir, deferStatusUntilSelection: true }),
-      );
-    });
-  });
-
-  it("fails before config mutation when the source auth store is unreadable", async () => {
-    await withState("auth-unreadable", async ({ root, workspaceDir }) => {
-      const sourceAgentDir = path.join(root, "agents", "main", "agent");
-      await fs.mkdir(sourceAgentDir, { recursive: true });
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
-      database.exec(
-        "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
-      );
-      database.close();
-      const wizard = useWizard(["work", workspaceDir]);
-
-      await expect(add()).rejects.toThrow(
-        /auth profile store .* is unreadable; run .*doctor --fix/i,
-      );
-
-      expect(writeConfig).not.toHaveBeenCalled();
-      expect(wizard.outro).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not persist prepared provider auth when a later prompt is cancelled", async () => {
-    await withState("auth-cancel-provider", async ({ root, workspaceDir, agentDir }) => {
-      await seedAuth(root, "main", {
-        "openai:portable": apiKey("portable-cancel"),
-      });
-      useWizard(["work", workspaceDir], [true, true]);
-      stageGuidedAuth();
-      warnModel.mockRejectedValueOnce(new WizardCancelledError());
-
-      await add();
-
-      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
-      expectUnused(persistAuth, createAgent);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    });
-  });
-
-  it("keeps guided auth while applying portable profiles without overwriting", async () => {
-    await withState("auth-guided", async ({ root, workspaceDir, agentDir }) => {
-      await seedAuth(
-        root,
-        "main",
-        {
-          "openai:api-key": apiKey("portable-conflict"),
-          "openai:portable": apiKey("portable-retained"),
-        },
-        { openai: ["openai:api-key", "openai:portable"] },
-      );
-      const wizard = useWizard(["work", workspaceDir], [true, true], ["openai", "openai-api-key"]);
-      stageGuidedAuth([
-        keyProfile("openai:api-key", "guided-wins"),
-        keyProfile("openai:guided", "guided-retained"),
-      ]);
-
-      const create = createAgent.getMockImplementation()!;
-      createAgent.mockImplementationOnce(async (params) => {
-        expect(lifecycle.state.active).toBe(true);
-        expect(persistAuth).not.toHaveBeenCalled();
-        return await create(params);
-      });
-      await add();
-      expect(persistAuth).toHaveBeenCalledOnce();
-      expect(warnModel).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Object),
-        expect.objectContaining({
-          agentId: "work",
-          pendingAuthProfiles: expect.arrayContaining([
-            expect.objectContaining({ profileId: "openai:guided" }),
-          ]),
-        }),
-      );
-      const persisted = loadPersistedAuthProfileStore(agentDir);
-      expect(persisted).toMatchObject({
-        profiles: {
-          "openai:api-key": { key: "guided-wins" },
-          "openai:portable": { key: "portable-retained" },
-          "openai:guided": { key: "guided-retained" },
-        },
-        order: { openai: ["openai:api-key", "openai:portable"] },
-      });
-      expect(wizard.note).toHaveBeenCalledWith(
-        'Copied 2 portable auth profiles from "main".',
-        "Auth profiles",
-      );
-    });
-  });
-
-  it("publishes no agent when staged provider auth cannot persist atomically", async () => {
-    await withState("auth-persist-failure", async ({ workspaceDir, agentDir }) => {
-      const profiles = ["first", "second"].map((name) =>
-        keyProfile(`openai:${name}`, `sk-${name}`),
-      );
-      useWizard(["work", workspaceDir], [true]);
-      stageGuidedAuth(profiles);
-      persistAuth.mockRejectedValueOnce(new Error("injected auth batch persistence failure"));
-
-      await expect(add()).rejects.toThrow("injected auth batch persistence failure");
-
-      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
-      expect(createAgent).toHaveBeenCalledOnce();
-      expectUnused(commitConfig, writeConfig);
-    });
-  });
-
-  it.each(["config publication", "later output"])(
-    "settles existing-agent auth when %s fails",
-    async (failurePoint) => {
-      await withState("auth-existing", async ({ workspaceDir, agentDir }) => {
-        setConfigSnapshot({
-          agents: { entries: { work: { workspace: workspaceDir, agentDir } } },
-        });
-        const wizard = useWizard([workspaceDir], [true, true]);
-        stageGuidedAuth();
-        const published = failurePoint === "later output";
-        (published ? wizard.outro : commitConfig).mockRejectedValueOnce(new Error(failurePoint));
-        await expect(add({ name: "work" })).rejects.toThrow(failurePoint);
-        const persisted = loadPersistedAuthProfileStore(agentDir);
-        if (published) {
-          expect(persisted?.profiles["openai:primary"]).toMatchObject({ key: "sk-primary" });
-          expect(commitConfig).toHaveBeenCalledWith(
-            expect.objectContaining({
-              sourceConfig: expect.objectContaining({ auth: expect.any(Object) }),
-            }),
-          );
-        } else {
-          expect(persisted).toBeNull();
-        }
-        expect(createAgent).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it("passes canonical created config to fresh-agent post-write hooks", async () => {
-    const persistedConfig = {
-      agents: { entries: { work: { workspace: "/tmp/canonical-workspace" } } },
-      plugins: { installs: {} },
+  it("reports only portable profiles persisted from shared state-db auth", async ({
+    state: { workspaceDir, agentDir },
+  }) => {
+    const sourceStore: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:api-key": apiKey("sk-test"),
+        "openai:oauth": createOAuthRefreshCredential({ copyToAgents: true }),
+      },
     };
-    const hook = vi.fn(async () => {});
-    useWizard(["work", "/tmp/staged-workspace"], [false]);
-    stageChannelPostWriteHook(hook);
-    createAgent.mockResolvedValueOnce({
-      status: "created",
-      agentId: "work",
-      name: "work",
-      workspace: "/tmp/canonical-workspace",
-      agentDir: "/tmp/agent-work",
-      bootstrapPending: true,
-      config: persistedConfig,
-      configPath: configFiles.write(persistedConfig).path,
-    });
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+    saveAuthProfileStore(sourceStore);
+    const wizard = useWizard(["work", workspaceDir], [true, false]);
 
     await add();
 
-    expect(hook).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cfg: persistedConfig }));
-    expect(createAgent.mock.invocationCallOrder[0]!).toBeLessThan(
-      hook.mock.invocationCallOrder[0]!,
+    expect(Object.keys(loadPersistedAuthProfileStore(agentDir)?.profiles ?? {})).toEqual([
+      "openai:api-key",
+    ]);
+    expect(wizard.note).toHaveBeenCalledWith(
+      'Copied 1 portable auth profile from "main". OAuth profiles stay shared from "main" unless this agent signs in separately.',
+      "Auth profiles",
     );
   });
 
-  it("does not run channel post-write hooks when fresh agent creation fails", async () => {
-    const hook = vi.fn(async () => {});
-    useWizard(["work", "/tmp/workspace-work"], [false]);
-    stageChannelPostWriteHook(hook);
-    createAgent.mockResolvedValueOnce({
-      status: "error",
-      reason: "write-failed",
-      agentId: "work",
-      message: "controlled create failure",
+  it("copies auth from a selected agent in an explicit fleet", async ({
+    state: { root, workspaceDir, agentDir },
+  }) => {
+    const sourceAgentDir = await seedAuth(root, "ops", {
+      "openai:portable": apiKey("fixture-only-key"),
     });
+    setConfigSnapshot({
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: { agentDir: sourceAgentDir } },
+      },
+    });
+    const wizard = useWizard(["work", workspaceDir], [true, false], ["ops"]);
 
     await add();
 
-    expect(hook).not.toHaveBeenCalled();
+    expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
+    const copied = loadPersistedAuthProfileStore(agentDir);
+    expect(copied?.profiles["openai:portable"]).toBeDefined();
+    expect(setupChannels).toHaveBeenCalledWith(
+      expect.any(Object),
+      runtime,
+      wizard.prompter,
+      expect.objectContaining({ workspaceDir, deferStatusUntilSelection: true }),
+    );
   });
+
+  it("fails before config mutation when the source auth store is unreadable", async ({
+    state: { root, workspaceDir },
+  }) => {
+    const sourceAgentDir = path.join(root, "agents", "main", "agent");
+    await fs.mkdir(sourceAgentDir, { recursive: true });
+    const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+    database.exec(
+      "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
+    );
+    database.close();
+    const wizard = useWizard(["work", workspaceDir]);
+
+    await expect(add()).rejects.toThrow(/auth profile store .* is unreadable; run .*doctor --fix/i);
+
+    expect(writeConfig).not.toHaveBeenCalled();
+    expect(wizard.outro).not.toHaveBeenCalled();
+  });
+
+  it("does not persist prepared provider auth when a later prompt is cancelled", async ({
+    state: { root, workspaceDir, agentDir },
+  }) => {
+    await seedAuth(root, "main", {
+      "openai:portable": apiKey("portable-cancel"),
+    });
+    useWizard(["work", workspaceDir], [true, true]);
+    stageGuidedAuth();
+    warnModel.mockRejectedValueOnce(new WizardCancelledError());
+
+    await add();
+
+    expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+    expectUnused(persistAuth, createAgent);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps guided auth while applying portable profiles without overwriting", async ({
+    state: { root, workspaceDir, agentDir },
+  }) => {
+    await seedAuth(
+      root,
+      "main",
+      {
+        "openai:api-key": apiKey("portable-conflict"),
+        "openai:portable": apiKey("portable-retained"),
+      },
+      { openai: ["openai:api-key", "openai:portable"] },
+    );
+    const wizard = useWizard(["work", workspaceDir], [true, true], ["openai", "openai-api-key"]);
+    stageGuidedAuth([
+      keyProfile("openai:api-key", "guided-wins"),
+      keyProfile("openai:guided", "guided-retained"),
+    ]);
+
+    const create = createAgent.getMockImplementation()!;
+    createAgent.mockImplementationOnce(async (params) => {
+      expect(lifecycle.state.active).toBe(true);
+      expect(persistAuth).not.toHaveBeenCalled();
+      return await create(params);
+    });
+    await add();
+    expect(persistAuth).toHaveBeenCalledOnce();
+    expect(warnModel).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        agentId: "work",
+        pendingAuthProfiles: expect.arrayContaining([
+          expect.objectContaining({ profileId: "openai:guided" }),
+        ]),
+      }),
+    );
+    const persisted = loadPersistedAuthProfileStore(agentDir);
+    expect(persisted).toMatchObject({
+      profiles: {
+        "openai:api-key": { key: "guided-wins" },
+        "openai:portable": { key: "portable-retained" },
+        "openai:guided": { key: "guided-retained" },
+      },
+      order: { openai: ["openai:api-key", "openai:portable"] },
+    });
+    expect(wizard.note).toHaveBeenCalledWith(
+      'Copied 2 portable auth profiles from "main".',
+      "Auth profiles",
+    );
+  });
+
+  it("publishes no agent when staged provider auth cannot persist atomically", async ({
+    state: { workspaceDir, agentDir },
+  }) => {
+    const profiles = ["first", "second"].map((name) => keyProfile(`openai:${name}`, `sk-${name}`));
+    useWizard(["work", workspaceDir], [true]);
+    stageGuidedAuth(profiles);
+    persistAuth.mockRejectedValueOnce(new Error("injected auth batch persistence failure"));
+
+    await expect(add()).rejects.toThrow("injected auth batch persistence failure");
+
+    expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+    expect(createAgent).toHaveBeenCalledOnce();
+    expectUnused(commitConfig, writeConfig);
+  });
+
+  it.for(["config publication", "later output"])(
+    "settles existing-agent auth when %s fails",
+    async (failurePoint, { state: { workspaceDir, agentDir } }) => {
+      setConfigSnapshot({
+        agents: { entries: { work: { workspace: workspaceDir, agentDir } } },
+      });
+      const wizard = useWizard([workspaceDir], [true, true]);
+      stageGuidedAuth();
+      const published = failurePoint === "later output";
+      (published ? wizard.outro : commitConfig).mockRejectedValueOnce(new Error(failurePoint));
+      await expect(add({ name: "work" })).rejects.toThrow(failurePoint);
+      const persisted = loadPersistedAuthProfileStore(agentDir);
+      if (published) {
+        expect(persisted?.profiles["openai:primary"]).toMatchObject({ key: "sk-primary" });
+        expect(commitConfig).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sourceConfig: expect.objectContaining({ auth: expect.any(Object) }),
+          }),
+        );
+      } else {
+        expect(persisted).toBeNull();
+      }
+      expect(createAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.for([true, false])(
+    "runs fresh-agent hooks only after successful creation: %s",
+    async (created) => {
+      const config = {
+        agents: { entries: { work: { workspace: "/tmp/canonical-workspace" } } },
+        plugins: { installs: {} },
+      };
+      const hook = vi.fn(async () => {});
+      useWizard(["work", "/tmp/staged-workspace"], [false]);
+      stageChannelPostWriteHook(hook);
+      createAgent.mockResolvedValueOnce(
+        created
+          ? {
+              status: "created",
+              agentId: "work",
+              name: "work",
+              workspace: "/tmp/canonical-workspace",
+              agentDir: "/tmp/agent-work",
+              configPath: configFiles.write(config).path,
+            }
+          : {
+              status: "error",
+              reason: "write-failed",
+              agentId: "work",
+              message: "controlled create failure",
+            },
+      );
+      await add();
+      if (created) {
+        expect(hook).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cfg: config }));
+        expect(createAgent.mock.invocationCallOrder[0]!).toBeLessThan(
+          hook.mock.invocationCallOrder[0]!,
+        );
+      } else {
+        expect(hook).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("does not commit an existing-agent update when workspace provisioning fails", async () => {
     existingAgentWizard();
@@ -608,16 +592,18 @@ describe("agents add command", () => {
     expectUnused(commitConfig, writeConfig);
   });
 
-  describe("non-interactive config mutation", () => {
-    it("creates with explicit non-interactive inputs without a usable terminal", async () => {
+  it.for([false, true])(
+    "creates without a terminal and reports binding conflicts: %s",
+    async (conflicts) => {
       hasTerminal.mockReturnValue(false);
-
-      await agentsAddCommand(
-        { name: "Work", workspace: "/tmp/work", nonInteractive: true },
-        runtime,
-        { hasAutomationFlags: false },
+      await add(
+        {
+          name: "Work",
+          workspace: "/tmp/work",
+          ...(conflicts ? { bind: ["telegram"], json: true } : { nonInteractive: true }),
+        },
+        conflicts,
       );
-
       expect(createAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Work",
@@ -625,38 +611,32 @@ describe("agents add command", () => {
           transformConfig,
         }),
       );
-      expectUnused(transformConfig, runtime.exit, runtime.error, hasTerminal);
+      expectUnused(transformConfig, runtime.error, hasTerminal);
+      if (conflicts) {
+        const payload: { bindings: { added: string[]; conflicts: string[] } } = JSON.parse(
+          String(runtime.log.mock.calls.at(-1)?.[0]),
+        );
+        expect(payload.bindings).toMatchObject({
+          added: [],
+          conflicts: ["telegram (agent=other-agent)"],
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(runtime.exit).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("reports a duplicate agent through the root failure owner", async () => {
+    createAgent.mockResolvedValueOnce({
+      status: "error",
+      reason: "already-exists",
+      agentId: "work",
+      message: 'agent "work" already exists',
     });
-
-    it("reports a duplicate agent through the root failure owner", async () => {
-      createAgent.mockResolvedValueOnce({
-        status: "error",
-        reason: "already-exists",
-        agentId: "work",
-        message: 'agent "work" already exists',
-      });
-
-      await expectRootFailure(
-        agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
-          hasAutomationFlags: true,
-        }),
-        'Agent "work" already exists.',
-      );
-    });
-
-    it("renders binding conflicts returned by agent creation and fails the command", async () => {
-      await agentsAddCommand(
-        { name: "Work", workspace: "/tmp/work", bind: ["telegram"], json: true },
-        runtime,
-        { hasAutomationFlags: true },
-      );
-
-      const payload = JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0])) as {
-        bindings: { added: string[]; conflicts: string[] };
-      };
-      expect(payload.bindings.added).toEqual([]);
-      expect(payload.bindings.conflicts).toEqual(["telegram (agent=other-agent)"]);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    });
+    await expectRootFailure(
+      add({ name: "Work", workspace: "/tmp/work" }, true),
+      'Agent "work" already exists.',
+    );
   });
 });
