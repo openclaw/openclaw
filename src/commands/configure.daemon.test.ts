@@ -34,6 +34,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const serviceHasInstalledDefinition = vi.hoisted(() => vi.fn(async () => false));
 const serviceReadCommand = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
@@ -77,6 +78,7 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: vi.fn(() => ({
     isLoaded: serviceIsLoaded,
+    hasInstalledDefinition: serviceHasInstalledDefinition,
     readCommand: serviceReadCommand,
     install: serviceInstall,
     uninstall: serviceUninstall,
@@ -110,6 +112,7 @@ describe("maybeInstallDaemon", () => {
       stderr: "",
     });
     serviceIsLoaded.mockResolvedValue(false);
+    serviceHasInstalledDefinition.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue(null);
     serviceInstall.mockResolvedValue(undefined);
     select.mockReset().mockResolvedValue("node");
@@ -245,6 +248,29 @@ describe("maybeInstallDaemon", () => {
     );
 
     expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("offers the existing-service menu for an installed but disabled unit", async () => {
+    // systemd reports a stopped, disabled unit as not loaded, but its definition remains.
+    serviceHasInstalledDefinition.mockResolvedValue(true);
+    select.mockResolvedValueOnce("skip");
+
+    expect(await runInstall()).toBe("skipped");
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway service already installed" }),
+    );
+    expect(serviceInstall).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+  });
+
+  it("installs without the existing-service menu when no definition exists", async () => {
+    expect(await runInstall()).toBe("succeeded");
+
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway service already installed" }),
+    );
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
   it("shows restart scheduled when a loaded service defers restart handoff", async () => {
