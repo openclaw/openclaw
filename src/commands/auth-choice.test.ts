@@ -11,14 +11,18 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
-import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
 
 type ResolveDeprecatedProviderInstallCatalogEntry =
   typeof import("../plugins/provider-install-catalog.js").resolveDeprecatedProviderInstallCatalogEntry;
 
-const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
+const resolvePluginProviders = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(
+    () => [],
+  ),
+);
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
   vi.fn<ResolveDeprecatedProviderInstallCatalogEntry>(() => undefined),
@@ -176,27 +180,15 @@ function createOpenAiProvider(): ProviderPlugin {
   };
 }
 
-function createFixedChoiceProvider(params: {
-  providerId: string;
-  label: string;
-  choiceId: string;
-  method: ProviderAuthMethod;
-}): ProviderPlugin {
-  return {
-    id: params.providerId,
-    label: params.label,
-    auth: [
-      {
-        ...params.method,
-        wizard: {
-          choiceId: params.choiceId,
-          choiceLabel: params.label,
-          groupId: params.providerId,
-          groupLabel: params.label,
-        },
-      },
-    ],
-  };
+function apply(overrides: Partial<Parameters<typeof applyAuthChoice>[0]>) {
+  return applyAuthChoice({
+    authChoice: "skip",
+    config: {},
+    prompter: createWizardPrompter({}),
+    runtime: createExitThrowingRuntime(),
+    setDefaultModel: true,
+    ...overrides,
+  });
 }
 
 describe("applyAuthChoice", () => {
@@ -237,14 +229,6 @@ describe("applyAuthChoice", () => {
   ) {
     expect(result.config.auth?.profiles?.[profileId]).toMatchObject(expected);
   }
-  function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error("Expected first mock call");
-    }
-    return call[0];
-  }
-
   let defaultProviderPlugins: ProviderPlugin[] = [];
 
   beforeAll(async () => {
@@ -272,43 +256,34 @@ describe("applyAuthChoice", () => {
 
   it("applies Anthropic setup-token auth when the provider exposes the setup flow", async () => {
     await setupTempState();
-
+    const token = `sk-ant-oat01-${"a".repeat(80)}`;
     resolvePluginProviders.mockReturnValue([
-      createFixedChoiceProvider({
-        providerId: "anthropic",
+      {
+        id: "anthropic",
         label: "Anthropic",
-        choiceId: "setup-token",
-        method: {
-          id: "setup-token",
-          label: "Anthropic setup-token",
-          kind: "token",
-          run: vi.fn(async (): Promise<ProviderAuthResult> => ({
-            profiles: [
-              {
-                profileId: "anthropic:default",
-                credential: {
-                  type: "token",
-                  provider: "anthropic",
-                  token: `sk-ant-oat01-${"a".repeat(80)}`,
+        auth: [
+          {
+            id: "setup-token",
+            label: "Anthropic setup-token",
+            kind: "token",
+            wizard: { choiceId: "setup-token" },
+            run: async () => ({
+              profiles: [
+                {
+                  profileId: "anthropic:default",
+                  credential: { type: "token", provider: "anthropic", token },
                 },
-              },
-            ],
-            defaultModel: "anthropic/claude-sonnet-4-6",
-          })),
-        },
-      }),
+              ],
+              defaultModel: "anthropic/claude-sonnet-4-6",
+            }),
+          },
+        ],
+      },
     ]);
 
-    const result = await applyAuthChoice({
+    const result = await apply({
       authChoice: "token",
-      config: {} as OpenClawConfig,
-      prompter: createPrompter({}),
-      runtime: createExitThrowingRuntime(),
-      setDefaultModel: true,
-      opts: {
-        tokenProvider: "anthropic",
-        token: `sk-ant-oat01-${"a".repeat(80)}`,
-      },
+      opts: { tokenProvider: "anthropic", token },
     });
 
     expectAuthProfileConfig(result, "anthropic:default", {
@@ -318,9 +293,7 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       "anthropic/claude-sonnet-4-6",
     );
-    expect((await readAuthProfile("anthropic:default"))?.token).toBe(
-      `sk-ant-oat01-${"a".repeat(80)}`,
-    );
+    expect((await readAuthProfile("anthropic:default"))?.token).toBe(token);
   });
 
   it("escapes removed provider auth choice guidance for terminal output", async () => {
@@ -331,12 +304,8 @@ describe("applyAuthChoice", () => {
       } as never);
     try {
       await expect(
-        applyAuthChoice({
+        apply({
           authChoice: "legacy\u001b[31mchoice",
-          config: {},
-          prompter: createPrompter({}),
-          runtime: createExitThrowingRuntime(),
-          setDefaultModel: true,
         }),
       ).rejects.toThrow(
         'Auth choice "legacy\\u001b[31mchoice" is no longer supported. Use "modern\\nchoice" instead, or run openclaw onboard to choose interactively.',
@@ -355,12 +324,8 @@ describe("applyAuthChoice", () => {
     } as never);
     try {
       await expect(
-        applyAuthChoice({
+        apply({
           authChoice: "modelstudio-api-key",
-          config: {},
-          prompter: createPrompter({}),
-          runtime: createExitThrowingRuntime(),
-          setDefaultModel: true,
         }),
       ).rejects.toThrow(
         'Auth choice "modelstudio-api-key" is no longer supported. Use "qwen-api-key" instead, or run openclaw onboard to choose interactively.',
@@ -377,23 +342,15 @@ describe("applyAuthChoice", () => {
     const text = vi.fn().mockResolvedValue("should-not-be-used");
     const confirm = vi.fn(async () => true);
     const prompter = createPrompter({ text, confirm });
-    const runtime = createExitThrowingRuntime();
-
-    const result = await applyAuthChoice({
+    const result = await apply({
       authChoice: "openai-api-key",
-      config: {},
       env,
       prompter,
-      runtime,
       setDefaultModel: false,
     });
 
-    const providerResolveInput = firstCallArg(resolvePluginProviders) as {
-      env?: NodeJS.ProcessEnv;
-      mode?: string;
-    };
-    expect(providerResolveInput.env).toBe(env);
-    expect(providerResolveInput.mode).toBe("setup");
+    expect(resolvePluginProviders.mock.calls[0]?.[0]).toMatchObject({ mode: "setup" });
+    expect(resolvePluginProviders.mock.calls[0]?.[0]?.env).toBe(env);
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("OPENAI_API_KEY") }),
     );

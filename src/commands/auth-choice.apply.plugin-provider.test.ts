@@ -1,7 +1,6 @@
-// Auth-choice plugin provider tests cover loaded provider setup, plugin install, and credential routing.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { createManagedPluginArtifactConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import * as pluginEnable from "../plugins/enable.js";
@@ -26,6 +25,7 @@ import {
   buildInstalledLocalProviderPluginResult,
 } from "./auth-choice.apply.plugin-provider.test-support.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
+import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 type ResolveProviderInstallCatalogEntry =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntry;
@@ -53,18 +53,14 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
 );
-vi.mock("../plugins/provider-auth-choices.js", () => ({
-  resolveManifestProviderAuthChoice,
-}));
+vi.mock("../plugins/provider-auth-choices.js", () => ({ resolveManifestProviderAuthChoice }));
 
 const persistAuthProfileBatch = vi.hoisted(() =>
   vi.fn(async () => ({
     rollback: () => ({ unrevertedProfileIds: new Set<string>() }),
   })),
 );
-vi.mock("../agents/auth-profiles.js", () => ({
-  persistAuthProfileBatch,
-}));
+vi.mock("../agents/auth-profiles.js", () => ({ persistAuthProfileBatch }));
 
 const loadAuthProfileStoreWithoutExternalProfilesAsync = vi.hoisted(() => vi.fn());
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
@@ -87,33 +83,21 @@ const applyAuthProfileConfig = vi.hoisted(() =>
     (config) => config,
   ),
 );
-vi.mock("../plugins/provider-auth-helpers.js", () => ({
-  applyAuthProfileConfig,
-}));
+vi.mock("../plugins/provider-auth-helpers.js", () => ({ applyAuthProfileConfig }));
 
-vi.mock("../infra/browser-open.js", () => ({
-  openUrl: vi.fn(async () => {}),
-}));
+vi.mock("../infra/browser-open.js", () => ({ openUrl: vi.fn(async () => {}) }));
 
-vi.mock("../infra/remote-env.js", () => ({
-  isRemoteEnvironment: () => false,
-}));
+vi.mock("../infra/remote-env.js", () => ({ isRemoteEnvironment: () => false }));
 
-vi.mock("../plugins/provider-oauth-flow.js", () => ({
-  createVpsAwareOAuthHandlers: vi.fn(),
-}));
+vi.mock("../plugins/provider-oauth-flow.js", () => ({ createVpsAwareOAuthHandlers: vi.fn() }));
 
 const resolveProviderInstallCatalogEntry = vi.hoisted(() =>
   vi.fn<ResolveProviderInstallCatalogEntry>(() => undefined),
 );
-vi.mock("../plugins/provider-install-catalog.js", () => ({
-  resolveProviderInstallCatalogEntry,
-}));
+vi.mock("../plugins/provider-install-catalog.js", () => ({ resolveProviderInstallCatalogEntry }));
 
 const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn<EnsureOnboardingPluginInstalled>());
-vi.mock("../commands/onboarding-plugin-install.js", () => ({
-  ensureOnboardingPluginInstalled,
-}));
+vi.mock("../commands/onboarding-plugin-install.js", () => ({ ensureOnboardingPluginInstalled }));
 
 const ensureModelSelectionRuntimePlugins = vi.hoisted(() =>
   vi.fn<typeof import("./runtime-plugin-install.js").ensureModelSelectionRuntimePlugins>(),
@@ -126,37 +110,33 @@ vi.mock("../commands/runtime-plugin-install.js", () => ({
 const offerPostInstallMigrations = vi.hoisted(() =>
   vi.fn<typeof import("../wizard/setup.post-install-migration.js").offerPostInstallMigrations>(),
 );
-vi.mock("../wizard/setup.post-install-migration.js", () => ({
-  offerPostInstallMigrations,
-}));
+vi.mock("../wizard/setup.post-install-migration.js", () => ({ offerPostInstallMigrations }));
 
 const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
-const localCredential = {
-  type: "api_key",
-  provider: LOCAL_PROVIDER_ID,
-  key: LOCAL_API_KEY,
-} as const;
-
-function expectPersistedProfile(profileId: string, credential: AuthProfileCredential): void {
-  expect(persistAuthProfileBatch).toHaveBeenCalledWith(
-    expect.objectContaining({
-      profiles: [{ profileId, credential }],
-      agentDir: "/tmp/agent",
-    }),
-  );
-}
+const note = vi.fn(async () => {});
+const localCredential = createApiKeyCredential(LOCAL_PROVIDER_ID, LOCAL_API_KEY);
 
 function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthChoiceParams {
   return {
     authChoice: LOCAL_PROVIDER_ID,
     config: {},
-    prompter: {
-      note: vi.fn(async () => {}),
-    } as unknown as ApplyAuthChoiceParams["prompter"],
+    prompter: makePrompter({ note }),
     runtime: {} as ApplyAuthChoiceParams["runtime"],
     setDefaultModel: true,
     ...overrides,
   };
+}
+
+function blockProvider(params: ApplyAuthChoiceParams, reason?: string) {
+  const entry = buildLocalProviderInstallCatalogEntry();
+  resolveProviderInstallCatalogEntry.mockReturnValueOnce(entry);
+  const enable = vi.spyOn(pluginEnable, "enablePluginWithCapabilityConsent").mockResolvedValueOnce({
+    config: params.config,
+    enabled: false,
+    pluginId: entry.pluginId,
+    ...(reason ? { reason } : {}),
+  });
+  return { entry, enable };
 }
 
 function selectProvider(provider = buildProvider()) {
@@ -166,6 +146,19 @@ function selectProvider(provider = buildProvider()) {
     method: expectDefined(provider.auth[0], "provider auth method"),
   });
   return provider;
+}
+
+function installProvider(provider = buildProvider()) {
+  selectProvider(provider);
+  resolveProviderPluginChoice.mockReturnValueOnce(null);
+  resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+  return provider;
+}
+
+function agentDefaults(
+  defaults: NonNullable<ApplyAuthChoiceParams["config"]["agents"]>["defaults"],
+): ApplyAuthChoiceParams["config"] {
+  return { agents: { defaults } };
 }
 
 function runAuthResult(
@@ -195,73 +188,55 @@ function modelDefaults(provider: string) {
 }
 
 describe("applyAuthChoiceLoadedPluginProvider", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("checks the persistent-effect guard before accepting plugin capabilities", async () => {
     const beforePersistentEffect = vi.fn(async () => {
       throw new Error("setup was cancelled");
     });
     const params = { ...buildParams(), beforePersistentEffect };
     params.prompter.confirm = vi.fn(async () => true);
-    const entry = buildLocalProviderInstallCatalogEntry();
-    resolveProviderInstallCatalogEntry.mockReturnValueOnce(entry);
-    const enable = vi
-      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
-      .mockResolvedValueOnce({ config: params.config, enabled: false, pluginId: entry.pluginId });
-    try {
-      await prepareAuthChoiceLoadedPluginProvider(params, (prepared) => prepared);
-      const consent = expectDefined(
-        enable.mock.calls[0]?.[2]?.onCapabilityConsent,
-        "selected provider capability callback",
-      );
-      const manifest = expectDefined(
-        metadataSnapshot({ id: entry.pluginId, enabled: false }).byPluginId.get(entry.pluginId),
-        "selected provider manifest",
-      );
-      const review = buildPluginCapabilityConsentReview({
-        pluginId: entry.pluginId,
-        manifest,
-        record: { source: "npm", spec: entry.install.npmSpec },
-        config: params.config,
-      });
+    const { entry, enable } = blockProvider(params);
+    await prepareAuthChoiceLoadedPluginProvider(params, (prepared) => prepared);
+    const consent = expectDefined(
+      enable.mock.calls[0]?.[2]?.onCapabilityConsent,
+      "selected provider capability callback",
+    );
+    const manifest = expectDefined(
+      metadataSnapshot({ id: entry.pluginId, enabled: false }).byPluginId.get(entry.pluginId),
+      "selected provider manifest",
+    );
+    const review = buildPluginCapabilityConsentReview({
+      pluginId: entry.pluginId,
+      manifest,
+      record: { source: "npm", spec: entry.install.npmSpec },
+      config: params.config,
+    });
 
-      await expect(consent(review)).rejects.toThrow("setup was cancelled");
-      expect(beforePersistentEffect).toHaveBeenCalledOnce();
-      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
-      expect(resolvePluginProviders).not.toHaveBeenCalled();
-    } finally {
-      enable.mockRestore();
-    }
+    await expect(consent(review)).rejects.toThrow("setup was cancelled");
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("does not load a selected provider when capability consent is declined", async () => {
     const params = buildParams();
-    const entry = buildLocalProviderInstallCatalogEntry();
-    resolveProviderInstallCatalogEntry.mockReturnValueOnce(entry);
-    const enable = vi
-      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
-      .mockResolvedValueOnce({
-        config: params.config,
-        enabled: false,
-        pluginId: entry.pluginId,
-        reason: "Plugin requires capability consent.",
-      });
-    try {
-      const result = await applyAuthChoiceLoadedPluginProvider(params);
-      expect(result?.config).toBe(params.config);
-      expect(params.prompter.note).toHaveBeenCalledWith(
-        expect.stringContaining("capability consent"),
-        entry.label,
-      );
-      expect(resolvePluginSetupProvider).not.toHaveBeenCalled();
-      expect(resolvePluginProviders).not.toHaveBeenCalled();
-      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
-    } finally {
-      enable.mockRestore();
-    }
+    const { entry } = blockProvider(params, "Plugin requires capability consent.");
+    const result = await applyAuthChoiceLoadedPluginProvider(params);
+    expect(result?.config).toBe(params.config);
+    expect(params.prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("capability consent"),
+      entry.label,
+    );
+    expect(resolvePluginSetupProvider).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset().mockResolvedValue({
+    loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset();
+    loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue({
       version: 1,
       profiles: {},
     });
@@ -285,11 +260,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("offers only the selected provider's saved profiles during onboarding", async () => {
     const provider = selectProvider();
-    const credential = {
-      type: "api_key",
-      provider: provider.id,
-      key: "synthetic-saved-key",
-    } as const;
+    const credential = createApiKeyCredential(provider.id, "synthetic-saved-key");
     loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue({
       version: 1,
       profiles: {
@@ -309,36 +280,30 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("stages provider profiles until the caller commits them", async () => {
     selectProvider();
-
     const prepared = await prepareAuthChoiceLoadedPluginProvider(buildParams(), (result) => result);
-
-    expect(prepared?.authProfiles).toEqual([
-      {
-        profileId: LOCAL_PROFILE_ID,
-        credential: localCredential,
-      },
-    ]);
+    const profile = { profileId: LOCAL_PROFILE_ID, credential: localCredential };
+    expect(prepared?.authProfiles).toEqual([profile]);
     expect(persistAuthProfileBatch).not.toHaveBeenCalled();
 
-    await prepared?.persistAuthProfiles([
-      {
-        profileId: LOCAL_PROFILE_ID,
-        credential: { ...localCredential, key: "test-key" },
-      },
-    ]);
+    const replacement = { ...profile, credential: { ...localCredential, key: "test-key" } };
+    await prepared?.persistAuthProfiles([structuredClone(replacement)]);
     await prepared?.persistAuthProfiles();
 
     expect(persistAuthProfileBatch).toHaveBeenCalledOnce();
-    expectPersistedProfile(LOCAL_PROFILE_ID, { ...localCredential, key: "test-key" });
+    expect(persistAuthProfileBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profiles: [replacement],
+        agentDir: "/tmp/agent",
+      }),
+    );
   });
 
   it("restores the exact entry config after provider install and auth staging", async () => {
-    const provider = buildProvider();
+    installProvider();
     const entryConfig = {
-      agents: { defaults: { model: { primary: EXISTING_DEFAULT_MODEL } } },
+      ...agentDefaults({ model: { primary: EXISTING_DEFAULT_MODEL } }),
       wizard: { lastRunVersion: "entry-version" },
     };
-    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
     ensureOnboardingPluginInstalled.mockResolvedValue({
       ...buildInstalledLocalProviderPluginResult(),
       cfg: {
@@ -346,23 +311,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         plugins: { entries: { "local-provider-plugin": { enabled: true } } },
       },
     });
-    resolvePluginProviders.mockReturnValue([provider]);
-    resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
-      provider,
-      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
-    });
-    const note = vi.fn(async () => {});
     ensureModelSelectionRuntimePlugins.mockResolvedValue({
       ok: false,
       message: "GitHub Copilot agent runtime is required but unavailable.",
     });
 
-    const result = await applyAuthChoiceLoadedPluginProvider(
-      buildParams({
-        config: entryConfig,
-        prompter: { note } as unknown as ApplyAuthChoiceParams["prompter"],
-      }),
-    );
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams({ config: entryConfig }));
 
     expect(result).toEqual({ config: entryConfig, retrySelection: true });
     expect(result?.config).toBe(entryConfig);
@@ -375,28 +329,18 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("keeps an existing default when provider auth patches its own primary model", async () => {
     selectProvider(buildProviderWithDefaultModelPatch());
-    const note = vi.fn(async () => {});
 
     const result = await applyAuthChoiceLoadedPluginProvider(
       buildParams({
-        config: {
-          agents: {
-            defaults: {
-              model: { primary: EXISTING_DEFAULT_MODEL },
-              models: {
-                [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" },
-              },
-            },
-          },
-        },
-        prompter: { ...buildParams().prompter, note },
+        config: agentDefaults({
+          model: { primary: EXISTING_DEFAULT_MODEL },
+          models: { [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" } },
+        }),
         preserveExistingDefaultModel: true,
       }),
     );
 
-    expect(result?.config.agents?.defaults?.model).toEqual({
-      primary: EXISTING_DEFAULT_MODEL,
-    });
+    expect(result?.config.agents?.defaults?.model).toEqual({ primary: EXISTING_DEFAULT_MODEL });
     expect(result?.config.agents?.defaults?.models).toEqual({
       [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" },
       [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
@@ -410,7 +354,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("installs a verified official provider without capability review and retries setup resolution", async () => {
     await withTestDir({ prefix: "official-provider-setup-" }, async (artifactDir) => {
-      const provider = buildProvider();
+      const provider = installProvider();
       const method = expectDefined(provider.auth[0], "provider.auth[0] test invariant");
       const run = method.run;
       method.run = async (context) => ({
@@ -455,11 +399,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
           },
         };
       });
-      resolvePluginProviders.mockReturnValue([provider]);
-      resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
-        provider,
-        method,
-      });
 
       const result = await prepareAuthChoiceLoadedPluginProvider(
         buildParams(),
@@ -470,17 +409,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
       expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
       expect(onCapabilityConsent).not.toHaveBeenCalled();
-      const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
-      if (installParams === undefined) {
-        throw new Error("expected plugin install params");
-      }
-      expect(installParams.entry?.pluginId).toBe("diffs");
-      expect(installParams.entry?.label).toBe(LOCAL_PROVIDER_LABEL);
-      expect(installParams.workspaceDir).toBe("/tmp/workspace");
-      expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
-      expect(result?.config.agents?.defaults?.model).toEqual({
-        primary: LOCAL_DEFAULT_MODEL,
+      expect(ensureOnboardingPluginInstalled.mock.calls[0]?.[0]).toMatchObject({
+        entry: { pluginId: "diffs", label: LOCAL_PROVIDER_LABEL },
+        workspaceDir: "/tmp/workspace",
       });
+      expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+      expect(result?.config.agents?.defaults?.model).toEqual({ primary: LOCAL_DEFAULT_MODEL });
     });
   });
 
@@ -494,7 +428,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     );
 
     const events: string[] = [];
-    const note = vi.fn(async () => {
+    const recordNote = vi.fn(async () => {
       events.push("note");
     });
     const providerConfig = {
@@ -516,15 +450,9 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         notes: ["Detected local provider runtime.", "Pulled model metadata."],
       },
       {
-        config: {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-sonnet-4-6" },
-            },
-          },
-        },
+        config: agentDefaults({ model: { primary: "anthropic/claude-sonnet-4-6" } }),
         env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
-        prompter: { ...buildParams().prompter, note },
+        prompter: makePrompter({ note: recordNote }),
         beforePersistentEffect: () => {
           events.push("lock");
         },
@@ -537,7 +465,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       provider: LOCAL_PROVIDER_ID,
       mode: "api_key",
     });
-    expect(note).toHaveBeenCalledWith(
+    expect(recordNote).toHaveBeenCalledWith(
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
@@ -565,7 +493,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         replaceDefaultModels: true,
         defaultModel: "claude-cli/claude-sonnet-4-6",
       },
-      { config: { agents: { defaults: modelDefaults("anthropic") } } },
+      { config: agentDefaults(modelDefaults("anthropic")) },
     );
 
     expect(result.config.agents?.defaults?.model).toEqual(migrated.model);

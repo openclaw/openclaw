@@ -1,5 +1,5 @@
-// API-provider auth-choice tests cover built-in provider config, API keys, and provider plugin setup.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
@@ -93,11 +93,7 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
       const authProfiles = [
         {
           profileId: "workspace-provider:default",
-          credential: {
-            type: "api_key" as const,
-            provider: provider.id,
-            key: "fixture-workspace-key",
-          },
+          credential: createApiKeyCredential(provider.id, "fixture-workspace-key"),
         },
       ];
       resolvePluginProviders.mockImplementation((params) =>

@@ -15,27 +15,17 @@ const resolveProviderSetupFlowContributions = vi.hoisted(() =>
 );
 vi.mock("../flows/provider-flow.js", () => ({ resolveProviderSetupFlowContributions }));
 
-// A consumer fixture, not a metadata resolver: keep the supplied option and order unchanged.
-function flowContribution(
-  providerId: string,
-  option: ProviderSetupFlowContribution["option"],
-): ProviderSetupFlowContribution {
-  return { providerId, option };
-}
-
 function groupedFlow(
   providerId: string,
   value: string,
   label: string,
-  groupLabel: string,
+  groupLabel = label,
   extra: Partial<ProviderSetupFlowContribution["option"]> = {},
 ): ProviderSetupFlowContribution {
-  return flowContribution(providerId, {
-    value,
-    label,
-    group: { id: providerId, label: groupLabel },
-    ...extra,
-  });
+  return {
+    providerId,
+    option: { value, label, group: { id: providerId, label: groupLabel }, ...extra },
+  };
 }
 
 function getOptions(includeSkip = false) {
@@ -81,18 +71,9 @@ describe("buildAuthChoiceOptions", () => {
 
   it("builds cli help choices from the same prepared flow results", () => {
     resolveProviderSetupFlowContributions.mockReturnValue([
-      flowContribution("chutes", {
-        value: "chutes",
-        label: "Chutes (OAuth)",
-      }),
-      flowContribution("litellm", {
-        value: "litellm-api-key",
-        label: "LiteLLM API key",
-      }),
-      flowContribution("openai", {
-        value: "openai-api-key",
-        label: "OpenAI API key",
-      }),
+      { providerId: "chutes", option: { value: "chutes", label: "Chutes (OAuth)" } },
+      { providerId: "litellm", option: { value: "litellm-api-key", label: "LiteLLM API key" } },
+      { providerId: "openai", option: { value: "openai-api-key", label: "OpenAI API key" } },
       groupedFlow("ollama", "ollama", "Ollama", "Ollama", {
         hint: "Cloud and local open models",
       }),
@@ -177,13 +158,8 @@ describe("buildAuthChoiceOptions", () => {
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {
     resolveProviderSetupFlowContributions.mockReturnValue([
       groupedFlow("opencode", "opencode-zen", "OpenCode Zen catalog", "OpenCode"),
-      flowContribution("opencode-go", {
-        value: "opencode-go",
-        label: "OpenCode Go catalog",
-        group: {
-          id: "opencode",
-          label: "OpenCode",
-        },
+      groupedFlow("opencode-go", "opencode-go", "OpenCode Go catalog", "OpenCode", {
+        group: { id: "opencode", label: "OpenCode" },
       }),
     ]);
     const { groups } = buildAuthChoiceGroups({
@@ -207,18 +183,8 @@ describe("buildAuthChoiceOptions", () => {
         groupedFlow("vydra", "vydra-api-key", "Vydra API key", "Vydra"),
         groupedFlow("openrouter", "openrouter-api-key", "OpenRouter API key", "OpenRouter"),
         groupedFlow("openai", "openai-api-key", "OpenAI API key", "OpenAI"),
-        groupedFlow(
-          "local-image-runtime",
-          "local-image-runtime",
-          "Local image runtime",
-          "Local image runtime",
-        ),
-        groupedFlow(
-          "local-music-runtime",
-          "local-music-runtime",
-          "Local music runtime",
-          "Local music runtime",
-        ),
+        groupedFlow("local-image-runtime", "local-image-runtime", "Local image runtime"),
+        groupedFlow("local-music-runtime", "local-music-runtime", "Local music runtime"),
         groupedFlow("ollama", "ollama", "Ollama", "Ollama"),
       ]);
 

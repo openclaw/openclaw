@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,16 +15,15 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { readBackupRuns } from "../state/backup-run-records.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
   buildBackupArchivePath,
   buildBackupArchiveRoot,
-  type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
@@ -61,15 +59,6 @@ describe("backup commands", () => {
   let tempHome: TempHomeEnv;
   let stateDir: string;
 
-  async function withTempDir(prefix: string, run: (dir: string) => Promise<void>) {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-    try {
-      await run(dir);
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  }
-
   async function writeWorkspaceBackupConfig(workspaceDir: string) {
     await fs.writeFile(
       path.join(stateDir, "openclaw.json"),
@@ -78,6 +67,13 @@ describe("backup commands", () => {
       }),
       "utf8",
     );
+  }
+
+  async function prepareWorkspace() {
+    const workspaceDir = path.join(stateDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+    return workspaceDir;
   }
 
   beforeAll(async () => {
@@ -111,27 +107,18 @@ describe("backup commands", () => {
       });
       const entered = createDeferred();
       const settled = createDeferred();
+      const failed = outcome === "failure" || outcome === "uncertain";
+      const cause =
+        outcome === "uncertain"
+          ? new AggregateError([new CommandProcessCleanupError()], "nested cleanup")
+          : undefined;
       backupWalkMock.mockImplementation(() =>
         createMockTarStream({
           beforeRead: async () => {
             entered.resolve();
             await settled.promise;
           },
-          ...(outcome === "success" || outcome === "SIGINT" || outcome === "SIGTERM"
-            ? {}
-            : {
-                error: new Error(
-                  "archive failed",
-                  outcome === "uncertain"
-                    ? {
-                        cause: new AggregateError(
-                          [new CommandProcessCleanupError()],
-                          "nested cleanup",
-                        ),
-                      }
-                    : undefined,
-                ),
-              }),
+          ...(failed ? { error: new Error("archive failed", cause ? { cause } : undefined) } : {}),
         }),
       );
       const running = create({
@@ -223,67 +210,12 @@ describe("backup commands", () => {
     }
   });
 
-  async function withInvalidWorkspaceBackupConfig(
-    raw: string,
-    fn: (runtime: RuntimeEnv) => Promise<void>,
-  ) {
-    const configPath = path.join(tempHome.home, "custom-config.json");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, raw, "utf8");
-
-    await withEnv("OPENCLAW_CONFIG_PATH", configPath, async () => {
-      await fn(createTestRuntime());
-    });
-  }
-
-  function expectWorkspaceCoveredByState(
-    plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
-  ) {
-    const included = expectDefined(plan.included[0], "included state asset");
-    const stateSourcePath = included.sourcePath;
-    expect(plan.included).toStrictEqual([
-      {
-        kind: "state",
-        sourcePath: stateSourcePath,
-        displayPath: included.displayPath,
-        archivePath: buildBackupArchivePath(buildBackupArchiveRoot(123), stateSourcePath),
-      },
-    ]);
-    const workspaceSourcePath = path.join(included.sourcePath, "workspace");
-    expect(plan.skipped).toStrictEqual([
-      {
-        kind: "workspace",
-        sourcePath: workspaceSourcePath,
-        displayPath: path.join(included.displayPath, "workspace"),
-        reason: "covered",
-        coveredBy: included.displayPath,
-      },
-    ]);
-    const skipped = expectDefined(plan.skipped[0], "covered workspace skip entry");
-    expect(path.relative(included.sourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
-  }
-
-  function expectOnlyAssetKind(assets: BackupAsset[], kind: BackupAsset["kind"]) {
-    expect(assets).toStrictEqual([
-      {
-        kind,
-        sourcePath: expect.any(String),
-        displayPath: expect.any(String),
-        archivePath: expect.stringContaining("/payload/"),
-      },
-    ]);
-  }
-
-  it("formats backup archive timestamps in local time", async () => {
-    await withEnv("TZ", "Asia/Shanghai", () => {
-      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
-        "2026-03-14T09-02-03.456+08-00-openclaw-backup",
-      );
-    });
-    await withEnv("TZ", "America/New_York", () => {
-      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
-        "2026-03-13T21-02-03.456-04-00-openclaw-backup",
-      );
+  it.each([
+    ["Asia/Shanghai", "2026-03-14T09-02-03.456+08-00-openclaw-backup"],
+    ["America/New_York", "2026-03-13T21-02-03.456-04-00-openclaw-backup"],
+  ])("formats backup archive timestamps in %s local time", async (timezone, expected) => {
+    await withEnv("TZ", timezone, () => {
+      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(expected);
     });
   });
 
@@ -292,20 +224,38 @@ describe("backup commands", () => {
       return;
     }
 
-    const workspaceDir = path.join(stateDir, "workspace");
-    await withTempDir("openclaw-workspace-link-", async (symlinkDir) => {
+    const workspaceDir = await prepareWorkspace();
+    await withTestDir({ prefix: "openclaw-workspace-link-" }, async (symlinkDir) => {
       const workspaceLink = path.join(symlinkDir, "ws-link");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
       await fs.symlink(workspaceDir, workspaceLink);
       await writeWorkspaceBackupConfig(workspaceLink);
       const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
-      expectWorkspaceCoveredByState(plan);
+      const included = expectDefined(plan.included[0], "included state asset");
+      const stateSourcePath = included.sourcePath;
+      expect(plan.included).toStrictEqual([
+        {
+          kind: "state",
+          sourcePath: stateSourcePath,
+          displayPath: included.displayPath,
+          archivePath: buildBackupArchivePath(buildBackupArchiveRoot(123), stateSourcePath),
+        },
+      ]);
+      expect(plan.skipped).toStrictEqual([
+        {
+          kind: "workspace",
+          sourcePath: path.join(stateSourcePath, "workspace"),
+          displayPath: path.join(included.displayPath, "workspace"),
+          reason: "covered",
+          coveredBy: included.displayPath,
+        },
+      ]);
+      const skipped = expectDefined(plan.skipped[0], "covered workspace skip entry");
+      expect(path.relative(stateSourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
     });
   });
 
   it("backupCreateCommand omits volatile files and keeps notices out of JSON output", async () => {
-    await withTempDir("openclaw-backups-json-", async (backupDir) => {
+    await withTestDir({ prefix: "openclaw-backups-json-" }, async (backupDir) => {
       const runtime = createTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       const sessions = path.join(stateDir, "sessions");
@@ -337,51 +287,53 @@ describe("backup commands", () => {
     });
   });
 
-  it("reports an actionable EACCES output-parent failure", async () => {
-    const outputParent = path.join(tempHome.home, "missing-parent", "daily");
-    const outputPath = path.join(outputParent, "backup.tar.gz");
-    await mockStateOnlyBackupPlan(stateDir);
-    vi.spyOn(fs, "mkdir").mockRejectedValueOnce(
-      Object.assign(new Error(`EACCES: filesystem error, mkdir '${outputParent}'`), {
-        code: "EACCES",
-        path: outputParent,
-        syscall: "mkdir",
-      }),
-    );
-
-    const error = await create({ output: outputPath }).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(Error);
-    const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then run \`openclaw backup create --output <archive>\` again.`;
-    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
-    const debugMessage = `${operatorMessage} | EACCES: filesystem error, mkdir '${outputParent}' | EACCES`;
-    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toBe(
-      debugMessage,
-    );
-  });
-
-  it("does not describe an output parent file as a missing directory", async () => {
-    const outputParent = path.join(tempHome.home, "not-a-directory");
-    const outputPath = path.join(outputParent, "backup.tar.gz");
-    await fs.writeFile(outputParent, "file\n", "utf8");
-    await mockStateOnlyBackupPlan(stateDir);
-
-    const error = await create({ output: outputPath }).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(Error);
-    const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`;
-    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
-    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toMatch(
-      /\| EEXIST: .*mkdir.*\| EEXIST/u,
-    );
-  });
+  it.each(["EACCES", "EEXIST"] as const)(
+    "reports an actionable %s output-parent failure",
+    async (code) => {
+      const outputParent = path.join(
+        tempHome.home,
+        code === "EACCES" ? "missing-parent/daily" : "not-a-directory",
+      );
+      const outputPath = path.join(outputParent, "backup.tar.gz");
+      if (code === "EEXIST") {
+        await fs.writeFile(outputParent, "file\n", "utf8");
+      }
+      await mockStateOnlyBackupPlan(stateDir);
+      if (code === "EACCES") {
+        vi.spyOn(fs, "mkdir").mockRejectedValueOnce(
+          Object.assign(new Error(`EACCES: filesystem error, mkdir '${outputParent}'`), {
+            code,
+            path: outputParent,
+            syscall: "mkdir",
+          }),
+        );
+      }
+      const error = await create({ output: outputPath }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      const detail = code === "EACCES" ? "directory is not writable" : "parent is not a directory";
+      const recovery =
+        code === "EACCES"
+          ? "Check the path and directory permissions, then run"
+          : "Choose a directory path and run";
+      const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output ${detail}: ${outputParent}. ${recovery} \`openclaw backup create --output <archive>\` again.`;
+      expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
+      const debug = formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } });
+      if (code === "EACCES") {
+        expect(debug).toBe(
+          `${operatorMessage} | EACCES: filesystem error, mkdir '${outputParent}' | EACCES`,
+        );
+      } else {
+        expect(debug).toMatch(/\| EEXIST: .*mkdir.*\| EEXIST/u);
+      }
+    },
+  );
 
   it("rejects symlinked output paths even when intermediate directories do not exist yet", async () => {
     if (process.platform === "win32") {
       return;
     }
 
-    await withTempDir("openclaw-backup-link-", async (symlinkDir) => {
+    await withTestDir({ prefix: "openclaw-backup-link-" }, async (symlinkDir) => {
       const symlinkPath = path.join(symlinkDir, "linked-state");
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.symlink(stateDir, symlinkPath);
@@ -395,42 +347,36 @@ describe("backup commands", () => {
     });
   });
 
-  it("falls back to the home directory when cwd is inside a backed-up source tree", async () => {
-    const workspaceDir = path.join(stateDir, "workspace");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
-    vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-    const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
-    await writeWorkspaceBackupConfig(workspaceDir);
-
-    const runtime = createTestRuntime();
-
-    const result = await create({ nowMs }, runtime);
-
-    expect(result.archivePath).toBe(
-      path.join(tempHome.home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
-    );
-    await fs.rm(result.archivePath, { force: true });
-
-    if (process.platform !== "win32") {
-      await withTempDir("openclaw-backup-cwd-link-", async (linkParent) => {
-        const workspaceLink = path.join(linkParent, "workspace-link");
-        await fs.symlink(workspaceDir, workspaceLink);
-        vi.mocked(process["cwd"]).mockReturnValue(workspaceLink);
-        const symlinkNowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
-        const symlinkResult = await create({ nowMs: symlinkNowMs });
-        expect(symlinkResult.archivePath).toBe(
-          path.join(tempHome.home, `${buildBackupArchiveRoot(symlinkNowMs)}.tar.gz`),
+  it.each([false, true])(
+    "falls back to home when cwd is a backed-up workspace (symlink=%s)",
+    async (symlink) => {
+      if (symlink && process.platform === "win32") {
+        return;
+      }
+      const workspaceDir = await prepareWorkspace();
+      await writeWorkspaceBackupConfig(workspaceDir);
+      await withTestDir({ prefix: "openclaw-backup-cwd-link-" }, async (linkParent) => {
+        const cwd = symlink ? path.join(linkParent, "workspace-link") : workspaceDir;
+        if (symlink) {
+          await fs.symlink(workspaceDir, cwd);
+        }
+        vi.spyOn(process, "cwd").mockReturnValue(cwd);
+        const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
+        const result = await create({ nowMs });
+        expect(result.archivePath).toBe(
+          path.join(tempHome.home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
         );
-        await fs.rm(symlinkResult.archivePath, { force: true });
+        await fs.rm(result.archivePath, { force: true });
       });
-    }
-  });
+    },
+  );
 
   it("handles invalid syntax according to backup scope", async () => {
-    const raw = '{"agents": { defaults: { workspace: ';
-    await withInvalidWorkspaceBackupConfig(raw, async (runtime) => {
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}", "utf8");
+    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+    await withEnv("OPENCLAW_CONFIG_PATH", configPath, async () => {
+      const runtime = createTestRuntime();
       await expect(create({ dryRun: true }, runtime)).rejects.toThrow(
         /ownership could not be resolved/i,
       );
@@ -440,7 +386,14 @@ describe("backup commands", () => {
       );
 
       const configOnly = await create({ dryRun: true, onlyConfig: true }, runtime);
-      expectOnlyAssetKind(configOnly.assets, "config");
+      expect(configOnly.assets).toStrictEqual([
+        {
+          kind: "config",
+          sourcePath: expect.any(String),
+          displayPath: expect.any(String),
+          archivePath: expect.stringContaining("/payload/"),
+        },
+      ]);
     });
   });
 

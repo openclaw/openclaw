@@ -17,6 +17,8 @@ const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profi
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
 }));
+const note = vi.fn(async (_message: string, _title?: string) => {});
+const prompter = makePrompter({ note });
 
 function modelConfig(
   model: string | { primary: string },
@@ -73,13 +75,12 @@ describe("warnIfModelConfigLooksOff", () => {
         credential: createApiKeyCredential("anthropic", "test-anthropic-key"),
       },
     ];
-    const note = vi.fn(async () => {});
 
     expect(resolveDefaultModelAuthStatus(config, { env: {}, pendingAuthProfiles })).toMatchObject({
       status: "ready",
       hasAuth: true,
     });
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
+    await warnIfModelConfigLooksOff(config, prompter, {
       env: {},
       pendingAuthProfiles,
     });
@@ -89,9 +90,8 @@ describe("warnIfModelConfigLooksOff", () => {
 
   it("does not use pending auth profiles from a different provider", async () => {
     const config = modelConfig("anthropic/claude-sonnet-4-6");
-    const note = vi.fn(async () => {});
 
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
+    await warnIfModelConfigLooksOff(config, prompter, {
       env: {},
       pendingAuthProfiles: [
         {
@@ -108,8 +108,6 @@ describe("warnIfModelConfigLooksOff", () => {
   });
 
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
-    const note = vi.fn(async (_message: string, _title?: string) => {});
-    const prompter = makePrompter({ note });
     useSubscription("openai:default");
     const config = modelConfig(
       { primary: "openai/gpt-5.5" },
@@ -136,8 +134,7 @@ describe("warnIfModelConfigLooksOff", () => {
       authRequirement: "subscription",
     });
 
-    const note = vi.fn(async (_message: string) => {});
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
+    await warnIfModelConfigLooksOff(config, prompter, {
       env: { OPENAI_API_KEY: "api-key" },
     });
     const warning = note.mock.calls.flatMap(([message]) => message).join("\n");
@@ -157,8 +154,7 @@ describe("warnIfModelConfigLooksOff", () => {
       hasAuth: false,
       code: "platform-only-model-on-chatgpt",
     });
-    const note = vi.fn(async () => {});
-    await warnIfModelConfigLooksOff(config, makePrompter({ note }));
+    await warnIfModelConfigLooksOff(config, prompter);
 
     expect(note).toHaveBeenCalledWith(
       'Model route is incompatible for "openai/gpt-5.6": gpt-5.6 is available only through OpenAI Platform API-key authentication.',
@@ -207,8 +203,6 @@ describe("warnIfModelConfigLooksOff", () => {
   });
 
   it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
-    const note = vi.fn(async () => {});
-    const prompter = makePrompter({ note });
     const config = modelConfig("openai/gpt-5.4-nano");
 
     expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
