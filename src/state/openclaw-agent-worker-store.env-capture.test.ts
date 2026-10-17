@@ -93,94 +93,84 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+type Worker = Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore>>;
 async function withPublication(
-  run: (worker: Awaited<ReturnType<typeof openPublication>>) => Promise<void>,
+  run: (worker: Worker) => Promise<void>,
+  options: OpenClawAgentDatabaseOptions = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: "/synthetic/captured" },
+  },
 ) {
-  const worker = await openPublication();
+  const db = new DatabaseSync(":memory:");
+  boundary.current.mockReturnValue({ db });
+  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
   try {
     await run(worker);
   } finally {
     await worker.close();
   }
 }
-async function openPublication() {
-  const db = new DatabaseSync(":memory:");
-  boundary.current.mockReturnValue({ db });
-  return openOpenClawAgentSqliteWorkerStore(
-    { agentId: "main", env: { OPENCLAW_STATE_DIR: "/synthetic/captured" } },
-    db,
-    workerModule,
-  );
-}
-
-it.each(["domain close", "retired executor", "executor release", "both cleanup steps"] as const)(
-  "preserves completed publication when %s fails",
-  async (failurePoint) => {
-    const cleanupError = new Error("Publication cleanup unavailable after completed command");
-    const releaseError = new Error("Executor release failed after completed publication");
-    const committed = { revision: 42 };
-    boundary.execute.mockImplementation(async (command) => {
-      if (command.type === "database.domain.execute" && failurePoint === "retired executor") {
+it.each([
+  "domain close",
+  "retired executor",
+  "executor release",
+  "both cleanup steps",
+  "callback",
+  "command",
+] as const)("preserves publication outcome when %s fails", async (failure) => {
+  const original = new Error("Publication failed");
+  const cleanupError = new Error("Domain cleanup failed");
+  const releaseError = new Error("Executor release failed");
+  const committed = { revision: 42 };
+  const fails = failure === "callback" || failure === "command";
+  boundary.execute.mockImplementation(async ({ type }) => {
+    if (type === "database.domain.execute") {
+      if (failure === "command") {
+        throw original;
+      }
+      if (failure === "retired executor") {
         boundary.available.mockImplementation(() => {
           throw cleanupError;
         });
       }
-      if (
-        command.type === "database.domain.close" &&
-        (failurePoint === "domain close" || failurePoint === "both cleanup steps")
-      ) {
-        throw cleanupError;
-      }
-    });
-    if (failurePoint === "executor release" || failurePoint === "both cleanup steps") {
-      boundary.release.mockRejectedValue(releaseError);
     }
-    await withPublication(async (worker) => {
-      await expect(
-        worker.run(async (scope) => {
-          await scope.execute({ type: "append", input: { value: "committed" } });
-          return committed;
-        }, allow),
-      ).resolves.toBe(committed);
-      expect(boundary.release).toHaveBeenCalledOnce();
-    });
-  },
-);
-
-it.each(["callback", "command"] as const)(
-  "preserves the failed %s and both cleanup errors",
-  async (failurePoint) => {
-    const original = new Error("Publication failed before producing a completed result");
-    const cleanupError = new Error("Domain cleanup also failed");
-    const releaseError = new Error("Executor release also failed");
-    boundary.execute.mockImplementation(async (command) => {
-      if (command.type === "database.domain.execute" && failurePoint === "command") {
+    if (
+      type === "database.domain.close" &&
+      (fails || failure === "domain close" || failure === "both cleanup steps")
+    ) {
+      throw cleanupError;
+    }
+  });
+  if (fails || failure === "executor release" || failure === "both cleanup steps") {
+    boundary.release.mockRejectedValue(releaseError);
+  }
+  await withPublication(async (worker) => {
+    const work = worker.run(async (scope) => {
+      if (failure === "callback") {
         throw original;
       }
-      if (command.type === "database.domain.close") {
-        throw cleanupError;
+      const command = scope.execute({ type: "append", input: { value: "committed" } });
+      // A handled command failure must still fail its enclosing publication.
+      if (failure === "command") {
+        await command.catch(allow);
+      } else {
+        await command;
       }
-    });
-    boundary.release.mockRejectedValue(releaseError);
-    await withPublication(async (worker) => {
-      const work = worker.run(async (scope) => {
-        if (failurePoint === "callback") {
-          throw original;
-        }
-        // A caller can handle its command promise, but the adapter still owns its failure.
-        await scope.execute({ type: "append", input: { value: "failed" } }).catch(() => {});
-        return "must not report success";
-      }, allow);
+      return committed;
+    }, allow);
+    if (fails) {
       const errors = (error: unknown): unknown[] =>
         error instanceof AggregateError ? error.errors.flatMap(errors) : [error];
       await expect(work).rejects.toSatisfy((error: unknown) => {
         expect(errors(error)).toEqual([original, cleanupError, releaseError]);
         return true;
       });
-      expect(boundary.release).toHaveBeenCalledOnce();
-    });
-  },
-);
+    } else {
+      await expect(work).resolves.toBe(committed);
+    }
+    expect(boundary.release).toHaveBeenCalledOnce();
+  });
+});
 
 it.each([
   { platform: "win32", key: "OpenClaw_State_Dir", input: "plain" },
@@ -194,40 +184,37 @@ it.each([
       const rawEnv = { [fixture.key]: root };
       const env = fixture.input === "precloned" ? cloneEnvWithPlatformSemantics(rawEnv) : rawEnv;
       const options = { agentId: "main", env };
-      const db = new DatabaseSync(":memory:");
-      boundary.current.mockReturnValue({ db });
       const ready = createDeferredCore();
       boundary.ready = ready.promise;
-      const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
-      let work: Promise<string> | undefined;
-      try {
-        expect(boundary.captureState).toHaveBeenCalledWith(`${root}/state.sqlite`);
-        work = worker.run(async (scope) => {
-          await scope.execute({ type: "append", input: { value: "published" } });
-          return "published";
-        }, allow);
-        expect(boundary.capture.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
-        expect(boundary.execute).not.toHaveBeenCalled();
-        env[fixture.key] = "/synthetic/changed";
-        options.env = { OPENCLAW_STATE_DIR: "/synthetic/replaced" };
-        ready.resolve();
-        await expect(work).resolves.toBe("published");
-        const captured = boundary.capture.mock.calls[0]?.[0];
-        expect(captured?.path).toBe(`${root}/main.sqlite`);
-        expect(captured?.env?.OPENCLAW_STATE_DIR).toBe(root);
-        expect(boundary.current.mock.calls.length).toBeGreaterThan(1);
-        for (const [admitted] of boundary.current.mock.calls) {
-          expect(admitted.path).toBe(`${root}/main.sqlite`);
-          expect(admitted.env.OPENCLAW_STATE_DIR).toBe(root);
+      await withPublication(async (worker) => {
+        let work: Promise<string> | undefined;
+        try {
+          expect(boundary.captureState).toHaveBeenCalledWith(`${root}/state.sqlite`);
+          work = worker.run(async (scope) => {
+            await scope.execute({ type: "append", input: { value: "published" } });
+            return "published";
+          }, allow);
+          expect(boundary.capture.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
+          expect(boundary.execute).not.toHaveBeenCalled();
+          env[fixture.key] = "/synthetic/changed";
+          options.env = { OPENCLAW_STATE_DIR: "/synthetic/replaced" };
+          ready.resolve();
+          await expect(work).resolves.toBe("published");
+          const captured = boundary.capture.mock.calls[0]?.[0];
+          const expected = { path: `${root}/main.sqlite`, env: { OPENCLAW_STATE_DIR: root } };
+          expect(captured).toMatchObject(expected);
+          expect(boundary.current.mock.calls.length).toBeGreaterThan(1);
+          for (const [admitted] of boundary.current.mock.calls) {
+            expect(admitted).toMatchObject(expected);
+          }
+          expect(boundary.release).toHaveBeenCalledExactlyOnceWith(captured);
+          expect(boundary.release.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
+          await worker.close();
+        } finally {
+          ready.resolve();
+          await work?.catch(allow);
         }
-        expect(boundary.release).toHaveBeenCalledExactlyOnceWith(captured);
-        expect(boundary.release.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
-        await worker.close();
-      } finally {
-        ready.resolve();
-        await work?.catch(allow);
-        await worker.close();
-      }
+      }, options);
     });
   },
 );

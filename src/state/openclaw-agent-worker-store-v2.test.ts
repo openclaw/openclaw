@@ -27,7 +27,9 @@ import { runOpenClawAgentWorkerWrite as runWorkerWrite } from "./openclaw-agent-
 const allow = () => {};
 const append = (value: string) => ({ type: "append" as const, input: { value } });
 
-const workers = new Set<OpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>>();
+type Worker = OpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>;
+
+const workers = new Set<Worker>();
 const executions = new Set<OpenClawAgentDatabaseExecution>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -56,7 +58,24 @@ async function openWorker(
   return worker;
 }
 
-function observeTerminal(worker: OpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>) {
+function proofDatabase() {
+  const { db } = openDatabase(options);
+  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
+  return db;
+}
+async function expectReadmission(
+  db: ReturnType<typeof proofDatabase>,
+  worker: Worker,
+  prior: string[] = [],
+) {
+  await expect(worker.execute(append("still refused"), allow)).rejects.toThrow();
+  const recovered = await openWorker();
+  expect(await recovered.execute(append("readmitted"), allow)).toBeGreaterThan(0);
+  expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual(
+    [...prior, "readmitted"].map((value) => ({ value })),
+  );
+}
+function observeTerminal(worker: Worker) {
   const notify = vi.fn();
   const terminal = new Promise<void>((resolve) => {
     worker.terminalSignal.addEventListener(
@@ -108,105 +127,84 @@ it.each([false, true])(
   },
 );
 
-it("V2 reports owner revocation and admits the next request through a fresh worker", async ({
-  signal,
-}) => {
-  const { db } = openDatabase(options);
-  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
-  let current = true;
-  const worker = await openWorker(
-    {
-      onAdmitted(request) {
-        if (request.stage === "transaction") {
-          current = false;
-        }
-      },
-    },
-    {
-      version: 2,
-      assertCurrent() {
-        if (!current) {
-          throw new Error("V2 owner revoked");
-        }
-      },
-    },
-  );
-  const observed = observeTerminal(worker);
-  await expect(worker.execute(append("refused"), allow)).rejects.toThrow("V2 owner revoked");
-  await withinTest(observed.terminal, signal);
-  expect(observed.notify).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
-  expect(worker.terminalSignal.reason).toMatchObject({ message: "V2 owner revoked" });
-  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-  await expect(worker.execute(append("still refused"), allow)).rejects.toThrow();
-  const recovered = await openWorker();
-  expect(await recovered.execute(append("readmitted"), allow)).toBeGreaterThan(0);
-  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "readmitted" }]);
-});
-
-it.for(["crash", "exit"] as const)(
-  "V2 settles requests and reports terminal loss after worker %s",
+it.for(["owner revocation", "crash", "exit", "resource revocation"] as const)(
+  "V2 settles %s and readmits through a fresh worker",
   async (failure, { signal }) => {
-    const { db } = openDatabase(options);
-    db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
-    const worker = await openWorker();
+    const db = proofDatabase();
+    let current = true;
+    const worker =
+      failure === "owner revocation"
+        ? await openWorker(
+            {
+              onAdmitted(request) {
+                if (request.stage === "transaction") {
+                  current = false;
+                }
+              },
+            },
+            {
+              version: 2,
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("V2 owner revoked");
+                }
+              },
+            },
+          )
+        : await openWorker();
     const observed = observeTerminal(worker);
-    const failed = worker.execute({ type: "failWorker", input: failure }, allow);
-    const queued = worker.execute(append("must not write"), allow);
-    const results = await withinTest(Promise.allSettled([failed, queued]), signal);
-    expect(results).toEqual([
-      { status: "rejected", reason: expect.any(Error) },
-      { status: "rejected", reason: expect.any(Error) },
-    ]);
+    if (failure === "owner revocation") {
+      await expect(worker.execute(append("refused"), allow)).rejects.toThrow("V2 owner revoked");
+    } else if (failure === "resource revocation") {
+      let revoked: Promise<void> | undefined;
+      let terminalBeforePublication: boolean | undefined;
+      const committedAtNotification: unknown[] = [];
+      worker.terminalSignal.addEventListener("abort", () => {
+        committedAtNotification.push(db.prepare("SELECT value FROM worker_proof").all());
+      });
+      const accepted = worker.run(async (scope) => {
+        const result = await scope.execute(append("accepted"));
+        // Revoke after native COMMIT, but before publication settles.
+        revoked = Promise.all(revokeAgentDatabaseResources(options)).then(allow);
+        void revoked.catch(allow);
+        terminalBeforePublication = worker.terminalSignal.aborted;
+        return result;
+      }, allow);
+      expect(await withinTest(accepted, signal)).toBeGreaterThan(0);
+      await withinTest(observed.terminal, signal);
+      await revoked;
+      expect(terminalBeforePublication).toBe(false);
+      expect(committedAtNotification).toEqual([[{ value: "accepted" }]]);
+    } else {
+      const failed = worker.execute({ type: "failWorker", input: failure }, allow);
+      const queued = worker.execute(append("must not write"), allow);
+      expect(await withinTest(Promise.allSettled([failed, queued]), signal)).toEqual([
+        { status: "rejected", reason: expect.any(Error) },
+        { status: "rejected", reason: expect.any(Error) },
+      ]);
+      await withinTest(observed.terminal, signal);
+      expect(worker.terminalSignal.aborted).toBe(true);
+      expect(worker.terminalSignal.reason).toMatchObject({
+        message: expect.stringMatching(/worker|exit|crash/i),
+      });
+    }
     await withinTest(observed.terminal, signal);
     expect(observed.notify).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
-    expect(worker.terminalSignal.aborted).toBe(true);
     const reason: unknown = worker.terminalSignal.reason;
-    expect(reason).toMatchObject({ message: expect.stringMatching(/worker|exit|crash/i) });
-    await expect(worker.prepare()).rejects.toThrow();
-    await expect(worker.execute(append("still refused"), allow)).rejects.toThrow();
-
-    const recovered = await openWorker();
-    expect(await recovered.execute(append("readmitted"), allow)).toBeGreaterThan(0);
-    expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "readmitted" }]);
-    await worker.close();
-    expect(worker.terminalSignal.reason).toBe(reason);
-    expect(observed.notify).toHaveBeenCalledTimes(1);
+    if (failure === "owner revocation") {
+      expect(reason).toMatchObject({ message: "V2 owner revoked" });
+      expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+    } else if (failure === "crash" || failure === "exit") {
+      await expect(worker.prepare()).rejects.toThrow();
+    }
+    await expectReadmission(db, worker, failure === "resource revocation" ? ["accepted"] : []);
+    if (failure === "crash" || failure === "exit") {
+      await worker.close();
+      expect(worker.terminalSignal.reason).toBe(reason);
+      expect(observed.notify).toHaveBeenCalledTimes(1);
+    }
   },
 );
-
-it("V2 reports resource revocation only after its accepted write settles", async ({ signal }) => {
-  const { db } = openDatabase(options);
-  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
-  let revoked: Promise<void> | undefined;
-  let terminalBeforePublication: boolean | undefined;
-  const worker = await openWorker();
-  const observed = observeTerminal(worker);
-  const committedAtNotification: unknown[] = [];
-  worker.terminalSignal.addEventListener("abort", () => {
-    committedAtNotification.push(db.prepare("SELECT value FROM worker_proof").all());
-  });
-  const accepted = worker.run(async (scope) => {
-    const result = await scope.execute(append("accepted"));
-    // The native COMMIT is acknowledged while the enclosing publication is still pending.
-    revoked = Promise.all(revokeAgentDatabaseResources(options)).then(allow);
-    void revoked.catch(allow);
-    terminalBeforePublication = worker.terminalSignal.aborted;
-    return result;
-  }, allow);
-  expect(await withinTest(accepted, signal)).toBeGreaterThan(0);
-  await withinTest(observed.terminal, signal);
-  await revoked;
-  expect(terminalBeforePublication).toBe(false);
-  expect(committedAtNotification).toEqual([[{ value: "accepted" }]]);
-  expect(observed.notify).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
-  await expect(worker.execute(append("refused"), allow)).rejects.toThrow();
-  const recovered = await openWorker();
-  expect(await recovered.execute(append("readmitted"), allow)).toBeGreaterThan(0);
-  expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
-    { value: "accepted" },
-    { value: "readmitted" },
-  ]);
-});
 
 it("attributes cold worker reservations to bounded commands and actual outer transactions", async () => {
   const reservationRoot = tempDirs.make("openclaw-reservation-attribution-");
@@ -226,25 +224,14 @@ it("attributes cold worker reservations to bounded commands and actual outer tra
         input: undefined,
       });
       try {
-        await store.execute({
-          type: "database.domain.execute",
-          input: {
-            command: {
-              type: "session.actor.appendTranscriptEvent",
-              input: { value: "synthetic-private-committed" },
-            },
-          },
-        });
-        await expect(
+        const execute = (type: string, value: string) =>
           store.execute({
             type: "database.domain.execute",
-            input: {
-              command: {
-                type: "session.private-customer-command",
-                input: { value: "synthetic-private-rolled-back" },
-              },
-            },
-          }),
+            input: { command: { type, input: { value } } },
+          });
+        await execute("session.actor.appendTranscriptEvent", "synthetic-private-committed");
+        await expect(
+          execute("session.private-customer-command", "synthetic-private-rolled-back"),
         ).rejects.toThrow("Fixture transaction rolled back");
         expect(await store.execute({ type: "read", input: undefined })).toEqual([
           "synthetic-private-committed",

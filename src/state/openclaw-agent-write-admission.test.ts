@@ -50,21 +50,36 @@ function directTiming(ms: number, outcome = "ok") {
   };
 }
 const slowMessage = "slow agent database reservation";
+function warning(fields: Record<string, unknown>) {
+  return [expect.objectContaining(fields), slowMessage];
+}
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+function makeFixture(prefix: string, agentId = "usage", filename = "agent.sqlite") {
+  const root = tempDirs.make(prefix);
+  const options = { agentId, path: path.join(root, filename) };
+  const entered = createDeferred();
+  const release = createDeferred();
+  const order: string[] = [];
+  const hold = () => {
+    entered.resolve();
+    return release.promise;
+  };
+  const record = (value: string) => async () => {
+    order.push(value);
+  };
+  return { root, options, entered, release, order, hold, record };
+}
 
 it("overlaps Board reads with transcript writes while retaining exclusive mutation order", async ({
   signal,
 }) => {
-  const options = {
-    agentId: "main",
-    path: path.join(tempDirs.make("board-admission-"), "agent.sqlite"),
-  };
+  const { options, order, record } = makeFixture("board-admission-", "main");
   const writerEntered = createDeferred();
   const releaseWriter = createDeferred();
   const readEntered = createDeferred();
   const releaseRead = createDeferred();
-  const order: string[] = [];
   const writer = workerWrite(
     options,
     async () => {
@@ -84,12 +99,8 @@ it("overlaps Board reads with transcript writes while retaining exclusive mutati
     await releaseRead.promise;
     order.push("read");
   });
-  const mutation = workerWrite(options, async () => {
-    order.push("mutation settled");
-  });
-  const following = boardRead(options, async () => {
-    order.push("following read");
-  });
+  const mutation = workerWrite(options, record("mutation settled"));
+  const following = boardRead(options, record("following read"));
   try {
     await withinTest(readEntered.promise, signal);
     releaseWriter.resolve();
@@ -111,26 +122,19 @@ it.each(["single", "batch"] as const)(
     withExchange(
       () => [],
       async () => {
-        const root = tempDirs.make("openclaw-cold-writer-order-");
-        const options = { agentId: "usage", path: path.join(root, "z", "agent.sqlite") };
+        const { root, options, entered, order, record } = makeFixture(
+          "openclaw-cold-writer-order-",
+          "usage",
+          path.join("z", "agent.sqlite"),
+        );
         const earlier = { agentId: "earlier", path: path.join(root, "a", "agent.sqlite") };
-        const entered = createDeferred();
         const requestPrune = createDeferred();
         const releaseTurn = createDeferred();
-        const order: string[] = [];
         let pruning: Promise<void> | undefined;
         const native = nativeTurn([options.path], async () => {
           entered.resolve();
           await requestPrune.promise;
-          pruning = workerWrite(
-            options,
-            async () => {
-              order.push("prune");
-            },
-            undefined,
-            undefined,
-            "background",
-          );
+          pruning = workerWrite(options, record("prune"), undefined, undefined, "background");
           // Let failure cleanup release the synthetic turn without stranding the FIFO.
           await Promise.race([pruning, releaseTurn.promise]);
         });
@@ -138,9 +142,7 @@ it.each(["single", "batch"] as const)(
         let foregroundEntered = false;
         const prepare = () => {
           foregroundEntered = true;
-          return nativeTurn([options.path], async () => {
-            order.push("foreground");
-          });
+          return nativeTurn([options.path], record("foreground"));
         };
         const foreground =
           kind === "single" ? write(options, prepare) : writeMany([earlier, options], prepare);
@@ -163,31 +165,24 @@ it.each(["single", "batch"] as const)(
 it.each([false, true])(
   "defers background writes behind later foreground work (abort=%s)",
   async (abort) => {
-    const root = tempDirs.make("openclaw-background-admission-");
-    const options = { agentId: "usage", path: path.join(root, "agent.sqlite") };
-    const entered = createDeferred();
-    const release = createDeferred();
+    const { options, entered, release, order, hold, record } = makeFixture(
+      "openclaw-background-admission-",
+    );
     const controller = new AbortController();
     const reason = new Error("closed");
-    const order: string[] = [];
     const held = workerWrite(options, async () => {
       order.push("held");
-      entered.resolve();
-      await release.promise;
+      await hold();
     });
     await entered.promise;
     const background = workerWrite(
       options,
-      async () => {
-        order.push("background");
-      },
+      record("background"),
       undefined,
       controller.signal,
       "background",
     );
-    const foreground = workerWrite(options, async () => {
-      order.push("foreground");
-    });
+    const foreground = workerWrite(options, record("foreground"));
     const outcome = abort ? expect(background).rejects.toBe(reason) : background;
     try {
       if (abort) {
@@ -301,8 +296,11 @@ it("releases earlier reservations when a later database path is invalid", async 
 });
 
 function fixture() {
-  const root = tempDirs.make("openclaw-reservation-diagnostic-");
-  const options = { agentId: "synthetic-private-agent", path: path.join(root, "private.sqlite") };
+  const base = makeFixture(
+    "openclaw-reservation-diagnostic-",
+    "synthetic-private-agent",
+    "private.sqlite",
+  );
   const clock = { now: 0 };
   vi.spyOn(performance, "now").mockImplementation(() => clock.now);
   const warnings: unknown[][] = [];
@@ -315,19 +313,16 @@ function fixture() {
     });
     return logger;
   });
-  return { options, clock, warnings };
+  return { ...base, clock, warnings };
 }
 
 it.each(["ok", "error"] as const)(
   "reports both the slow direct holder and its long-waiting fast follower (%s)",
   async (outcome) => {
-    const { options, clock, warnings } = fixture();
-    const entered = createDeferred();
-    const release = createDeferred();
+    const { options, clock, warnings, entered, release, order, hold } = fixture();
     const releaseFollower = createDeferred();
     const failure = new Error("synthetic-private-error");
     const value = { result: "synthetic-private-result" };
-    const order: string[] = [];
     const observations: unknown[] = [];
     const diagnostics = channel("openclaw.agent-database.reservation");
     const observe = (observation: unknown) => {
@@ -341,8 +336,7 @@ it.each(["ok", "error"] as const)(
           options,
           async () => {
             order.push("holder");
-            entered.resolve();
-            await release.promise;
+            await hold();
             if (outcome === "error") {
               throw failure;
             }
@@ -380,17 +374,14 @@ it.each(["ok", "error"] as const)(
       expect(order).toEqual(["holder", "follower"]);
       expect(warnings).toEqual([
         [{ ...directTiming(1_600, outcome), caller: "session-manager.write" }, slowMessage],
-        [
-          expect.objectContaining({
-            operation: "direct",
-            outcome: "ok",
-            queueWaitMs: 1_500,
-            writerExecutionMs: 25,
-            blockingOperation: "direct",
-            blockingCaller: "session-manager.write",
-          }),
-          slowMessage,
-        ],
+        warning({
+          operation: "direct",
+          outcome: "ok",
+          queueWaitMs: 1_500,
+          writerExecutionMs: 25,
+          blockingOperation: "direct",
+          blockingCaller: "session-manager.write",
+        }),
       ]);
       expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
       expect(JSON.stringify(warnings)).not.toContain(options.path);
@@ -409,8 +400,7 @@ it.each(["ok", "error"] as const)(
 );
 
 it("attributes a reentrant Worker reservation without letting foreground callbacks borrow it", async () => {
-  const { options, clock, warnings } = fixture();
-  const order: string[] = [];
+  const { options, clock, warnings, order } = fixture();
   let follower: Promise<void> | undefined;
   await write(options, async () => {
     await workerWrite(options, async () => {
@@ -432,30 +422,25 @@ it("attributes a reentrant Worker reservation without letting foreground callbac
   });
   await follower;
   expect(order).toEqual(["worker settled", "holder settled", "follower"]);
-  expect(warnings.at(-1)).toEqual([
-    expect.objectContaining({
+  expect(warnings.at(-1)).toEqual(
+    warning({
       queueWaitMs: 1_000,
       writerExecutionMs: 0,
       blockingOperation: "worker",
       blockingWorkerOperations: ["session.entry.patch.commit"],
     }),
-    slowMessage,
-  ]);
+  );
 });
 
 it("keeps an aborted worker reservation until settlement and reports it once", async () => {
-  const { options, clock, warnings } = fixture();
-  const release = createDeferred();
-  const entered = createDeferred();
+  const { options, clock, warnings, entered, release, order, hold, record } = fixture();
   const controller = new AbortController();
   const reason = new Error("synthetic-private-abort");
-  const order: string[] = [];
   const first = workerWrite(
     options,
     async () => {
       order.push("holder");
-      entered.resolve();
-      await release.promise;
+      await hold();
       const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
       request.started();
       request.completed();
@@ -466,9 +451,7 @@ it("keeps an aborted worker reservation until settlement and reports it once", a
   );
   const failed = expect(first).rejects.toBe(reason);
   await entered.promise;
-  const next = workerWrite(options, async () => {
-    order.push("follower");
-  });
+  const next = workerWrite(options, record("follower"));
   try {
     controller.abort(reason);
     expect(order).toEqual(["holder"]);
@@ -478,26 +461,20 @@ it("keeps an aborted worker reservation until settlement and reports it once", a
     await next;
     expect(order).toEqual(["holder", "follower"]);
     expect(warnings).toEqual([
-      [
-        expect.objectContaining({
-          operation: "worker",
-          outcome: "error",
-          writerExecutionMs: 1_000,
-          reentrant: false,
-        }),
-        slowMessage,
-      ],
-      [
-        expect.objectContaining({
-          operation: "worker",
-          outcome: "ok",
-          queueWaitMs: 1_000,
-          writerExecutionMs: 0,
-          blockingOperation: "worker",
-          blockingWorkerOperations: ["session.entry.patch.commit"],
-        }),
-        slowMessage,
-      ],
+      warning({
+        operation: "worker",
+        outcome: "error",
+        writerExecutionMs: 1_000,
+        reentrant: false,
+      }),
+      warning({
+        operation: "worker",
+        outcome: "ok",
+        queueWaitMs: 1_000,
+        writerExecutionMs: 0,
+        blockingOperation: "worker",
+        blockingWorkerOperations: ["session.entry.patch.commit"],
+      }),
     ]);
     expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
   } finally {
@@ -507,13 +484,10 @@ it("keeps an aborted worker reservation until settlement and reports it once", a
 });
 
 it("reports each ordered-read reservation across an awaited read without reporting reentrant borrowing", async () => {
-  const { options, clock, warnings } = fixture();
+  const { options, clock, warnings, entered, release, hold } = fixture();
   const second = { ...options, path: path.join(path.dirname(options.path), "second.sqlite") };
-  const entered = createDeferred();
-  const release = createDeferred();
   const read = writeMany([second, options], async () => {
-    entered.resolve();
-    await release.promise;
+    await hold();
     await write(
       options,
       () => {
@@ -527,18 +501,13 @@ it("reports each ordered-read reservation across an awaited read without reporti
     clock.now = 100;
     release.resolve();
     await read;
-    expect(warnings).toHaveLength(2);
-    for (const warning of warnings) {
-      expect(warning).toEqual([
-        expect.objectContaining({
-          operation: "ordered-read",
-          outcome: "ok",
-          writerExecutionMs: 1_200,
-          reentrant: false,
-        }),
-        slowMessage,
-      ]);
-    }
+    const expected = warning({
+      operation: "ordered-read",
+      outcome: "ok",
+      writerExecutionMs: 1_200,
+      reentrant: false,
+    });
+    expect(warnings).toEqual([expected, expected]);
   } finally {
     release.resolve();
     await read;
@@ -549,13 +518,8 @@ it("does not report a cancelled waiter as a holder", async () =>
   withExchange(
     () => [],
     async () => {
-      const { options, clock, warnings } = fixture();
-      const release = createDeferred();
-      const entered = createDeferred();
-      const first = write(options, () => {
-        entered.resolve();
-        return release.promise;
-      });
+      const { options, clock, warnings, entered, release, hold } = fixture();
+      const first = write(options, hold);
       await entered.promise;
       const controller = new AbortController();
       const callback = vi.fn(async () => {});

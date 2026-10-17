@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -54,11 +53,8 @@ function schemaWithoutStandingIntentCreator(): string {
 describe("additive memory agent schemas", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  async function withDatabase(
-    schema: string,
-    run: (db: ReturnType<typeof openNodeSqliteDatabase>, databasePath: string) => void,
-  ) {
-    const tempDir = await fs.realpath(tempDirs.make("openclaw-memory-schema-"));
+  function withDatabase(schema: string, run: (db: Database, databasePath: string) => void) {
+    const tempDir = tempDirs.make("openclaw-memory-schema-");
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
     using db = openNodeSqliteDatabase(databasePath);
     db.exec(schema);
@@ -71,46 +67,52 @@ describe("additive memory agent schemas", () => {
     run(db, databasePath);
   }
 
-  it("accepts a current-version database before the lazy ensure and ensures idempotently", async () => {
-    await withDatabase(
-      removeSchemaSection("standing_intents", "session_transcript_index_state"),
-      (db, databasePath) => {
-        expectAccepted(db, databasePath);
-        expect(
-          db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'standing_intents'").get(),
-        ).toBeUndefined();
+  it.each(["tables", "creator"] as const)(
+    "lazily repairs missing %s idempotently",
+    async (missing) => {
+      await withDatabase(
+        missing === "tables"
+          ? removeSchemaSection("standing_intents", "session_transcript_index_state")
+          : schemaWithoutStandingIntentCreator(),
+        (db, databasePath) => {
+          expectAccepted(db, databasePath);
+          if (missing === "tables") {
+            expect(table(db, "standing_intents")).toBeUndefined();
+          } else {
+            expect(columnNames(db, "standing_intents")).not.toContain("creator_sender");
+          }
 
-        ensureOpenClawAgentStandingIntentsSchema(db);
-        ensureOpenClawAgentStandingIntentsSchema(db);
+          ensureOpenClawAgentStandingIntentsSchema(db);
+          ensureOpenClawAgentStandingIntentsSchema(db);
 
-        const tables = db
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE name IN ('standing_intents', 'standing_intents_fts') ORDER BY name",
-          )
-          .all() as Array<{ name: string }>;
-        expect(tables.map((row) => row.name)).toStrictEqual([
-          "standing_intents",
-          "standing_intents_fts",
-        ]);
-        const columns = db.prepare("PRAGMA table_info(standing_intents)").all() as Array<{
-          name: string;
-          pk: number;
-          type: string;
-        }>;
-        expect(columns.find((column) => column.name === "intent_key")).toMatchObject({
-          type: "INTEGER",
-          pk: 1,
-        });
-        expect(columns.find((column) => column.name === "id")).toMatchObject({
-          type: "TEXT",
-          pk: 0,
-        });
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
-          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-      },
-    );
-  });
+          const tables = db
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE name IN ('standing_intents', 'standing_intents_fts') ORDER BY name",
+            )
+            .all() as Array<{ name: string }>;
+          expect(tables.map((row) => row.name)).toStrictEqual([
+            "standing_intents",
+            "standing_intents_fts",
+          ]);
+          expect(
+            db
+              .prepare(
+                "SELECT name, type, pk FROM pragma_table_info('standing_intents') WHERE name IN ('id', 'intent_key') ORDER BY name",
+              )
+              .all(),
+          ).toEqual([
+            { name: "id", type: "TEXT", pk: 0 },
+            { name: "intent_key", type: "INTEGER", pk: 1 },
+          ]);
+          expect(columnNames(db, "standing_intents")).toContain("creator_sender");
+          expectAccepted(db, databasePath);
+          expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
+            user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          });
+        },
+      );
+    },
+  );
 
   it("accepts current-version databases before the provenance lazy ensure", async () => {
     await withDatabase(
@@ -135,19 +137,6 @@ describe("additive memory agent schemas", () => {
         });
       },
     );
-  });
-
-  it("lazily adds creator provenance to the unreleased standing-intent table", async () => {
-    await withDatabase(schemaWithoutStandingIntentCreator(), (db, databasePath) => {
-      expectAccepted(db, databasePath);
-      expect(columnNames(db, "standing_intents")).not.toContain("creator_sender");
-
-      ensureOpenClawAgentStandingIntentsSchema(db);
-      ensureOpenClawAgentStandingIntentsSchema(db);
-
-      expect(columnNames(db, "standing_intents")).toContain("creator_sender");
-      expectAccepted(db, databasePath);
-    });
   });
 
   it("migrates unreleased inline chunk metadata into rollback-safe storage", async () => {

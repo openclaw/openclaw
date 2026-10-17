@@ -110,8 +110,11 @@ function publish(
 ) {
   return worker.run((scope) => scope.execute(command), allow);
 }
-function append(value: string) {
-  return { type: "append" as const, input: { value } };
+function append(
+  value: string,
+  extra: Omit<AgentWorkerFixtureOperations["append"]["input"], "value"> = {},
+) {
+  return { type: "append" as const, input: { value, ...extra } };
 }
 function expectValues(db: Pick<DatabaseSync, "prepare">, ordered: boolean, ...values: string[]) {
   const order = ordered ? " ORDER BY rowid" : "";
@@ -119,11 +122,27 @@ function expectValues(db: Pick<DatabaseSync, "prepare">, ordered: boolean, ...va
     values.map((value) => ({ value })),
   );
 }
-function openWorker(db: DatabaseSync) {
-  return openWorkerStore<AgentWorkerFixtureOperations>(options, db, {
+function queryLeases(
+  shared: ReturnType<typeof openOpenClawStateDatabase>,
+  pathname = options.path,
+  allColumns = false,
+) {
+  return shared.db
+    .prepare(
+      `SELECT ${allColumns ? "*" : "lease_id"} FROM agent_database_leases WHERE path = ? ORDER BY lease_id`,
+    )
+    .all(pathname);
+}
+async function openWorker(
+  source: Parameters<typeof openWorkerStore>[1],
+  input?: Parameters<typeof bindSqliteWorkerBackend>[0],
+) {
+  const worker = await openWorkerStore<AgentWorkerFixtureOperations>(options, source, {
     moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
-    input: undefined,
+    input,
   });
+  workers.add(worker);
+  return worker;
 }
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   const db = requireNativeSqliteDatabase(openDatabase(options).db);
@@ -132,15 +151,10 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   if (execution) {
     executions.add(execution);
   }
-  const worker = await openWorkerStore<AgentWorkerFixtureOperations>(
-    options,
-    execution ? { execution } : db,
-    {
-      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
-      input: { ...input, receiptBroadcastName: receipts.broadcastName },
-    },
-  );
-  workers.add(worker);
+  const worker = await openWorker(execution ? { execution } : db, {
+    ...input,
+    receiptBroadcastName: receipts.broadcastName,
+  });
   return { db, worker };
 }
 
@@ -153,36 +167,33 @@ it("retains an idle agent executor for thirty minutes and renews the window afte
   const { db, worker } = await setup();
   const shared = openOpenClawStateDatabase();
   const releaseState = retainOpenClawStateDatabaseForIdle(shared);
-  const readLeases = () =>
-    shared.db
-      .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
-      .all(options.path);
-  const hostLeases = readLeases();
+  const leases = () => queryLeases(shared);
+  const hostLeases = leases();
   const publishValue = (value: string) =>
     worker.run((scope) => scope.execute({ type: "append", input: { value } }), allow);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     await publishValue("first");
-    const retainedLeases = readLeases();
+    const retainedLeases = leases();
     expect(retainedLeases).toHaveLength(hostLeases.length + 1);
 
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
     const borrowed = captureExecution(options);
     executions.add(borrowed);
     await publishValue("reborrowed");
-    expect(readLeases()).toEqual(retainedLeases);
+    expect(leases()).toEqual(retainedLeases);
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
-    expect(readLeases()).toEqual(retainedLeases);
+    expect(leases()).toEqual(retainedLeases);
     await borrowed.release();
     executions.delete(borrowed);
 
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-    expect(readLeases()).toEqual(retainedLeases);
+    expect(leases()).toEqual(retainedLeases);
     await vi.advanceTimersByTimeAsync(1);
     // A new request joins the expired generation's cleanup before reopening it.
     await publishValue("after idle");
-    expect(readLeases()).toHaveLength(retainedLeases.length);
-    expect(readLeases()).not.toEqual(retainedLeases);
+    expect(leases()).toHaveLength(retainedLeases.length);
+    expect(leases()).not.toEqual(retainedLeases);
     expectValues(db, true, "first", "reborrowed", "after idle");
   } finally {
     vi.useRealTimers();
@@ -203,7 +214,6 @@ it("retains a warm executor through a fallback wait between publication generati
     entered.resolve();
     await resume.promise;
     next = await openWorker(db);
-    workers.add(next);
     return next.run((scope) => scope.execute(append("after preparation")), allow);
   })();
   try {
@@ -237,37 +247,34 @@ it.each([false, true])(
     }
     const shared = openOpenClawStateDatabase();
     const releaseState = retainOpenClawStateDatabaseForIdle(shared);
-    const readLeases = () =>
-      shared.db
-        .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
-        .all(options.path);
-    const hostLeases = readLeases();
+    const leases = () => queryLeases(shared);
+    const hostLeases = leases();
     try {
       const firstThread = await worker.run(async (scope) => {
         const thread = await scope.execute(append("first"));
         markGatewayRestartDraining();
         return thread;
       }, allow);
-      const retainedLeases = readLeases();
+      const retainedLeases = leases();
       const secondThread = await worker.execute(append("second"), allow);
       expect(secondThread).toBe(firstThread);
       expect(retainedLeases).toHaveLength(hostLeases.length + 1);
-      expect(readLeases()).toEqual(retainedLeases);
+      expect(leases()).toEqual(retainedLeases);
       await publish(worker, append("third"));
-      expect(readLeases()).toEqual(retainedLeases);
+      expect(leases()).toEqual(retainedLeases);
       beginGatewayShutdownCleanup();
       const cleanupThread = await worker.execute(append("cleanup"), allow);
       if (retainGeneration) {
         expect(cleanupThread).toBe(firstThread);
-        expect(readLeases()).toEqual(retainedLeases);
+        expect(leases()).toEqual(retainedLeases);
       } else {
-        expect(readLeases()).toEqual(hostLeases);
+        expect(leases()).toEqual(hostLeases);
       }
       expectValues(db, true, "first", "second", "third", "cleanup");
       await worker.close();
       await execution?.release();
       expect(db.isOpen).toBe(false);
-      expect(readLeases()).toEqual([]);
+      expect(leases()).toEqual([]);
       expect(readCleanClose(options.path)).toBe(true);
     } finally {
       await worker.close();
@@ -436,7 +443,7 @@ describe("pooled agent publication owner (captured source)", () => {
             throw new Error("fixture authority revoked during preparation");
           }
         };
-        const command = { type: "append" as const, input: { value: "prepared" } };
+        const command = append("prepared");
         const work =
           entry === "single"
             ? worker.execute(command, assertCurrent)
@@ -478,11 +485,7 @@ describe("pooled agent publication owner (captured source)", () => {
       let ticks = 0;
       const timer = setInterval(() => ticks++, 10);
       const native = worker.run(
-        (scope) =>
-          scope.execute({
-            type: "append",
-            input: { value: "worker", transactionMarker, delayMs: 250 },
-          }),
+        (scope) => scope.execute(append("worker", { transactionMarker, delayMs: 250 })),
         allow,
       );
       try {
@@ -520,8 +523,7 @@ describe("pooled agent publication owner (captured source)", () => {
       let current = true;
       const transactionMarker = path.join(root, "before-commit");
       const work = worker.run(
-        (scope) =>
-          scope.execute({ type: "append", input: { value: "refused", transactionMarker } }),
+        (scope) => scope.execute(append("refused", { transactionMarker })),
         () => {
           if (!current) {
             throw new Error("fixture authority revoked");
@@ -544,7 +546,7 @@ describe("pooled agent publication owner (captured source)", () => {
         signal.throwIfAborted();
         const { db, worker } = await setup();
         const commitMarker = path.join(root, "accepted-commit");
-        const command = { type: "append" as const, input: { value: "accepted", commitMarker } };
+        const command = append("accepted", { commitMarker });
         const work =
           entry === "single"
             ? worker.execute(command, allow)
@@ -589,7 +591,6 @@ describe("pooled agent publication owner (captured source)", () => {
     expect(await worker.execute(append("committed"), allow)).toBeGreaterThan(0);
     expectValues(db, false, "committed");
     const following = await openWorker(db);
-    workers.add(following);
     expect(await following.execute(append("follower"), allow)).toBeGreaterThan(0);
     expectValues(db, true, "committed", "follower");
   });
@@ -631,7 +632,6 @@ describe("pooled agent publication owner (captured source)", () => {
       interception.mockRestore();
 
       const following = await openWorker(db);
-      workers.add(following);
       expect(await following.execute(append("follower"), allow)).toBeGreaterThan(0);
       expectValues(db, false, "follower");
     },
@@ -738,14 +738,11 @@ describe("pooled agent publication owner (captured source)", () => {
   it("retains exact canonical lease cleanup after failure and releases it on retry", async () => {
     const { db, worker } = await setup();
     const shared = openOpenClawStateDatabase();
-    const readLeases = () =>
-      shared.db
-        .prepare("SELECT * FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
-        .all(options.path);
-    const hostLeases = readLeases();
+    const leases = () => queryLeases(shared, options.path, true);
+    const hostLeases = leases();
     expect(hostLeases).toHaveLength(1);
     await publish(worker, append("before cleanup"));
-    const retainedLeases = readLeases();
+    const retainedLeases = leases();
     const workerLeases = retainedLeases.filter(
       (row) => !hostLeases.some((host) => host.lease_id === row.lease_id),
     );
@@ -764,17 +761,16 @@ describe("pooled agent publication owner (captured source)", () => {
       for (const error of cleanupErrors) {
         expect(error).toMatchObject({ message: "controlled worker lease cleanup failure" });
       }
-      expect(readLeases()).toEqual(retainedLeases);
+      expect(leases()).toEqual(retainedLeases);
       await expect(worker.run(async () => 0, allow)).rejects.toThrow("closed");
       const open = () => openWorker(db);
       await expect(open()).rejects.toThrow("resources are closing");
-      expect(readLeases()).toEqual(retainedLeases);
+      expect(leases()).toEqual(retainedLeases);
       leaseCleanupFault.disable();
       const retried = await Promise.allSettled(revokeAgentDatabaseResources(selection));
       expect(retried).not.toContainEqual(expect.objectContaining({ status: "rejected" }));
-      expect(readLeases()).toEqual(hostLeases);
+      expect(leases()).toEqual(hostLeases);
       const recovered = await open();
-      workers.add(recovered);
       await recovered.run((scope) => scope.execute(append("after cleanup")), allow);
       expectValues(db, true, "before cleanup", "after cleanup");
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
@@ -824,11 +820,7 @@ describe("pooled agent publication owner (captured source)", () => {
       const exec = vi.spyOn(db, "exec");
       const transactionMarker = path.join(root, "maintenance-transaction");
       const work = worker.run(
-        (scope) =>
-          scope.execute({
-            type: "append",
-            input: { value: "published", transactionMarker, delayMs: 250 },
-          }),
+        (scope) => scope.execute(append("published", { transactionMarker, delayMs: 250 })),
         allow,
       );
       await waitForFixtureEntry(receipts, transactionMarker, work, signal);

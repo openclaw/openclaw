@@ -19,6 +19,11 @@ import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-sna
 
 const fixtureKey = "agent:main:fixture-0";
 
+function migrate(database: DatabaseSync, options: Parameters<typeof ensureSchema>[1]) {
+  return withAgentDatabaseMaintenanceLease({ env: options.env }, async () => {
+    ensureSchema(database, options);
+  });
+}
 function largeEntry(index: number): SessionEntry {
   const sessionId = `session-${index}`;
   return {
@@ -26,24 +31,20 @@ function largeEntry(index: number): SessionEntry {
     updatedAt: 10,
     lifecycleRevision: `revision-${index}`,
     label: `Conversation ${index}`,
-    delivery: { kind: "none" },
     sessionDiffBaseline: {
       version: 1,
       sessionId,
       root: "/synthetic/workspace",
-      files: Array.from({ length: 80 }, (_, file) => ({
-        path: `src/features/feature-${file}/component.ts`,
-        fingerprint: "a".repeat(64),
-      })),
+      files: [{ path: "src/component.ts", fingerprint: "a".repeat(64) }],
     },
-    skillsSnapshot: { prompt: "p".repeat(25_000), skills: [{ name: "fixture" }], version: 1 },
+    skillsSnapshot: { prompt: "p".repeat(40_000), skills: [{ name: "fixture" }], version: 1 },
     systemPromptReport: {
       source: "run",
       generatedAt: 9,
       sessionId,
-      systemPrompt: { chars: 25_000, projectContextChars: 0, nonProjectContextChars: 25_000 },
+      systemPrompt: { chars: 40_000, projectContextChars: 0, nonProjectContextChars: 40_000 },
       injectedWorkspaceFiles: [],
-      skills: { promptChars: 25_000, entries: [{ name: "fixture", blockChars: 25_000 }] },
+      skills: { promptChars: 40_000, entries: [{ name: "fixture", blockChars: 40_000 }] },
       tools: { listChars: 0, schemaChars: 0, entries: [] },
     },
   };
@@ -104,8 +105,8 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sourcePath = state.path("source-v23.sqlite");
     const pathname = state.path("candidate.sqlite");
-    const source = new DatabaseSync(sourcePath);
-    let entries: ReturnType<typeof seedV23>;
+    using source = new DatabaseSync(sourcePath);
+    const options = { agentId: "main", path: pathname, env: state.env };
     const rejected = new Map([
       ["malformed", '{"sessionId":"malformed"'],
       ["nul", '{"sessionId":"nul","updatedAt":10,"skillsSnapshot":null}\0'],
@@ -120,123 +121,101 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       skillsSnapshot: null,
       systemPromptReport: false,
     };
-    try {
-      entries = seedV23(source, 128);
-      expect(Buffer.byteLength(JSON.stringify(entries.get(fixtureKey)))).toBeGreaterThan(35_000);
-      const insert = source.prepare(`INSERT INTO session_nodes
+    const entries = seedV23(source, 128);
+    expect(Buffer.byteLength(JSON.stringify(entries.get(fixtureKey)))).toBeGreaterThan(35_000);
+    const insert = source.prepare(`INSERT INTO session_nodes
         (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 10)`);
-      for (const [id, entryJson] of rejected) {
-        insert.run(`agent:main:${id}`, id, entryJson);
-      }
-      insert.run("agent:main:legacy-values", legacyValues.sessionId, JSON.stringify(legacyValues));
-      insert.run(
-        "agent:main:deep",
-        "deep",
-        `{"sessionId":"deep","updatedAt":10,"skillsSnapshot":${depthJson}}`,
-      );
-      expect(
-        source
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_entry_snapshots'")
-          .get(),
-      ).toBeUndefined();
-    } finally {
-      source.close();
+    for (const [id, entryJson] of rejected) {
+      insert.run(`agent:main:${id}`, id, entryJson);
     }
+    insert.run("agent:main:legacy-values", legacyValues.sessionId, JSON.stringify(legacyValues));
+    insert.run(
+      "agent:main:deep",
+      "deep",
+      `{"sessionId":"deep","updatedAt":10,"skillsSnapshot":${depthJson}}`,
+    );
+    expect(
+      source.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_entry_snapshots'").get(),
+    ).toBeUndefined();
+    source.close();
     copyFileSync(sourcePath, pathname);
-    let database = new DatabaseSync(pathname);
-    try {
-      const beforeTranscript = transcriptRows(database);
-      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-        ensureSchema(database, {
-          agentId: "main",
-          path: pathname,
-          env: state.env,
-        });
-      });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(database.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(transcriptRows(database)).toEqual(beforeTranscript);
-      const reader = { agentId: "main", db: database };
-      for (const [key, entry] of entries) {
-        expect(readEntry(reader, key)?.entry).toEqual(entry);
-      }
-      expect(readEntry(reader, "agent:main:legacy-values")?.entry).toEqual(legacyValues);
-      expect(JSON.stringify(readEntry(reader, "agent:main:deep")?.entry.skillsSnapshot)).toBe(
-        depthJson,
-      );
-      expect(
-        database.prepare("SELECT count(*) AS count FROM session_entry_snapshots").get(),
-      ).toEqual({ count: 388 });
-      for (const [id, entryJson] of rejected) {
-        expect(
-          database
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(`agent:main:${id}`),
-        ).toEqual({ entry_json: entryJson });
-      }
-      const migratedNodes = nodeRows(database);
-      const coldRows = snapshotRows(database);
-      database.close();
-      database = new DatabaseSync(pathname);
-      ensureSchema(database, {
-        agentId: "main",
-        path: pathname,
-        env: state.env,
-      });
-      expect(nodeRows(database)).toEqual(migratedNodes);
-      expect(snapshotRows(database)).toEqual(coldRows);
-      database.close();
-      const options = { agentId: "main", path: pathname, env: state.env };
-      const opened = openDatabase(options);
-      const native = requireNativeSqliteDatabase(opened.db);
-      const readRevision = () =>
-        opened.db
-          .prepare(
-            "SELECT snapshot_revision FROM session_nodes WHERE session_key = 'agent:main:fixture-0'",
-          )
-          .get();
-      const migratedRevision = readRevision();
-      writeTransaction((current) => {
-        const entry = readEntry(current, fixtureKey)!.entry;
-        writeSessionEntry(
-          current,
-          fixtureKey,
-          { ...entry, label: "Renamed" },
-          { canonicalPreviousEntry: entry },
-        );
-      }, options);
-      expect(readEntry(opened, fixtureKey)?.entry.label).toBe("Renamed");
-      expect(snapshotRows(native)).toEqual(coldRows);
-      expect(readRevision()).toEqual(migratedRevision);
-      expect(transcriptRows(native)).toEqual(beforeTranscript);
-      const revision = readCacheToken(opened.db);
-      opened.db.exec("BEGIN");
-      try {
-        opened.db
-          .prepare(`UPDATE session_entry_snapshots SET value_json = ?
-            WHERE session_key = 'agent:main:fixture-0' AND field = 'skillsSnapshot'`)
-          .run(JSON.stringify({ prompt: "Changed outside the entry writer", skills: [] }));
-        expect(readCacheToken(opened.db)).not.toEqual(revision);
-        expect(readEntry(opened, fixtureKey)?.entry.skillsSnapshot?.prompt).toBe(
-          "Changed outside the entry writer",
-        );
-      } finally {
-        opened.db.exec("ROLLBACK");
-      }
-      const rolledBackRevision = readCacheToken(opened.db);
-      expect(rolledBackRevision).not.toEqual(revision);
-      expect(readCacheToken(opened.db)).toEqual(rolledBackRevision);
-      expect(readRevision()).toEqual(migratedRevision);
-      expect(snapshotRows(native)).toEqual(coldRows);
-    } finally {
-      if (database.isOpen) {
-        database.close();
-      }
+    using database = new DatabaseSync(pathname);
+    const beforeTranscript = transcriptRows(database);
+    await migrate(database, options);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+    expect(database.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+    expect(transcriptRows(database)).toEqual(beforeTranscript);
+    const reader = { agentId: "main", db: database };
+    for (const [key, entry] of entries) {
+      expect(readEntry(reader, key)?.entry).toEqual(entry);
     }
+    expect(readEntry(reader, "agent:main:legacy-values")?.entry).toEqual(legacyValues);
+    expect(JSON.stringify(readEntry(reader, "agent:main:deep")?.entry.skillsSnapshot)).toBe(
+      depthJson,
+    );
+    expect(database.prepare("SELECT count(*) AS count FROM session_entry_snapshots").get()).toEqual(
+      { count: 388 },
+    );
+    for (const [id, entryJson] of rejected) {
+      expect(
+        database
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(`agent:main:${id}`),
+      ).toEqual({ entry_json: entryJson });
+    }
+    const migratedNodes = nodeRows(database);
+    const coldRows = snapshotRows(database);
+    database.close();
+    using reopened = new DatabaseSync(pathname);
+    ensureSchema(reopened, options);
+    expect(nodeRows(reopened)).toEqual(migratedNodes);
+    expect(snapshotRows(reopened)).toEqual(coldRows);
+    reopened.close();
+    const opened = openDatabase(options);
+    const native = requireNativeSqliteDatabase(opened.db);
+    const readRevision = () =>
+      opened.db
+        .prepare(
+          "SELECT snapshot_revision FROM session_nodes WHERE session_key = 'agent:main:fixture-0'",
+        )
+        .get();
+    const migratedRevision = readRevision();
+    writeTransaction((current) => {
+      const entry = readEntry(current, fixtureKey)!.entry;
+      writeSessionEntry(
+        current,
+        fixtureKey,
+        { ...entry, label: "Renamed" },
+        { canonicalPreviousEntry: entry },
+      );
+    }, options);
+    expect(readEntry(opened, fixtureKey)?.entry.label).toBe("Renamed");
+    expect(snapshotRows(native)).toEqual(coldRows);
+    expect(readRevision()).toEqual(migratedRevision);
+    expect(transcriptRows(native)).toEqual(beforeTranscript);
+    const revision = readCacheToken(opened.db);
+    opened.db.exec("BEGIN");
+    try {
+      opened.db
+        .prepare(`UPDATE session_entry_snapshots SET value_json = ?
+            WHERE session_key = 'agent:main:fixture-0' AND field = 'skillsSnapshot'`)
+        .run(JSON.stringify({ prompt: "Changed outside the entry writer", skills: [] }));
+      expect(readCacheToken(opened.db)).not.toEqual(revision);
+      expect(readEntry(opened, fixtureKey)?.entry.skillsSnapshot?.prompt).toBe(
+        "Changed outside the entry writer",
+      );
+    } finally {
+      opened.db.exec("ROLLBACK");
+    }
+    const rolledBackRevision = readCacheToken(opened.db);
+    expect(rolledBackRevision).not.toEqual(revision);
+    expect(readCacheToken(opened.db)).toEqual(rolledBackRevision);
+    expect(readRevision()).toEqual(migratedRevision);
+    expect(snapshotRows(native)).toEqual(coldRows);
   });
 });
 
@@ -264,13 +243,7 @@ it("rolls back extracted snapshots and version markers when schema publication i
       return constants.SQLITE_OK;
     });
     await expect(
-      withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-        ensureSchema(database, {
-          agentId: "main",
-          path: pathname,
-          env: state.env,
-        });
-      }),
+      migrate(database, { agentId: "main", path: pathname, env: state.env }),
     ).rejects.toThrow(/authoriz/i);
     database.setAuthorizer(null);
     expect(reachedPublication).toBe(true);
