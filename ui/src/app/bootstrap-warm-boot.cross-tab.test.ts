@@ -32,6 +32,24 @@ const record = (scope: string, recoveryScope = "account-a"): BootRecord => ({
   sectionOrder: [],
 });
 
+function storageChange(key: string | null, oldRecord: BootRecord | null, next: BootRecord | null) {
+  window.dispatchEvent(
+    new StorageEvent("storage", {
+      key,
+      oldValue: oldRecord ? JSON.stringify(oldRecord) : null,
+      newValue: next ? JSON.stringify(next) : null,
+    }),
+  );
+}
+function hello(source: ReturnType<ReturnType<typeof createGatewayStoreTestStore>["current"]>) {
+  source.opts.onHello?.({
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: [], method: "trusted-proxy", recoveryScope: "account-a" },
+    snapshot: { presence: [{ ts: 0, instanceId: source.instanceId, user: { id: "profile-a" } }] },
+  });
+}
+
 it.each([
   { name: "first save", next: "account-a" },
   { name: "refresh", previous: "account-a", next: "account-a" },
@@ -66,14 +84,7 @@ it.each([
     gateway.connect();
     const source = current();
     if (!cold) {
-      source.opts.onHello?.({
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: [], method: "trusted-proxy", recoveryScope: "account-a" },
-        snapshot: {
-          presence: [{ ts: 0, instanceId: source.instanceId, user: { id: "profile-a" } }],
-        },
-      });
+      hello(source);
     }
     const rejected = vi.fn();
     const stop = subscribeWarmBootConnection(gateway, null, rejected);
@@ -90,13 +101,7 @@ it.each([
       }
     }
     try {
-      window.dispatchEvent(
-        new StorageEvent("storage", {
-          key: clearAll ? null : key,
-          oldValue: previous ? JSON.stringify(record(scope, previous)) : null,
-          newValue: replacement ? JSON.stringify(replacement) : null,
-        }),
-      );
+      storageChange(clearAll ? null : key, previous ? record(scope, previous) : null, replacement);
       expect(gateway.snapshot.phase).toBe(retires ? "stopped" : cold ? "connecting" : "connected");
       expect(rejected).toHaveBeenCalledTimes(retires ? 1 : 0);
       if (cold) {
@@ -132,13 +137,7 @@ it.each(["local", "external"])(
         expect(() => clearBootRecords(scope)).not.toThrow();
       } else {
         localStorage.removeItem(key);
-        window.dispatchEvent(
-          new StorageEvent("storage", {
-            key,
-            oldValue: JSON.stringify(record(scope)),
-            newValue: null,
-          }),
-        );
+        storageChange(key, record(scope), null);
       }
       window.dispatchEvent(new Event("pagehide"));
       expect(localStorage.getItem(key)).toBeNull();
@@ -168,14 +167,7 @@ it.each(["unreplaced", "local replacement", "peer replacement"])(
     try {
       gateway.connect();
       const source = current();
-      source.opts.onHello?.({
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: [], method: "trusted-proxy", recoveryScope: "account-a" },
-        snapshot: {
-          presence: [{ ts: 0, instanceId: source.instanceId, user: { id: "profile-a" } }],
-        },
-      });
+      hello(source);
       if (publication === "unreplaced") {
         persistBootRecord(record(scope));
       }
@@ -186,27 +178,13 @@ it.each(["unreplaced", "local replacement", "peer replacement"])(
           window.dispatchEvent(new Event("pagehide"));
         } else {
           localStorage.setItem(key, JSON.stringify(next));
-          window.dispatchEvent(
-            new StorageEvent("storage", {
-              key,
-              oldValue: JSON.stringify(legacy),
-              newValue: JSON.stringify(next),
-            }),
-          );
+          storageChange(key, legacy, next);
         }
       }
-      window.dispatchEvent(
-        new StorageEvent("storage", {
-          key,
-          oldValue: JSON.stringify({ ...legacy, credential: "foreign-fingerprint" }),
-          newValue: null,
-        }),
-      );
+      storageChange(key, { ...legacy, credential: "foreign-fingerprint" }, null);
       expect(gateway.snapshot.phase).toBe("connected");
       expect(rejected).not.toHaveBeenCalled();
-      window.dispatchEvent(
-        new StorageEvent("storage", { key, oldValue: JSON.stringify(legacy), newValue: null }),
-      );
+      storageChange(key, legacy, null);
       const retired = publication === "unreplaced";
       expect(gateway.snapshot.phase).toBe(retired ? "stopped" : "connected");
       expect(rejected).toHaveBeenCalledTimes(retired ? 1 : 0);

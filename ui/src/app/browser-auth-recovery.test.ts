@@ -13,6 +13,26 @@ function redirectResponse() {
   });
 }
 
+function mockFailedRead(
+  probe: (init: RequestInit) => Response | Promise<Response> = redirectResponse,
+) {
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "HEAD") {
+      return probe(init);
+    }
+    throw new TypeError("Failed to fetch");
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+const failedRead = () =>
+  expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+function observeRestored() {
+  const restored = vi.fn();
+  onTestFinished(subscribeBrowserAuthRestored(restored));
+  return restored;
+}
+
 function button(label: string) {
   flush();
   const result = [...document.querySelectorAll("button")].find(
@@ -71,17 +91,12 @@ describe("browser sign-in recovery", () => {
       // Opening Gateway settings must not replace website-session recovery copy.
       registerSettingsEnglish();
       let authenticated = false;
-      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method === "HEAD") {
-          return authenticated
-            ? new Response(null, { headers: { "content-type": "application/json" } })
-            : redirectResponse();
-        }
-        throw new TypeError("Failed to fetch");
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const restored = vi.fn();
-      onTestFinished(subscribeBrowserAuthRestored(restored));
+      const fetchMock = mockFailedRead(() =>
+        authenticated
+          ? new Response(null, { headers: { "content-type": "application/json" } })
+          : redirectResponse(),
+      );
+      const restored = observeRestored();
       const opened = vi.spyOn(window, "open").mockReturnValue(null);
       const initialLocation = window.location.href;
       const requests = ["image-a", "image-b"].map((name) =>
@@ -143,25 +158,12 @@ describe("browser sign-in recovery", () => {
   it.each(["offline", "gateway-auth"])(
     "does not turn %s into a sign-in dialog",
     async (failure) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (_url: string, init?: RequestInit) => {
-          if (init?.method !== "HEAD" || failure === "offline") {
-            throw new TypeError("Failed to fetch");
-          }
-          return new Response(null, {
-            status:
-              failure === "missing"
-                ? 404
-                : failure === "server-error"
-                  ? 503
-                  : failure === "gateway-auth"
-                    ? 401
-                    : 200,
-            headers: { "content-type": "text/html" },
-          });
-        }),
-      );
+      mockFailedRead(() => {
+        if (failure === "offline") {
+          throw new TypeError("Failed to fetch");
+        }
+        return new Response(null, { status: 401, headers: { "content-type": "text/html" } });
+      });
       await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow(
         "Failed to fetch",
       );
@@ -170,81 +172,43 @@ describe("browser sign-in recovery", () => {
     },
   );
 
-  it.each(["stored-password"])(
-    "verifies renewed website access using the current %s credential",
-    async (acceptedCredential) => {
-      stop();
-      stop = startBrowserAuthRecovery("/nested", () => ({
-        hello: { auth: { deviceToken: "expired-device-token" } },
-        settings: { token: "stored-token" },
-        password: "stored-password",
-      }));
-      let signedIn = false;
-      const credentials: string[] = [];
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (_url: string, init?: RequestInit) => {
-          if (init?.method !== "HEAD") {
-            throw new TypeError("Failed to fetch");
-          }
-          expect(init.redirect).toBe("manual");
-          if (!signedIn) {
-            return redirectResponse();
-          }
-          const authorization = new Headers(init.headers).get("Authorization") ?? "";
-          credentials.push(authorization);
-          return authorization === `Bearer ${acceptedCredential}`
-            ? new Response(null, { headers: { "content-type": "application/json" } })
-            : new Response(null, { status: 401 });
-        }),
-      );
-      const restored = vi.fn();
-      onTestFinished(subscribeBrowserAuthRestored(restored));
-      await expect(
-        fetchControlUiResource("/nested/__openclaw__/assistant-media"),
-      ).rejects.toThrow();
-      await finishRenewal();
-      const { dialog: pendingDialog } = await getRenderedModalDialog(document.body);
-      await waitForSolid(() =>
-        expect(pendingDialog.querySelector('[role="status"]')?.textContent).toBe(""),
-      );
-      signedIn = true;
-      window.dispatchEvent(new Event("focus"));
-      try {
-        await expect.poll(() => restored.mock.calls.length).toBe(1);
-      } catch (error) {
-        const modal = document.querySelector("openclaw-modal-dialog");
-        const dialog = modal?.querySelector("dialog");
-        const probes = vi
-          .mocked(fetch)
-          .mock.calls.filter(([, init]) => init?.method === "HEAD")
-          .map(([, init]) => {
-            const reason: unknown = init?.signal?.reason;
-            return {
-              aborted: init?.signal?.aborted,
-              reason: reason instanceof Error ? reason.name : null,
-            };
-          });
-        throw new Error(
-          `Browser auth recovery failed: ${JSON.stringify({
-            credentials,
-            probes,
-            modal: Boolean(modal),
-            open: dialog?.open ?? null,
-            phase: dialog?.getAttribute("data-phase") ?? null,
-            status: modal?.querySelector('[role="status"]')?.textContent ?? null,
-          })}`,
-          { cause: error },
-        );
+  it("verifies renewed website access using the current stored-password credential", async () => {
+    stop();
+    stop = startBrowserAuthRecovery("/nested", () => ({
+      hello: { auth: { deviceToken: "expired-device-token" } },
+      settings: { token: "stored-token" },
+      password: "stored-password",
+    }));
+    let signedIn = false;
+    const credentials: string[] = [];
+    mockFailedRead((init) => {
+      expect(init.redirect).toBe("manual");
+      if (!signedIn) {
+        return redirectResponse();
       }
-      expect(credentials).toEqual([
-        "Bearer expired-device-token",
-        "Bearer stored-token",
-        ...(acceptedCredential === "stored-password" ? ["Bearer stored-password"] : []),
-      ]);
-      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-    },
-  );
+      const authorization = new Headers(init.headers).get("Authorization") ?? "";
+      credentials.push(authorization);
+      return authorization === "Bearer stored-password"
+        ? new Response(null, { headers: { "content-type": "application/json" } })
+        : new Response(null, { status: 401 });
+    });
+    const restored = observeRestored();
+    await failedRead();
+    await finishRenewal();
+    const { dialog: pendingDialog } = await getRenderedModalDialog(document.body);
+    await waitForSolid(() =>
+      expect(pendingDialog.querySelector('[role="status"]')?.textContent).toBe(""),
+    );
+    signedIn = true;
+    window.dispatchEvent(new Event("focus"));
+    await expect.poll(() => restored.mock.calls.length).toBe(1);
+    expect(credentials).toEqual([
+      "Bearer expired-device-token",
+      "Bearer stored-token",
+      "Bearer stored-password",
+    ]);
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
 
   it("discards recovery from a credential replaced while the probe was pending", async () => {
     stop();
@@ -254,26 +218,19 @@ describe("browser sign-in recovery", () => {
     const probe = createDeferred<Response>();
     const success = () => new Response(null, { headers: { "content-type": "application/json" } });
     let probes = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method !== "HEAD") {
-          throw new TypeError("Failed to fetch");
-        }
-        probes += 1;
-        if (probes <= 2) {
-          return redirectResponse();
-        }
-        if (probes === 3) {
-          return probe.promise;
-        }
-        expect(new Headers(init.headers).get("Authorization")).toBe("Bearer replacement-token");
-        return success();
-      }),
-    );
-    const restored = vi.fn();
-    onTestFinished(subscribeBrowserAuthRestored(restored));
-    await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+    mockFailedRead((init) => {
+      probes += 1;
+      if (probes <= 2) {
+        return redirectResponse();
+      }
+      if (probes === 3) {
+        return probe.promise;
+      }
+      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer replacement-token");
+      return success();
+    });
+    const restored = observeRestored();
+    await failedRead();
     await finishRenewal();
     const { dialog } = await getRenderedModalDialog(document.body);
     await waitForSolid(() => expect(dialog.querySelector('[role="status"]')?.textContent).toBe(""));
@@ -290,21 +247,13 @@ describe("browser sign-in recovery", () => {
   });
 
   it("keeps dismissal quiet across later automatic attachment retries", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method === "HEAD") {
-          return redirectResponse();
-        }
-        throw new TypeError("Failed to fetch");
-      }),
-    );
-    await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+    mockFailedRead();
+    await failedRead();
     await finishRenewal();
     await getRenderedModalDialog(document.body);
     button("Not now").click();
     now += 30_001;
-    await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+    await failedRead();
     await Promise.resolve();
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(document.querySelector("iframe")).toBeNull();
@@ -324,16 +273,9 @@ describe("browser sign-in recovery", () => {
 
   it.each(["timeout", "stop"])("cleans up a pending renewal on %s", async (outcome) => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method === "HEAD") {
-        return redirectResponse();
-      }
-      throw new TypeError("Failed to fetch");
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const restored = vi.fn();
-    onTestFinished(subscribeBrowserAuthRestored(restored));
-    await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+    const fetchMock = mockFailedRead();
+    const restored = observeRestored();
+    await failedRead();
     await vi.advanceTimersByTimeAsync(0);
     expect(document.querySelector("iframe")).not.toBeNull();
     if (outcome === "stop") {
@@ -354,16 +296,9 @@ describe("browser sign-in recovery", () => {
     stop();
     let token = "original-token";
     stop = startBrowserAuthRecovery("/nested", () => ({ settings: { token } }));
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method === "HEAD") {
-        return redirectResponse();
-      }
-      throw new TypeError("Failed to fetch");
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const restored = vi.fn();
-    onTestFinished(subscribeBrowserAuthRestored(restored));
-    await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+    const fetchMock = mockFailedRead();
+    const restored = observeRestored();
+    await failedRead();
     await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
     token = "replacement-token";
     await finishRenewal();
@@ -375,16 +310,8 @@ describe("browser sign-in recovery", () => {
 
   it("discards an in-flight probe when its document owner stops", async () => {
     const probe = createDeferred<Response>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method === "HEAD") {
-          return probe.promise;
-        }
-        throw new TypeError("Failed to fetch");
-      }),
-    );
-    await expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
+    mockFailedRead(() => probe.promise);
+    await failedRead();
     stop();
     probe.resolve(redirectResponse());
     await Promise.resolve();
