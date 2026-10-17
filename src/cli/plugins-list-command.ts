@@ -48,12 +48,14 @@ export async function runPluginsListCommand(
   const [
     { formatPluginSourceForTable, resolvePluginSourceRoots },
     { getTerminalTableWidth, renderTable },
+    { sanitizeTerminalText },
     { theme },
     { formatCliCommand },
     { formatPluginLine, formatPluginStatus },
   ] = await Promise.all([
     import("../plugins/source-display.js"),
     import("../../packages/terminal-core/src/table.js"),
+    import("../../packages/terminal-core/src/safe-text.js"),
     import("../../packages/terminal-core/src/theme.js"),
     import("./command-format.js"),
     import("./plugins-list-format.js"),
@@ -97,18 +99,20 @@ export async function runPluginsListCommand(
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
       const error = plugin.status === "error" && plugin.error;
-      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
+      const desc = error
+        ? theme.error(error)
+        : theme.muted(sanitizeTerminalText(plugin.description ?? ""));
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
       return {
-        Name: plugin.name || plugin.id,
+        Name: sanitizeTerminalText(plugin.name || plugin.id),
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
         Format: plugin.format ?? "openclaw",
         Status: formatPluginStatus(plugin),
         Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
-        Version: plugin.version ?? "",
+        Version: sanitizeTerminalText(plugin.version ?? ""),
       };
     });
 

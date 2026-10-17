@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -150,7 +151,7 @@ export async function runPluginsInspectCommand(
       }
       const tableWidth = getTerminalTableWidth();
       const rows = inspectAll.map((inspect) => ({
-        Name: inspect.plugin.name || inspect.plugin.id,
+        Name: sanitizeTerminalText(inspect.plugin.name || inspect.plugin.id),
         ID:
           inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
@@ -312,12 +313,12 @@ function formatPluginInspection(
       lines.push("", theme.muted(`${title}:`), ...content);
     }
   };
-  lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+  lines.push(theme.heading(sanitizeTerminalText(inspect.plugin.name || inspect.plugin.id)));
   if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
     lines.push(theme.muted(`id: ${inspect.plugin.id}`));
   }
   if (inspect.plugin.description) {
-    lines.push(inspect.plugin.description);
+    lines.push(sanitizeTerminalText(inspect.plugin.description));
   }
   lines.push("");
   lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, runtimeInspect)}`);
@@ -339,7 +340,7 @@ function formatPluginInspection(
     lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
   }
   if (inspect.plugin.version) {
-    lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
+    lines.push(`${theme.muted("Version:")} ${sanitizeTerminalText(inspect.plugin.version)}`);
   }
   lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
   lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);

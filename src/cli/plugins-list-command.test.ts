@@ -18,6 +18,9 @@ function createJsonRuntime(writes: unknown[]): OutputRuntimeEnv {
 type SnapshotPlugin = {
   id: string;
   enabled: boolean;
+  name?: string;
+  description?: string;
+  version?: string;
   commands?: string[];
   agentHarnessIds?: string[];
 };
@@ -57,17 +60,22 @@ function mockHumanListModules(importedModules: string[] = []): void {
       resolvePluginSourceRoots: vi.fn(),
     };
   });
+  // mock-isolation: these cases assert the rows the command builds; table layout and borders are not under test.
   vi.doMock("../../packages/terminal-core/src/table.js", () => {
     importedModules.push("table");
     return {
       getTerminalTableWidth: vi.fn(),
-      renderTable: vi.fn(),
+      renderTable: vi.fn(() => ""),
     };
   });
+  // mock-isolation: identity styling keeps row assertions readable; terminal color output is not under test.
   vi.doMock("../../packages/terminal-core/src/theme.js", () => {
     importedModules.push("theme");
     return {
       theme: {
+        command: (value: string) => value,
+        error: (value: string) => value,
+        heading: (value: string) => value,
         muted: (value: string) => value,
         warn: (value: string) => value,
       },
@@ -162,6 +170,43 @@ describe("runPluginsListCommand", () => {
     expect(writes).toEqual([
       "No enabled plugins found. Plugins are globally disabled. Run formatted(openclaw plugins list) to inspect installed plugins.",
     ]);
+  });
+
+  it("strips terminal controls from plugin display metadata in the human table", async () => {
+    mockPluginListSnapshot(
+      [
+        {
+          id: "evil",
+          enabled: true,
+          name: "Evil \u001B[31mRED\u0007",
+          description: "Desc \u001B[2Jwiped\u0007 tail",
+          version: "1.0.0\u001B[1m",
+        },
+      ],
+      { plugins: { enabled: true } },
+    );
+    mockHumanListModules();
+
+    const sourceDisplay = await import("../plugins/source-display.js");
+    vi.mocked(sourceDisplay.formatPluginSourceForTable).mockReturnValue({
+      value: "global:evil",
+    } as never);
+    vi.mocked(sourceDisplay.resolvePluginSourceRoots).mockReturnValue({} as never);
+
+    const table = await import("../../packages/terminal-core/src/table.js");
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    await runPluginsListCommand({}, createJsonRuntime([]));
+
+    const tableArgs = vi.mocked(table.renderTable).mock.calls[0]?.[0] as {
+      rows: Array<Record<string, string>>;
+    };
+    const row = tableArgs.rows[0];
+    // Manifest text is display metadata: the terminal renders the words, never the escapes.
+    expect(row?.Name).toBe("Evil RED");
+    expect(row?.Source).toContain("Desc wiped tail");
+    expect(row?.Version).toBe("1.0.0");
+    expect(JSON.stringify(row)).not.toContain("\u001B");
+    expect(JSON.stringify(row)).not.toContain("\u0007");
   });
 
   it("makes omitted workspace plugin scope visible in human output", async () => {
