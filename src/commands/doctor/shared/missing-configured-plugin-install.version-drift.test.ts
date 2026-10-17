@@ -76,7 +76,10 @@ function writePackage(root: string, name: string, version: string) {
 
 function npmTarget(spec: string) {
   const parsed = expectDefined(parseRegistryNpmSpec(spec), "npm fixture target");
-  const version = parsed.selectorKind === "exact-version" ? parsed.selector : "2026.9.6";
+  const version =
+    parsed.selectorKind === "exact-version"
+      ? expectDefined(parsed.selector, "exact npm fixture version")
+      : "2026.9.6";
   return { name: parsed.name, version, resolvedSpec: `${parsed.name}@${version}` };
 }
 

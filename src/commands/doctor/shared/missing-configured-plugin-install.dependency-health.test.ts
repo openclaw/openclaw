@@ -130,13 +130,15 @@ function createDependencyInstall(
     },
   });
   const version = plugin.packageVersion ?? "1.0.0";
-  const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
+  const markerPath = () => resolveRetainedManagedNpmInstallMarkerPath(rootDir);
   return {
     plugin,
     pluginId,
     rootDir,
-    markerPath,
-    readMarker: () => fs.readFileSync(markerPath, "utf8"),
+    get markerPath() {
+      return markerPath();
+    },
+    readMarker: () => fs.readFileSync(markerPath(), "utf8"),
     isRetained: () => hasRetainedManagedNpmInstallMarker(rootDir),
     retain: (retainedAt?: string) =>
       markRetainedManagedNpmInstall({
