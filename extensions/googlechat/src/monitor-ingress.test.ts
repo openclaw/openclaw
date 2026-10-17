@@ -238,16 +238,18 @@ describe("Google Chat durable ingress", () => {
   it("preserves same-space order across append retry backoff", async () => {
     await withQueue(async (queue) => {
       let failFirst = true;
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
-        if (failFirst) {
-          failFirst = false;
-          throw new Error("sqlite busy");
-        }
-        return await enqueue(...args);
+      const flakyQueue: GoogleChatIngressQueue = {
+        ...queue,
+        enqueue: async (...args) => {
+          if (failFirst) {
+            failFirst = false;
+            throw new Error("sqlite busy");
+          }
+          return await queue.enqueue(...args);
+        },
       };
       const dispatched: string[] = [];
-      const ingress = startIngress(queue, async (event, lifecycle) => {
+      const ingress = startIngress(flakyQueue, async (event, lifecycle) => {
         dispatched.push(event.message?.name ?? "");
         await lifecycle.onAdopted();
       });

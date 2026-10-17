@@ -11,6 +11,7 @@ import {
   type RawEvent,
   type StoredEvent,
 } from "./ingress-monitor.test-harness.js";
+import type { ChannelIngressQueue } from "./ingress-queue.js";
 
 const withQueue = useIngressMonitorQueueFixture();
 const raw: RawEvent = { id: "fresh", lane: "a", text: "synthetic message" };
@@ -336,4 +337,48 @@ describe("idle ingress admission", () => {
       }
     });
   });
+
+  it.each([
+    { queueKind: "core queue", wrap: false, calls: [0, 1, 1] },
+    { queueKind: "spread wrapper", wrap: true, calls: [3, 0, 0] },
+  ])(
+    "admits idle singletons and batches through the $queueKind's expected path",
+    async ({ wrap, calls: expected }) => {
+      await withQueue(async (queue) => {
+        const calls = {
+          enqueue: vi.spyOn(queue, "enqueue"),
+          enqueueAndClaim: vi.spyOn(queue, "enqueueAndClaim"),
+          enqueueBatch: vi.spyOn(queue, "enqueueBatch"),
+        };
+        // A spread copy inherits the fused methods, but only its own `enqueue` may admit.
+        const admissionQueue: ChannelIngressQueue<StoredEvent> = wrap
+          ? { ...queue, enqueue: (...args) => queue.enqueue(...args) }
+          : queue;
+        const delivered: string[] = [];
+        const monitor = createMonitor(
+          admissionQueue,
+          (event) => {
+            delivered.push(event.id);
+          },
+          { pollIntervalMs: 60_000 },
+        );
+        try {
+          monitor.start();
+          await monitor.waitForIdle();
+          await monitor.admit(raw);
+          await monitor.waitForIdle();
+          await monitor.admitBatch([
+            { ...raw, id: "batch-a", lane: "b" },
+            { ...raw, id: "batch-b", lane: "c" },
+          ]);
+          await monitor.waitForIdle();
+          // Calls to [enqueue, enqueueAndClaim, enqueueBatch] on the core instance.
+          expect(Object.values(calls).map((call) => call.mock.calls.length)).toEqual(expected);
+          expect(delivered.toSorted()).toEqual(["batch-a", "batch-b", "fresh"]);
+        } finally {
+          await monitor.stop();
+        }
+      });
+    },
+  );
 });

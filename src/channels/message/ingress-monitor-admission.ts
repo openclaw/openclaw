@@ -8,6 +8,7 @@ import type {
   ChannelIngressMonitorFacts,
   CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor-types.js";
+import { isCoreChannelIngressQueue } from "./ingress-queue-identity.js";
 import type { ChannelIngressQueue } from "./ingress-queue.js";
 
 export type ChannelIngressAdmissionContext = {
@@ -80,8 +81,11 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     try {
       admissionQueue = options.getQueue();
       await options.pruneBeforeAdmission();
-      const enqueueBatch = admissionQueue.enqueueBatch?.bind(admissionQueue);
-      const enqueueAndClaim = admissionQueue.enqueueAndClaim?.bind(admissionQueue);
+      // Batch and fused admission bypass `enqueue`; any queue other than the core
+      // instance, including a spread copy, keeps every admission on its own `enqueue`.
+      const fastPathQueue = isCoreChannelIngressQueue(admissionQueue) ? admissionQueue : undefined;
+      const enqueueBatch = fastPathQueue?.enqueueBatch?.bind(fastPathQueue);
+      const enqueueAndClaim = fastPathQueue?.enqueueAndClaim?.bind(fastPathQueue);
       const idleDrain =
         prepared.length === 1 && enqueueAndClaim ? options.getIdleDrain() : undefined;
       const ownerId = idleDrain?.idleOwnerId();
@@ -149,7 +153,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     }
     for (const [index, { raw, facts, payload, index: resultIndex }] of prepared.entries()) {
       try {
-        // Shipped plugin-supplied queues may implement only individual admission.
+        // Plugin-supplied queues and wrappers admit each event through `enqueue`.
         const queueResult = queueResults
           ? queueResults[index]!
           : await appendIngressWithRetry(

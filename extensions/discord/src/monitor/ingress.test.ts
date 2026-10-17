@@ -188,20 +188,12 @@ describe("Discord durable ingress", () => {
         appendStarted.resolve();
         await appendGate.promise;
       });
-      // An idle monitor admits a fresh singleton through the fused append-and-claim.
-      const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
       const gatedQueue: ChannelIngressQueue<DiscordIngressPayload> = {
         ...queue,
         enqueue: async (...args) => {
           await gateAppend();
           return await queue.enqueue(...args);
         },
-        enqueueAndClaim:
-          enqueueAndClaim &&
-          (async (...args) => {
-            await gateAppend();
-            return await enqueueAndClaim(...args);
-          }),
       };
       const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
         await lifecycle.onAdopted();

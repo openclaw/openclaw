@@ -7,6 +7,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
 import { invalidateChannelIngressHealth } from "./ingress-queue-health-cache.js";
+import { markCoreChannelIngressQueue } from "./ingress-queue-identity.js";
 import {
   baseRecord,
   claimedRecord,
@@ -419,7 +420,7 @@ export function createChannelIngressQueue<
     );
     return result!;
   };
-  return {
+  const queue: Queue = {
     enqueue,
     enqueueBatch,
     async enqueueAndClaim(id, payload, enqueueOptions) {
@@ -568,4 +569,5 @@ export function createChannelIngressQueue<
       });
     },
   };
+  return markCoreChannelIngressQueue(queue);
 }

@@ -83,7 +83,6 @@ describe("Signal durable ingress", () => {
       const failingQueue = {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
-        enqueueAndClaim: vi.fn().mockRejectedValue(appendError),
       } satisfies SignalIngressQueue;
       const dispatch = vi.fn();
       const monitor = await startSignalIngressMonitor({
