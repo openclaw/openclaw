@@ -63,15 +63,18 @@ describe("createApplicationGateway connection ownership", () => {
     current().opts.onHello?.(HELLO);
   }
 
-  it.each(["session", "agent"])(
+  it.each(["session", "agent", "short"])(
     "shares the connect %s catalog across cold readers and returns",
     async (kind) => {
       const scope = {
         agentId: "main",
-        ...(kind === "session" ? { sessionKey: "agent:main:catalog" } : {}),
+        ...(kind !== "agent"
+          ? { sessionKey: "agent:main:12345678-1234-1234-1234-123456789abc" }
+          : {}),
       };
       const catalog = { models: [{ id: "first", provider: "fixture", name: "First" }] };
-      const target = kind === "agent" ? {} : scope;
+      const target =
+        kind === "agent" ? {} : kind === "short" ? { agentId: "main", shortId: "12345678" } : scope;
       ({ gateway, current } = createStore({ getModelCatalogTarget: () => target }));
       gateway.start();
       expect(current().opts.modelCatalog).toEqual(target);

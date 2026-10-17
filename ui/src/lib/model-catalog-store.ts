@@ -186,10 +186,14 @@ export async function loadModelCatalog(
     if (
       snapshot &&
       (timeoutMs == null || timeoutMs >= 1_000) &&
-      snapshot.scope &&
-      modelCatalogKey({ ...snapshot.scope, agentId: snapshot.scope.agentId ?? params.agentId }) ===
-        modelCatalogKey(params)
+      (!snapshot.scope ||
+        modelCatalogKey({
+          ...snapshot.scope,
+          agentId: snapshot.scope.agentId ?? params.agentId,
+        }) === modelCatalogKey(params))
     ) {
+      // Short URLs acquire their scope from publication; the lookup below still
+      // requires the exact projection before reusing its result.
       await subscribeToSharedRequest(
         { promise: snapshot.promise, subscribers: new Set<object>() },
         {},
