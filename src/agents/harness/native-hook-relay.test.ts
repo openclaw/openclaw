@@ -13,6 +13,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { nativeHookRelayHandlers } from "../../gateway/server-methods/native-hook-relay.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
@@ -415,6 +416,49 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
     closeAdmittedRunDelegatedAuthority(admittedRunContext);
     relay.unregister();
+  });
+
+  it("retires a retained relay at lifecycle rotation and keeps its same-id successor", async () => {
+    const { admittedRunContext, hostCapabilities } = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-retained-rotation",
+    });
+    let successor: ReturnType<typeof registerOwnedRelay> | undefined;
+    const onDispose = vi.fn(() => {
+      successor = registerOwnedRelay({
+        relayId: "codex-retained-rotation",
+        runId: "run-rotation-successor",
+        allowedEvents: ["pre_tool_use"],
+      });
+    });
+    const relay = registerOwnedRelay({
+      relayId: "codex-retained-rotation",
+      runId: "run-retained-rotation",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall: hostCapabilities.runBeforeToolCall,
+      assertActive: hostCapabilities.assertActive,
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => true,
+        allowPreToolUse: (claim) => claim === "child-thread",
+        onDispose,
+      },
+    });
+    await relay.ready;
+    relay.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)?.runId).toBe(
+      "run-retained-rotation",
+    );
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(onDispose).toHaveBeenCalledOnce();
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)?.runId).toBe(
+      "run-rotation-successor",
+    );
+    rotateAgentEventLifecycleGeneration();
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    successor?.unregister();
+    closeAdmittedRunDelegatedAuthority(admittedRunContext);
   });
 
   it("keeps only a claimed flat native child after foreground cleanup", async () => {

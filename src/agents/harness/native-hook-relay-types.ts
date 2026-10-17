@@ -314,6 +314,8 @@ export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
 export type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
+  /** Gateway lifecycle generation that admitted this relay. */
+  lifecycleGeneration: string;
   policyReady: Promise<void>;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
