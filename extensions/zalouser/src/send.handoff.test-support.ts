@@ -60,7 +60,6 @@ const voiceUrl = "https://zalo.test/voice.aac";
 type Gate = {
   entered: ReturnType<typeof createDeferred<void>>;
   release: ReturnType<typeof createDeferred<void>>;
-  wait: () => Promise<void>;
 };
 export type SendRoute = "message.text" | "message.media" | "sendText" | "sendMedia" | "sendPayload";
 type SendInput = Pick<
@@ -155,14 +154,7 @@ export class SendHarness {
   private nextMessage = 0;
 
   gate(): Gate {
-    const gate = {
-      entered: createDeferred<void>(),
-      release: createDeferred<void>(),
-      wait: async () => {
-        gate.entered.resolve();
-        await gate.release.promise;
-      },
-    };
+    const gate = { entered: createDeferred<void>(), release: createDeferred<void>() };
     this.gates.push(gate);
     return gate;
   }
@@ -223,7 +215,8 @@ export class SendHarness {
       void this.track(
         this.uploadEvents.runInAsyncScope(async () => {
           if (this.uploadWait) {
-            await this.uploadWait.wait();
+            this.uploadWait.entered.resolve();
+            await this.uploadWait.release.promise;
           }
           await callback({ fileId, fileUrl: voiceUrl });
           uploads.delete(fileId);
@@ -249,21 +242,37 @@ export class SendHarness {
 
   send(route: SendRoute, input: SendInput = {}) {
     const ctx = { cfg: this.cfg, to: "user:200", text: "hello", ...input };
-    const media = { ...ctx, mediaUrl: input.mediaUrl ?? imageUrl };
-    const message = zalouserPlugin.message?.send;
-    const outbound = zalouserPlugin.outbound;
-    const senders = {
-      "message.text": () => required(message?.text)(ctx),
-      "message.media": () => required(message?.media)(media),
-      sendText: () => required(outbound?.sendText)(ctx),
-      sendMedia: () => required(outbound?.sendMedia)(media),
-      sendPayload: () =>
-        required(outbound?.sendPayload)({
-          ...ctx,
-          payload: { text: ctx.text, ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}) },
-        }),
-    };
-    return this.track(senders[route]());
+    switch (route) {
+      case "message.text":
+        return this.track(required(zalouserPlugin.message?.send?.text)(ctx));
+      case "message.media":
+        return this.track(
+          required(zalouserPlugin.message?.send?.media)({
+            ...ctx,
+            mediaUrl: input.mediaUrl ?? imageUrl,
+          }),
+        );
+      case "sendText":
+        return this.track(required(zalouserPlugin.outbound?.sendText)(ctx));
+      case "sendMedia":
+        return this.track(
+          required(zalouserPlugin.outbound?.sendMedia)({
+            ...ctx,
+            mediaUrl: input.mediaUrl ?? imageUrl,
+          }),
+        );
+      case "sendPayload":
+        return this.track(
+          required(zalouserPlugin.outbound?.sendPayload)({
+            ...ctx,
+            payload: { text: ctx.text, ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}) },
+          }),
+        );
+      default: {
+        const unexpectedRoute: never = route;
+        throw new Error("Unsupported send route", { cause: unexpectedRoute });
+      }
+    }
   }
 
   async close() {
@@ -302,19 +311,21 @@ export function createSendHarness(options: { mediaFixture?: boolean } = {}): Sen
   }));
   vi.mocked(clearStoredZaloCredentials).mockResolvedValue(true);
   if (options.mediaFixture !== false) {
-    useMediaFixture();
+    vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
+      buffer: Buffer.from("fixture"),
+      kind: "image",
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
   }
   return harness;
 }
 
-export function useMediaFixture(
-  kind: "image" | "audio" = "image",
-  buffer = Buffer.from(kind === "image" ? "fixture" : "fixture-audio"),
-) {
+export function useAudioFixture() {
   vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
-    buffer,
-    kind,
-    contentType: kind === "image" ? "image/png" : "audio/aac",
-    fileName: kind === "image" ? "photo.png" : "voice.aac",
+    buffer: Buffer.from("fixture-audio"),
+    kind: "audio",
+    contentType: "audio/aac",
+    fileName: "voice.aac",
   });
 }

@@ -1,3 +1,5 @@
+// Gateway E2E test helpers.
+// Starts gateway servers, connects test clients, and handles device-auth fixtures.
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +15,6 @@ import { WebSocket, type RawData } from "../../packages/gateway-client/src/webso
 import {
   type HelloOk,
   type ModelCatalogTarget,
-  type ResponseFrame,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
@@ -44,87 +45,101 @@ import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
-type ClientOptions = {
+/** Connect a GatewayClient with test defaults and resolve after hello-ok. */
+export async function connectGatewayClient(params: {
+  url: string;
   token?: string;
+  deviceToken?: string;
   origin?: string;
   edgeAuthHeaders?: Readonly<Record<string, string>>;
   tlsFingerprint?: string;
   clientName?: GatewayClientName;
   modelCatalog?: ModelCatalogTarget;
   clientDisplayName?: string;
+  clientVersion?: string;
   mode?: GatewayClientMode;
+  platform?: string;
+  deviceFamily?: string;
+  role?: "operator" | "node";
   scopes?: string[];
+  caps?: string[];
+  commands?: string[];
+  permissions?: Record<string, boolean>;
+  instanceId?: string;
+  deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
-};
-
-/** Connect a GatewayClient with test defaults and resolve after hello-ok. */
-export async function connectGatewayClient(
-  params: ClientOptions & {
-    url: string;
-    deviceToken?: string;
-    clientVersion?: string;
-    platform?: string;
-    deviceFamily?: string;
-    role?: "operator" | "node";
-    caps?: string[];
-    commands?: string[];
-    permissions?: Record<string, boolean>;
-    instanceId?: string;
-    deviceIdentity?: DeviceIdentity;
-    onHelloOk?: (hello: HelloOk) => void;
-    connectChallengeTimeoutMs?: number;
-    preauthHandshakeTimeoutMs?: number;
-    requestTimeoutMs?: number;
-    minProtocol?: number;
-    maxProtocol?: number;
-    timeoutMs?: number;
-    timeoutMessage?: string;
-    signal?: AbortSignal;
-    verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
-  },
-) {
-  const { timeoutMs, timeoutMessage, signal, verifyCleanup, ...options } = params;
-  signal?.throwIfAborted();
+  onHelloOk?: (hello: HelloOk) => void;
+  connectChallengeTimeoutMs?: number;
+  preauthHandshakeTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  minProtocol?: number;
+  maxProtocol?: number;
+  timeoutMs?: number;
+  timeoutMessage?: string;
+  signal?: AbortSignal;
+  verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
+}) {
+  params.signal?.throwIfAborted();
   const role = params.role ?? "operator";
   const scopes = params.scopes ?? (role === "node" ? [] : undefined);
   const platform = params.platform ?? process.platform;
-  const safe = normalizeLowercaseStringOrEmpty(
-    `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
-      /[^a-zA-Z0-9._-]+/g,
-      "_",
-    ),
-  );
+  const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   const deviceIdentity =
     params.deviceIdentity ??
     loadOrCreateDeviceIdentity({
-      path: path.join(
-        process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir(),
-        "test-device-identities",
-        `${safe}.sqlite`,
-      ),
+      path: (() => {
+        const safe = normalizeLowercaseStringOrEmpty(
+          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
+            /[^a-zA-Z0-9._-]+/g,
+            "_",
+          ),
+        );
+        return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
+      })(),
     });
   return await acquireGatewayTestClient(
     {
-      ...options,
+      url: params.url,
+      token: params.token,
+      deviceToken: params.deviceToken,
+      origin: params.origin,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
+      ...(params.connectChallengeTimeoutMs !== undefined
+        ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
+        : {}),
       preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs ?? params.timeoutMs,
+      ...(params.requestTimeoutMs !== undefined
+        ? { requestTimeoutMs: params.requestTimeoutMs }
+        : {}),
+      minProtocol: params.minProtocol,
+      maxProtocol: params.maxProtocol,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
+      modelCatalog: params.modelCatalog,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
       platform,
+      deviceFamily: params.deviceFamily,
       mode: params.mode ?? GATEWAY_CLIENT_MODES.TEST,
       role,
       scopes,
+      caps: params.caps,
+      commands: params.commands,
+      permissions: params.permissions,
+      instanceId: params.instanceId,
       deviceIdentity,
+      onEvent: params.onEvent,
+      onHelloOk: params.onHelloOk,
     },
     {
       // The Gateway answers or closes an unfinished handshake at its preauth deadline.
       // Wait past that verdict instead of racing it with a shorter fixture timer.
-      timeoutMs: timeoutMs ?? resolvePreauthHandshakeTimeoutMs() + 5_000,
-      timeoutMessage: timeoutMessage ?? "gateway connect timeout",
+      timeoutMs: params.timeoutMs ?? resolvePreauthHandshakeTimeoutMs() + 5_000,
+      timeoutMessage: params.timeoutMessage ?? "gateway connect timeout",
       closeMessage: "gateway closed during connect",
       unrefTimeout: true,
-      signal,
-      verifyCleanup,
+      signal: params.signal,
+      verifyCleanup: params.verifyCleanup,
     },
   );
 }
@@ -134,7 +149,12 @@ export async function disconnectGatewayClient(client: GatewayClient): Promise<vo
   await client.stopAndWait();
 }
 
-type DeviceAuthConnectResponse = Pick<ResponseFrame, "type" | "id" | "ok" | "error">;
+type DeviceAuthConnectResponse = {
+  type: "res";
+  id: string;
+  ok: boolean;
+  error?: { message?: string };
+};
 
 function waitForDeviceAuthMessage<T>(
   ws: WebSocket,
@@ -217,6 +237,13 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
       nonce: connectNonce,
       platform,
     });
+    const device = {
+      id: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      signature: signDevicePayload(identity.privateKeyPem, payload),
+      signedAt: signedAtMs,
+      nonce: connectNonce,
+    };
     ws.send(
       JSON.stringify({
         type: "req",
@@ -234,13 +261,7 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
           },
           caps: [],
           auth: params.token ? { token: params.token } : undefined,
-          device: {
-            id: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-            signature: signDevicePayload(identity.privateKeyPem, payload),
-            signedAt: signedAtMs,
-            nonce: connectNonce,
-          },
+          device,
         },
       }),
     );
@@ -256,32 +277,37 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
     );
     return await connectResponsePromise;
   })();
-  return await runQaGatewayFixture(
-    () => response,
+  await runQaGatewayFixture(
+    async () => {
+      await response;
+    },
     () => closeGatewayTestWebSocket(ws),
-    () => Promise.allSettled([opening, connectNoncePromise, connectResponsePromise]),
+    async () => {
+      await Promise.allSettled([opening, connectNoncePromise, connectResponsePromise]);
+    },
   );
+  return await response;
 }
 
 export async function startGatewayWithClient(
-  params: ClientOptions & {
+  params: {
     cfg: unknown;
     configPath: string;
+    token?: string;
     auth?: GatewayServerOptions["auth"];
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
     secure?: boolean;
+    tlsFingerprint?: string;
+    clientName?: GatewayClientName;
+    modelCatalog?: ModelCatalogTarget;
+    mode?: GatewayClientMode;
+    origin?: string;
+    clientDisplayName?: string;
+    scopes?: string[];
+    onEvent?: (evt: { event?: string; payload?: unknown }) => void;
     hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
   } & ({ port?: number; portClaim?: never } | { port?: never; portClaim: TestPortClaim }),
 ) {
-  const {
-    cfg,
-    configPath,
-    auth,
-    secure,
-    hotReloadRecovery,
-    portClaim,
-    port: requestedPort,
-    ...clientOptions
-  } = params;
   const gatewayStartupEnv = captureEnv([
     ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
     "OPENCLAW_CONFIG_PATH",
@@ -289,35 +315,44 @@ export async function startGatewayWithClient(
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let listener: Awaited<ReturnType<typeof reserveGatewayTestListener>> | undefined;
   try {
-    await writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
+    process.env.OPENCLAW_CONFIG_PATH = params.configPath;
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
     // The retained listener is HTTP-only; TLS must create its own secure server.
-    const secureClaim = secure
-      ? (portClaim ??
-        (await acquireTestPortBlock({ port: requestedPort, offsets: [0, 1, 2, 3, 4] })))
+    const secureClaim = params.secure
+      ? (params.portClaim ??
+        (await acquireTestPortBlock({ port: params.port, offsets: [0, 1, 2, 3, 4] })))
       : undefined;
     listener = secureClaim
       ? undefined
-      : await reserveGatewayTestListener(portClaim ?? requestedPort);
+      : await reserveGatewayTestListener(params.portClaim ?? params.port);
     const port = secureClaim?.port ?? listener!.port;
     const start = () =>
       startGatewayServer(port, {
         bind: "loopback",
-        auth: auth ?? { mode: "token", token: params.token },
+        auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
-        hotReloadRecovery,
+        hotReloadRecovery: params.hotReloadRecovery,
       });
     const startedServer = secureClaim
       ? await startClaimedGateway(secureClaim, start)
       : await listener!.start(start);
     server = startedServer;
     const client = await connectGatewayClient({
-      ...clientOptions,
-      url: `${secure ? "wss" : "ws"}://127.0.0.1:${port}`,
+      url: `${params.secure ? "wss" : "ws"}://127.0.0.1:${port}`,
+      token: params.token,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
+      clientName: params.clientName,
+      modelCatalog: params.modelCatalog,
+      mode: params.mode,
+      origin: params.origin,
+      clientDisplayName: params.clientDisplayName,
+      scopes: params.scopes,
+      onEvent: params.onEvent,
     });
 
     return {
@@ -329,7 +364,7 @@ export async function startGatewayWithClient(
           // Failed shutdown retains selectors needed by the still-owned server.
           await startedServer.close(...args);
           await listener?.closeUnadopted();
-          await portClaim?.release();
+          await params.portClaim?.release();
           gatewayStartupEnv.restore();
         },
       },
@@ -352,7 +387,7 @@ export async function startGatewayWithClient(
         }
         await server?.close({ reason: "gateway E2E client setup failed" });
         await listener?.closeUnadopted();
-        await portClaim?.release();
+        await params.portClaim?.release();
         gatewayStartupEnv.restore();
       },
     );

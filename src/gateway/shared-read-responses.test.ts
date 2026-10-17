@@ -28,6 +28,7 @@ function createReadHarness(
 ) {
   let config: OpenClawConfig = {};
   let runnerRevision = 0;
+  // The dispatch fixture supplies the owners touched by these read-only methods.
   const context = {
     getRuntimeConfig: () => config,
     getCommittedRuntimeConfig: () => config,
@@ -106,71 +107,6 @@ function expectPayload(request: { id: string; frames: readonly string[] }, paylo
   });
 }
 
-async function read(
-  harness: ReturnType<typeof createReadHarness>,
-  id: string,
-  payload: unknown,
-  params?: Record<string, unknown>,
-) {
-  const request = harness.request(id, params);
-  await request.done;
-  expectPayload(request, payload);
-  return request;
-}
-
-const preparedHarness = (run: (respond: RespondFn) => void | Promise<void>, method?: string) =>
-  createReadHarness(
-    createPreparedReadHandler(() => ({ run })),
-    method,
-  );
-
-function readBarrier(count = 1) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  let remaining = count;
-  const wait = (done: Promise<unknown>) =>
-    awaitGateBeforeSettlement(entered.promise, done, "readers did not prepare");
-  return {
-    pause: () => release.promise,
-    wait,
-    prepare() {
-      if (--remaining === 0) {
-        entered.resolve();
-      }
-    },
-    async hold(done: Promise<unknown>, inspect: () => void | Promise<void> = () => {}) {
-      try {
-        await wait(done);
-        await inspect();
-      } finally {
-        release.resolve();
-        await done;
-      }
-    },
-  };
-}
-
-function generationHarness(blockFirst = false, prepare = () => {}) {
-  let generation = 0;
-  const barrier = readBarrier();
-  const produce = vi.fn(async (config: OpenClawConfig, respond: RespondFn) => {
-    const current = ++generation;
-    if (blockFirst && current === 1) {
-      barrier.prepare();
-      await barrier.pause();
-    }
-    respond(true, { generation: current, port: config.gateway?.port });
-  });
-  const harness = createReadHarness(
-    createPreparedReadHandler(({ context }) => {
-      prepare();
-      const config = context.getRuntimeConfig();
-      return { run: (respond) => produce(config, respond) };
-    }),
-  );
-  return { harness, produce, barrier };
-}
-
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 });
@@ -183,25 +119,45 @@ describe("shared read response dispatch", () => {
   it.each(["expiry", "invalidation"])(
     "releases a waiting reader on %s without waiting for the slow producer",
     async (reason) => {
-      const prepared = readBarrier(2);
-      const { harness, produce, barrier } = generationHarness(true, prepared.prepare);
+      const entered = createDeferredCore();
+      const prepared = createDeferredCore();
+      const release = createDeferredCore();
+      let preparations = 0;
+      let generation = 0;
+      const produce = vi.fn(async (respond: RespondFn) => {
+        const value = ++generation;
+        if (value === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        respond(true, { generation: value });
+      });
+      const harness = createReadHarness(
+        createPreparedReadHandler(() => {
+          if (++preparations === 2) {
+            prepared.resolve();
+          }
+          return { run: produce };
+        }),
+      );
       const first = harness.request("slow-producer");
       let follower: ReturnType<typeof harness.request> | undefined;
       try {
-        await barrier.hold(first.done, async () => {
-          follower = harness.request("waiting-reader");
-          await prepared.wait(follower.done);
-          await vi.advanceTimersByTimeAsync(0);
-          if (reason === "invalidation") {
-            harness.invalidate("chat.metadata.changed");
-          }
-          await vi.advanceTimersByTimeAsync(reason === "expiry" ? 1_000 : 0);
-          expect(produce).toHaveBeenCalledTimes(2);
-          await follower.done;
-          expectPayload(follower, { generation: 2 });
-          expect(first.frames).toHaveLength(0);
-        });
+        await awaitGateBeforeSettlement(entered.promise, first.done, "producer did not start");
+        follower = harness.request("waiting-reader");
+        await awaitGateBeforeSettlement(prepared.promise, follower.done, "reader did not prepare");
+        await vi.advanceTimersByTimeAsync(0);
+        if (reason === "invalidation") {
+          harness.invalidate("chat.metadata.changed");
+        }
+        await vi.advanceTimersByTimeAsync(reason === "expiry" ? 1_000 : 0);
+        expect(produce).toHaveBeenCalledTimes(2);
+        await follower.done;
+        expectPayload(follower, { generation: 2 });
+        expect(first.frames).toHaveLength(0);
       } finally {
+        release.resolve();
+        await first.done;
         await follower?.done;
       }
     },
@@ -225,37 +181,90 @@ describe("shared read response dispatch", () => {
     expect(produce).toHaveBeenCalledTimes(21);
   });
 
+  it("does not certify a pending response against a replacement config", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const produce = vi.fn(async (config: OpenClawConfig, respond: RespondFn) => {
+      entered.resolve();
+      await release.promise;
+      respond(true, { port: config.gateway?.port });
+    });
+    const harness = createReadHarness(
+      createPreparedReadHandler(({ context }) => {
+        const config = context.getRuntimeConfig();
+        return { run: (respond) => produce(config, respond) };
+      }),
+    );
+    const original = harness.request("original-config");
+    try {
+      await awaitGateBeforeSettlement(entered.promise, original.done, "read did not start");
+      harness.setConfig({ gateway: { port: 18790 } });
+    } finally {
+      release.resolve();
+      await original.done;
+    }
+    const current = harness.request("current-config");
+    await current.done;
+    expectPayload(original, {});
+    expectPayload(current, { port: 18790 });
+    expect(produce).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes runner status before its asynchronous session change event is published", async () => {
     let available = true;
     const produce = vi.fn((respond: RespondFn) => respond(true, { available }));
-    const harness = preparedHarness(produce, "sessions.list");
-    await read(harness, "before-disconnect", { available: true });
+    const harness = createReadHarness(
+      createPreparedReadHandler(() => ({ run: produce })),
+      "sessions.list",
+    );
+    const first = harness.request("before-disconnect");
+    await first.done;
+    expectPayload(first, { available: true });
 
     available = false;
     harness.runnerChanged();
-    await read(harness, "before-row-event", { available: false });
-    await read(harness, "same-runner-revision", { available: false });
+    const second = harness.request("before-row-event");
+    await second.done;
+    expectPayload(second, { available: false });
+
+    const third = harness.request("same-runner-revision");
+    await third.done;
+    expectPayload(third, { available: false });
     expect(produce).toHaveBeenCalledTimes(2);
   });
 
   it("computes and serializes one payload for 25 connections while delivering every request id", async () => {
-    const barrier = readBarrier(25);
+    const releaseProducer = createDeferredCore();
+    const allPrepared = createDeferredCore();
     const payload = { models: [{ id: "fixture-model", name: 'Model é🦞 \\"' }] };
     const serialize = vi.fn(() => payload);
     const produce = vi.fn(async (respond: RespondFn) => {
-      await barrier.pause();
+      await releaseProducer.promise;
       respond(true, { toJSON: serialize });
     });
     const released = vi.fn();
     const delivered = vi.fn();
+    let prepared = 0;
     const harness = createReadHarness(
       createPreparedReadHandler(() => {
-        barrier.prepare();
+        if (++prepared === 25) {
+          allPrepared.resolve();
+        }
         return { run: produce, release: released, beforeRespond: delivered };
       }),
     );
     const requests = Array.from({ length: 25 }, (_, index) => harness.request(`request-${index}`));
-    await barrier.hold(Promise.all(requests.map((request) => request.done)));
+    const done = Promise.all(requests.map((request) => request.done));
+    try {
+      await awaitGateBeforeSettlement(
+        allPrepared.promise,
+        done,
+        "burst did not prepare every reader",
+      );
+    } finally {
+      releaseProducer.resolve();
+      await done;
+    }
 
     expect(produce).toHaveBeenCalledOnce();
     expect(serialize).toHaveBeenCalledExactlyOnceWith("payload");
@@ -263,8 +272,9 @@ describe("shared read response dispatch", () => {
     expect(delivered).toHaveBeenCalledTimes(25);
     const payloadBytes = new Set<string>();
     for (const request of requests) {
-      expectPayload(request, payload);
+      expect(request.frames).toHaveLength(1);
       const frame = request.frames[0]!;
+      expect(JSON.parse(frame)).toEqual({ type: "res", id: request.id, ok: true, payload });
       payloadBytes.add(frame.slice(frame.indexOf('"payload":') + '"payload":'.length, -1));
     }
     expect(payloadBytes.size).toBe(1);
@@ -273,9 +283,14 @@ describe("shared read response dispatch", () => {
   it("keeps an omitted toJSON payload valid across shared and ordinary JSON responses", async () => {
     const toJSON = vi.fn(() => undefined);
     const produce = vi.fn((respond: RespondFn) => respond(true, { toJSON }));
-    const harness = preparedHarness(produce);
-    const first = await read(harness, "omitted-first", undefined);
-    await read(harness, "omitted-second", undefined);
+    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
+    const first = harness.request("omitted-first");
+    await first.done;
+    const second = harness.request("omitted-second");
+    await second.done;
+
+    expectPayload(first, undefined);
+    expectPayload(second, undefined);
     expect(JSON.stringify({ ok: true, payload: first.respond.mock.calls[0]![1] })).toBe(
       '{"ok":true}',
     );
@@ -286,9 +301,14 @@ describe("shared read response dispatch", () => {
   it("does not retain scalar responses exceeding the encoded byte limit", async () => {
     const payload = "é".repeat(600 * 1024);
     const produce = vi.fn((respond: RespondFn) => respond(true, payload));
-    const harness = preparedHarness(produce);
-    await read(harness, "large-first", payload);
-    await read(harness, "large-second", payload);
+    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
+    const first = harness.request("large-first");
+    await first.done;
+    const second = harness.request("large-second");
+    await second.done;
+
+    expectPayload(first, payload);
+    expectPayload(second, payload);
     expect(produce).toHaveBeenCalledTimes(2);
   });
 
@@ -326,17 +346,21 @@ describe("shared read response dispatch", () => {
   it.each(["method authority", "operator scope"] as const)(
     "rejects only the waiting reader whose %s changes and releases every reader",
     async (authority) => {
-      const barrier = readBarrier(3);
+      const releaseProducer = createDeferredCore();
+      const allPrepared = createDeferredCore();
       const revoked = new Set<string>();
       const released = vi.fn<(id: string) => void>();
       const delivered = vi.fn<(id: string) => void>();
       const produce = vi.fn(async (respond: RespondFn) => {
-        await barrier.pause();
+        await releaseProducer.promise;
         respond(true, { models: ["allowed"] });
       });
+      let prepared = 0;
       const harness = createReadHarness(
         createPreparedReadHandler(({ req }) => {
-          barrier.prepare();
+          if (++prepared === 3) {
+            allPrepared.resolve();
+          }
           return {
             run: produce,
             assertCurrent: () => {
@@ -353,13 +377,22 @@ describe("shared read response dispatch", () => {
         }),
       );
       const requests = ["producer", "revoked", "allowed"].map((id) => harness.request(id));
-      await barrier.hold(Promise.all(requests.map((request) => request.done)), () => {
+      const done = Promise.all(requests.map((request) => request.done));
+      try {
+        await awaitGateBeforeSettlement(
+          allPrepared.promise,
+          done,
+          "readers did not join the producer",
+        );
         if (authority === "method authority") {
           revoked.add("revoked");
         } else {
           requests[1]!.client.connect.scopes = [];
         }
-      });
+      } finally {
+        releaseProducer.resolve();
+        await done;
+      }
 
       expect(produce).toHaveBeenCalledOnce();
       expect(requests[1]!.respond).toHaveBeenCalledWith(
@@ -379,48 +412,75 @@ describe("shared read response dispatch", () => {
     },
   );
 
-  it.each(["config replacement", "invalidation"])(
-    "keeps old completions out after %s",
-    async (cause) => {
-      const { harness, produce, barrier } = generationHarness(true);
-      const first = harness.request("before");
-      let second: ReturnType<typeof harness.request> | undefined;
-      const current = { generation: 2, ...(cause === "config replacement" ? { port: 18790 } : {}) };
-      await barrier.hold(first.done, async () => {
-        if (cause === "config replacement") {
-          harness.setConfig({ gateway: { port: 18790 } });
-        } else {
-          harness.invalidate("chat.metadata.changed");
-        }
-        second = harness.request("after");
-        await second.done;
-      });
-      await read(harness, "after-old-completed", current);
+  it("does not let a pre-invalidation completion replace the new shared result", async () => {
+    const entered = createDeferredCore();
+    const releaseOld = createDeferredCore();
+    let generation = 0;
+    const produce = vi.fn(async (respond: RespondFn) => {
+      const current = ++generation;
+      if (current === 1) {
+        entered.resolve();
+        await releaseOld.promise;
+      }
+      respond(true, { generation: current });
+    });
+    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
+    const first = harness.request("before");
+    let second: ReturnType<typeof harness.request> | undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first.done,
+        "original producer did not start",
+      );
+      harness.invalidate("chat.metadata.changed");
+      second = harness.request("after");
+      await second.done;
+    } finally {
+      releaseOld.resolve();
+      await first.done;
+    }
+    const third = harness.request("after-old-completed");
+    await third.done;
 
-      expect(produce).toHaveBeenCalledTimes(2);
-      expectPayload(first, { generation: 1 });
-      expectPayload(second!, current);
-    },
-  );
+    expect(produce).toHaveBeenCalledTimes(2);
+    expectPayload(first, { generation: 1 });
+    expectPayload(second!, { generation: 2 });
+    expectPayload(third, { generation: 2 });
+  });
 
   it("expires a response at the absolute ceiling even when recent readers used it", async () => {
     vi.setSystemTime(1_000);
-    const { harness, produce } = generationHarness();
-    await read(harness, "initial", { generation: 1 });
+    let generation = 0;
+    const produce = vi.fn((respond: RespondFn) => respond(true, { generation: ++generation }));
+    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
+    const first = harness.request("initial");
+    await first.done;
     vi.setSystemTime(1_999);
-    await read(harness, "last-hit", { generation: 1 });
+    const lastHit = harness.request("last-hit");
+    await lastHit.done;
     vi.setSystemTime(2_000);
-    await read(harness, "expired", { generation: 2 });
+    const expired = harness.request("expired");
+    await expired.done;
 
     expect(produce).toHaveBeenCalledTimes(2);
+    expectPayload(first, { generation: 1 });
+    expectPayload(lastHit, { generation: 1 });
+    expectPayload(expired, { generation: 2 });
   });
 
   it("executes every explicit model refresh when the method's share key opts out", async () => {
-    const { harness, produce } = generationHarness();
-    await read(harness, "refresh-first", { generation: 1 }, { refresh: true });
-    await read(harness, "refresh-second", { generation: 2 }, { refresh: true });
+    let generation = 0;
+    const produce = vi.fn((respond: RespondFn) => respond(true, { generation: ++generation }));
+    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
+    const first = harness.request("refresh-first", { refresh: true });
+    await first.done;
+    const second = harness.request("refresh-second", { refresh: true });
+    await second.done;
 
     expect(produce).toHaveBeenCalledTimes(2);
+    expectPayload(first, { generation: 1 });
+    expectPayload(second, { generation: 2 });
   });
 
   it.each(["sessions.catalog.list", "workboard.cards.list"])(

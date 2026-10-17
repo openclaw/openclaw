@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
-import { delimiter, join, resolve } from "node:path";
+import path, { delimiter, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
@@ -9,16 +9,9 @@ import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-ru
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
-import * as fixture from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const runner = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-const runnerSection = (start: string, end: string) =>
-  runner.slice(runner.indexOf(start), runner.indexOf(end));
-const assertSuccess = (result: ReturnType<typeof fixture.runProcess>) =>
-  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-const bash = (script: string, ...args: string[]) =>
-  fixture.runProcess("bash", ["-c", script, "survivor-fixture", ...args]);
+const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
 
 it("owns the model endpoint before authoring legacy operator configuration", async () => {
   const root = tempDirs.make("survivor-model-endpoint-");
@@ -33,10 +26,14 @@ it("owns the model endpoint before authoring legacy operator configuration", asy
   if (!address || typeof address === "string") {
     throw new Error("fixture did not bind a TCP listener");
   }
-  const setup = runnerSection("apply_baseline_config_recipe()", "\nprepare_schema_expectation()");
-  const phases = runnerSection(
-    'if [ "$SCENARIO" = "abandoned-update" ]',
-    "\nrun_missing_load_path_fixture seed",
+  const source = readFileSync(runner, "utf8");
+  const setup = source.slice(
+    source.indexOf("apply_baseline_config_recipe()"),
+    source.indexOf("\nprepare_schema_expectation()"),
+  );
+  const phases = source.slice(
+    source.indexOf('if [ "$SCENARIO" = "abandoned-update" ]'),
+    source.indexOf("\nrun_missing_load_path_fixture seed"),
   );
   try {
     const result = await promisify(execFile)(
@@ -97,13 +94,20 @@ it.each([
   { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
 ])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
   const nativeEnabled = scenario === "legacy-operator-state" && mode === "manual";
-  const routing = runnerSection("companion_survivor_scenario()", "\npackage_root()");
-  const orchestration = runnerSection(
-    "phase seed-state seed_state",
-    "phase update-candidate update_candidate_for_install_mode",
+  const source = readFileSync(runner, "utf8");
+  const routing = source.slice(
+    source.indexOf("companion_survivor_scenario()"),
+    source.indexOf("\npackage_root()"),
   );
-  const result = bash(
-    `set -eu
+  const orchestration = source.slice(
+    source.indexOf("phase seed-state seed_state"),
+    source.indexOf("phase update-candidate update_candidate_for_install_mode"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -eu
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$1"
 UPDATE_RESTART_MODE="$2"
@@ -124,7 +128,10 @@ configure_plugin_registry() {
 }
 seed_legacy_operator_gateway() { legacy_seeded=1; }
 start_native_assignment_fixture() {
-  [ "$legacy_seeded" = "1" ] || return 92
+  if [ "$legacy_seeded" != "1" ]; then
+    echo "native agent makes the ownerless Cron roster ambiguous" >&2
+    return 92
+  fi
   [ "$NPM_CONFIG_REGISTRY" = baseline-registry ]
 }
 prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
@@ -134,7 +141,10 @@ install_update_restart_systemctl_shim() {
 }
 run_update_restart_probe_gateway() {
   [ "$#" -eq 3 ] && [ "$1" = start ] && [ "$2" = 18789 ] && [ "$3" = "$COMMAND_TIMEOUT" ] || return 97
-  [ "$manager_registry" = "$NPM_CONFIG_REGISTRY" ] || return 91
+  if [ "$manager_registry" != "$NPM_CONFIG_REGISTRY" ]; then
+    printf 'manager retained stale registry: %s, current: %s\\n' "$manager_registry" "$NPM_CONFIG_REGISTRY" >&2
+    return 91
+  fi
   printf 'service=%s\\n' "$manager_registry"
 }
 phase() {
@@ -146,11 +156,14 @@ phase() {
 }
 ${orchestration}
 `,
-    scenario,
-    mode,
+      "survivor-manager-registry-order",
+      scenario,
+      mode,
+    ],
+    { encoding: "utf8" },
   );
-  assertSuccess(result);
-  const expected =
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n").filter(Boolean)).toEqual(
     scenario === "legacy-operator-state"
       ? [
           "registry=baseline-registry",
@@ -162,8 +175,8 @@ ${orchestration}
         ]
       : scenario === "base"
         ? ["registry=candidate-registry"]
-        : [];
-  expect(result.stdout.trim().split("\n").filter(Boolean)).toEqual(expected);
+        : [],
+  );
 });
 
 it.each([
@@ -173,32 +186,39 @@ it.each([
   { scenario: "sqlite-volume", mode: "auto-auth" },
 ])("preserves all $scenario migration rows after $mode baseline setup", ({ scenario, mode }) => {
   const root = tempDirs.make("openclaw-survivor-baseline-order-");
-  const paths = readUpgradeSurvivorPaths(root, { OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario });
+  const paths = readUpgradeSurvivorPaths(root, {
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+  });
   if (scenario === "sqlite-volume") {
     mkdirSync(paths.packageRoot, { recursive: true });
-    fixture.writeJson(join(paths.packageRoot, "package.json"), {
-      name: "openclaw",
-      version: "2026.8.1",
-      type: "module",
-      exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
-    });
+    writeFileSync(
+      path.join(paths.packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.8.1",
+        type: "module",
+        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
+      }),
+    );
     // Keep real SQLite persistence behind the fixture's installed SDK boundary.
     symlinkSync(
       fileURLToPath(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.store)),
-      join(paths.packageRoot, "cron-store-runtime.js"),
+      path.join(paths.packageRoot, "cron-store-runtime.js"),
       "file",
     );
   }
-  const resultPath = join(root, "result.json");
-  const probePath = join(root, "probe.mjs");
-  const bin = join(root, "bin");
+  const authoredPath = path.join(root, "authored.json");
+  const resultPath = path.join(root, "result.json");
+  const probePath = path.join(root, "probe.mjs");
+  const bin = path.join(root, "bin");
   mkdirSync(bin);
-  fixture.writeExecutable(
-    join(bin, "openclaw"),
+  writeFileSync(
+    path.join(bin, "openclaw"),
     '#!/usr/bin/env bash\nexec node --import "$TSX_IMPORT" "$PROBE_SCRIPT" "$@"\n',
+    { mode: 0o755 },
   );
-  fixture.writeExecutable(
-    join(bin, "systemctl"),
+  writeFileSync(
+    path.join(bin, "systemctl"),
     `#!/usr/bin/env bash
   case "$2" in
     stop) rm -f "$PROBE_LIVE" ;;
@@ -206,15 +226,33 @@ it.each([
     *) exit 97 ;;
   esac
 `,
+    { mode: 0o755 },
   );
-  const moduleUrl = (file: string) => JSON.stringify(pathToFileURL(resolve(file)).href);
+  writeFileSync(
+    authoredPath,
+    JSON.stringify({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
+        },
+      },
+      plugins: { enabled: true, allow: [], entries: {} },
+      channels: { discord: { enabled: true } },
+    }),
+  );
+  const startupModule = pathToFileURL(path.resolve("src/config/sessions/startup-migration.ts"));
+  const legacyStoreModule = pathToFileURL(
+    path.resolve("src/config/sessions/legacy-store-inspection.ts"),
+  );
   writeFileSync(
     probePath,
     `import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
-import { assertSessionStoreMigrationComplete } from ${moduleUrl("src/config/sessions/startup-migration.ts")};
-import { readLegacySessionStoreEntries } from ${moduleUrl("src/config/sessions/legacy-store-inspection.ts")};
+import path, { delimiter, join, resolve } from "node:path";
+import { assertSessionStoreMigrationComplete } from ${JSON.stringify(startupModule.href)};
+import { readLegacySessionStoreEntries } from ${JSON.stringify(legacyStoreModule.href)};
 const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
 const stores = volume
@@ -259,8 +297,11 @@ if (process.argv[2] === "startup") {
 }
 `,
   );
-  const boundary = runner.indexOf("phase storage-preflight");
-  const script = `${runner.slice(0, boundary)}
+  const source = readFileSync(runner, "utf8");
+  const boundary = source.indexOf("phase storage-preflight");
+  const setup = source.slice(0, boundary);
+  const phases = source.slice(boundary);
+  const script = `${setup}
 trap - EXIT ERR INT TERM
 openclaw_e2e_eval_test_state_from_b64() { :; }
 openclaw_test_state_create() {
@@ -268,7 +309,7 @@ openclaw_test_state_create() {
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   export OPENCLAW_TEST_WORKSPACE_DIR="$FIXTURE_HOME/workspace"
   mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
-  printf '%s' '{"channels":{"discord":{"enabled":true}}}' > "$OPENCLAW_CONFIG_PATH"
+  cp "$AUTHORED_CONFIG" "$OPENCLAW_CONFIG_PATH"
 }
 getent() { printf 'fixture:x:1000:1000:fixture:%s:/bin/bash\n' "$FIXTURE_HOME"; }
 install_update_restart_systemctl_shim() { :; }
@@ -292,32 +333,36 @@ phase() {
     *) : ;;
   esac
 }
-${runner.slice(boundary)}
+${phases}
 `;
   // The Darwin Bash guard must be able to replay this injected runner.
-  const scriptPath = join(root, "runner.sh");
+  const scriptPath = path.join(root, "runner.sh");
   writeFileSync(scriptPath, script);
-  const result = fixture.runProcess("bash", [scriptPath], {
-    ...process.env,
-    PATH: `${bin}${delimiter}${process.env.PATH}`,
-    HOME: root,
-    FIXTURE_HOME: root,
-    PROBE_SCRIPT: probePath,
-    PROBE_RESULT: resultPath,
-    PROBE_READY: join(root, "ready"),
-    PROBE_LIVE: join(root, "live"),
-    TSX_IMPORT: resolve("node_modules/tsx/dist/loader.mjs"),
-    OPENCLAW_TEST_STATE_FUNCTION_B64: "Og==",
-    OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-    OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-    ...paths.env,
-    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "12",
-    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "3",
-    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "6",
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+  const result = spawnSync("bash", [scriptPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      HOME: root,
+      FIXTURE_HOME: root,
+      AUTHORED_CONFIG: authoredPath,
+      PROBE_SCRIPT: probePath,
+      PROBE_RESULT: resultPath,
+      PROBE_READY: path.join(root, "ready"),
+      PROBE_LIVE: path.join(root, "live"),
+      TSX_IMPORT: path.resolve("node_modules/tsx/dist/loader.mjs"),
+      OPENCLAW_TEST_STATE_FUNCTION_B64: "Og==",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
+      ...paths.env,
+      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "12",
+      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "3",
+      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "6",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+    },
   });
-  assertSuccess(result);
-  expect(fixture.readJson(resultPath)).toEqual({
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(JSON.parse(readFileSync(resultPath, "utf8"))).toEqual({
     rows: scenario === "sqlite-volume" ? 15 : 3,
     volume: scenario === "sqlite-volume",
   });
@@ -333,18 +378,21 @@ it.each(["2026.9.2", "2026.9.4"])("preserves Cron ownership on %s", (version) =>
   const state = join(root, "state");
   const configPath = join(root, "openclaw.json");
   const ledgerPath = join(artifacts, "legacy-operator-baseline.json");
-  for (const directory of [bin, artifacts, state]) {
-    mkdirSync(directory);
-  }
+  mkdirSync(bin);
+  mkdirSync(artifacts);
+  mkdirSync(state);
   writeFileSync(configPath, "{}");
   if (version === "2026.9.4") {
-    fixture.writeJson(join(artifacts, "native-assignment-eligibility.json"), {
-      status: "required",
-    });
+    writeFileSync(
+      join(artifacts, "native-assignment-eligibility.json"),
+      JSON.stringify({ status: "required" }),
+    );
   }
-  // Shipped CLI ownership rules, including failure of global reads after adding ops.
-  fixture.writeExecutable(
-    join(bin, "openclaw"),
+  const cliPath = join(bin, "openclaw");
+  // Model the shipped API boundary: ownerless creation needs an unambiguous
+  // roster, an explicit owner must exist, and global listing may fail later.
+  writeFileSync(
+    cliPath,
     `#!${process.execPath}
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
@@ -352,11 +400,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 const configPath = process.env.OPENCLAW_CONFIG_PATH;
-const read = file => JSON.parse(fs.readFileSync(file, "utf8"));
-const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
-const output = value => process.stdout.write(JSON.stringify(value));
-const option = name => args[args.indexOf(name) + 1];
-const cfg = read(configPath);
+const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
 const approvalPath = path.join(process.env.OPENCLAW_STATE_DIR, "exec-approvals.json");
 if (args[0] === "--help") {
   process.stdout.write("  approvals Manage exec approvals\\n");
@@ -364,52 +408,55 @@ if (args[0] === "--help") {
   process.stdout.write("  --baseline Create baseline state\\n");
 } else if (args[0] === "setup") {
   cfg.agents = { entries: { main: {} }, defaults: {} };
-  write(configPath, cfg);
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
 } else if (args[0] === "plugins" && args[1] === "list") {
-  output({ plugins: [{ id: "webhooks" }] });
+  process.stdout.write(JSON.stringify({ plugins: [
+    { id: "device-pair", enabled: true }, { id: "webhooks", enabled: false },
+  ] }));
 } else if (args[0] === "config" && args[1] === "set") {
   const keys = args[2].split(".");
   let target = cfg;
   for (const key of keys.slice(0, -1)) target = target[key] ??= {};
   target[keys.at(-1)] = JSON.parse(args[3]);
-  write(configPath, cfg);
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
 } else if (args[0] === "approvals" && args[1] === "set") {
-  fs.copyFileSync(option("--file"), approvalPath);
+  fs.copyFileSync(args[args.indexOf("--file") + 1], approvalPath);
 } else if (args[0] === "approvals" && args[1] === "allowlist") {
-  const agent = option("--agent");
+  const agent = args[args.indexOf("--agent") + 1];
   assert(cfg.agents.entries[agent], "baseline approvals reject unknown agents");
-  const policy = read(approvalPath);
+  const policy = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
   policy.agents[agent] = { allowlist: [{ pattern: args[args.indexOf("--agent") + 2] }] };
-  write(approvalPath, policy);
+  fs.writeFileSync(approvalPath, JSON.stringify(policy));
 } else if (args[0] === "approvals" && args[1] === "get") {
-  const file = read(approvalPath);
+  const file = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
   for (const agent of Object.values(file.agents)) {
     for (const entry of agent.allowlist ?? []) entry.id ??= crypto.randomUUID();
   }
-  output({ file });
+  process.stdout.write(JSON.stringify({ file }));
 } else if (args[0] === "cron" && args[1] === "add") {
-  const explicitAgent = args.includes("--agent") ? option("--agent") : undefined;
+  const explicitAgent = args.includes("--agent") ? args[args.indexOf("--agent") + 1] : undefined;
   assert(explicitAgent ? cfg.agents.entries[explicitAgent] : Object.keys(cfg.agents.entries).length === 1,
     "baseline cannot resolve the requested cron owner");
-  const name = option("--name");
-  output({ id: "native-" + name, name, ...(explicitAgent ? { agentId: explicitAgent } : {}) });
+  const name = args[args.indexOf("--name") + 1];
+  process.stdout.write(JSON.stringify({ id: "native-" + name, name, ...(explicitAgent ? { agentId: explicitAgent } : {}) }));
 } else if (args[0] === "agents" && args[1] === "add") {
   cfg.agents.entries[args[2]] = {};
   cfg.agents.defaults.systemAgent = { agentId: "main" };
-  write(configPath, cfg);
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
 } else if (args[0] === "config" && args[1] === "unset") {
   delete cfg.agents.defaults.systemAgent;
-  write(configPath, cfg);
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
 } else {
   throw new Error("baseline global cron reads are unavailable with unresolved owners");
 }
 `,
   );
+  chmodSync(cliPath, 0o755);
   const run = (command: string) =>
-    fixture.runProcess(
-      process.execPath,
-      [assertions, command],
-      {
+    spawnSync(process.execPath, [assertions, command], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
@@ -421,9 +468,9 @@ if (args[0] === "--help") {
         OPENCLAW_STATE_DIR: state,
         GATEWAY_AUTH_TOKEN_REF: "survivor-test-token",
       },
-      10_000,
-    );
-  assertSuccess(run("seed-legacy-operator"));
+    });
+  const initialized = run("seed-legacy-operator");
+  expect(initialized.status, initialized.stderr).toBe(0);
   const earlyAgent = run("seed-legacy-operator-agent");
   expect(earlyAgent.status).toBe(1);
   expect(earlyAgent.stderr).toContain("create the default-owner cron job before adding ops");
@@ -433,14 +480,14 @@ if (args[0] === "--help") {
     "seed-legacy-operator-gateway",
     "assert-exec-approvals",
   ]) {
-    assertSuccess(run(command));
+    const result = run(command);
+    expect(result.status, result.stderr).toBe(0);
   }
-  const ledger = fixture.readJson(ledgerPath);
-  expect(ledger.jobs).toEqual([
+  expect(JSON.parse(readFileSync(ledgerPath, "utf8")).jobs).toEqual([
     { id: "native-survivor-default-owner", name: "survivor-default-owner" },
     { id: "native-survivor-ops-owner", name: "survivor-ops-owner", agentId: "ops" },
   ]);
-  expect(ledger).toMatchObject({
+  expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toMatchObject({
     approvalsJsonEra: true,
     approvals: {
       agents: {
@@ -449,10 +496,10 @@ if (args[0] === "--help") {
       },
     },
   });
-  const approvals = ledger.approvals;
+  const approvals = JSON.parse(readFileSync(ledgerPath, "utf8")).approvals;
   expect(approvals.defaults).toEqual({ security: "allowlist", ask: "off", askFallback: "deny" });
   expect(approvals.agents["native-proof"]).toEqual(
     version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
   );
-  expect(fixture.readJson(configPath).agents.defaults.systemAgent).toBeUndefined();
+  expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
 });

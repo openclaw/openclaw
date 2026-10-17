@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -34,7 +34,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
-import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
   entrypoint: vi.fn(),
@@ -101,26 +101,21 @@ vi.mock("./update-command-runtime.js", async (importOriginal) => ({
 
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import * as executorOwner from "./update-command-executor.js";
-import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 import { withUpdateEnv } from "./update-command-service-env.js";
 
-const pluginUpdate = createPostCorePluginUpdateResult({ status: "ok", warnings: [] });
+const pluginUpdate: PostCorePluginUpdateResult = {
+  status: "ok",
+  changed: false,
+  sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+  npm: { changed: false, outcomes: [] },
+  integrityDrifts: [],
+  warnings: [],
+};
 let state: OpenClawTestState;
 let dispatched: string[];
-const retirement = { step: "finalize:doctor:model-retirement", status: "skipped" as const };
-
-function captureResult(name = "post-core-result.json") {
-  const resultPath = state.statePath(name);
-  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-  return async (): Promise<unknown> => JSON.parse(await fs.readFile(resultPath, "utf8"));
-}
-
-function doctorOptions() {
-  return { root: state.root, pluginUpdate, yes: true, json: true };
-}
 
 beforeEach(async () => {
   state = await createOpenClawTestState({
@@ -201,441 +196,470 @@ function firstRefusal() {
   };
 }
 
-it.each([false, true])(
-  "rechecks legacy requester authority after executor settlement (revoked=%s)",
-  async (revoked) => {
-    const requester = { channel: "test", senderId: "owner" };
-    const run = createResumingRun({
-      before: { version: "2026.9.2" },
-      origin: { requester },
-    });
-    const readResult = captureResult();
-    vi.spyOn(packageRoot, "resolveOpenClawPackageRootSync").mockReturnValue(state.root);
-    const scratch = state.path("executor");
-    await fs.mkdir(scratch, { mode: 0o700 });
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
-    let current = true;
-    let settled = false;
-    vi.spyOn(requesterAuthority, "createManagedUpdateRequesterAuthority").mockResolvedValue({
-      requester,
-      isCurrent: () => current,
-    });
-    const withExecutor = executorOwner.withUpdateCommandExecutor;
-    vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementation(
-      async (runId, operation, options) => {
-        const result = await withExecutor(runId, operation, options);
-        settled = true;
-        current = !revoked;
-        return result;
-      },
-    );
-    const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
-    const result = resume();
-    if (revoked) {
-      await expect(result).rejects.toMatchObject({ code: "requester-revoked" });
-      expect(publication).not.toHaveBeenCalled();
-      expect(await readResult()).toMatchObject({
-        status: "failed",
-        error: "requester-revoked",
+describe("unproved Doctor authority callers", () => {
+  it.each([false, true])(
+    "rechecks legacy requester authority after executor settlement (revoked=%s)",
+    async (revoked) => {
+      const requester = { channel: "test", senderId: "owner" };
+      const run = createResumingRun({
+        before: { version: "2026.9.2" },
+        origin: { requester },
       });
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    } else {
-      await result;
-      expect(publication).toHaveBeenCalledOnce();
-      expect(await readResult()).toMatchObject({ status: "ok" });
-      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
-    }
-    expect(settled).toBe(true);
-    expect(getUpdateRun(run.runId)?.status).toBe("running");
-  },
-);
-
-it("defers the published parent-owned continuation before preparing an older schema", async () => {
-  const run = createResumingRun({ before: { version: "2026.9.5" } });
-  expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
-  await recordDeferredPluginMigrations({
-    pending: [
-      {
-        pluginId: "pending-fixture",
-        reason: "state upgrade deferred",
-        command: "openclaw doctor --fix",
-        requiresStateMigration: true,
-      },
-    ],
-  });
-  const readResult = captureResult("parent-owned-result.json");
-  await state.writeJson("handoff.json", { completionOwner: "parent" });
-  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-  const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-  // The deferred-migration write retains a worker connection. The synchronous
-  // close only starts its retirement, whose final checkpoint then races the
-  // raw downgrade and the read-only inspections below.
-  await closeOpenClawStateDatabaseAsync();
-  const prior = new DatabaseSync(databasePath);
-  try {
-    // Downgrade as the only connection, or refuse before inspecting.
-    prior.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE");
-    removePreparedWorkerOwnershipColumns(prior);
-    prior.exec(
-      "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'; COMMIT",
-    );
-  } finally {
-    prior.close();
-  }
-  const inspect = () => {
-    const db = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      return {
-        version: db.prepare("PRAGMA user_version").get(),
-        schema: db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all(),
-        pending: db
-          .prepare(
-            "SELECT * FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' ORDER BY id",
-          )
-          .all(),
-        steps: JSON.parse(
-          String(
-            db.prepare("SELECT steps_json FROM update_runs WHERE run_id=?").get(run.runId)
-              ?.steps_json,
-          ),
-        ),
-      };
-    } finally {
-      db.close();
-    }
-  };
-  const before = inspect();
-  const holder = acquireGatewayStateOwner({
-    databasePath,
-    payload: {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath: state.configPath,
-      role: "gateway",
+      const resultPath = state.statePath("post-core-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      vi.spyOn(packageRoot, "resolveOpenClawPackageRootSync").mockReturnValue(state.root);
+      const scratch = state.path("executor");
+      await fs.mkdir(scratch, { mode: 0o700 });
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+      let current = true;
+      let settled = false;
+      vi.spyOn(requesterAuthority, "createManagedUpdateRequesterAuthority").mockResolvedValue({
+        requester,
+        isCurrent: () => current,
+      });
+      const withExecutor = executorOwner.withUpdateCommandExecutor;
+      vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementation(
+        async (runId, operation, options) => {
+          const result = await withExecutor(runId, operation, options);
+          settled = true;
+          current = !revoked;
+          return result;
+        },
+      );
+      const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
+      const result = resume();
+      if (revoked) {
+        await expect(result).rejects.toMatchObject({ code: "requester-revoked" });
+        expect(publication).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+          error: "requester-revoked",
+        });
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(publication).toHaveBeenCalledOnce();
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({ status: "ok" });
+        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+      }
+      expect(settled).toBe(true);
+      expect(getUpdateRun(run.runId)?.status).toBe("running");
     },
-  });
-  expect(holder).not.toBeNull();
-  const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
-  try {
-    const work = resume().catch((error: unknown) => error);
-    expect(await work).toBeUndefined();
-    expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
-    expect(maintenance.mock.calls[0]?.[0].assertCurrent).toBeUndefined();
-    expect(await readResult()).toMatchObject({
-      status: "warning",
-      changed: false,
-      warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
-    });
-    const after = inspect();
-    expect(after.version).toEqual(before.version);
-    expect(after.schema).toEqual(before.schema);
-    expect(after.pending).toEqual(before.pending);
-    expect(after.steps).toContainEqual(
-      expect.objectContaining({ step: "warning:finalize:plugins:0", status: "completed" }),
-    );
-    expect(mocks.plugins).not.toHaveBeenCalled();
-    expect(dispatched).toEqual([]);
-    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
-  } finally {
-    holder?.release();
-  }
-});
+  );
 
-it.each([
-  { boundary: "parent-admission", repairs: 0 },
-  { boundary: "fresh-doctor", repairs: 1 },
-  { boundary: "post-plugin-doctor", repairs: 2 },
-  { boundary: "incomplete-migration", repairs: 0 },
-] as const)(
-  "settles the published parent's $boundary maintenance outcome before publication",
-  async ({ boundary, repairs }) => {
+  it("defers the published parent-owned continuation before preparing an older schema", async () => {
     const run = createResumingRun({ before: { version: "2026.9.5" } });
     expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
-    const readResult = captureResult("maintenance-result.json");
-    const unsafe = boundary === "incomplete-migration";
-    const refusal = new DoctorMaintenanceRefusalError(
-      "Doctor maintenance remains pending; stop other OpenClaw processes and run openclaw doctor --fix.",
-      unsafe
-        ? { kind: "data-at-risk", reason: "incomplete-migration" }
-        : { kind: "deferred", reason: "coordinator-contention" },
-    );
-    const maintenance = createDoctorMaintenanceFixture();
-    vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async () => {
-      if (boundary === "parent-admission" || unsafe) {
-        throw refusal;
-      }
-      return maintenance;
-    });
-    if (repairs === 2) {
-      mocks.plugins.mockResolvedValue({ ...pluginUpdate, changed: true });
-    }
-    const dispatch = mocks.runExec.getMockImplementation()!;
-    let doctorPass = 0;
-    mocks.runExec.mockImplementation(async (command, args, options) => {
-      const result = await dispatch(command, args, options);
-      if (args.includes("--repair") && ++doctorPass === (repairs || 1)) {
-        await writeUpdatePostInstallDoctorResult({
-          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          result: {
-            status: "ok",
-            warnings: [refusal.message],
-            maintenanceRefusal: refusal.refusal,
-          },
-        });
-      }
-      return result;
-    });
-    const pending = resume();
-    if (unsafe) {
-      await expect(pending).rejects.toBe(refusal);
-      expect(await readResult()).toMatchObject({
-        status: "failed",
-      });
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    } else {
-      await pending;
-      expect(await readResult()).toMatchObject({
-        status: "warning",
-        changed: repairs === 2,
-        warnings: [{ reason: "doctor-advisory", message: refusal.message }],
-      });
-      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
-      expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-        expect.stringContaining("Post-core update evidence could not be saved"),
-      );
-      expect(getUpdateRun(run.runId)?.steps).toContainEqual(
-        expect.objectContaining({
-          step: "warning:finalize:plugins:0",
-          status: "completed",
-          detail: refusal.message,
-        }),
-      );
-    }
-    expect(dispatched).toEqual(Array<string>(repairs).fill("repair"));
-    expect(mocks.plugins).toHaveBeenCalledTimes(repairs === 2 ? 1 : 0);
-    expect(maintenance.finish).toHaveBeenCalledTimes(repairs > 0 ? 1 : 0);
-  },
-);
-
-it("keeps the shipped 9.3 child-owned completion route outside the 9.2 bridge", async () => {
-  const run = createResumingRun({ before: { version: "2026.9.3" } });
-  await resume();
-  expect(dispatched).toEqual(["repair", "validate", "readiness"]);
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-    expect.objectContaining({
-      runId: run.runId,
-      steps: [
-        expect.objectContaining({
-          name: "post-plugin doctor",
-          exitCode: 0,
-          deferredInspectionCheckIds: null,
-        }),
-        expect.objectContaining({ doctorLintFindings: [] }),
+    await recordDeferredPluginMigrations({
+      pending: [
+        {
+          pluginId: "pending-fixture",
+          reason: "state upgrade deferred",
+          command: "openclaw doctor --fix",
+          requiresStateMigration: true,
+        },
       ],
-    }),
-  );
-  expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
-});
-
-it.each([false, true])(
-  "publishes settled phase evidence only for older parents (parent owns completion=%s)",
-  async (parentOwnsCompletion) => {
-    const run = createUpdateRun({ trigger: "cli" });
-    adoptUpdateRun(run.runId);
-    recordUpdateRunStep(run.runId, retirement);
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
-    captureResult();
-    if (parentOwnsCompletion) {
-      await state.writeJson("handoff.json", { completionOwner: "parent" });
+    });
+    const resultPath = state.statePath("parent-owned-result.json");
+    await state.writeJson("handoff.json", { completionOwner: "parent" });
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    // The deferred-migration write retains a worker connection. The synchronous
+    // close only starts its retirement, whose final checkpoint then races the
+    // raw downgrade and the read-only inspections below.
+    await closeOpenClawStateDatabaseAsync();
+    const prior = new DatabaseSync(databasePath);
+    try {
+      // Downgrade as the only connection, or refuse before inspecting.
+      prior.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE");
+      removePreparedWorkerOwnershipColumns(prior);
+      prior.exec(
+        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'; COMMIT",
+      );
+    } finally {
+      prior.close();
     }
-    await fs.mkdir(state.path("phase-artifacts"));
-    vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
-    let restored = false;
-    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
-      createDoctorMaintenanceFixture({
-        finish: vi.fn(async () => {
-          await Promise.resolve();
-          restored = true;
-        }),
+    const inspect = () => {
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        return {
+          version: db.prepare("PRAGMA user_version").get(),
+          schema: db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all(),
+          pending: db
+            .prepare(
+              "SELECT * FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' ORDER BY id",
+            )
+            .all(),
+          steps: JSON.parse(
+            String(
+              db.prepare("SELECT steps_json FROM update_runs WHERE run_id=?").get(run.runId)
+                ?.steps_json,
+            ),
+          ),
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const before = inspect();
+    const holder = acquireGatewayStateOwner({
+      databasePath,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+      },
+    });
+    expect(holder).not.toBeNull();
+    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
+    try {
+      const work = resume().catch((error: unknown) => error);
+      expect(await work).toBeUndefined();
+      expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
+      expect(maintenance.mock.calls[0]?.[0].assertCurrent).toBeUndefined();
+      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+        status: "warning",
+        changed: false,
+        warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
+      });
+      const after = inspect();
+      expect(after.version).toEqual(before.version);
+      expect(after.schema).toEqual(before.schema);
+      expect(after.pending).toEqual(before.pending);
+      expect(after.steps).toContainEqual(
+        expect.objectContaining({ step: "warning:finalize:plugins:0", status: "completed" }),
+      );
+      expect(mocks.plugins).not.toHaveBeenCalled();
+      expect(dispatched).toEqual([]);
+      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {
+      holder?.release();
+    }
+  });
+
+  it.each([
+    "parent-admission",
+    "fresh-doctor",
+    "post-plugin-doctor",
+    "incomplete-migration",
+  ] as const)(
+    "settles the published parent's %s maintenance outcome before publication",
+    async (boundary) => {
+      const run = createResumingRun({ before: { version: "2026.9.5" } });
+      expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
+      const resultPath = state.statePath("maintenance-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      const unsafe = boundary === "incomplete-migration";
+      const refusal = new DoctorMaintenanceRefusalError(
+        "Doctor maintenance remains pending; stop other OpenClaw processes and run openclaw doctor --fix.",
+        unsafe
+          ? { kind: "data-at-risk", reason: "incomplete-migration" }
+          : { kind: "deferred", reason: "coordinator-contention" },
+      );
+      const maintenance = createDoctorMaintenanceFixture();
+      vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async () => {
+        if (boundary === "parent-admission" || unsafe) {
+          throw refusal;
+        }
+        return maintenance;
+      });
+      if (boundary === "post-plugin-doctor") {
+        mocks.plugins.mockResolvedValue({ ...pluginUpdate, changed: true });
+      }
+      const dispatch = mocks.runExec.getMockImplementation()!;
+      let doctorPass = 0;
+      mocks.runExec.mockImplementation(async (command, args, options) => {
+        const result = await dispatch(command, args, options);
+        if (
+          args.includes("--repair") &&
+          ++doctorPass === (boundary === "post-plugin-doctor" ? 2 : 1)
+        ) {
+          await writeUpdatePostInstallDoctorResult({
+            resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+            result: {
+              status: "ok",
+              warnings: [refusal.message],
+              maintenanceRefusal: refusal.refusal,
+            },
+          });
+        }
+        return result;
+      });
+      const pending = resume();
+      if (unsafe) {
+        await expect(pending).rejects.toBe(refusal);
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+        });
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        await pending;
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "warning",
+          changed: boundary === "post-plugin-doctor",
+          warnings: [{ reason: "doctor-advisory", message: refusal.message }],
+        });
+        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+          expect.stringContaining("Post-core update evidence could not be saved"),
+        );
+        expect(getUpdateRun(run.runId)?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:finalize:plugins:0",
+            status: "completed",
+            detail: refusal.message,
+          }),
+        );
+      }
+      expect(dispatched).toEqual(
+        boundary === "fresh-doctor"
+          ? ["repair"]
+          : boundary === "post-plugin-doctor"
+            ? ["repair", "repair"]
+            : [],
+      );
+      expect(mocks.plugins).toHaveBeenCalledTimes(boundary === "post-plugin-doctor" ? 1 : 0);
+      expect(maintenance.finish).toHaveBeenCalledTimes(
+        boundary === "fresh-doctor" || boundary === "post-plugin-doctor" ? 1 : 0,
+      );
+    },
+  );
+
+  it("keeps the shipped 9.3 child-owned completion route outside the 9.2 bridge", async () => {
+    const run = createResumingRun({ before: { version: "2026.9.3" } });
+    await resume();
+    expect(dispatched).toEqual(["repair", "validate", "readiness"]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.runId,
+        steps: [
+          expect.objectContaining({
+            name: "post-plugin doctor",
+            exitCode: 0,
+            deferredInspectionCheckIds: null,
+          }),
+          expect.objectContaining({ doctorLintFindings: [] }),
+        ],
       }),
     );
-    let phasePath: string | undefined;
-    vi.mocked(defaultRuntime.error).mockImplementation((line) => {
-      const prefix = "Post-plugin Doctor report (update completion pending): ";
-      if (typeof line === "string" && line.startsWith(prefix)) {
-        expect(restored).toBe(true);
-        phasePath = line.slice(prefix.length);
-      }
-    });
-    const writeResult = postCore.writePostCorePluginUpdateResultFile;
-    const publication = vi
-      .spyOn(postCore, "writePostCorePluginUpdateResultFile")
-      .mockImplementation(async (...args) => {
-        const lintStep = expect.objectContaining({
-          step: "finalize:doctor-lint:post-plugin-doctor-lint",
-        });
-        if (parentOwnsCompletion) {
-          expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(lintStep);
-          expect(dispatched).toEqual([]);
-          expect(args[1]?.doctorLint).toBeUndefined();
-        } else {
-          expect(getUpdateRun(run.runId)?.steps).toContainEqual(lintStep);
-          // Legacy resume prepares migrations before producing plugins, then
-          // completion handles the recorded deferred retirement.
-          expect(dispatched).toEqual(["repair", "repair", "validate", "readiness"]);
-        }
-        expect(getUpdateRun(run.runId)?.status).toBe("running");
-        const canonicalPath = state.statePath("update-reports", `${run.runId}.md`);
-        await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
-        if (parentOwnsCompletion) {
-          expect(phasePath).toBeUndefined();
-          expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
-        } else {
-          expect(phasePath).toBeDefined();
-          expect(phasePath).not.toBe(canonicalPath);
-          const report = await fs.readFile(phasePath!, "utf8");
-          expect(report).toContain("update completion is pending with the parent updater");
-          expect(report).toContain("Complete Doctor lint findings (0)");
-        }
-        await writeResult(...args);
+    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it.each([false, true])(
+    "publishes settled phase evidence only for older parents (parent owns completion=%s)",
+    async (parentOwnsCompletion) => {
+      const run = createUpdateRun({ trigger: "cli" });
+      adoptUpdateRun(run.runId);
+      recordUpdateRunStep(run.runId, {
+        step: "finalize:doctor:model-retirement",
+        status: "skipped",
       });
-
-    await resume();
-
-    expect(publication).toHaveBeenCalledOnce();
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.log).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["paths", "sizes"] as const)(
-  "fences default-budget %s await before the next child",
-  async (boundary) => {
-    const authority = firstRefusal();
-    const mock = boundary === "paths" ? mocks.paths : mocks.sizes;
-    mock.mockImplementationOnce(async () => {
-      await Promise.resolve();
-      authority.arm();
-      return boundary === "paths" ? new Map() : [];
-    });
-    const result = completePostCorePluginUpdate({
-      ...doctorOptions(),
-      pluginUpdate: { ...pluginUpdate, changed: true },
-      assertCurrent: authority.assertCurrent,
-    });
-    await expect(result).rejects.toBe(authority.error);
-    expect(dispatched).toEqual(["repair"]);
-  },
-);
-
-it.each([
-  { owner: "parent", selected: "deferred", ambient: "missing" },
-  { owner: "parent", selected: "deferred", ambient: "foreign" },
-  { owner: "parent", selected: "clear", ambient: "foreign" },
-  { owner: "parent", selected: "terminal", ambient: "foreign" },
-  { owner: "standalone", selected: "deferred", ambient: "missing" },
-] as const)(
-  "completes only the selected retirement ($owner, $selected, ambient=$ambient)",
-  async ({ owner, selected, ambient }) => {
-    const env = { ...process.env };
-    const run = createUpdateRun({ trigger: "cli" }, { env });
-    if (selected !== "clear") {
-      recordUpdateRunStep(run.runId, retirement, { env });
-    }
-    if (selected === "terminal") {
-      finishUpdateRun(run.runId, { status: "succeeded" }, { env });
-    }
-    const unrelated = createUpdateRun({ trigger: "cli" }, { env });
-    recordUpdateRunStep(unrelated.runId, retirement, { env });
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", ambient === "foreign" ? unrelated.runId : undefined);
-    vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, undefined);
-
-    await completePostCorePluginUpdate({
-      ...doctorOptions(),
-      timeoutMs: 5_000,
-      ...(owner === "parent"
-        ? {
-            opts: { run: { runId: run.runId, env, executorFence: firstRefusal() } },
-            // A caller's admitted run takes precedence over the standalone hint too.
-            runId: unrelated.runId,
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+      const resultPath = state.statePath("post-core-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      if (parentOwnsCompletion) {
+        await state.writeJson("handoff.json", { completionOwner: "parent" });
+      }
+      await fs.mkdir(state.path("phase-artifacts"));
+      vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
+      let restored = false;
+      const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
+        createDoctorMaintenanceFixture({
+          finish: vi.fn(async () => {
+            await Promise.resolve();
+            restored = true;
+          }),
+        }),
+      );
+      let phasePath: string | undefined;
+      vi.mocked(defaultRuntime.error).mockImplementation((line) => {
+        const prefix = "Post-plugin Doctor report (update completion pending): ";
+        if (typeof line === "string" && line.startsWith(prefix)) {
+          expect(restored).toBe(true);
+          phasePath = line.slice(prefix.length);
+        }
+      });
+      const writeResult = postCore.writePostCorePluginUpdateResultFile;
+      const publication = vi
+        .spyOn(postCore, "writePostCorePluginUpdateResultFile")
+        .mockImplementation(async (...args) => {
+          const lintStep = expect.objectContaining({
+            step: "finalize:doctor-lint:post-plugin-doctor-lint",
+          });
+          if (parentOwnsCompletion) {
+            expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(lintStep);
+            expect(dispatched).toEqual([]);
+            expect(args[1]?.doctorLint).toBeUndefined();
+          } else {
+            expect(getUpdateRun(run.runId)?.steps).toContainEqual(lintStep);
+            // Legacy resume prepares migrations before producing plugins, then
+            // completion handles the recorded deferred retirement.
+            expect(dispatched).toEqual(["repair", "repair", "validate", "readiness"]);
           }
-        : { runId: run.runId }),
-    });
+          expect(getUpdateRun(run.runId)?.status).toBe("running");
+          const canonicalPath = state.statePath("update-reports", `${run.runId}.md`);
+          await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
+          if (parentOwnsCompletion) {
+            expect(phasePath).toBeUndefined();
+            expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
+          } else {
+            expect(phasePath).toBeDefined();
+            expect(phasePath).not.toBe(canonicalPath);
+            const report = await fs.readFile(phasePath!, "utf8");
+            expect(report).toContain("update completion is pending with the parent updater");
+            expect(report).toContain("Complete Doctor lint findings (0)");
+          }
+          await writeResult(...args);
+        });
 
-    const repairs = mocks.runExec.mock.calls.filter(([, args]) => args.includes("--repair"));
-    expect(repairs).toHaveLength(selected === "deferred" ? 1 : 0);
-    if (repairs.length) {
-      expect(repairs[0]?.[2].env.OPENCLAW_UPDATE_RUN_ID).toBe(run.runId);
-    }
-    expect(getUpdateRun(unrelated.runId, { env })?.steps).toContainEqual(
-      expect.objectContaining(retirement),
-    );
-  },
-);
+      await resume();
 
-it.each(["live", "first-refusal"] as const)(
-  "forwards original authority through resumed production and parent completion: %s",
-  async (boundary) => {
-    const authority = firstRefusal();
-    const run = createUpdateRun({ trigger: "cli", before: { version: VERSION } });
-    recordUpdateRunStep(run.runId, retirement);
-    // The modern child publishes plugin work without starting Doctor. Exercise
-    // deferred retirement through the real parent that consumes that result.
-    captureResult();
-    await state.writeJson("handoff.json", { completionOwner: "parent" });
-    if (boundary === "first-refusal") {
-      mocks.entrypoint.mockImplementationOnce(async () => {
+      expect(publication).toHaveBeenCalledOnce();
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(defaultRuntime.log).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["paths", "sizes"] as const)(
+    "fences default-budget %s await before the next child",
+    async (boundary) => {
+      const authority = firstRefusal();
+      const mock = boundary === "paths" ? mocks.paths : mocks.sizes;
+      mock.mockImplementationOnce(async () => {
         await Promise.resolve();
         authority.arm();
-        return state.path("dist/index.js");
+        return boundary === "paths" ? new Map() : [];
       });
-    }
-    const before = await readConfigFileSnapshot({ observe: false });
-    const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
-    const handoff = vi
-      .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
-      .mockImplementationOnce(async (params) => {
-        // The transport correlates its child; the admitted parent keeps its run in opts.
-        await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
-          resumePostCoreUpdate(params),
-        );
-        expect(dispatched).toEqual([]);
-        expect(defaultRuntime.exit).not.toHaveBeenCalled();
-        const published = publication.mock.lastCall?.[1];
-        expect(published).toBeDefined();
-        expect(published?.doctorLint).toBeUndefined();
-        return { resumed: true, pluginUpdate: published };
-      });
-    const result = convergeUpdatePlugins({
-      result: resultFixture(state.root),
-      root: state.root,
-      installKindChanged: false,
-      configSnapshot: before,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      opts: {
-        json: true,
+      const result = completePostCorePluginUpdate({
+        root: state.root,
+        pluginUpdate: { ...pluginUpdate, changed: true },
         yes: true,
-        run: { runId: run.runId, env: process.env, executorFence: authority },
-      },
-      preUpdatePluginInstallRecords: {},
-      startedAt: Date.now(),
-      updateStepTimeoutMs: 5_000,
-    });
-    if (boundary === "live") {
-      const completed = await result;
-      expect(dispatched).toEqual(["repair", "validate", "readiness"]);
-      expect(completed.resultWithPostUpdate.postUpdate?.plugins?.doctorLint).toBeDefined();
-    } else {
+        json: true,
+        assertCurrent: authority.assertCurrent,
+      });
       await expect(result).rejects.toBe(authority.error);
-      expect(dispatched).toEqual([]);
-    }
-    expect(handoff).toHaveBeenCalledOnce();
-    expect(publication).toHaveBeenCalledOnce();
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect((await readConfigFileSnapshot({ observe: false })).raw).toBe(before.raw);
-  },
-);
+      expect(dispatched).toEqual(["repair"]);
+    },
+  );
+
+  it.each([
+    { owner: "parent", selected: "deferred", ambient: "missing" },
+    { owner: "parent", selected: "deferred", ambient: "foreign" },
+    { owner: "parent", selected: "clear", ambient: "foreign" },
+    { owner: "parent", selected: "terminal", ambient: "foreign" },
+    { owner: "standalone", selected: "deferred", ambient: "missing" },
+  ] as const)(
+    "completes only the selected retirement ($owner, $selected, ambient=$ambient)",
+    async ({ owner, selected, ambient }) => {
+      const env = { ...process.env };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const deferred = { step: "finalize:doctor:model-retirement", status: "skipped" as const };
+      if (selected !== "clear") {
+        recordUpdateRunStep(run.runId, deferred, { env });
+      }
+      if (selected === "terminal") {
+        finishUpdateRun(run.runId, { status: "succeeded" }, { env });
+      }
+      const unrelated = createUpdateRun({ trigger: "cli" }, { env });
+      recordUpdateRunStep(unrelated.runId, deferred, { env });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", ambient === "foreign" ? unrelated.runId : undefined);
+      vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, undefined);
+
+      await completePostCorePluginUpdate({
+        root: state.root,
+        ...(owner === "parent"
+          ? {
+              opts: { run: { runId: run.runId, env, executorFence: firstRefusal() } },
+              // A caller's admitted run takes precedence over the standalone hint too.
+              runId: unrelated.runId,
+            }
+          : { runId: run.runId }),
+        pluginUpdate,
+        yes: true,
+        json: true,
+        timeoutMs: 5_000,
+      });
+
+      const repairs = mocks.runExec.mock.calls.filter(([, args]) => args.includes("--repair"));
+      expect(repairs).toHaveLength(selected === "deferred" ? 1 : 0);
+      if (repairs.length) {
+        expect(repairs[0]?.[2].env.OPENCLAW_UPDATE_RUN_ID).toBe(run.runId);
+      }
+      expect(getUpdateRun(unrelated.runId, { env })?.steps).toContainEqual(
+        expect.objectContaining(deferred),
+      );
+    },
+  );
+
+  it.each(["live", "first-refusal"] as const)(
+    "forwards original authority through resumed production and parent completion: %s",
+    async (boundary) => {
+      const authority = firstRefusal();
+      const run = createUpdateRun({ trigger: "cli", before: { version: VERSION } });
+      recordUpdateRunStep(run.runId, {
+        step: "finalize:doctor:model-retirement",
+        status: "skipped",
+      });
+      // The modern child publishes plugin work without starting Doctor. Exercise
+      // deferred retirement through the real parent that consumes that result.
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", state.statePath("post-core-result.json"));
+      await state.writeJson("handoff.json", { completionOwner: "parent" });
+      if (boundary === "first-refusal") {
+        mocks.entrypoint.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          authority.arm();
+          return state.path("dist/index.js");
+        });
+      }
+      const before = await readConfigFileSnapshot({ observe: false });
+      const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
+      const handoff = vi
+        .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
+        .mockImplementationOnce(async (params) => {
+          // The transport correlates its child; the admitted parent keeps its run in opts.
+          await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
+            resumePostCoreUpdate(params),
+          );
+          expect(dispatched).toEqual([]);
+          expect(defaultRuntime.exit).not.toHaveBeenCalled();
+          const published = publication.mock.lastCall?.[1];
+          expect(published).toBeDefined();
+          expect(published?.doctorLint).toBeUndefined();
+          return { resumed: true, pluginUpdate: published };
+        });
+      const result = convergeUpdatePlugins({
+        result: { status: "ok", mode: "npm", root: state.root, steps: [], durationMs: 0 },
+        root: state.root,
+        installKindChanged: false,
+        configSnapshot: before,
+        requestedChannel: null,
+        storedChannel: null,
+        channel: "stable",
+        downgradeRisk: false,
+        opts: {
+          json: true,
+          yes: true,
+          run: { runId: run.runId, env: process.env, executorFence: authority },
+        },
+        preUpdatePluginInstallRecords: {},
+        startedAt: Date.now(),
+        updateStepTimeoutMs: 5_000,
+      });
+      if (boundary === "live") {
+        const completed = await result;
+        expect(dispatched).toEqual(["repair", "validate", "readiness"]);
+        expect(completed.resultWithPostUpdate.postUpdate?.plugins?.doctorLint).toBeDefined();
+      } else {
+        await expect(result).rejects.toBe(authority.error);
+        expect(dispatched).toEqual([]);
+      }
+      expect(handoff).toHaveBeenCalledOnce();
+      expect(publication).toHaveBeenCalledOnce();
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect((await readConfigFileSnapshot({ observe: false })).raw).toBe(before.raw);
+    },
+  );
+});

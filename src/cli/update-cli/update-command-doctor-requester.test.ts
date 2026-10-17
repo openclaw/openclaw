@@ -26,7 +26,6 @@ import { runPackageUpdateDoctor } from "./update-command-package.js";
 
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
-const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 
 it.each([
   { kind: "package", fault: "requester-reassigned" },
@@ -46,11 +45,10 @@ it.each([
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
       await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
-      await writeJson(path.join(root, "package.json"), {
-        name: "openclaw",
-        type: "module",
-        version: "2026.9.4",
-      });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", type: "module", version: "2026.9.4" }),
+      );
       await fs.writeFile(path.join(root, "dist", "index.js"), "");
       const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
       const marker = path.join(root, "doctor-ran");
@@ -84,23 +82,26 @@ it.each([
         senderId: "100000000000000001",
       };
       linkUserChannelIdentity(ada.id, identity, identityOptions);
-      await writeJson(env.OPENCLAW_CONFIG_PATH, {
-        plugins: { enabled: false },
-        gateway: {
-          auth: {
-            identityScopes: {
-              "ada@example.test": ["operator.admin"],
-              "grace@example.test": ["operator.admin"],
+      await fs.writeFile(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({
+          plugins: { enabled: false },
+          gateway: {
+            auth: {
+              identityScopes: {
+                "ada@example.test": ["operator.admin"],
+                "grace@example.test": ["operator.admin"],
+              },
+            },
+            roles: {
+              default: "admin",
+              definitions: {
+                admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+              },
             },
           },
-          roles: {
-            default: "admin",
-            definitions: {
-              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-            },
-          },
-        },
-      });
+        }),
+      );
       const requesterAuthority = await createManagedUpdateRequesterAuthority(
         {
           channel: identity.channelId,
@@ -111,6 +112,10 @@ it.each([
         env,
       );
       expect(requesterAuthority.isCurrent()).toBe(true);
+      const reassignRequester = () => {
+        unlinkUserChannelIdentity(ada.id, identity, identityOptions);
+        linkUserChannelIdentity(grace.id, identity, identityOptions);
+      };
       let reachedSpawn = false;
       const runChild = processRunner.runUtf8CommandWithTimeout;
       vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
@@ -120,8 +125,7 @@ it.each([
           beforeInput: (pid, spawnedArgv) => {
             reachedSpawn = true;
             if (fault === "requester-reassigned") {
-              unlinkUserChannelIdentity(ada.id, identity, identityOptions);
-              linkUserChannelIdentity(grace.id, identity, identityOptions);
+              reassignRequester();
             }
             commandOptions.beforeInput?.(pid, spawnedArgv);
           },
@@ -129,7 +133,11 @@ it.each([
       });
       const params = executionParams(kind);
       params.root = root;
-      params.opts.run = { runId, env, requesterAuthority };
+      params.opts.run = {
+        runId,
+        env,
+        requesterAuthority,
+      };
       mocks.nativeSupport.mockResolvedValue(true);
       mocks.validateCanary.mockResolvedValue({
         status: "ok",

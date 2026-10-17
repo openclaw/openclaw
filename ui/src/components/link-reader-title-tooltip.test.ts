@@ -5,7 +5,6 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
-import { expectAttributes, hovercard as card, key, pointer } from "./link-reader.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { settleTooltip } from "./tooltip.test-support.ts";
@@ -25,11 +24,19 @@ vi.mock(import("./link-reader-hovercard.ts"), async (original) => {
 
 const tag = "openclaw-link-reader-hovercard-provider";
 const href = "https://github.com/openclaw/openclaw/issues/99815";
-const response = { url: href, title: "Preview ready" };
-const tooltip = () =>
-  document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
-const titleIsOpen = () =>
-  Boolean(tooltip()?.shadowRoot?.querySelector(".tooltip-surface")?.matches(":popover-open"));
+const response = {
+  url: href,
+  comments: 2,
+  createdAt: "2026-07-05T08:00:00Z",
+  kind: "issue",
+  login: "octocat",
+  number: 99815,
+  owner: "openclaw",
+  repo: "openclaw",
+  state: "open",
+  title: "Preview ready",
+  updatedAt: "2026-07-05T09:55:00Z",
+};
 let dispose: () => void;
 beforeEach(() => {
   vi.useFakeTimers();
@@ -65,23 +72,30 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
-  const noPopupAria = () =>
-    expectAttributes(anchor, {
-      "aria-haspopup": null,
-      "aria-expanded": null,
-      "aria-controls": null,
-    });
+  const tooltip = () =>
+    document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
+  const titleIsOpen = () =>
+    Boolean(
+      tooltip()
+        ?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface")
+        ?.matches(":popover-open"),
+    );
+  const noPopupAria = () => {
+    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    expect(anchor.hasAttribute("aria-controls")).toBe(false);
+  };
   try {
     // Install the real bootstrap after the title adapter: listener order must not matter.
     expect(customElements.get(tag)).toBeUndefined();
     await import("./link-reader-hovercard-registration.ts");
-    pointer(anchor, "pointerover");
+    anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
     await vi.advanceTimersByTimeAsync(1_000);
     expect(customElements.get(tag)).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
     expect(anchor.title).toBe("");
     noPopupAria();
-    expect(titleIsOpen()).toBe(false);
+    expect({ mounts: titleMounts.length, open: titleIsOpen() }).toEqual({ mounts: 0, open: false });
 
     runtimeLoad.release();
     await import("./link-reader-hovercard.ts");
@@ -92,21 +106,24 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     anchor.focus();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(card()).toBeNull();
+    expect(titleMounts).toEqual([]);
+    expect(document.querySelector(".link-reader-hovercard")).toBeNull();
     noPopupAria();
     const failure = "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.";
     first.reject(new GatewayRequestError({ code: "UNAVAILABLE", message: failure }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(card()?.textContent).toContain(failure);
+    expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain(failure);
     anchor.dispatchEvent(new MouseEvent("pointerleave", { composed: true }));
     anchor.blur();
     expect(anchor.title).toBe(href);
     anchor.focus();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).toHaveBeenCalledTimes(1);
-    const failedCard = card();
+    expect(titleMounts).toEqual([]);
+    const failedCard = document.querySelector(".link-reader-hovercard");
     expect(failedCard?.textContent).toContain(failure);
-    expectAttributes(anchor, { "aria-controls": failedCard!.id, "aria-expanded": "true" });
+    expect(anchor.getAttribute("aria-controls")).toBe(failedCard?.id);
+    expect(anchor.getAttribute("aria-expanded")).toBe("true");
     expect(titleIsOpen()).toBe(false);
 
     // An icon-only cached permalink still gets its name from title while native hints stay blank.
@@ -157,10 +174,13 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     noPopupAria();
     second.resolve(response);
     await vi.advanceTimersByTimeAsync(0);
-    expect(card()?.textContent).toContain("Preview ready");
+    expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain(
+      "Preview ready",
+    );
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
     expect(titleMounts).toHaveLength(previousMounts);
-    expect(anchor).toMatchObject({ title: "", href });
+    expect(anchor.title).toBe("");
+    expect(anchor.href).toBe(href);
     anchor.blur();
     await vi.advanceTimersByTimeAsync(200);
     expect(anchor.title).toBe(href);
@@ -199,7 +219,8 @@ it("keeps rendered GitHub links free of native titles across preview closure and
     for (const link of links) {
       expect.soft(link.hasAttribute("title")).toBe(false);
       expect(link.querySelector("[title]")).toBeNull();
-      expect(link).toMatchObject({ href, target: "_blank" });
+      expect(link.href).toBe(href);
+      expect(link.target).toBe("_blank");
     }
   };
   expect(links).toHaveLength(15);
@@ -208,21 +229,23 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   noNativeTitles();
   const anchor = links[1]!;
   const child = anchor.querySelector("strong")!;
+  const pointer = (target: Element, type: string, relatedTarget?: EventTarget) =>
+    target.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, relatedTarget }));
   pointer(anchor, "pointerover");
   await customElements.whenDefined(tag);
   await vi.advanceTimersByTimeAsync(1_000);
   // The real lazy bootstrap requires browser :hover; focus supplies intent in jsdom.
   anchor.focus();
   await vi.advanceTimersByTimeAsync(0);
-  expect(card()?.textContent).toContain("Preview ready");
+  expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain("Preview ready");
   noNativeTitles();
   pointer(anchor, "pointerout", child);
   pointer(child, "pointerover", anchor);
   await vi.advanceTimersByTimeAsync(200);
-  expect(card()).not.toBeNull();
-  key(anchor, "Escape");
+  expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
+  anchor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await vi.advanceTimersByTimeAsync(200);
-  expect(card()).toBeNull();
+  expect(document.querySelector(".link-reader-hovercard")).toBeNull();
   noNativeTitles();
   pointer(child, "pointerout", document.body);
   pointer(anchor, "pointerleave", document.body);
@@ -231,31 +254,39 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   noNativeTitles();
   pointer(child, "pointerover", document.body);
   await vi.advanceTimersByTimeAsync(300);
-  expect(card()).not.toBeNull();
+  expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
   noNativeTitles();
   expect(links[0]?.textContent).toBe("openclaw/openclaw#99815");
   expect(anchor.textContent).toBe("the related issue");
   expect(links[2]?.querySelector("img")?.alt).toBe("Issue icon");
-  for (const index of [3, 6, 9, 10, 12]) {
-    expect(links[index]?.getAttribute("aria-label")).toBe("Issue details");
-  }
-  for (const index of [4, 5, 7, 8, 11]) {
-    expect(links[index]?.hasAttribute("aria-label")).toBe(false);
-  }
+  expect(links[3]?.getAttribute("aria-label")).toBe("Issue details");
   expect(links[4]?.textContent).toBe("<button>");
+  expect(links[4]?.hasAttribute("aria-label")).toBe(false);
   expect(links[5]?.textContent).toBe("*");
+  expect.soft(links[5]?.hasAttribute("aria-label")).toBe(false);
   expect(links[6]?.textContent).toBe("");
+  expect(links[6]?.getAttribute("aria-label")).toBe("Issue details");
   expect(links[7]?.querySelector("progress")?.value).toBe(1);
   expect(links[7]?.querySelector("progress")?.getAttribute("aria-label")).toBe("Build status");
+  expect.soft(links[7]?.hasAttribute("aria-label")).toBe(false);
+  expect(links[8]?.hasAttribute("aria-label")).toBe(false);
   expect.soft(links[8]?.querySelector("progress")?.getAttribute("aria-label")).toBe("Build status");
+  expect.soft(links[9]?.getAttribute("aria-label")).toBe("Issue details");
+  expect(links[10]?.getAttribute("aria-label")).toBe("Issue details");
+  expect(links[11]?.hasAttribute("aria-label")).toBe(false);
+  expect(links[12]?.getAttribute("aria-label")).toBe("Issue details");
   const ordinary = provider.querySelector<HTMLAnchorElement>('a[href="https://example.com"]')!;
   pointer(child, "pointerout", ordinary);
   pointer(anchor, "pointerleave", ordinary);
   ordinary.focus();
   await vi.advanceTimersByTimeAsync(200);
-  await settleTooltip(tooltip()!);
-  expect(tooltip()?.content).toBe("Read the documentation");
-  expect(titleIsOpen()).toBe(true);
+  const tooltip =
+    document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
+  await settleTooltip(tooltip!);
+  expect(tooltip?.content).toBe("Read the documentation");
+  expect(
+    tooltip?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface")?.matches(":popover-open"),
+  ).toBe(true);
   ordinary.blur();
   expect(ordinary.title).toBe("Read the documentation");
 });

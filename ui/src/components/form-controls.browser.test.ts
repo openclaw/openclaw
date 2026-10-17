@@ -51,20 +51,6 @@ function buttonAppearance(button: Locator) {
   });
 }
 
-function readComputed(page: Page, selectors: string[], property: string, pseudo = "") {
-  return page.evaluate(
-    (input) =>
-      input.selectors.map((selector) => {
-        const node = document.querySelector(selector);
-        if (!(node instanceof HTMLElement)) {
-          throw new Error(`Missing style fixture ${selector}`);
-        }
-        return getComputedStyle(node, input.pseudo || null).getPropertyValue(input.property);
-      }),
-    { selectors, property, pseudo },
-  );
-}
-
 function controlsHtml() {
   return `
     <main>
@@ -409,30 +395,43 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   it("keeps mobile control sizes and themed select affordances", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {
       await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
-      const selectors = [
-        ".field input",
-        ".field textarea",
-        ".field select",
-        ".settings-sidebar__search-input",
-        ".settings-theme-import__input",
-        ".config-raw-field textarea",
-        "input.settings-input",
-        ".settings-row__control > textarea.settings-input",
-        ".settings-select",
-        ".usage-date-input",
-        ".usage-select",
-        ".usage-query-input",
-        '.usage-filters-inline input[type="text"]',
-        ".usage-filters-inline select",
-        ".agent-chat__composer-combobox > textarea",
-      ];
-      expect(
-        await page.evaluate(() => matchMedia("(hover: none) and (pointer: coarse)").matches),
-      ).toBe(true);
-      const sizes = await readComputed(page, selectors, "font-size");
-      sizes.forEach((size, index) =>
-        expect(Number.parseFloat(size), selectors[index]).toBeGreaterThanOrEqual(16),
-      );
+      const metrics = await page.evaluate(() => {
+        const selectors = [
+          ".field input",
+          ".field textarea",
+          ".field select",
+          ".settings-sidebar__search-input",
+          ".settings-theme-import__input",
+          ".config-raw-field textarea",
+          "input.settings-input",
+          ".settings-row__control > textarea.settings-input",
+          ".settings-select",
+          ".usage-date-input",
+          ".usage-select",
+          ".usage-query-input",
+          '.usage-filters-inline input[type="text"]',
+          ".usage-filters-inline select",
+          ".agent-chat__composer-combobox > textarea",
+        ];
+        return {
+          touchPrimary: matchMedia("(hover: none) and (pointer: coarse)").matches,
+          sizes: selectors.map((selector) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing control ${selector}`);
+            }
+            return {
+              selector,
+              fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+            };
+          }),
+        };
+      });
+
+      expect(metrics.touchPrimary).toBe(true);
+      for (const size of metrics.sizes) {
+        expect(size.fontSize, size.selector).toBeGreaterThanOrEqual(16);
+      }
 
       // Both the .field-wrapped and bare settings selects draw the themed
       // chevron; bare ones once fell back to the misaligned native arrow.
@@ -452,14 +451,12 @@ describeBrowserLayout("form controls and app chrome styles", () => {
 
       expect(selects).toHaveLength(2);
       for (const select of selects) {
-        expect(select).toMatchObject({
-          appearance: "none",
-          positionX: ["calc(100% - 18px)", "calc(100% - 14px)"],
-          size: ["5px 5px", "5px 5px"],
-          repeat: ["no-repeat", "no-repeat"],
-        });
+        expect(select.appearance).toBe("none");
         expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
+        expect(select.positionX).toEqual(["calc(100% - 18px)", "calc(100% - 14px)"]);
+        expect(select.size).toEqual(["5px 5px", "5px 5px"]);
+        expect(select.repeat).toEqual(["no-repeat", "no-repeat"]);
       }
 
       const dimensions = await page.evaluate(() => {
@@ -488,17 +485,26 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   it("uses the arrow for recovery controls and the hand for its real link", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setContent(readStyleSheet("ui/index.html"));
-      expect(
-        await readComputed(
-          page,
-          [
-            "#openclaw-mount-retry",
-            "#openclaw-mount-wait",
-            '.mount-fallback__panel a[href^="https://"]',
-          ],
-          "cursor",
-        ),
-      ).toEqual(["default", "default", "pointer"]);
+      const cursors = await page.evaluate(() => {
+        const cursor = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing cursor fixture ${selector}`);
+          }
+          return getComputedStyle(node).cursor;
+        };
+        return {
+          retry: cursor("#openclaw-mount-retry"),
+          wait: cursor("#openclaw-mount-wait"),
+          docs: cursor('.mount-fallback__panel a[href^="https://"]'),
+        };
+      });
+
+      expect(cursors).toEqual({
+        retry: "default",
+        wait: "default",
+        docs: "pointer",
+      });
     });
   });
 
@@ -586,14 +592,18 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               ].map((selector): [string] => [selector]),
               [".file-view__search input", 12],
             ];
-        const readSizes = async () =>
-          (
-            await readComputed(
-              page,
-              targets.map(([selector]) => selector),
-              "font-size",
-            )
-          ).map((size) => Number.parseFloat(size));
+        const readSizes = () =>
+          page.evaluate(
+            (entries) =>
+              entries.map(([selector]) => {
+                const node = document.querySelector(selector);
+                if (!(node instanceof HTMLElement)) {
+                  throw new Error(`Missing sidebar typography fixture ${selector}`);
+                }
+                return Number.parseFloat(getComputedStyle(node).fontSize);
+              }),
+            targets,
+          );
         const baseline = await readSizes();
         if (mobile) {
           expect(
@@ -661,12 +671,27 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
         );
 
-        const [display] = await readComputed(page, [".sidebar-brand__search"], "display");
-        // Only merged chrome lacks a topbar search; native hosts never merge.
+        const display = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile drawer fixture ${selector}`);
+            }
+            return getComputedStyle(node).display;
+          };
+          return {
+            search: read(".sidebar-brand__search"),
+          };
+        });
+
+        // Merged chat chrome hides the topbar, leaving the drawer as the only
+        // surface that can carry search. Everywhere else - including every native
+        // host, which never merges - the topbar keeps its own, so a drawer copy
+        // would put two on screen at once.
         if (search === "visible") {
-          expect(display).not.toBe("none");
+          expect(display.search).not.toBe("none");
         } else {
-          expect(display).toBe("none");
+          expect(display.search).toBe("none");
         }
       });
     },
@@ -694,29 +719,49 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         <div class="board-tabs__track">Hidden horizontal rail</div>`,
       );
 
-      expect(
-        await readComputed(
-          page,
-          [
-            ".chat-thread",
-            ".settings-card",
-            ".settings-sidebar__search-input",
-            ".sidebar-shell__body",
-            ".settings-sidebar__nav",
-          ],
-          "user-select",
-        ),
-      ).toEqual(["text", "auto", "text", "none", "none"]);
-      expect(
-        await readComputed(
-          page,
-          [".content", ".sidebar-shell__body", ".settings-sidebar__nav"],
-          "width",
-          "::-webkit-scrollbar",
-        ),
-      ).toEqual(["12px", "12px", "12px"]);
-      // The board rail intentionally hides its scrollbar rather than inheriting the blanket width.
-      expect(await readComputed(page, [".board-tabs__track"], "scrollbar-width")).toEqual(["none"]);
+      const metrics = await page.evaluate(() => {
+        const style = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing interaction fixture ${selector}`);
+          }
+          return getComputedStyle(node);
+        };
+        const scrollbarWidth = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing scrollbar fixture ${selector}`);
+          }
+          return getComputedStyle(node, "::-webkit-scrollbar").width;
+        };
+        return {
+          chatSelection: style(".chat-thread").userSelect,
+          chromeSelection: style(".settings-card").userSelect,
+          contentScrollbar: scrollbarWidth(".content"),
+          inputSelection: style(".settings-sidebar__search-input").userSelect,
+          regularSidebarScrollbar: scrollbarWidth(".sidebar-shell__body"),
+          regularSidebarSelection: style(".sidebar-shell__body").userSelect,
+          settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
+          settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+          // The board tab rail intentionally hides its scrollbar (a drag/wheel
+          // affordance, not a styling variant); the new blanket
+          // `* { scrollbar-width: thin }` rule in base.css must not win over
+          // its higher-specificity `scrollbar-width: none`.
+          hiddenRailScrollbarWidth: style(".board-tabs__track").scrollbarWidth,
+        };
+      });
+
+      expect(metrics).toEqual({
+        chatSelection: "text",
+        chromeSelection: "auto",
+        contentScrollbar: "12px",
+        hiddenRailScrollbarWidth: "none",
+        inputSelection: "text",
+        regularSidebarScrollbar: "12px",
+        regularSidebarSelection: "none",
+        settingsSidebarScrollbar: "12px",
+        settingsSidebarSelection: "none",
+      });
     });
   });
 });

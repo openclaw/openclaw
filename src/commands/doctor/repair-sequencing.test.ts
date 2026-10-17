@@ -1,3 +1,4 @@
+// Doctor repair sequencing tests cover ordered repair execution and dependency handling.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -10,59 +11,37 @@ import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
 
-function runRepair(
-  cfg: OpenClawConfig,
-  {
-    candidate = structuredClone(cfg),
-    ...options
-  }: Omit<Parameters<typeof runDoctorRepairSequence>[0], "state" | "doctorFixCommand"> & {
-    candidate?: OpenClawConfig;
-  } = {},
-) {
-  return runDoctorRepairSequence({
-    state: { cfg, candidate, pendingChanges: false, fixHints: [] },
-    doctorFixCommand: "openclaw doctor --fix",
-    ...options,
-  });
-}
-
-function unchanged(config: OpenClawConfig) {
-  return { config, changes: [] };
-}
-
-function externalProviderConfig(): OpenClawConfig {
-  return {
-    plugins: { allow: ["mistral"], entries: { mistral: { enabled: true } } },
-    agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
-    memory: { search: { provider: "mistral" } },
-  };
-}
-
-function expectExternalProvider(config: OpenClawConfig) {
-  expect(config.plugins?.allow).toEqual(["mistral"]);
-  expect(config.plugins?.entries?.mistral?.enabled).toBe(true);
-  expect(config.agents?.defaults?.model).toEqual({ primary: "mistral/mistral-large-latest" });
-  expect(config.memory?.search?.provider).toBe("mistral");
-}
-
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }: { config: OpenClawConfig }) =>
-      unchanged(config),
-    );
+    mocks.applyPluginAutoEnable.mockImplementation((params: { config: OpenClawConfig }) => ({
+      config: params.config,
+      changes: [],
+    }));
     mocks.materializePluginAutoEnableCandidates.mockImplementation(
-      ({ config }: { config: OpenClawConfig }) => unchanged(config),
+      (params: { config: OpenClawConfig }) => ({
+        config: params.config,
+        changes: [],
+      }),
     );
-    mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {}, usageStats: {} });
-    mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      profiles: {},
+      usageStats: {},
+    });
+    mocks.evaluateStoredCredentialEligibility.mockReturnValue({
+      eligible: true,
+      reasonCode: "ok",
+    });
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.loadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
     mocks.resolveConfigWidePluginMetadataSnapshot.mockReturnValue(
       createPluginMetadataSnapshotFixture(),
     );
-    mocks.maybeRepairGroupAllowFromFallback.mockImplementation(unchanged);
+    mocks.maybeRepairGroupAllowFromFallback.mockImplementation((cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+    }));
     mocks.maybeRepairPluginOpenClawHostLinks.mockResolvedValue(false);
     mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.repairMergedGatewayOwnerProfile.mockReturnValue({
@@ -83,24 +62,39 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       warnings: [],
     }));
-    mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation(unchanged);
+    mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation((cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+    }));
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(null);
     mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementation(
-      ({ cfg }: { cfg: OpenClawConfig }) => unchanged(cfg),
+      ({ cfg }: { cfg: OpenClawConfig }) => ({ config: cfg, changes: [] }),
     );
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
       warnings: [],
     }));
-    mocks.repairStaleOAuthProfileShadows.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.collectChannelDoctorCompatibilityMutations.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
-    mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
-    mocks.maybeRepairStalePluginConfig.mockImplementation(unchanged);
+    mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+    }));
   });
 
   registerSharedRuntimeReaderDoctorTests();
@@ -149,7 +143,10 @@ describe("doctor repair sequencing", () => {
     });
     const candidate = {} as OpenClawConfig;
 
-    const result = await runRepair(candidate, { candidate });
+    const result = await runDoctorRepairSequence({
+      state: { cfg: candidate, candidate, pendingChanges: false, fixHints: [] },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(result.changeNotes).toEqual(["Installed pluginnext.", "Migrated recommendationsnext."]);
     expect(result.warningNotes).toEqual([
@@ -163,12 +160,41 @@ describe("doctor repair sequencing", () => {
   });
 
   it("applies ordered repairs and sanitizes empty-allowlist warnings", async () => {
-    const result = await runRepair({
-      channels: {
-        discord: { allowFrom: [123] },
-        signal: { accounts: { "ops\u001B[31m-team\u001B[0m\r\nnext": { dmPolicy: "allowlist" } } },
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              allowFrom: [123],
+            },
+            signal: {
+              accounts: {
+                "ops\u001B[31m-team\u001B[0m\r\nnext": {
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              allowFrom: [123],
+            },
+            signal: {
+              accounts: {
+                "ops\u001B[31m-team\u001B[0m\r\nnext": {
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
       },
-    } as unknown as OpenClawConfig);
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual(["123"]);
@@ -216,7 +242,13 @@ describe("doctor repair sequencing", () => {
   });
 
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
-    const config: OpenClawConfig = { plugins: { entries: { "google-meet": { enabled: true } } } };
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "google-meet": { enabled: true },
+        },
+      },
+    };
     const events: string[] = [];
     const refreshedSnapshot = createPluginMetadataSnapshotFixture();
     mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
@@ -233,7 +265,15 @@ describe("doctor repair sequencing", () => {
       return { changes: [], warnings: [], records: {} };
     });
 
-    const result = await runRepair(structuredClone(config));
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: structuredClone(config),
+        candidate: structuredClone(config),
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(events).toEqual(["bundled-shadow-cleanup", "openclaw-peer-links", "missing-installs"]);
     expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledOnce();
@@ -251,7 +291,11 @@ describe("doctor repair sequencing", () => {
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
     expect(mocks.loadInstalledPluginIndex).toHaveBeenCalledWith(
-      expect.objectContaining({ config, env: process.env, installRecords: {} }),
+      expect.objectContaining({
+        config,
+        env: process.env,
+        installRecords: {},
+      }),
     );
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(result.pluginMetadataSnapshot).toMatchObject({
@@ -264,7 +308,10 @@ describe("doctor repair sequencing", () => {
     const events: string[] = [];
     mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => {
       events.push("stale-oauth-shadows");
-      return { changes: ["Removed stale OAuth auth profile shadow openai-codex."], warnings: [] };
+      return {
+        changes: ["Removed stale OAuth auth profile shadow openai-codex."],
+        warnings: [],
+      };
     });
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
       events.push("sqlite-migration");
@@ -282,7 +329,15 @@ describe("doctor repair sequencing", () => {
       return { config: cfg, changes: [] };
     });
 
-    const result = await runRepair({} as OpenClawConfig);
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(events).toEqual(["stale-oauth-shadows", "sqlite-migration", "stale-auth-order"]);
     expect(result.changeNotes).toEqual([
@@ -320,9 +375,27 @@ describe("doctor repair sequencing", () => {
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
-    const result = await runRepair({
-      channels: { discord: { allowFrom: [106232522769186816] } },
-    } as unknown as OpenClawConfig);
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              allowFrom: [106232522769186816],
+            },
+          },
+        } as unknown as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              allowFrom: [106232522769186816],
+            },
+          },
+        } as unknown as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.warningNotes).toStrictEqual([
@@ -394,12 +467,31 @@ describe("doctor repair sequencing", () => {
       pluginInventoryChanged: true,
     });
 
-    await runRepair({
-      agents: {
-        ownership: "explicit",
-        entries: { ops: { workspace: "/srv/ops" }, research: { workspace: "/srv/research" } },
+    await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              ops: { workspace: "/srv/ops" },
+              research: { workspace: "/srv/research" },
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              ops: { workspace: "/srv/ops" },
+              research: { workspace: "/srv/research" },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
       },
-    } as OpenClawConfig);
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
       expect.objectContaining({ manifestRegistry }),
@@ -439,21 +531,46 @@ describe("doctor repair sequencing", () => {
               ...cfg,
               agents: {
                 ...cfg.agents,
-                defaults: { ...cfg.agents?.defaults, model: { primary: "openai/gpt-5.6-sol" } },
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  model: { primary: "openai/gpt-5.6-sol" },
+                },
               },
             },
         changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
         warnings: [],
       };
     });
-    const config = externalProviderConfig();
+    const config = {
+      plugins: {
+        allow: ["mistral"],
+        entries: { mistral: { enabled: true } },
+      },
+      agents: {
+        defaults: { model: { primary: "mistral/mistral-large-latest" } },
+      },
+      memory: { search: { provider: "mistral" } },
+    } as OpenClawConfig;
 
-    const result = await runRepair(config, { candidate: config });
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: config,
+        candidate: config,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.repairStaleAgentModelRefs.mock.invocationCallOrder[0] ?? 0,
     );
-    expectExternalProvider(result.state.candidate);
+    expect(result.state.candidate.plugins?.allow).toEqual(["mistral"]);
+    expect(result.state.candidate.plugins?.entries?.mistral?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+    expect(result.state.candidate.memory?.search?.provider).toBe("mistral");
   });
 
   it("preserves external provider model references when plugin install repair fails", async () => {
@@ -464,12 +581,34 @@ describe("doctor repair sequencing", () => {
       ],
       failedPluginIds: ["mistral"],
     });
-    const config = externalProviderConfig();
+    const config = {
+      plugins: {
+        allow: ["mistral"],
+        entries: { mistral: { enabled: true } },
+      },
+      agents: {
+        defaults: { model: { primary: "mistral/mistral-large-latest" } },
+      },
+      memory: { search: { provider: "mistral" } },
+    } as OpenClawConfig;
 
-    const result = await runRepair(config, { candidate: config });
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: config,
+        candidate: config,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(mocks.repairStaleAgentModelRefs).not.toHaveBeenCalled();
-    expectExternalProvider(result.state.candidate);
+    expect(result.state.candidate.plugins?.allow).toEqual(["mistral"]);
+    expect(result.state.candidate.plugins?.entries?.mistral?.enabled).toBe(true);
+    expect(result.state.candidate.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+    expect(result.state.candidate.memory?.search?.provider).toBe("mistral");
   });
 
   it("applies doctor contracts exposed by newly installed plugins", async () => {
@@ -485,7 +624,10 @@ describe("doctor repair sequencing", () => {
           ...params.config,
           plugins: {
             ...params.config.plugins,
-            entries: { ...params.config.plugins?.entries, discord: { enabled: true } },
+            entries: {
+              ...params.config.plugins?.entries,
+              discord: { enabled: true },
+            },
           },
         },
         changes: ["discord installed for existing configuration, enabled automatically."],
@@ -514,12 +656,32 @@ describe("doctor repair sequencing", () => {
       ],
     );
 
-    const result = await runRepair({
-      channels: { discord: { dm: { enabled: true, policy: "allowlist", allowFrom: [123] } } },
-    } as OpenClawConfig);
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: [123] },
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              dm: { enabled: true, policy: "allowlist", allowFrom: [123] },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(mocks.collectChannelDoctorCompatibilityMutations).toHaveBeenCalledWith(
-      expect.objectContaining({ plugins: { entries: { discord: { enabled: true } } } }),
+      expect.objectContaining({
+        plugins: { entries: { discord: { enabled: true } } },
+      }),
       { env: process.env },
     );
     expect(result.state.candidate.channels?.discord).toEqual({
@@ -589,15 +751,9 @@ describe("doctor repair sequencing", () => {
   it("refreshes retained default-workspace metadata after cleanup-only inventory repairs", async () => {
     const workspaceDir = path.resolve("/tmp/openclaw-doctor-workspace");
     const workspaceProvider = "workspace-provider";
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: `${workspaceProvider}/model`,
-          workspace: workspaceDir,
-        },
-      },
-    };
-    const staleSnapshot = createPluginMetadataSnapshotFixture({ plugins: [{ id: "google-meet" }] });
+    const staleSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "google-meet" }],
+    });
     const configWideManifestRegistry = {
       plugins: [
         createPluginManifestRecordFixture({
@@ -639,7 +795,9 @@ describe("doctor repair sequencing", () => {
           persistedProviderIdsByAgentId: new Map([["main", new Set()]]),
         }),
     );
-    const pluginMetadataSnapshotState = { current: staleSnapshot };
+    const pluginMetadataSnapshotState = {
+      current: staleSnapshot,
+    };
     const scopedSnapshots: Array<PluginMetadataSnapshot | undefined> = [];
     const runWithPluginMetadataSnapshot = <T>(
       _scope: { config: OpenClawConfig; workspaceDir?: string },
@@ -649,31 +807,78 @@ describe("doctor repair sequencing", () => {
       return run();
     };
 
-    const result = await runRepair(config, {
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          agents: {
+            defaults: {
+              model: `${workspaceProvider}/model`,
+              workspace: workspaceDir,
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          agents: {
+            defaults: {
+              model: `${workspaceProvider}/model`,
+              workspace: workspaceDir,
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
       pluginMetadataSnapshotState,
       runWithPluginMetadataSnapshot,
     });
 
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config,
+      config: {
+        agents: {
+          defaults: {
+            model: `${workspaceProvider}/model`,
+            workspace: workspaceDir,
+          },
+        },
+      },
       env: process.env,
       workspaceDir,
       index: { plugins: [] },
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config,
+      config: {
+        agents: {
+          defaults: {
+            model: `${workspaceProvider}/model`,
+            workspace: workspaceDir,
+          },
+        },
+      },
       env: process.env,
       manifestRegistry: configWideManifestRegistry,
     });
     const currentPluginMetadataSnapshot = pluginMetadataSnapshotState.current;
-    expect(mocks.repairStaleAgentModelRefs).toHaveBeenCalledWith(config, {
-      env: process.env,
-      pluginMetadataSnapshot: currentPluginMetadataSnapshot,
-    });
+    expect(mocks.repairStaleAgentModelRefs).toHaveBeenCalledWith(
+      {
+        agents: {
+          defaults: {
+            model: `${workspaceProvider}/model`,
+            workspace: workspaceDir,
+          },
+        },
+      },
+      {
+        env: process.env,
+        pluginMetadataSnapshot: currentPluginMetadataSnapshot,
+      },
+    );
     expect(currentPluginMetadataSnapshot).toMatchObject({
       manifestRegistry: configWideManifestRegistry,
       plugins: configWideManifestRegistry.plugins,
-      owners: { providers: new Map([[workspaceProvider, ["workspace-plugin"]]]) },
+      owners: {
+        providers: new Map([[workspaceProvider, ["workspace-plugin"]]]),
+      },
     });
     expect(scopedSnapshots[0]).toBe(staleSnapshot);
     expect(scopedSnapshots).toContain(currentPluginMetadataSnapshot);
@@ -802,21 +1007,42 @@ describe("doctor repair sequencing", () => {
           id: "codex",
         });
         expect(params.cfg.agents?.defaults?.models?.["openai-codex/gpt-5.5"]).toBeUndefined();
-        return { changes: [], warnings: [] };
+        return {
+          changes: [],
+          warnings: [],
+        };
       },
     );
 
     const staleUpgradeConfig = {
-      plugins: { allow: ["openai"], entries: { codex: { enabled: true } } },
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          codex: { enabled: true },
+        },
+      },
       agents: {
         defaults: {
           model: "openai-codex/gpt-5.5",
-          models: { "openai-codex/gpt-5.5": { params: { reasoning_effort: "high" } } },
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { reasoning_effort: "high" },
+            },
+          },
         },
       },
     } as OpenClawConfig;
 
-    const result = await runRepair(staleUpgradeConfig, { env: {}, candidate: staleUpgradeConfig });
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: staleUpgradeConfig,
+        candidate: staleUpgradeConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.plugins?.allow).toEqual(["openai", "codex"]);
@@ -847,7 +1073,13 @@ describe("doctor repair sequencing", () => {
       return {
         config: {
           ...cfg,
-          channels: { ...cfg.channels, signal: { ...cfg.channels?.signal, allowFrom: ["*"] } },
+          channels: {
+            ...cfg.channels,
+            signal: {
+              ...cfg.channels?.signal,
+              allowFrom: ["*"],
+            },
+          },
         },
         changes: ['channels.signal.allowFrom: set to ["*"]'],
       };
@@ -858,15 +1090,39 @@ describe("doctor repair sequencing", () => {
       return {
         config: {
           ...cfg,
-          channels: { ...cfg.channels, signal: { ...cfg.channels?.signal, groupAllowFrom: ["*"] } },
+          channels: {
+            ...cfg.channels,
+            signal: {
+              ...cfg.channels?.signal,
+              groupAllowFrom: ["*"],
+            },
+          },
         },
         changes: ["channels.signal.groupAllowFrom: copied 1 sender entry from allowFrom"],
       };
     });
 
-    const result = await runRepair({
-      channels: { signal: { dmPolicy: "open" } },
-    } as OpenClawConfig);
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            signal: {
+              dmPolicy: "open",
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          channels: {
+            signal: {
+              dmPolicy: "open",
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
 
     expect(events).toEqual(["open-policy", "group-fallback"]);
     expect(result.state.candidate.channels?.signal?.groupAllowFrom).toEqual(["*"]);
@@ -883,22 +1139,54 @@ describe("doctor repair sequencing", () => {
       ],
       warnings: [],
     });
-    const result = await runRepair(
-      {
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: true,
-              config: {
-                webSearch: { apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" } },
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          plugins: {
+            allow: ["brave"],
+            entries: {
+              brave: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "BRAVE_API_KEY",
+                    },
+                  },
+                },
               },
             },
           },
-        },
-      } as OpenClawConfig,
-      { env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
-    );
+        } as OpenClawConfig,
+        candidate: {
+          plugins: {
+            allow: ["brave"],
+            entries: {
+              brave: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "BRAVE_API_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      },
+    });
 
     expect(mocks.maybeRepairStalePluginConfig).not.toHaveBeenCalled();
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);

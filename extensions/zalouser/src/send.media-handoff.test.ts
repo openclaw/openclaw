@@ -1,5 +1,4 @@
 import type { LookupAddress } from "node:dns";
-import { promisify } from "node:util";
 import type { DispatcherAwareRequestInit } from "openclaw/plugin-sdk/runtime-fetch";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSendHarness, type SendHarness } from "./send.handoff.test-support.js";
@@ -56,6 +55,10 @@ function mediaResponse() {
   });
 }
 
+function requestUrl(input: Parameters<typeof fetch>[0]): URL {
+  return new URL(input instanceof Request ? input.url : input);
+}
+
 let harness: SendHarness;
 let ambientDownloads: string[];
 let runtimeDownloads: Array<{
@@ -87,7 +90,7 @@ beforeEach(() => {
   }
   // Model an ambient runtime fetch that accepts but ignores the dispatcher option.
   const ambientFetch: typeof fetch = async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : input);
+    const url = requestUrl(input);
     if (url.href === mediaUrl) {
       ambientDownloads.push(url.href);
       return mediaResponse();
@@ -100,7 +103,7 @@ beforeEach(() => {
     EnvHttpProxyAgent: FixtureEnvHttpProxyAgent,
     ProxyAgent: FixtureProxyAgent,
     fetch: async (input: Parameters<typeof fetch>[0], init?: DispatcherAwareRequestInit) => {
-      const url = new URL(input instanceof Request ? input.url : input);
+      const url = requestUrl(input);
       const dispatcher = init?.dispatcher;
       if (!(dispatcher instanceof FixtureAgent)) {
         throw new Error("Expected the guarded runtime dispatcher");
@@ -110,7 +113,15 @@ beforeEach(() => {
         throw new Error("Expected pinned DNS on the runtime dispatcher");
       }
       const addresses = pinnedLookup
-        ? await promisify(pinnedLookup)(url.hostname, { all: true })
+        ? await new Promise<LookupAddress[]>((resolve, reject) => {
+            pinnedLookup(url.hostname, { all: true }, (error, resolved) => {
+              if (error) {
+                reject(error);
+              } else {
+                resolve(resolved);
+              }
+            });
+          })
         : [];
       dispatcher.dispatch(
         { origin: url.origin, path: url.pathname + url.search, method: init?.method ?? "GET" },
@@ -149,9 +160,15 @@ describe("Zalouser guarded media handoff", () => {
     ]);
     if (proxy) {
       const proxies = FixtureAgent.instances.filter((agent) => agent instanceof FixtureProxyAgent);
-      expect(proxies).toMatchObject([
+      expect(
+        proxies.map(({ options, dispatched, closed }) => ({
+          uri: options.uri,
+          dispatched,
+          closed,
+        })),
+      ).toEqual([
         {
-          options: { uri: proxyUrl },
+          uri: proxyUrl,
           dispatched: [
             { origin: "https://media.example.com", path: "/document.txt", method: "GET" },
           ],
@@ -170,7 +187,8 @@ describe("Zalouser guarded media handoff", () => {
   it("makes no media or SDK request after cancellation during guarded DNS preparation", async () => {
     const dns = harness.gate();
     lookup.mockImplementation(async () => {
-      await dns.wait();
+      dns.entered.resolve();
+      await dns.release.promise;
       return [{ address: publicAddress, family: 4 }];
     });
     const caller = new AbortController();
@@ -179,6 +197,8 @@ describe("Zalouser guarded media handoff", () => {
     caller.abort(new Error("media caller canceled"));
     dns.release.resolve();
     await expect(send).rejects.toThrow("media caller canceled");
-    expect([runtimeDownloads, ambientDownloads, harness.requests]).toEqual([[], [], []]);
+    expect(runtimeDownloads).toEqual([]);
+    expect(ambientDownloads).toEqual([]);
+    expect(harness.requests).toEqual([]);
   });
 });

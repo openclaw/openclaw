@@ -17,6 +17,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
+  type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -83,141 +84,24 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function withDoctor<T>(
-  work: (context: {
-    fence: UpdateRecoveryFence;
-    opts: UpdateCommandOptions;
-    guards: ReturnType<typeof createUpdateCommandExecutionGuards>;
-    options: Parameters<typeof runPackageUpdateDoctor>[0];
-  }) => Promise<T>,
-  requester = false,
-) {
-  const runId = randomUUID();
-  return withUpdateCommandExecutor(runId, async (executor) => {
-    const fence = await executor.enter(root, { serviceRoot });
-    const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env, executorFence: fence };
-    if (requester) {
-      run.requesterAuthority = {
-        requester: { channel: "test", senderId: "owner" },
-        isCurrent: () => true,
-      };
-    }
-    const opts = { run };
-    const guards = createUpdateCommandExecutionGuards(opts, root);
-    return work({
-      opts,
-      guards,
-      fence,
-      options: {
-        root,
-        timeoutMs: 5000,
-        progress: {},
-        managedServiceEnv: env,
-        getDoctorContext: () => ({
-          runId,
-          executorFence: fence,
-          inputHash: hashConfigRaw("{}\n"),
-          changes: [],
-          ...guards,
-        }),
-      },
-    });
-  });
-}
-
-function standaloneDoctor(
-  steps: UpdateStepResult[],
-  argv: string[],
-  options: DoctorProcessOptions,
-) {
-  return runUpdateDoctorProcess(
-    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
-    argv,
-    {
-      cwd: root,
-      input: "",
-      timeoutMs: 5_000,
-      ...options,
-      env: {
-        ...env,
-        [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: path.join(root, "doctor-result.json"),
-      },
-    },
-  );
-}
-
-type DoctorProcessOptions = Exclude<
-  Parameters<typeof processRunner.runUtf8CommandWithTimeout>[1],
-  number
->;
-
-function interceptDoctor(
-  argv: string[],
-  configure: (options: DoctorProcessOptions) => DoctorProcessOptions = (options) => options,
-  completed?: (result: SpawnResult, options: DoctorProcessOptions) => Promise<void>,
-) {
-  const run = processRunner.runUtf8CommandWithTimeout;
-  const child: { pid?: number; result?: SpawnResult } = {};
-  vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
-    async (_argv, options) => {
-      assert(typeof options !== "number", "Doctor supplies input-admission options");
-      const configured = configure(options);
-      child.result = await run(argv, {
-        ...configured,
-        beforeInput(pid, spawnedArgv) {
-          child.pid = pid;
-          configured.beforeInput?.(pid, spawnedArgv);
-        },
-      });
-      if (completed) {
-        await completed(child.result, options);
-      }
-      return child.result;
-    },
-  );
-  return child;
-}
-
-function receivingDoctor(keepAlive = false) {
-  return [
-    process.execPath,
-    "-e",
-    `process.stdin.on('data',x=>require('node:fs').appendFileSync(process.argv[1],x));${keepAlive ? "setInterval(()=>{},1000);" : "process.stdin.resume();"}`,
-    received,
-  ];
-}
-
-async function expectChildExited(pid: number | undefined) {
-  assert(typeof pid === "number", "Doctor child must have spawned");
-  expect(await waitForPidToExit(pid)).toBe(true);
-}
-
-function expectUnchangedInput() {
-  expect(fs.existsSync(received)).toBe(false);
-  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
-}
-
-function expectSettlement(steps: UpdateStepResult[], writerPid?: number) {
-  expect(steps).toContainEqual(
-    expect.objectContaining({
-      name: "doctor process settlement",
-      exitCode: writerPid === undefined ? 0 : 1,
-      ...(writerPid === undefined
-        ? {
-            advisory: expect.objectContaining({
-              message: expect.stringContaining("openclaw update repair"),
-            }),
-          }
-        : {
-            failureFacts: [
-              expect.objectContaining({
-                code: "doctor-processes-unsettled",
-                message: expect.stringContaining(String(writerPid)),
-              }),
-            ],
-          }),
+function doctorOptions(
+  runId: string,
+  executorFence: UpdateRecoveryFence,
+  guards: ReturnType<typeof createUpdateCommandExecutionGuards>,
+): Parameters<typeof runPackageUpdateDoctor>[0] {
+  return {
+    root,
+    timeoutMs: 5000,
+    progress: {},
+    managedServiceEnv: env,
+    getDoctorContext: () => ({
+      runId,
+      executorFence,
+      inputHash: hashConfigRaw("{}\n"),
+      changes: [],
+      ...guards,
     }),
-  );
+  };
 }
 
 function readHandoffClaims() {
@@ -257,93 +141,166 @@ function expectRetainedCommandClaims(writerPid: number, roots: string[]) {
 it.each(["recovery-pending", "A-revoked", "B-revoked"] as const)(
   "withholds all Doctor input and settles the real child when %s before input",
   async (change) => {
-    let child: ReturnType<typeof interceptDoctor> | undefined;
-    const work = withDoctor(async ({ fence, opts, options: doctor }) => {
-      child = interceptDoctor(receivingDoctor(), (options) => {
-        expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
-        return {
-          ...options,
-          beforeInput(pid, spawnedArgv) {
-            if (change === "recovery-pending") {
-              opts.recovery = {};
-            }
-            if (change === "A-revoked" || change === "B-revoked") {
-              const db = new DatabaseSync(path.join(root, "tmp", "managed-update-handoffs.sqlite"));
-              try {
-                db.prepare(
-                  "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?",
-                ).run("replacement", change === "A-revoked" ? serviceRoot : root);
-              } finally {
-                db.close();
-              }
-            }
-            options.beforeInput?.(pid, spawnedArgv);
-          },
-        };
-      });
-      await runPackageUpdateDoctor(doctor);
-    }, true);
+    const runId = randomUUID();
+    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+    let childPid: number | undefined;
+    const requesterAuthority = {
+      requester: { channel: "test", senderId: "owner" },
+      isCurrent: () => true,
+    };
+    const work = withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot });
+      const run = { runId, env, executorFence: fence, requesterAuthority };
+      const opts: UpdateCommandOptions = { run };
+      const guards = createUpdateCommandExecutionGuards(opts, root);
+      vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+        async (_argv, options) => {
+          assert(typeof options !== "number", "Doctor supplies input-admission options");
+          expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
+          return runUtf8(
+            [
+              process.execPath,
+              "-e",
+              "process.stdin.on('data',x=>require('node:fs').appendFileSync(process.argv[1],x));process.stdin.resume();",
+              received,
+            ],
+            {
+              ...options,
+              beforeInput(pid, spawnedArgv) {
+                childPid = pid;
+                if (change === "recovery-pending") {
+                  opts.recovery = {};
+                }
+                if (change === "A-revoked" || change === "B-revoked") {
+                  const db = new DatabaseSync(
+                    path.join(root, "tmp", "managed-update-handoffs.sqlite"),
+                  );
+                  try {
+                    db.prepare(
+                      "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?",
+                    ).run("replacement", change === "A-revoked" ? serviceRoot : root);
+                  } finally {
+                    db.close();
+                  }
+                }
+                options.beforeInput?.(pid, spawnedArgv);
+              },
+            },
+          );
+        },
+      );
+      await runPackageUpdateDoctor(doctorOptions(runId, fence, guards));
+    });
     await expect(work).rejects.toThrow();
-    await expectChildExited(child?.pid);
-    expectUnchangedInput();
+    expect(childPid).toBeTypeOf("number");
+    if (childPid !== undefined) {
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    }
+    expect(fs.existsSync(received)).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
   },
 );
 
 it("retains the settled Doctor failure outcome", async () => {
   const exitCode = 23;
+  const runId = randomUUID();
+  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+  let childPid: number | undefined;
   let resultPath: string | undefined;
+  const receipt: UpdatePostInstallDoctorResult = { status: "error" };
+  receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
   const steps: UpdateStepResult[] = [];
   const onStepComplete = vi.fn();
-  await withDoctor(async ({ fence, guards, options: doctor }) => {
-    const child = interceptDoctor(
-      [
-        process.execPath,
-        "-e",
-        "process.stdin.resume();process.stdin.on('end',()=>process.exit(Number(process.argv[1])));",
-        String(exitCode),
-      ],
-      undefined,
-      async (result, options) => {
-        expect(result).toMatchObject({ cleanup: "normal", code: exitCode });
+  await withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(root, { serviceRoot });
+    const opts: UpdateCommandOptions = {
+      run: {
+        runId,
+        env,
+        executorFence: fence,
+        requesterAuthority: {
+          requester: { channel: "test", senderId: "owner" },
+          isCurrent: () => true,
+        },
+      },
+    };
+    const guards = createUpdateCommandExecutionGuards(opts, root);
+    vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+      async (_argv, options) => {
+        assert(typeof options !== "number", "Doctor supplies input-admission options");
+        const result = await runUtf8(
+          [
+            process.execPath,
+            "-e",
+            "process.stdin.resume();process.stdin.on('end',()=>process.exit(Number(process.argv[1])));",
+            String(exitCode),
+          ],
+          {
+            ...options,
+            beforeInput(pid, spawnedArgv) {
+              childPid = pid;
+              options.beforeInput?.(pid, spawnedArgv);
+            },
+          },
+        );
+        expect(result.cleanup).toBe("normal");
+        expect(result.code).toBe(exitCode);
         expect(onStepComplete).not.toHaveBeenCalled();
         resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
         assert(resultPath);
-        await writeUpdatePostInstallDoctorResult({
-          resultPath,
-          result: {
-            status: "error",
-            configChanges: [{ kind: "migration", message: "Moved model allowlist." }],
-          },
-        });
+        await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
+        return result;
       },
     );
     const result = await runPackageUpdateDoctor({
-      ...doctor,
+      ...doctorOptions(runId, fence, guards),
       progress: { onStepComplete },
       results: steps,
     }).catch((cause: unknown) => cause);
     expect(result).toMatchObject({ exitCode: 23 });
     guards.assertCurrent();
-    await expectChildExited(child.pid);
+    expect(childPid).toBeTypeOf("number");
+    if (childPid !== undefined) {
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    }
     fence.assertCurrent();
     assert(resultPath);
     expect(fs.existsSync(resultPath)).toBe(false);
     expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
-  }, true);
+  });
 });
 
 it("preserves before-input failure after proving the delegated grant was withheld", async () => {
-  let child: ReturnType<typeof interceptDoctor> | undefined;
+  const runId = randomUUID();
+  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+  let childPid: number | undefined;
   const steps: UpdateStepResult[] = [];
-  const work = withDoctor(async ({ options: doctor }) => {
-    child = interceptDoctor(receivingDoctor(true), (options) => ({
-      ...options,
-      beforeInput(pid, spawnedArgv) {
-        options.beforeInput?.(pid, spawnedArgv);
-        throw new Error("injected before-input failure after live child binding");
+  const work = withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(root, { serviceRoot });
+    const opts: UpdateCommandOptions = { run: { runId, env, executorFence: fence } };
+    const guards = createUpdateCommandExecutionGuards(opts, root);
+    vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+      async (_argv, options) => {
+        assert(typeof options !== "number", "Doctor supplies input-admission options");
+        return runUtf8(
+          [
+            process.execPath,
+            "-e",
+            "process.stdin.on('data',x=>require('node:fs').appendFileSync(process.argv[1],x));setInterval(()=>{},1000);",
+            received,
+          ],
+          {
+            ...options,
+            beforeInput(pid, spawnedArgv) {
+              childPid = pid;
+              options.beforeInput?.(pid, spawnedArgv);
+              throw new Error("injected before-input failure after live child binding");
+            },
+          },
+        );
       },
-    }));
-    await runPackageUpdateDoctor({ ...doctor, results: steps });
+    );
+    await runPackageUpdateDoctor({ ...doctorOptions(runId, fence, guards), results: steps });
   });
   const failure = await work.catch((error: unknown) => error);
   expect(hasCommandProcessCleanupError(failure)).toBe(false);
@@ -352,33 +309,66 @@ it("preserves before-input failure after proving the delegated grant was withhel
     cleanup: process.platform === "win32" ? "forced" : "cooperative",
   });
   expect(steps.filter((step) => step.name === "doctor process settlement")).toEqual([]);
-  await expectChildExited(child?.pid);
-  expectUnchangedInput();
+  expect(childPid).toBeTypeOf("number");
+  if (childPid !== undefined) {
+    expect(await waitForPidToExit(childPid)).toBe(true);
+  }
+  expect(fs.existsSync(received)).toBe(false);
+  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
 });
 
 it("does not treat standalone input withholding as a delegated no-writer proof", async () => {
   const original = new Error("Standalone input refused");
   let pid: number | undefined;
   const steps: UpdateStepResult[] = [];
-  const failure = await standaloneDoctor(steps, receivingDoctor(), {
-    input: "must not be delivered",
-    beforeInput: (spawnedPid) => {
-      pid = spawnedPid;
-      throw original;
+  const failure = await runUpdateDoctorProcess(
+    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
+    [
+      process.execPath,
+      "-e",
+      "process.stdin.on('data', x => require('node:fs').appendFileSync(process.argv[1], x)); process.stdin.resume();",
+      received,
+    ],
+    {
+      cwd: root,
+      input: "must not be delivered",
+      timeoutMs: 5_000,
+      env: {
+        ...env,
+        [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: path.join(root, "standalone-result.json"),
+      },
+      beforeInput: (spawnedPid) => {
+        pid = spawnedPid;
+        throw original;
+      },
     },
-  }).catch((error: unknown) => error);
+  ).catch((error: unknown) => error);
   assert(pid);
   expect(hasCommandProcessCleanupError(failure)).toBe(true);
   expect(failure).toMatchObject({ cause: original });
-  expectSettlement(steps, pid);
+  expect(steps).toContainEqual(
+    expect.objectContaining({
+      name: "doctor process settlement",
+      exitCode: 1,
+      failureFacts: [
+        expect.objectContaining({
+          code: "doctor-processes-unsettled",
+          message: expect.stringContaining(String(pid)),
+        }),
+      ],
+    }),
+  );
   expect(await waitForPidToExit(pid)).toBe(true);
-  expectUnchangedInput();
+  expect(fs.existsSync(received)).toBe(false);
+  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
 });
 
 it.skipIf(process.platform === "win32").for([true, false])(
   "settles a CPU-bound Doctor at its deadline or records unresolved writer identity (identity=%s)",
   async (identityAvailable, { signal }) => {
-    let child: ReturnType<typeof interceptDoctor> | undefined;
+    const runId = randomUUID();
+    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+    let childPid: number | undefined;
     let writer: CommandProcessIdentity | undefined;
     const steps: UpdateStepResult[] = [];
     const reportingError = new Error("settlement progress could not be recorded");
@@ -387,35 +377,50 @@ it.skipIf(process.platform === "win32").for([true, false])(
     const cleanup = new AbortController();
     let deadline: ReturnType<typeof controlDoctorDeadline> | undefined;
     let execution: Promise<void> | undefined;
+    let doctorResult: SpawnResult | undefined;
     let output = "";
     try {
-      execution = withDoctor(async ({ fence, options: doctor }) => {
-        child = interceptDoctor(busyDoctorWriterArgv(identityAvailable), (options) => {
-          deadline = controlDoctorDeadline();
-          return {
-            ...options,
-            signal: AbortSignal.any([
-              signal,
-              cleanup.signal,
-              ...(options.signal ? [options.signal] : []),
-            ]),
-            onOutputChunk(chunk, stream) {
-              const observed = options.onOutputChunk?.(chunk, stream);
-              if (stream === "stdout") {
-                output += chunk.toString();
-                const match = /Doctor busy (\d+)/.exec(output);
-                if (match) {
-                  const pid = Number(match[1]);
-                  writer = { pid, startedAt: getProcessInstanceStartTime(pid) };
-                  ready.resolve();
+      execution = withUpdateCommandExecutor(runId, async (executor) => {
+        const fence = await executor.enter(root, { serviceRoot });
+        const guards = createUpdateCommandExecutionGuards(
+          { run: { runId, env, executorFence: fence } },
+          root,
+        );
+        vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+          async (_argv, options) => {
+            assert(typeof options !== "number");
+            deadline = controlDoctorDeadline();
+            const result = await runUtf8(busyDoctorWriterArgv(identityAvailable), {
+              ...options,
+              signal: AbortSignal.any([
+                signal,
+                cleanup.signal,
+                ...(options.signal ? [options.signal] : []),
+              ]),
+              beforeInput(pid, argv) {
+                childPid = pid;
+                options.beforeInput?.(pid, argv);
+              },
+              onOutputChunk(chunk, stream) {
+                const observed = options.onOutputChunk?.(chunk, stream);
+                if (stream === "stdout") {
+                  output += chunk.toString();
+                  const match = /Doctor busy (\d+)/.exec(output);
+                  if (match) {
+                    const pid = Number(match[1]);
+                    writer = { pid, startedAt: getProcessInstanceStartTime(pid) };
+                    ready.resolve();
+                  }
                 }
-              }
-              return observed;
-            },
-          };
-        });
+                return observed;
+              },
+            });
+            doctorResult = result;
+            return result;
+          },
+        );
         const step = await runPackageUpdateDoctor({
-          ...doctor,
+          ...doctorOptions(runId, fence, guards),
           results: steps,
           progress: {
             onStepComplete: (completedStep) => {
@@ -440,11 +445,19 @@ it.skipIf(process.platform === "win32").for([true, false])(
           stdoutTail: expect.stringContaining("Doctor busy"),
           failureFacts: [expect.objectContaining({ code: "timeout" })],
         });
-        assert(child?.pid);
-        expect(isChildProcessTreeAlive({ pid: child.pid })).toBe(false);
+        assert(childPid);
+        expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false);
         assert(writer);
         expect(isChildProcessTreeAlive(writer)).toBe(false);
-        expectSettlement(steps);
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 0,
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("openclaw update repair"),
+            }),
+          }),
+        );
         fence.assertCurrent();
       });
       await withinTest(
@@ -474,9 +487,19 @@ it.skipIf(process.platform === "win32").for([true, false])(
         assert(writer);
         expect(isChildProcessTreeAlive(writer)).toBe(true);
         expectRetainedCommandClaims(writer.pid, [root, serviceRoot]);
-        expectSettlement(steps, writer.pid);
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 1,
+            failureFacts: [
+              expect.objectContaining({
+                code: "doctor-processes-unsettled",
+                message: expect.stringContaining(String(writer.pid)),
+              }),
+            ],
+          }),
+        );
       }
-      const doctorResult = child?.result;
       assert(doctorResult);
       expect(doctorResult, doctorResult.stderr).toMatchObject({
         termination: "timeout",
@@ -513,25 +536,36 @@ it.skipIf(process.platform === "win32").for([
     const deadline = controlDoctorDeadline();
     let execution: Promise<unknown> | undefined;
     try {
-      execution = standaloneDoctor(steps, busyDoctorWriterArgv(identityAvailable), {
-        signal: AbortSignal.any([signal, cleanup.signal]),
-        beforeInput: (pid) => {
-          doctorPid = pid;
+      execution = runUpdateDoctorProcess(
+        { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
+        busyDoctorWriterArgv(identityAvailable),
+        {
+          cwd: root,
+          input: "",
+          timeoutMs: 5_000,
+          signal: AbortSignal.any([signal, cleanup.signal]),
+          env: {
+            ...env,
+            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: path.join(root, "doctor-result.json"),
+          },
+          beforeInput: (pid) => {
+            doctorPid = pid;
+          },
+          onOutputChunk: (chunk, stream) => {
+            if (stream !== "stdout") {
+              return;
+            }
+            output += chunk.toString();
+            const match = /Doctor busy (\d+)/.exec(output);
+            if (match) {
+              const pid = Number(match[1]);
+              writer = { pid, startedAt: getProcessInstanceStartTime(pid) };
+              deadline.release(false);
+              throw original;
+            }
+          },
         },
-        onOutputChunk: (chunk, stream) => {
-          if (stream !== "stdout") {
-            return;
-          }
-          output += chunk.toString();
-          const match = /Doctor busy (\d+)/.exec(output);
-          if (match) {
-            const pid = Number(match[1]);
-            writer = { pid, startedAt: getProcessInstanceStartTime(pid) };
-            deadline.release(false);
-            throw original;
-          }
-        },
-      }).catch((cause: unknown) => cause);
+      ).catch((cause: unknown) => cause);
       const error = await withinTest(execution, signal);
       assert(doctorPid);
       assert(writer, output);
@@ -541,12 +575,6 @@ it.skipIf(process.platform === "win32").for([
       if (identityAvailable) {
         expect(readCommandClaims()).toEqual([]);
         expect(readHandoffClaims().find((claim) => claim.install_root === root)).toBeUndefined();
-        if (frozen) {
-          expect(error).toMatchObject({ message: original.message, cause: original });
-        } else {
-          expect(error).toBe(original);
-        }
-        expectSettlement(steps);
       } else {
         expectRetainedCommandClaims(writer.pid, [root]);
         const anchor = readHandoffClaims().find((claim) => claim.install_root === root);
@@ -558,8 +586,36 @@ it.skipIf(process.platform === "win32").for([
           executor: { pid: doctorPid },
           action: { kind: "update" },
         });
+      }
+      if (identityAvailable) {
+        if (frozen) {
+          expect(error).toMatchObject({ message: original.message, cause: original });
+        } else {
+          expect(error).toBe(original);
+        }
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 0,
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("openclaw update repair"),
+            }),
+          }),
+        );
+      } else {
         expect(error).toMatchObject({ cause: original });
-        expectSettlement(steps, writer.pid);
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 1,
+            failureFacts: [
+              expect.objectContaining({
+                code: "doctor-processes-unsettled",
+                message: expect.stringContaining(String(writer.pid)),
+              }),
+            ],
+          }),
+        );
       }
       const restore = vi.fn(async () => {});
       await settleUpdateDoctorMaintenance(

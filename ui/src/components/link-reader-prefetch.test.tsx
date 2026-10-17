@@ -21,9 +21,15 @@ class VisibilityObserver {
   constructor(private readonly callback: IntersectionObserverCallback) {
     VisibilityObserver.instances.push(this);
   }
-  observe = (target: Element) => this.targets.add(target);
-  unobserve = (target: Element) => this.targets.delete(target);
-  disconnect = () => this.targets.clear();
+  observe(target: Element) {
+    this.targets.add(target);
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+  disconnect() {
+    this.targets.clear();
+  }
   intersect(targets: Element[], isIntersecting = true) {
     this.callback(
       targets.map((target) => ({ target, isIntersecting }) as IntersectionObserverEntry),
@@ -389,10 +395,9 @@ describe("GitHub preview warming", () => {
 
   it("discovers streamed links and recycled hrefs without another parent render", async () => {
     await show([]);
-    const link = Object.assign(document.createElement("a"), {
-      className: "markdown-github-link",
-      href: href(1),
-    });
+    const link = document.createElement("a");
+    link.className = "markdown-github-link";
+    link.href = href(1);
     container.firstElementChild!.append(link);
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();

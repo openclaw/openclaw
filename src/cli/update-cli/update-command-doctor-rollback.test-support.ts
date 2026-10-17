@@ -16,15 +16,11 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import {
-  createGitFixtureCheckout,
-  runFixtureGit,
-} from "../../infra/update-runner-git-candidate.test-support.js";
+import { runFixtureGit } from "../../infra/update-runner-git-candidate.test-support.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
-import { resultFixture, verificationFixture } from "./update-command-fixtures.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { createReadinessRollbackFixture } from "./update-command-readiness-rollback.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -36,7 +32,32 @@ type Restart = typeof import("./update-command-service.js").maybeRestartService;
 type VerifyGateway = typeof import("./update-command-verification.js").verifyUpdatedGateway;
 
 async function createGitRollbackFixture(base: string) {
-  const { root } = await createGitFixtureCheckout(base, { version: VERSION });
+  vi.stubEnv("GIT_CONFIG_COUNT", "0");
+  for (const key of [
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+  const remote = path.join(base, "remote");
+  const root = path.join(base, "checkout");
+  await fs.mkdir(remote);
+  await runFixtureGit(remote, "init", "--initial-branch=main");
+  await runFixtureGit(remote, "config", "user.name", "OpenClaw Test");
+  await runFixtureGit(remote, "config", "user.email", "openclaw@example.com");
+  await fs.writeFile(
+    path.join(remote, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION, packageManager: "pnpm@12.0.0" }),
+  );
+  await fs.writeFile(path.join(remote, "openclaw.mjs"), "export {};\n");
+  await fs.writeFile(path.join(remote, ".gitignore"), "dist/\nnode_modules/\n.artifacts/\n");
+  await runFixtureGit(remote, "add", ".");
+  await runFixtureGit(remote, "commit", "-m", "fixture");
+  await runFixtureGit(base, "clone", "--quiet", remote, root);
+  await runFixtureGit(root, "config", "user.name", "OpenClaw Test");
+  await runFixtureGit(root, "config", "user.email", "openclaw@example.com");
   await fs.writeFile(path.join(root, "local-commit.txt"), "retained local commit\n");
   await runFixtureGit(root, "add", ".");
   await runFixtureGit(root, "commit", "-m", "local fixture");
@@ -45,16 +66,16 @@ async function createGitRollbackFixture(base: string) {
     const sha = await runFixtureGit(destination, "rev-parse", "HEAD");
     const dist = path.join(destination, "dist");
     await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
-    const stamp = JSON.stringify({ head: sha });
-    await Promise.all(
-      Object.entries({
-        "build-info.json": JSON.stringify({ commit: sha, buildId }),
-        ".buildstamp": stamp,
-        ".runtime-postbuildstamp": stamp,
-        "entry.js": `export const build = ${JSON.stringify(buildId)};\n`,
-        "control-ui/index.html": "<html></html>",
-      }).map(([file, contents]) => fs.writeFile(path.join(dist, file), contents)),
-    );
+    await Promise.all([
+      fs.writeFile(path.join(dist, "build-info.json"), JSON.stringify({ commit: sha, buildId })),
+      fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: sha })),
+      fs.writeFile(path.join(dist, ".runtime-postbuildstamp"), JSON.stringify({ head: sha })),
+      fs.writeFile(
+        path.join(dist, "entry.js"),
+        `export const build = ${JSON.stringify(buildId)};\n`,
+      ),
+      fs.writeFile(path.join(dist, "control-ui", "index.html"), "<html></html>"),
+    ]);
   };
   await writeRuntime(root, "previous-build");
   let transaction: PackageUpdateTransaction | undefined;
@@ -88,10 +109,9 @@ async function createGitRollbackFixture(base: string) {
       },
     },
   });
-  expect(result).toMatchObject({
-    status: "ok",
-    after: { sha: beforeSha, buildId: "candidate-build" },
-  });
+  expect(result.status).toBe("ok");
+  expect(result.after?.sha).toBe(beforeSha);
+  expect(result.after?.buildId).toBe("candidate-build");
   if (!transaction) {
     throw new Error("Git activation did not retain its runtime for finalization recovery");
   }
@@ -141,11 +161,15 @@ export function registerDoctorRestorationRollbackTests(
           },
         });
         expect(swap.status).toBe("committed");
-        updateResult = resultFixture(packageRoot, {
+        updateResult = {
+          status: "ok",
+          mode: "npm",
+          root: packageRoot,
           before: { version: "1.0.0" },
           after: { version: "9999.1.1" },
+          steps: [],
           durationMs: 1,
-        });
+        };
       }
       const serviceRoot = differentService ? path.join(base, "service-a") : packageRoot;
       const installedVersion = transport === "stale-git-graph" ? VERSION : "1.0.0";
@@ -269,10 +293,14 @@ export function registerDoctorRestorationRollbackTests(
               observedGateway.version === expectedVersion &&
               observedGateway.buildId === expectedBuildId;
             result.verification = {
-              ...verificationFixture(observedGateway.version ?? ""),
+              serviceRunning: true,
               runningVersion: observedGateway.version ?? undefined,
               runningBuildId: observedGateway.buildId ?? undefined,
               versionMatch: matches,
+              readyz: true,
+              settled: true,
+              channelsReady: true,
+              pluginErrors: [],
             };
             return {
               ok: matches,
@@ -284,10 +312,8 @@ export function registerDoctorRestorationRollbackTests(
       }
       if (!finishWithDeadline) {
         harness.restartCandidate.mockImplementationOnce(async (params) => {
-          expect(params).toMatchObject({
-            requireRunningServiceAfterRestart: true,
-            result: { after: { version: installedVersion } },
-          });
+          expect(params.requireRunningServiceAfterRestart).toBe(true);
+          expect(params.result.after?.version).toBe(installedVersion);
           expect(params.expectedGatewayIdentity).toEqual(before.serviceIdentity);
           expect(
             JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).version,
@@ -352,21 +378,17 @@ export function registerDoctorRestorationRollbackTests(
         }
         failure = caught;
       }
+      expect(failure?.exitCode).toBe(1);
       expect(rollback).toHaveBeenCalledOnce();
       expect(harness.stopCandidate).toHaveBeenCalledOnce();
       expect(harness.restartCandidate).toHaveBeenCalledTimes(finishWithDeadline ? 2 : 1);
-      expect(failure).toMatchObject({
-        exitCode: 1,
-        result: {
-          root: packageRoot,
-          after: { version: installedVersion },
-          recovery: {
-            serviceRestartSafe: true,
-            packageRollbackVerified: true,
-            service: "healthy",
-            version: serviceVersion,
-          },
-        },
+      expect(failure?.result.root).toBe(packageRoot);
+      expect(failure?.result.after?.version).toBe(installedVersion);
+      expect(failure?.result.recovery).toMatchObject({
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        service: "healthy",
+        version: serviceVersion,
       });
       if (finishWithDeadline) {
         expect(failure?.result.steps).toContainEqual(
@@ -383,9 +405,11 @@ export function registerDoctorRestorationRollbackTests(
         ]);
       }
       const recorded = getUpdateRun(run.runId, { env });
-      expect(recorded).toMatchObject({
-        status: "rolled-back",
-        verification: { serviceRunning: true, runningVersion: serviceVersion, versionMatch: true },
+      expect(recorded?.status).toBe("rolled-back");
+      expect(recorded?.verification).toMatchObject({
+        serviceRunning: true,
+        runningVersion: serviceVersion,
+        versionMatch: true,
       });
       if (!recorded) {
         throw new Error("Expected terminal rollback report");

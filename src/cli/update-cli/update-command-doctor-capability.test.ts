@@ -14,11 +14,19 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { resultFixture } from "./update-command-fixtures.test-support.js";
-import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import * as postCore from "./update-command-post-core.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const pluginUpdate: PostCorePluginUpdateResult = {
+  status: "ok",
+  changed: true,
+  sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+  npm: { changed: false, outcomes: [] },
+  integrityDrifts: [],
+  warnings: [],
+};
 
 it.each([
   { target: "legacy", coreAlreadyCurrent: false },
@@ -38,11 +46,6 @@ it.each([
       const root = state.path("target");
       const control = state.path("control");
       const marker = state.path("doctor-calls");
-      const worker = path.join(
-        root,
-        "dist",
-        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-      );
       const targetVersion = target === "pre-worker" ? "2026.7.1" : "2026.9.3";
       await fs.mkdir(control);
       await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
@@ -50,13 +53,16 @@ it.each([
       vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
       await state.writeConfig({ plugins: { enabled: false } });
-      await state.writeJson("target/package.json", {
-        name: "openclaw",
-        type: "module",
-        version: targetVersion,
-      });
-      await state.writeText(
-        "target/dist/index.js",
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          type: "module",
+          version: targetVersion,
+        }),
+      );
+      await fs.writeFile(
+        path.join(root, "dist", "index.js"),
         `import fs from "node:fs";
         if (process.argv.includes("--repair")) fs.appendFileSync(${JSON.stringify(marker)}, "legacy-doctor\\n");
         else if (process.argv.includes("--lint")) process.stdout.write(JSON.stringify({ok:true,checksRun:1,checksSkipped:0,findings:[]}));
@@ -75,7 +81,7 @@ it.each([
             };
       if (target !== "pre-worker") {
         await fs.writeFile(
-          worker,
+          path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
           `import fs from "node:fs";
         if (process.argv[2] === "--check") {
           fs.appendFileSync(${JSON.stringify(marker)}, "check\\n");
@@ -99,21 +105,21 @@ it.each([
         }`,
         );
       }
-      // Only target plugin work is mocked; capability and Doctor transports are real.
+      // Target plugin work is already complete. Parent convergence, capability
+      // inspection, both Doctor transports and native executor ownership are real.
       vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValue({
         resumed: true,
-        pluginUpdate: createPostCorePluginUpdateResult({
-          status: "ok",
-          changed: true,
-          warnings: [],
-        }),
+        pluginUpdate,
       });
       let current = true;
       if (target === "revoked-before-probe") {
         const lstat = fs.lstat;
         vi.spyOn(fs, "lstat").mockImplementation(async (pathname) => {
           const result = await lstat(pathname);
-          if (pathname === worker) {
+          if (
+            pathname ===
+            path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
+          ) {
             current = false;
           }
           return result;
@@ -145,12 +151,15 @@ it.each([
         return await convergeUpdatePlugins({
           root,
           coreAlreadyCurrent,
-          result: resultFixture(root, {
+          result: {
             status: coreAlreadyCurrent ? "skipped" : "ok",
+            mode: "npm",
+            root,
             before: { version: "2026.9.6" },
             after: { version: targetVersion },
+            steps: [],
             durationMs: 1,
-          }),
+          },
           installKindChanged: false,
           configSnapshot,
           requestedChannel: null,
@@ -166,7 +175,14 @@ it.each([
           assertCurrent: opts.run!.executorFence.assertCurrent,
         });
       });
-      if (!["legacy", "pre-worker", "modern"].includes(target)) {
+      if (
+        target === "malformed" ||
+        target === "unknown-protocol" ||
+        target === "probe-failed" ||
+        target === "missing-runner" ||
+        target === "revoked" ||
+        target === "revoked-before-probe"
+      ) {
         await expect(pending).rejects.toThrow();
         if (target === "missing-runner" || target === "revoked-before-probe") {
           await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });

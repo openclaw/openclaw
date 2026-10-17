@@ -21,13 +21,6 @@ const launch: QaEvidenceIdentity = {
 };
 const scenario = { id: "repeated", execution: { kind: "script" as const } };
 const options = { generatedAt: "2026-09-13T00:00:00Z" };
-function family() {
-  const parent = owner();
-  return { parent, shared: owner({ anchors: parent.anchors }), child: owner() };
-}
-function claims(...pairs: [string, "primary" | "secondary" | "diagnostic"][]) {
-  return pairs.map(([id, role]) => ({ id, role }));
-}
 function row(status: QaEvidenceStatus): QaEvidenceSummaryEntry {
   return {
     test: { id: "repeated", kind: "script-test", title: "Retained check" },
@@ -39,12 +32,13 @@ function owner(params: Partial<Parameters<typeof createQaEvidenceInvocation>[0]>
   return createQaEvidenceInvocation({ scenarios: [scenario], channel: null, launch, ...params });
 }
 function bundle(status: QaEvidenceStatus) {
-  const child = owner({
+  const child = createQaEvidenceInvocation({
     scenarios: [scenario, scenario],
+    channel: null,
     launch: { ...launch, source: { ref: "child-source", integrity: "child-tree" } },
   });
   const id = child.begin(0);
-  complete(child, id, status);
+  child.complete(id, { status, entries: [row(status)] });
   child.select(0, id);
   return child.snapshot(options);
 }
@@ -66,81 +60,100 @@ function finish(
   childEvidence: ReturnType<typeof bundle>,
   status: QaEvidenceStatus,
   retryOf?: string | null,
-  childCoverage?: QaEvidenceOccurrence["childCoverage"],
 ) {
   const id = parent.begin(0, retryOf);
-  complete(parent, id, status, { receipts: [receipt(id)], childEvidence, childCoverage });
+  parent.complete(id, {
+    status,
+    entries: [row(status)],
+    receipts: [receipt(id)],
+    childEvidence,
+  });
   parent.select(0, id);
   return id;
-}
-type Owner = ReturnType<typeof owner>;
-function complete(
-  invocation: Owner,
-  id: string,
-  status: QaEvidenceStatus,
-  extra: Partial<Parameters<Owner["complete"]>[1]> = {},
-) {
-  invocation.complete(id, { status, entries: [row(status)], ...extra });
-}
-function importSelected(parent: Owner, shared: Owner) {
-  parent.select(0, parent.importChild(0, shared.snapshot(options)));
-}
-function capture(child: ReturnType<typeof bundle>, cap?: QaEvidenceOccurrence["childCoverage"]) {
-  const parent = owner();
-  finish(parent, child, "pass", undefined, cap);
-  return parent.snapshot(options);
-}
-
-function projectCoverage(summary: ReturnType<typeof bundle>, entry = summary.entries[0]!) {
-  return resolveQaEvidenceContainment(summary.occurrences, summary.entries).projectCoverage(
-    entry.binding.occurrenceId,
-    entry.coverage,
-  );
 }
 
 describe("retained child evidence ownership", () => {
   it("intersects nested coverage caps without promoting or rewriting child claims", () => {
     const child = bundle("pass");
-    child.entries[0]!.coverage = claims(
-      ["cap", "primary"],
-      ["report", "secondary"],
-      ["diag", "diagnostic"],
-      ["other", "primary"],
-    );
+    child.entries[0]!.coverage = [
+      { id: "qa.coverage", role: "primary" },
+      { id: "qa.reporting", role: "secondary" },
+      { id: "qa.diagnostic", role: "diagnostic" },
+      { id: "other.claim", role: "primary" },
+    ];
     const original = structuredClone(child);
-    const inner = capture(
-      child,
-      claims(["cap", "secondary"], ["report", "primary"], ["diag", "primary"]),
-    );
-    const summary = capture(
-      inner,
-      claims(["cap", "primary"], ["report", "primary"], ["diag", "primary"], ["other", "primary"]),
-    );
+    function capture(input: typeof child, childCoverage?: QaEvidenceOccurrence["childCoverage"]) {
+      const parent = owner();
+      const id = parent.begin(0);
+      parent.complete(id, {
+        status: "pass",
+        entries: [row("pass")],
+        childEvidence: input,
+        childCoverage,
+        receipts: [receipt(id)],
+      });
+      parent.select(0, id);
+      return parent.snapshot(options);
+    }
+    const inner = capture(child, [
+      { id: "qa.coverage", role: "secondary" },
+      { id: "qa.reporting", role: "primary" },
+      { id: "qa.diagnostic", role: "primary" },
+    ]);
+    const summary = capture(inner, [
+      { id: "qa.coverage", role: "primary" },
+      { id: "qa.reporting", role: "primary" },
+      { id: "qa.diagnostic", role: "primary" },
+      { id: "other.claim", role: "primary" },
+    ]);
     const entry = summary.entries[0]!;
-    expect(projectCoverage(summary, entry)).toEqual(
-      claims(["cap", "secondary"], ["report", "secondary"], ["diag", "diagnostic"]),
-    );
+    const containment = resolveQaEvidenceContainment(summary.occurrences, summary.entries);
+    expect(containment.projectCoverage(entry.binding.occurrenceId, entry.coverage)).toEqual([
+      { id: "qa.coverage", role: "secondary" },
+      { id: "qa.reporting", role: "secondary" },
+      { id: "qa.diagnostic", role: "diagnostic" },
+    ]);
     expect(entry).toEqual(original.entries[0]);
     expect(getEffectiveQaEvidenceEntries(summary)[0]).toBe(entry);
     const empty = capture(child, []);
-    expect(projectCoverage(empty, entry)).toEqual([]);
+    expect(
+      resolveQaEvidenceContainment(empty.occurrences, empty.entries).projectCoverage(
+        entry.binding.occurrenceId,
+        entry.coverage,
+      ),
+    ).toEqual([]);
     const historical = capture(child);
-    expect(projectCoverage(historical, entry)).toBe(entry.coverage);
-    expect(projectCoverage(child, entry)).toBe(entry.coverage);
+    expect(
+      resolveQaEvidenceContainment(historical.occurrences, historical.entries).projectCoverage(
+        entry.binding.occurrenceId,
+        entry.coverage,
+      ),
+    ).toBe(entry.coverage);
+    expect(
+      resolveQaEvidenceContainment(child.occurrences, child.entries).projectCoverage(
+        entry.binding.occurrenceId,
+        entry.coverage,
+      ),
+    ).toBe(entry.coverage);
     expect(child).toEqual(original);
   });
 
   it("captures completed child bundles once without admitting later rewrites", () => {
-    const { parent, shared } = family();
+    const parent = owner();
+    const shared = owner({ anchors: parent.anchors });
     const id = shared.begin(0);
-    importSelected(parent, shared);
-    complete(shared, id, "pass", {
+    parent.importChild(0, shared.snapshot(options));
+    parent.select(0, null);
+    shared.complete(id, {
+      status: "pass",
+      entries: [row("pass")],
       childEvidence: bundle("pass"),
       childCoverage: [{ id: "qa.coverage", role: "secondary" }],
       receipts: [receipt(id)],
     });
     shared.select(0, id);
-    importSelected(parent, shared);
+    parent.importChild(0, shared.snapshot(options));
+    parent.select(0, id);
     const completed = parent.snapshot(options);
     expect(completed).toEqual(shared.snapshot(options));
     const changed = structuredClone(completed);
@@ -170,7 +183,7 @@ describe("retained child evidence ownership", () => {
       const first = bundle("fail");
       const firstId = finish(parent, first, "fail");
       const independent = parent.begin(0, null);
-      complete(parent, independent, "fail");
+      parent.complete(independent, { status: "fail", entries: [row("fail")] });
       parent.select(0, firstId);
       const second = bundle(status);
       const nextId = finish(parent, second, status);
@@ -180,7 +193,7 @@ describe("retained child evidence ownership", () => {
           scenarioId: scenario.id,
           scenarioInstanceId: parent.anchors[0]!.id,
           occurrenceId: status === "pass" ? nextId : firstId,
-          status,
+          status: status === "pass" ? "pass" : "fail",
         },
       ]);
       for (const child of [first, second]) {
@@ -227,25 +240,40 @@ describe("retained child evidence ownership", () => {
     finish(parent, child, "pass");
     const next = parent.begin(0, null);
     const before = parent.snapshot(options);
-    const completeNext = (childEvidence: typeof child) =>
-      complete(parent, next, "pass", { receipts: [receipt(next)], childEvidence });
-    expect(() => completeNext(child)).toThrow(/overlaps/);
+    expect(() =>
+      parent.complete(next, {
+        status: "pass",
+        entries: [row("pass")],
+        receipts: [receipt(next)],
+        childEvidence: child,
+      }),
+    ).toThrow(/overlaps/);
     expect(parent.snapshot(options)).toEqual(before);
     const malformed = structuredClone(child);
     malformed.occurrences[0]!.childOccurrenceIds = ["absent"];
-    expect(() => completeNext(malformed)).toThrow();
+    expect(() =>
+      parent.complete(next, {
+        status: "pass",
+        entries: [row("pass")],
+        receipts: [receipt(next)],
+        childEvidence: malformed,
+      }),
+    ).toThrow();
     expect(parent.snapshot(options)).toEqual(before);
   });
 
   it("retains captured child-local activity on a later shared snapshot", () => {
-    const { parent, shared, child } = family();
+    const parent = owner();
+    const shared = owner({ anchors: parent.anchors });
+    const child = owner();
     const selected = child.begin(0);
-    complete(child, selected, "pass");
+    child.complete(selected, { status: "pass", entries: [row("pass")] });
     child.select(0, selected);
     const diagnostic = child.begin(0, null);
-    complete(child, diagnostic, "fail");
-    finish(shared, child.snapshot(options), "fail");
-    importSelected(parent, shared);
+    child.complete(diagnostic, { status: "fail", entries: [row("fail")] });
+    const command = finish(shared, child.snapshot(options), "fail");
+    parent.importChild(0, shared.snapshot(options));
+    parent.select(0, command);
     const before = parent.snapshot(options);
     const rewritten = structuredClone(before);
     rewritten.entries.find((entry) => entry.binding.occurrenceId === diagnostic)!.effective = false;
@@ -255,15 +283,20 @@ describe("retained child evidence ownership", () => {
   });
 
   it("rejects completion of an open observation already captured in an immutable bundle", () => {
-    const { parent, shared, child } = family();
+    const parent = owner();
+    const shared = owner({ anchors: parent.anchors });
+    const child = owner();
     const open = child.begin(0);
-    finish(shared, child.snapshot(options), "fail");
-    importSelected(parent, shared);
+    const command = finish(shared, child.snapshot(options), "fail");
+    parent.importChild(0, shared.snapshot(options));
+    parent.select(0, command);
     const before = parent.snapshot(options);
-    expect(() => complete(parent, open, "pass")).toThrow(/captured child/);
+    expect(() => parent.complete(open, { status: "pass", entries: [row("pass")] })).toThrow(
+      /captured child/,
+    );
     expect(parent.snapshot(options)).toEqual(before);
     expect(parent.childInput(0).occurrences).toEqual(before.occurrences);
-    complete(child, open, "pass", { receipts: [receipt("later")] });
+    child.complete(open, { status: "pass", entries: [row("pass")], receipts: [receipt("later")] });
     const completion = child.snapshot(options);
     const rewritten = structuredClone(before);
     rewritten.occurrences = rewritten.occurrences.map((item) =>
