@@ -439,6 +439,56 @@ describe("Codex app-server steering queue", () => {
     harness.client.close();
   });
 
+  it("bounds consumption confirmation after a successful steering acknowledgement", async () => {
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line);
+        send({ id: request.id, result: { turnId: "turn-1" } });
+      },
+    });
+    const queue = createQueue(harness.client, { requestTimeoutMs: 1_000 });
+    const accepted = vi.fn();
+    const settled = vi.fn();
+    const outcomes: unknown[] = [];
+    const delivery = queue
+      .queue("synthetic follow-up", {
+        debounceMs: 0,
+        onQueueAccepted: accepted,
+        onQueueSettled: settled,
+      })
+      .then(
+        () => outcomes.push("resolved"),
+        (error: unknown) => outcomes.push(error),
+      );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted).toHaveBeenCalledWith(true);
+      expect(outcomes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+      expect((outcomes[0] as Error).cause).toMatchObject({
+        message: "Codex steering transcript consumption confirmation timed out",
+      });
+      expect(settled).toHaveBeenCalledOnce();
+      // Ambiguous delivery remains accepted, never eligible for automatic replay.
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(queue.getAcceptedMessages()).toHaveLength(1);
+      expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+
+      const next = queue.queue("synthetic later follow-up", { debounceMs: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.writes).toHaveLength(2);
+      expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
+      await next;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      queue.cancel();
+      harness.client.close();
+      await delivery;
+    }
+  });
+
   it("aborts the in-flight steer request and removes its client pending entry", async () => {
     const harness = createClientHarness();
     const controller = new AbortController();
