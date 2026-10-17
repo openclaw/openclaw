@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
@@ -41,6 +42,13 @@ function expectStoppedBeforePublication(fixture: RecoveryFixture) {
   fixture.expectNoContinuation();
 }
 
+function realCompactor(fixture: RecoveryFixture) {
+  return expectDefined(
+    fixture.compact.getMockImplementation(),
+    "Fixture must provide the real append implementation",
+  );
+}
+
 // Only deadline tests control timers; real persistence must reach its checkpoint first.
 async function recoverAtSafetyDeadline(
   fixture: RecoveryFixture,
@@ -66,8 +74,6 @@ async function recoverAtSafetyDeadline(
   }
 }
 
-// These counters observe recovery continuation only, not another model request:
-// downstream dispatch already has its own authority and cancellation guards.
 describe("embedded compaction recovery authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -140,8 +146,7 @@ describe("embedded compaction recovery authority", () => {
         expect(before).toHaveProperty("activeWriterRunId", fixture.runId);
         const successorId = randomUUID();
         fixture.compact.mockImplementationOnce(async ({ sessionTarget }) => {
-          // Engines declare the public successor; only the host may transfer
-          // the real durable row and retain its private admitted-writer facts.
+          // Only the host transfers the durable row and its private writer facts.
           expect(sessionTarget).not.toHaveProperty("expectedWriterRunId");
           expect(fixture.loadEntry()?.sessionId).toBe(before?.sessionId);
           return recoveryCompaction({
@@ -276,8 +281,7 @@ describe("embedded compaction recovery authority", () => {
       const entryBefore = fixture.loadEntry();
       fixture.updates.mockClear();
 
-      // Unlike the engine-owned detached control above, the fixture's default backend
-      // opens a real SessionManager with its portable target and no writer claim.
+      // The default backend opens a portable SessionManager without a writer claim.
       const outcome = await fixture.recover("overflow");
 
       expect(fixture.compact).toHaveBeenCalledOnce();
@@ -393,10 +397,7 @@ describe("embedded compaction recovery authority", () => {
       const opened = createDeferred();
       const release = createDeferred();
       const originalOpen = SessionManager.openAsync.bind(SessionManager);
-      const originalCompact = fixture.compact.getMockImplementation();
-      if (!originalCompact) {
-        throw new Error("Fixture must provide the real append implementation");
-      }
+      const originalCompact = realCompactor(fixture);
       let committed = false;
       fixture.compact.mockImplementationOnce(async (params) => {
         vi.spyOn(SessionManager, "openAsync").mockImplementationOnce(async (...args) => {
@@ -468,24 +469,19 @@ describe("embedded compaction recovery authority", () => {
         const entryBefore = fixture.loadEntry();
         const targetBefore = fixture.getSessionTarget();
         const sourceError = new Error("backend failed after committing compaction");
-        const originalCompact = fixture.compact.getMockImplementation();
-        if (!originalCompact) {
-          throw new Error("Fixture must provide the real append implementation");
-        }
+        const originalCompact = realCompactor(fixture);
         const committedAndWaiting = createDeferred();
         let childSignal: AbortSignal | undefined;
         fixture.compact.mockImplementationOnce(async (params) => {
           const committed = await originalCompact(params);
-          const recorder = readCompactionAccountingRecorder(params.runtimeContext);
-          if (!recorder) {
-            throw new Error("Recovery must attach its private accounting recorder");
-          }
-          if (!committed.result) {
-            throw new Error("Fixture compaction must report its committed context usage");
-          }
+          const recorder = expectDefined(
+            readCompactionAccountingRecorder(params.runtimeContext),
+            "Recovery must attach its private accounting recorder",
+          );
+          const usage = expectDefined(committed.result, "Compaction must report committed usage");
           recorder.recordCompaction?.({
-            tokensBefore: committed.result.tokensBefore,
-            tokensAfter: committed.result.tokensAfter,
+            tokensBefore: usage.tokensBefore,
+            tokensAfter: usage.tokensAfter,
             compactionKind: "context-engine",
           });
           fixture.updates.mockClear();
@@ -543,24 +539,21 @@ describe("embedded compaction recovery authority", () => {
           return unchangedMaintenance();
         });
         await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
-        if (!retainedRewrite) {
-          throw new Error("Maintenance must receive the host-owned rewrite capability");
-        }
+        const rewriteTranscript = expectDefined(retainedRewrite, "Missing host rewrite capability");
         const before = await fixture.snapshot();
         fixture.updates.mockClear();
         if (owner !== "active") {
           const retainedWriter = await fixture.openWriter();
           await fixture.invalidate(owner);
           if (owner === "writer-replaced") {
-            // The existing SQLite fence works for an explicitly fenced manager;
-            // the retained capability must not reopen an unfenced replacement.
+            // Retained capabilities must not reopen an unfenced replacement.
             await expect(
               retainedWriter.appendMessageAsync(fixture.replacement.message),
             ).rejects.toThrow();
           }
         }
 
-        const rewrite = retainedRewrite({ replacements: [fixture.replacement] });
+        const rewrite = rewriteTranscript({ replacements: [fixture.replacement] });
         if (owner === "active") {
           await expect(rewrite).resolves.toMatchObject({ changed: true, rewrittenEntries: 1 });
           const after = await fixture.snapshot();

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -24,6 +25,7 @@ const CODEX_MISSING_TERMINAL_MESSAGE =
 const UNSAFE_TIMEOUT_MESSAGE =
   "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
 type AttemptParams = Parameters<typeof mockedRunEmbeddedAttempt>[0];
+const appServerTurn = { transport: "stdio" as const, threadId: "thread-1", turnId: "turn-1" };
 
 function runtimeTimeout(message: string): EmbeddedRunAttemptResult["terminal"] {
   return {
@@ -53,9 +55,7 @@ function codexFailure(
     codexAppServerFailure: {
       kind: closed ? "client_closed_before_turn_completed" : "turn_completion_idle_timeout",
       ...(!closed ? { turnWatchTimeoutKind: "completion" as const } : {}),
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...appServerTurn,
       replaySafe: true,
     },
     ...overrides,
@@ -86,6 +86,19 @@ function replyWithAbort(abortByUser: () => boolean) {
     markWaitingForDeferredMaintenance: vi.fn(),
     markWaitingForGlobalLane: vi.fn(),
   } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
+}
+
+function expectIncompleteTimeout(
+  result: Awaited<ReturnType<typeof runEmbeddedAgent>>,
+  message: string,
+  meta: Partial<Awaited<ReturnType<typeof runEmbeddedAgent>>["meta"]>,
+) {
+  expect(result.payloads?.[0]).toMatchObject({ isError: true, text: message });
+  expect(result.meta).toMatchObject({
+    ...meta,
+    error: { kind: "incomplete_turn", message, fallbackSafe: false },
+  });
+  expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
 }
 
 describe("runEmbeddedAgent Codex app-server recovery", () => {
@@ -168,16 +181,12 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
       const text = "Work completed so far.";
       const message = `The runtime's ${deadline} deadline expired; verify the work before continuing.`;
-      const assistant = {
-        role: "assistant" as const,
-        api: "responses" as const,
-        provider: "openai",
+      const assistant = buildEmbeddedRunnerAssistant({
+        api: "responses",
         model: "gpt-5.6-luna",
-        content: [{ type: "text" as const, text }],
-        stopReason: "stop" as const,
-        timestamp: Date.now(),
+        content: [{ type: "text", text }],
         usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
-      };
+      });
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
           terminal: runtimeTimeout(message),
@@ -192,9 +201,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
             ? {
                 codexAppServerFailure: {
                   kind: "turn_settlement_timeout" as const,
-                  transport: "stdio" as const,
-                  threadId: "thread-1",
-                  turnId: "turn-1",
+                  ...appServerTurn,
                   replaySafe: false,
                 },
               }
@@ -331,21 +338,11 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     const result = await runCodex("run-codex-turn-completion-idle-timeout-retry-exhausted");
 
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: CODEX_MISSING_TERMINAL_MESSAGE,
-    });
-    expect(result.meta).toMatchObject({
+    expectIncompleteTimeout(result, CODEX_MISSING_TERMINAL_MESSAGE, {
       timeoutPhase: "provider",
       providerStarted: true,
-      error: {
-        kind: "incomplete_turn",
-        message: CODEX_MISSING_TERMINAL_MESSAGE,
-        fallbackSafe: false,
-      },
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
   it.each(["turn_completion_idle_timeout", "turn_settlement_timeout"] as const)(
@@ -365,9 +362,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
             kind,
             turnWatchTimeoutKind:
               kind === "turn_completion_idle_timeout" ? "completion" : undefined,
-            transport: "stdio",
-            threadId: "thread-1",
-            turnId: "turn-1",
+            ...appServerTurn,
             replaySafe: false,
             replayBlockedReason: "potential_side_effect",
           },
@@ -379,21 +374,11 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       setRuntimeConfigSnapshot(config);
       const result = await runCodex("run-codex-turn-completion-idle-timeout-fallback", { config });
 
-      expect(result.payloads?.[0]).toMatchObject({
-        isError: true,
-        text: UNSAFE_TIMEOUT_MESSAGE,
-      });
-      expect(result.meta).toMatchObject({
+      expectIncompleteTimeout(result, UNSAFE_TIMEOUT_MESSAGE, {
         replayInvalid: true,
         livenessState: "abandoned",
-        error: {
-          kind: "incomplete_turn",
-          message: UNSAFE_TIMEOUT_MESSAGE,
-          fallbackSafe: false,
-        },
       });
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     },
   );
 });

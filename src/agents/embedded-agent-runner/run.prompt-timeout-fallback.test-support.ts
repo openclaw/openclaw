@@ -7,6 +7,7 @@ import type { EmbeddedRunAttemptParamsV2 } from "../../plugin-sdk/agent-harness-
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { applyDelegationCapability } from "../delegation-capability.js";
+import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -50,23 +51,20 @@ function promptFailure(message = "LLM request timed out.") {
 }
 
 function completedAttempt(text?: string) {
-  const assistant = {
-    role: "assistant" as const,
+  const assistant = buildEmbeddedRunnerAssistant({
     ...model,
-    stopReason: "stop" as const,
     content: text ? [{ type: "text", text }] : [],
-  };
+  });
   return makeAttemptResult({
     assistantTexts: text ? [text] : [],
-    lastAssistant: assistant as never,
-    currentAttemptAssistant: assistant as never,
-    currentAttemptCompletedAssistant: assistant as never,
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
   });
 }
 function settledWriteTimeout(prompt: string, aborted = false) {
-  const toolUseAssistant = {
-    role: "assistant" as const,
-    stopReason: "toolUse" as const,
+  const toolUseAssistant = buildEmbeddedRunnerAssistant({
+    stopReason: "toolUse",
     ...model,
     content: [
       {
@@ -76,13 +74,8 @@ function settledWriteTimeout(prompt: string, aborted = false) {
         arguments: { path: "note.txt", content: "done" },
       },
     ],
-  };
-  const abortedAssistant = {
-    role: "assistant" as const,
-    stopReason: "aborted" as const,
-    ...model,
-    content: [],
-  };
+  });
+  const abortedAssistant = buildEmbeddedRunnerAssistant({ ...model, stopReason: "aborted" });
   return makeAttemptResult({
     assistantTexts: [],
     terminal: { kind: "timeout", phase: "prompt", source: "idle", ...(aborted ? { aborted } : {}) },
@@ -96,8 +89,8 @@ function settledWriteTimeout(prompt: string, aborted = false) {
       { role: "toolResult", toolCallId: "tool_write", toolName: "write", isError: false },
       abortedAssistant,
     ] as never,
-    lastAssistant: abortedAssistant as never,
-    currentAttemptAssistant: abortedAssistant as never,
+    lastAssistant: abortedAssistant,
+    currentAttemptAssistant: abortedAssistant,
     currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
   });
 }

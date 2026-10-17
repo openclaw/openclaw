@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
@@ -31,6 +32,7 @@ export type RecoveryFixture = Awaited<ReturnType<typeof createRecoveryFixture>>;
 // The engine is synthetic; admission, writer claims, safety timeout, recovery,
 // hooks, session state, transcript writes, and reopen reads are composed for real.
 async function createRecoveryFixture(state: OpenClawTestState, options: FixtureOptions) {
+  const { workspaceDir } = state;
   const { appendTranscriptMessage, loadTranscriptEvents, loadSessionEntry, replaceSessionEntry } =
     await import("../../config/sessions/session-accessor.js");
   const { waitForSessionTranscriptIndexReconcile } =
@@ -65,12 +67,15 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await import("../../auto-reply/reply/reply-run-registry.js");
   let replyOperation: PreparedEmbeddedRunInput["runParams"]["replyOperation"];
 
-  const memoryManager = options.inMemory ? SessionManager.inMemory(state.workspaceDir) : undefined;
+  const memoryManager = options.inMemory ? SessionManager.inMemory(workspaceDir) : undefined;
   const sessionId = memoryManager?.getSessionId() ?? randomUUID();
-  const target = {
+  const identity = {
     agentId: "main",
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
+  };
+  const target = {
+    ...identity,
     storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
   };
   const toolResult = makeTextToolResult(
@@ -102,7 +107,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
   }
   if (options.historicalTurns) {
-    const history = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
+    const history = memoryManager ?? (await SessionManager.openAsync(target, workspaceDir));
     for (let index = 0; index < options.historicalTurns; index += 1) {
       await history.appendMessageAsync(
         makeAgentUserMessage({ content: `Archived request ${index}` }),
@@ -125,7 +130,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   for (const message of messages) {
     const messageId = memoryManager
       ? await memoryManager.appendMessageAsync(message)
-      : (await appendTranscriptMessage(target, { cwd: state.workspaceDir, message })).messageId;
+      : (await appendTranscriptMessage(target, { cwd: workspaceDir, message })).messageId;
     if (message === recentUser) {
       recentUserId = messageId;
     }
@@ -175,15 +180,12 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     );
     assertActive();
     const runParams: PreparedEmbeddedRunInput["runParams"] = {
+      ...identity,
       runId,
-      sessionId,
-      sessionKey: target.sessionKey,
       sessionFile: target.sessionKey,
-      agentId: "main",
-      workspaceDir: state.workspaceDir,
+      workspaceDir,
       prompt: "continue",
       timeoutMs: 30_000,
-      // Ordinary lifecycle proofs use the production window, not a disk-speed deadline.
       config: {},
       abortSignal: controller.signal,
       admittedRunContext,
@@ -228,7 +230,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     };
     const openWriter = async () =>
       memoryManager ??
-      (await SessionManager.openAsync({ ...target, ...writerFence }, state.workspaceDir));
+      (await SessionManager.openAsync({ ...target, ...writerFence }, workspaceDir));
     const compact = vi.fn<ContextEngine["compact"]>(async () => {
       const writer = await openWriter();
       await writer.appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
@@ -264,12 +266,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       runParams,
       contextEngine,
       hookRunner,
-      hookContext: {
-        agentId: "main",
-        sessionId,
-        sessionKey: target.sessionKey,
-        workspaceDir: state.workspaceDir,
-      },
+      hookContext: { ...identity, workspaceDir },
       sessionPromptState,
     });
     const recoveryState = createEmbeddedRunContextRecoveryState();
@@ -307,7 +304,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         resolvedSessionKey: target.sessionKey,
         sessionAgentId: "main",
         agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
+        workspaceDir,
         modelSelection: {
           provider: "fixture-provider",
           model: "fixture-model",
@@ -356,14 +353,11 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       await drain();
       // Reopen independently: a cached manager can hide a durable append or leaf change.
       await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
-      const manager = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
+      const manager = memoryManager ?? (await SessionManager.openAsync(target, workspaceDir));
       const events = memoryManager
         ? memoryManager.getEntries()
         : await loadTranscriptEvents(target);
       const entries = manager.getEntries();
-      const toolResults = manager
-        .buildSessionContext()
-        .messages.filter((message) => message.role === "toolResult");
       return {
         resetCount: entries.filter((entry) => entry.type === "reset").length,
         eventDigests: events.map((entry) =>
@@ -373,15 +367,15 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         compactionIds: entries
           .filter((entry) => entry.type === "compaction")
           .map((entry) => entry.id),
-        toolResultChars: toolResults.reduce(
-          (sum, message) =>
-            sum +
-            message.content.reduce(
-              (chars, block) => chars + (block.type === "text" ? block.text.length : 0),
-              0,
-            ),
-          0,
-        ),
+        toolResultChars: manager.buildSessionContext().messages.reduce((sum, message) => {
+          if (message.role !== "toolResult") {
+            return sum;
+          }
+          return message.content.reduce(
+            (chars, block) => chars + (block.type === "text" ? block.text.length : 0),
+            sum,
+          );
+        }, 0),
       };
     };
     const invalidate = async (loss: AuthorityLoss) => {
@@ -414,11 +408,9 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       }
     };
     const expectNoContinuation = () => {
-      for (const retry of retries) {
+      for (const retry of [...retries, armPostCompactionGuard, onAgentEvent]) {
         expect(retry).not.toHaveBeenCalled();
       }
-      expect(armPostCompactionGuard).not.toHaveBeenCalled();
-      expect(onAgentEvent).not.toHaveBeenCalled();
     };
     return {
       compact,
@@ -498,14 +490,12 @@ export async function waitForCompactionAbort(
   if (signal.aborted) {
     throw toErrorObject(signal.reason, "Compaction aborted");
   }
-  let onAbort = () => {};
-  const pending = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(toErrorObject(signal.reason, "Compaction aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+  const pending = createDeferred<never>();
+  const onAbort = () => pending.reject(toErrorObject(signal.reason, "Compaction aborted"));
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
     onStarted?.();
-    return await pending;
+    return await pending.promise;
   } finally {
     signal.removeEventListener("abort", onAbort);
   }

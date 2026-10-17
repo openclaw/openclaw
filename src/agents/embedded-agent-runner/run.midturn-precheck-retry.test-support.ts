@@ -25,10 +25,7 @@ let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function requireAttemptCall(index: number) {
-  return expectDefined(
-    mockedRunEmbeddedAttempt.mock.calls[index],
-    `expected embedded attempt call ${index}`,
-  )[0];
+  return expectDefined(mockedRunEmbeddedAttempt.mock.calls[index])[0];
 }
 
 function run(runId: string, overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]> = {}) {
@@ -83,15 +80,13 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
     assistantTexts: [],
     lastAssistant: settledExecAssistant,
     currentAttemptAssistant: settledExecAssistant,
-    messagesSnapshot: resultRecorded
-      ? [
-          settledExecAssistant,
-          settledExecResult,
-          ...(params?.steeredAfterResult
-            ? [{ role: "user" as const, content: "also check the logs", timestamp: 3 }]
-            : []),
-        ]
-      : [settledExecAssistant],
+    messagesSnapshot: [
+      settledExecAssistant,
+      ...(resultRecorded ? [settledExecResult] : []),
+      ...(resultRecorded && params?.steeredAfterResult
+        ? [{ role: "user" as const, content: "also check the logs", timestamp: 3 }]
+        : []),
+    ],
     toolMetas: [
       {
         toolName: "exec",
@@ -175,10 +170,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     const { truncateOversizedToolResultsInSessionManager } =
       await import("./tool-result-truncation.js");
     const truncate = vi.mocked(truncateOversizedToolResultsInSessionManager);
-    const previousTruncate = truncate.getMockImplementation();
-    if (!previousTruncate) {
-      throw new Error("expected the shared harness truncation implementation");
-    }
+    const previousTruncate = expectDefined(truncate.getMockImplementation());
     truncate.mockImplementation(actualTruncation.truncateOversizedToolResultsInSessionManager);
     const successorId = `${session.runParams.sessionId}-tool-projection-successor`;
     const evidence = "tool evidence ".repeat(8_000);
@@ -283,15 +275,12 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     { label: "rotated yield_control without active items", activeCount: 0, rotated: true },
   ])("recovers $label only while the transcript identity permits it", async (row) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeReplayUnsafeMidTurnOverflow(
-        row.steeredAfterResult
-          ? { steeredAfterResult: true }
-          : {
-              activeCount: row.activeCount,
-              codeModeEngaged: true,
-              codeModeSuspended: true,
-            },
-      ),
+      makeReplayUnsafeMidTurnOverflow({
+        activeCount: row.activeCount,
+        codeModeEngaged: !row.steeredAfterResult,
+        codeModeSuspended: !row.steeredAfterResult,
+        steeredAfterResult: row.steeredAfterResult,
+      }),
     );
     if (!row.rotated) {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());

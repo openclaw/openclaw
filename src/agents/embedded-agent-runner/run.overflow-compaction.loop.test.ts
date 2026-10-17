@@ -25,7 +25,7 @@ import {
 import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
 import { resolveEmbeddedRunEffectiveModel } from "./run/model-harness.js";
-import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
+import { prepareAndDispatchEmbeddedRunAttempt as dispatch } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
@@ -106,7 +106,7 @@ let admittedRunContext: AdmittedRunContext;
 function makeDispatchInput(
   sessionManager: object = {},
   replayState: EmbeddedRunReplayState = createEmbeddedRunReplayState(),
-): Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0] {
+): Parameters<typeof dispatch>[0] {
   const workspaceDir = tempDirs.make("openclaw-retry-dispatch-");
   const params = {
     admittedRunContext,
@@ -207,7 +207,7 @@ function makeDispatchInput(
     getPostCompactionAbortError: vi.fn(() => undefined),
     setPostCompactionAbortController: vi.fn(),
     clearPostCompactionAbortController: vi.fn(),
-  } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
+  } as unknown as Parameters<typeof dispatch>[0];
 }
 
 async function dispatchExecSession(execSession: ExecSessionDefaults) {
@@ -219,7 +219,7 @@ async function dispatchExecSession(execSession: ExecSessionDefaults) {
     input.runInput.runParams.config = { agents: { defaults: { sandbox: { mode: "all" } } } };
   }
 
-  const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+  const { dispatchedAttempt } = await dispatch(input);
   return dispatchedAttempt;
 }
 
@@ -230,6 +230,13 @@ function capCase(
   sessionKey = "agent:main:session-1",
 ) {
   return { contextTokens, expectedBudget, nativeModelOwned, sessionKey };
+}
+
+async function publicationTools(input: Parameters<typeof dispatch>[0]) {
+  const { dispatchedAttempt } = await dispatch(input);
+  return createOpenClawTools({
+    githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
+  }).map((tool) => tool.name);
 }
 
 describe("embedded run retry dispatch", () => {
@@ -287,7 +294,7 @@ describe("embedded run retry dispatch", () => {
     const input = makeDispatchInput();
     input.preparedRuntime.snapshot().agentHarness.id = "openclaw";
     input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
-    Object.assign(input.runInput.runParams, { onContextAccountingEvent });
+    input.runInput.runParams.onContextAccountingEvent = onContextAccountingEvent;
     let subscription: ReturnType<typeof createSubscribedSessionHarness>["subscription"] | undefined;
     mocks.runAttempt.mockImplementationOnce(async (attempt: EmbeddedRunAttemptInternalParams) => {
       const harness = createSubscribedSessionHarness({
@@ -311,7 +318,6 @@ describe("embedded run retry dispatch", () => {
           },
         });
         await flushStarted.promise;
-        // The mocked attempt reports its replacement hook before the public notice.
         attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter: 40 });
         harness.emit({
           type: "compaction_end",
@@ -326,7 +332,7 @@ describe("embedded run retry dispatch", () => {
     });
 
     try {
-      await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
+      await expect(dispatch(input)).rejects.toBe(afterTurnError);
       expect(onContextAccountingEvent.mock.calls).toEqual([
         [{ kind: "model", contextTokens: undefined, successful: false }],
         [{ kind: "compaction", tokensAfter: 40 }],
@@ -351,7 +357,7 @@ describe("embedded run retry dispatch", () => {
     const input = makeDispatchInput(sessionManager, replayState);
     const {
       dispatchedAttempt: { preparedAttempt: attempt },
-    } = await prepareAndDispatchEmbeddedRunAttempt(input);
+    } = await dispatch(input);
 
     expect(attempt.sessionManager).toBe(sessionManager);
     expect(attempt.sessionTarget).toBeUndefined();
@@ -361,9 +367,7 @@ describe("embedded run retry dispatch", () => {
     );
     expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
     expect(attempt.initialReplayState).toBe(replayState);
-    expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
-    expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(attempt);
-    expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
+    expect(mocks.runAttempt).toHaveBeenCalledExactlyOnceWith(attempt, undefined);
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 
@@ -414,7 +418,7 @@ describe("embedded run retry dispatch", () => {
           nativeModelOwned,
         }),
       );
-      const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+      const { dispatchedAttempt } = await dispatch(input);
       const attempt = dispatchedAttempt.preparedAttempt;
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       try {
@@ -455,11 +459,7 @@ describe("embedded run retry dispatch", () => {
       input.preparedRuntime.snapshot().agentHarness.id = "openclaw";
       input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
       input.sessionPromptState.activePrompt.internal = continuation;
-      const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-      const names = createOpenClawTools({
-        githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
-      }).map((tool) => tool.name);
-
+      const names = await publicationTools(input);
       expect(names).toContain("github_identity_status");
       expect(names).toContain("github_publish");
     }
@@ -470,25 +470,19 @@ describe("embedded run retry dispatch", () => {
     const gateway = {} as GatewayRequestContext;
     bindGatewayContextResolver(admittedRunContext, () => gateway);
     const input = makeDispatchInput();
-    await prepareAndDispatchEmbeddedRunAttempt(input);
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "rotated-session",
-      sessionKey: "agent:main:session-1",
-      storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
-    };
+    await dispatch(input);
     input.sessionPromptState = {
       ...input.sessionPromptState,
       sessionId: "rotated-session",
-      sessionTarget,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "rotated-session",
+        sessionKey: "agent:main:session-1",
+        storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
+      },
     };
     mocks.readGitHubPublicationFact.mockReturnValue({ available: false });
-
-    const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-    const names = createOpenClawTools({
-      githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
-    }).map((tool) => tool.name);
-
+    const names = await publicationTools(input);
     expect(names).toContain("github_identity_status");
     expect(names).not.toContain("github_publish");
     expect(mocks.readGitHubPublicationFact).toHaveBeenLastCalledWith({
@@ -516,9 +510,7 @@ describe("embedded run retry dispatch", () => {
       acceptedSessionSpawns,
     });
 
-    await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(
-      postCompactionAbortError,
-    );
+    await expect(dispatch(input)).rejects.toBe(postCompactionAbortError);
 
     expect(mergeAcceptedSessionSpawnsForRun(admittedRunContext.operationalRunInstance)).toEqual(
       acceptedSessionSpawns,
