@@ -60,15 +60,16 @@ type TurnResult = SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-c
 
 export async function appendSessionTurnInWorker(
   requested: ResolvedTranscriptScope,
-  options: SqliteSessionTurnOptions,
+  requestedOptions: SqliteSessionTurnOptions,
   context: SessionTranscriptTurnWriteContext,
   native: (
     messages: SessionTranscriptTurnMessageAppend[],
   ) => Promise<SqliteExpectedSessionTranscriptTurnResult>,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  let options = requestedOptions;
   const scope = captureLifecycleDatabaseScope(requested);
   const database = { ...toDatabaseOptions(scope), path: scope.path };
-  const inputActor = await getSessionInputActor(scope);
+  const inputActor = await getSessionInputActor(scope, options.resolveRuntimeTarget);
   if (inputActor && inputActor.target.readSource?.path !== database.path) {
     throw new Error("Input actor changed the transcript's physical target");
   }
@@ -135,6 +136,7 @@ export async function appendSessionTurnInWorker(
     relocation: custody?.relocation,
   };
   const actor = inputActor?.actor;
+  let runtimeTarget: SqliteExpectedSessionTranscriptTurnResult["runtimeTarget"];
   let inputExpectedState = options.expectedSessionState;
   const fixedVoiceTranscript =
     !actor &&
@@ -160,7 +162,8 @@ export async function appendSessionTurnInWorker(
     !memory &&
     !fixedVoiceTranscript &&
     !messages.some((append) => append.shouldAppend) &&
-    (Boolean(sessionTurnMutation) ||
+    (options.resolveRuntimeTarget ||
+      Boolean(sessionTurnMutation) ||
       messages.some(
         (append) =>
           append.workerPreparation ||
@@ -255,6 +258,23 @@ export async function appendSessionTurnInWorker(
         }
         const prepareOwnedTurn = async () => {
           const prepared = await prepareTurn();
+          if (prepared.runtimeTarget) {
+            runtimeTarget = prepared.runtimeTarget;
+            if (inputActor && runtimeTarget.sessionKey !== inputActor.actor.target.sessionKey) {
+              throw new Error("Input actor differs from the recorder's admitted target");
+            }
+            scope.sessionKey = runtimeTarget.sessionKey;
+            context.sessionKey = runtimeTarget.sessionKey;
+            const selected = {
+              resolveRuntimeTarget: undefined,
+              selectedSessionId: runtimeTarget.selectedSessionId,
+              selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
+              sessionFile: runtimeTarget.sessionKey,
+            };
+            options = { ...options, ...selected };
+            plan.sessionKey = runtimeTarget.sessionKey;
+            plan.options = { ...plan.options, ...selected };
+          }
           if (prepared.refusedOwnerSource) {
             ownerSource?.checks[prepared.refusedOwnerSource.index]?.refuse(
               prepared.refusedOwnerSource.facts,
@@ -603,5 +623,5 @@ export async function appendSessionTurnInWorker(
   if (!outcome.ok) {
     throw outcome.error;
   }
-  return outcome.value;
+  return runtimeTarget ? { ...outcome.value, runtimeTarget } : outcome.value;
 }
