@@ -1958,7 +1958,7 @@ describe("canonical session message recovery", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "chat.history",
-          { sessionKey: state.sessionKey, ...historyBudget },
+          { sessionKey: state.sessionKey, knownState: {}, ...historyBudget },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
       );

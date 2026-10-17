@@ -126,6 +126,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       "chat.history",
       {
         sessionKey: "notes",
+        knownState: {},
         limit: 80,
         maxBytes: 256 * 1024,
         toolResultMaxChars: 2_000,
