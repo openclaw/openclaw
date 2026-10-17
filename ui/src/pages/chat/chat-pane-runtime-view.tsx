@@ -120,6 +120,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const gateway = projectGateway(context.gateway);
     const state = runtime.readState();
     const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
+    const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
     const realtimeOwner = createMemo(() => {
       revision();
       return runtime.realtimeTalk;
@@ -195,6 +196,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        composerCapabilities.read();
         realtime()?.read();
         projects.read();
         workspace?.read();
