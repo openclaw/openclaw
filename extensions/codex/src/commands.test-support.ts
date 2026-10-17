@@ -1,8 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -37,6 +45,53 @@ import { createCodexCommandHost } from "./command-host.test-support.js";
 import * as commandRpc from "./command-rpc.js";
 import * as conversationBindingData from "./conversation-binding-data.js";
 import * as conversationControl from "./conversation-control.js";
+
+export function useCodexControlTestState(options: {
+  prefix: string;
+  realpath?: boolean;
+  setup: (root: string) => void | Promise<void>;
+  cleanup: () => void;
+  restoreMocks?: boolean;
+}) {
+  let root: string;
+  let previousRegistry: ReturnType<typeof getActivePluginRegistry>;
+  beforeEach(async () => {
+    previousRegistry = getActivePluginRegistry();
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "openai",
+      provider: { id: "openai", label: "OpenAI", auth: [] },
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    root = await fs.mkdtemp(path.join(os.tmpdir(), options.prefix));
+    if (options.realpath) {
+      root = await fs.realpath(root);
+    }
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENAI_API_KEY", undefined);
+    vi.stubEnv("CODEX_API_KEY", undefined);
+    await options.setup(root);
+  });
+  afterEach(async () => {
+    if (previousRegistry) {
+      setActivePluginRegistry(previousRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+    options.cleanup();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    if (options.restoreMocks) {
+      vi.restoreAllMocks();
+    }
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
+    clearSessionStoreCacheForTest();
+    vi.unstubAllEnvs();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+}
 
 export function useCodexCommandTestState(options: {
   onSetup: (tempDir: string) => void;
@@ -396,11 +451,7 @@ export async function createCodexRuntimeContextOverrides(
   await upsertSessionEntry({
     storePath,
     sessionKey,
-    entry: {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      agentHarnessId: "codex",
-    },
+    entry: { sessionId: "session-1", updatedAt: Date.now(), agentHarnessId: "codex" },
   });
   return {
     config: { session: { store: storePath } },

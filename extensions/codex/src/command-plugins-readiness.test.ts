@@ -13,24 +13,39 @@ import { fakeCtx } from "./command-plugins-management.test-support.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRuntime from "./command-plugins-runtime.js";
 
+const appUrl = "https://chatgpt.com/apps/app-0";
+const privateError = "private upstream response";
+
 const ctx: PluginCommandContext = {
   ...fakeCtx,
   commandBody: "/codex plugins status notes@company-tools",
 };
 
+const readOnlyCalls: Array<() => unknown> = [];
+
 afterEach(() => {
-  defaultCodexAppInventoryCache.clear();
-  vi.restoreAllMocks();
+  try {
+    for (const call of readOnlyCalls.splice(0)) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  } finally {
+    defaultCodexAppInventoryCache.clear();
+    vi.restoreAllMocks();
+  }
 });
+
+function hostCommand(input: Partial<PluginCommandContext>) {
+  return handleCodexSubcommand(
+    { ...ctx, ...input },
+    { deps: createCodexCommandHost({ bindingStore: createCodexTestBindingStore() }) },
+  );
+}
 
 async function refreshHostedApps(context: CodexPluginCommandContext) {
   vi.spyOn(commandRuntime, "withCodexPluginCommandContext").mockImplementation(
     async (_params, run) => await run(context),
   );
-  return await handleCodexSubcommand(
-    { ...ctx, args: "plugins refresh", commandBody: "/codex plugins refresh" },
-    { deps: createCodexCommandHost({ bindingStore: createCodexTestBindingStore() }) },
-  );
+  return hostCommand({ args: "plugins refresh", commandBody: "/codex plugins refresh" });
 }
 
 function fixture(
@@ -38,7 +53,6 @@ function fixture(
     threadId?: string | null;
     appCount?: number;
     otherApp?: boolean;
-    pluginName?: string;
     disabled?: boolean;
     runtime?: v2.InstalledApp[];
     failMethod?: string;
@@ -51,7 +65,7 @@ function fixture(
     catalog?: { marketplace: string; kind: string };
   } = {},
 ) {
-  const pluginName = options.pluginName ?? "notes";
+  const pluginName = "notes";
   const current = {
     enabled: true,
     plugins: {
@@ -84,12 +98,9 @@ function fixture(
   const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
     if (method === options.failMethod) {
       if (options.unsupported) {
-        throw new CodexAppServerRpcError(
-          { code: -32601, message: "private upstream response" },
-          method,
-        );
+        throw new CodexAppServerRpcError({ code: -32601, message: privateError }, method);
       }
-      throw new Error("private upstream response");
+      throw new Error(privateError);
     }
     switch (method) {
       case "account/read":
@@ -146,11 +157,9 @@ function fixture(
         };
       case "app/read":
         return {
-          apps: inventoryApps
-            .filter((app) => (params as { appIds: string[] }).appIds.includes(app.id))
-            .map((app) =>
-              Object.assign({}, app, { pluginDisplayNames: ["Notes"], toolSummaries: null }),
-            ),
+          apps: inventoryApps.filter((app) =>
+            (params as { appIds: string[] }).appIds.includes(app.id),
+          ),
           missingAppIds: [],
         };
       default:
@@ -180,6 +189,7 @@ function fixture(
     withContext: async <T>(run: (value: CodexPluginCommandContext) => Promise<T>): Promise<T> =>
       run(context),
   };
+  readOnlyCalls.push(io.mutate, runtime.install);
   return {
     io,
     context,
@@ -202,45 +212,58 @@ describe("Codex plugin status command", () => {
     expect(result.presentation).toBeUndefined();
     expect(test.io.readConfig).not.toHaveBeenCalled();
     expect(test.request).not.toHaveBeenCalled();
-    expect(test.io.mutate).not.toHaveBeenCalled();
   });
 
   it.each([
-    { options: { accountType: "apiKey" as const }, reason: "ChatGPT sign-in" },
-    { options: { appsFeature: false }, reason: "disabled in this Codex runtime" },
-    {
-      options: {
-        detailPolicy: { availability: "DISABLED_BY_ADMIN", installPolicy: "NOT_AVAILABLE" },
-      },
-      reason: "marketplace",
+    [{ accountType: "apiKey" }, ["ChatGPT sign-in"], [appUrl]],
+    [{ appsFeature: false }, ["disabled in this Codex runtime"], [appUrl]],
+    [
+      { detailPolicy: { availability: "DISABLED_BY_ADMIN", installPolicy: "NOT_AVAILABLE" } },
+      ["marketplace"],
+      [appUrl],
+    ],
+    [
+      { disabled: true },
+      [
+        "OpenClaw app access: disabled",
+        "/codex plugins enable notes@company-tools",
+        "enabled: true; callable: true",
+        appUrl,
+      ],
+      [],
+    ],
+    [
+      { appCount: 0 },
+      ["No hosted apps declared"],
+      ["Connection:", "in your browser", "https://chatgpt.com"],
+    ],
+    [
+      { failMethod: "app/installed", unsupported: true },
+      ["does not support the required status method", "supported Codex version"],
+      [privateError],
+    ],
+    [
+      { threadId: null },
+      ["Runtime scope: account (no bound Codex thread)", "Bundle: installed"],
+      [privateError],
+    ],
+    [
+      { failMethod: "app/installed" },
+      ["runtime flags unavailable", "Bundle: installed"],
+      ["enabled: false", "callable: false", privateError],
+    ],
+  ] satisfies Array<[Parameters<typeof fixture>[0], string[], string[]]>)(
+    "renders status for %j without granting app access",
+    async (options, included, excluded) => {
+      const { text } = await fixture(options).status();
+      for (const value of included) {
+        expect(text).toContain(value);
+      }
+      for (const value of excluded) {
+        expect(text).not.toContain(value);
+      }
     },
-  ])("does not turn an app URL into setup permission: $reason", async ({ options, reason }) => {
-    const test = fixture(options);
-    const result = await test.status();
-    expect(result.text).toContain(reason);
-    expect(result.text).not.toContain("https://chatgpt.com/apps/app-0");
-    expect(test.io.mutate).not.toHaveBeenCalled();
-    expect(test.runtime.install).not.toHaveBeenCalled();
-  });
-
-  it("keeps hosted management separate from local permission and callable tools", async () => {
-    const test = fixture({ disabled: true });
-    const result = await test.status();
-    expect(result.text).toContain("OpenClaw app access: disabled");
-    expect(result.text).toContain("/codex plugins enable notes@company-tools");
-    expect(result.text).toContain("enabled: true; callable: true");
-    expect(result.text).toContain("https://chatgpt.com/apps/app-0");
-    expect(test.io.mutate).not.toHaveBeenCalled();
-  });
-
-  it("does not send a plugin without hosted apps through ChatGPT setup", async () => {
-    const test = fixture({ appCount: 0 });
-    const result = await test.status();
-    expect(result.text).toContain("No hosted apps declared");
-    expect(result.text).not.toContain("Connection:");
-    expect(result.text).not.toContain("in your browser");
-    expect(result.text).not.toContain("https://chatgpt.com");
-  });
+  );
 
   it("discovers a configured supplemental marketplace through its catalog kind", async () => {
     const catalog = { marketplace: "workspace-directory", kind: "workspace-directory" };
@@ -251,32 +274,6 @@ describe("Codex plugin status command", () => {
       remoteMarketplaceName: catalog.marketplace,
       pluginName: "plugins~Plugin_test_notes",
     });
-  });
-
-  it("gives a version-specific action for an unsupported runtime method without exposing its error body", async () => {
-    const test = fixture({ failMethod: "app/installed", unsupported: true });
-    const result = await test.status();
-    expect(result.text).toContain("does not support the required status method");
-    expect(result.text).toContain("supported Codex version");
-    expect(result.text).not.toContain("private upstream response");
-  });
-
-  it.each([
-    { options: { threadId: null }, expected: "Runtime scope: account (no bound Codex thread)" },
-    {
-      options: { failMethod: "app/installed" },
-      expected: "runtime flags unavailable",
-    },
-  ])("keeps $expected distinct from installation", async ({ options, expected }) => {
-    const test = fixture(options);
-    const result = await test.status();
-    expect(result.text).toContain(expected);
-    expect(result.text).toContain("Bundle: installed");
-    if (options.failMethod) {
-      expect(result.text).not.toContain("enabled: false");
-      expect(result.text).not.toContain("callable: false");
-    }
-    expect(result.text).not.toContain("private upstream response");
   });
 
   it("paginates every owned app through the real command without exposing unrelated inventory", async () => {
@@ -320,7 +317,6 @@ describe("Codex plugin status command", () => {
     const next = await test.status(continuation.action.command.split(" ").slice(3));
     expect(next.text).toContain("Apps (page 2/2)");
     expect(next.text).toContain("Open App 6 in ChatGPT");
-    expect(test.io.mutate).not.toHaveBeenCalled();
   });
 
   it("checks owner authority before reading profile-scoped inventory", async () => {
@@ -340,10 +336,7 @@ describe("Codex hosted app refresh", () => {
     "rejects $args for owner=$owner before opening a runtime",
     async ({ args, owner, expected }) => {
       const acquire = vi.spyOn(commandRuntime, "withCodexPluginCommandContext");
-      const result = await handleCodexSubcommand(
-        { ...ctx, args, senderIsOwner: owner },
-        { deps: createCodexCommandHost({ bindingStore: createCodexTestBindingStore() }) },
-      );
+      const result = await hostCommand({ args, senderIsOwner: owner });
       expect(result.text).toContain(expected);
       expect(acquire).not.toHaveBeenCalled();
     },
@@ -384,7 +377,6 @@ describe("Codex hosted app refresh", () => {
     ]);
     expect(refresh.text).toContain("current Codex account/runtime");
     expect(refresh.text).not.toContain("Plugin: notes");
-    expect(test.io.mutate).not.toHaveBeenCalled();
   });
 
   it("does not refresh when hosted app support is unknown", async () => {
@@ -393,23 +385,19 @@ describe("Codex hosted app refresh", () => {
     expect(result.text).toContain("Hosted app support is unknown");
     expect(result.text).not.toContain("request completed");
     expect(test.request).not.toHaveBeenCalledWith("app/installed", { forceRefresh: true });
-    expect(test.io.mutate).not.toHaveBeenCalled();
   });
 
   it.each([
     {
-      error: new Error("private upstream response"),
+      error: new Error(privateError),
       expected: "Hosted app tools could not be refreshed",
     },
     {
-      error: new CodexAppServerRpcError(
-        { code: -32601, message: "private upstream response" },
-        "app/installed",
-      ),
+      error: new CodexAppServerRpcError({ code: -32601, message: privateError }, "app/installed"),
       expected: "does not support the required app inventory methods",
     },
     {
-      error: Object.assign(new Error("private upstream response"), {
+      error: Object.assign(new Error(privateError), {
         code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
         reason: "aborted",
         mayHaveWritten: true,
@@ -425,8 +413,7 @@ describe("Codex hosted app refresh", () => {
       expect(result.text).toContain("/codex plugins refresh");
       expect(result.text).toContain("Previous inventory was not confirmed");
       expect(result.text).not.toContain("request completed");
-      expect(result.text).not.toContain("private upstream response");
-      expect(test.io.mutate).not.toHaveBeenCalled();
+      expect(result.text).not.toContain(privateError);
     },
   );
 
@@ -442,6 +429,5 @@ describe("Codex hosted app refresh", () => {
     expect(result.text).toContain("Unknown /codex plugins subcommand");
     expect(acquire).not.toHaveBeenCalled();
     expect(test.request).not.toHaveBeenCalled();
-    expect(test.io.mutate).not.toHaveBeenCalled();
   });
 });

@@ -1,30 +1,9 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createEmptyPluginRegistry,
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  clearSessionStoreCacheForTest,
-  resolveStorePath,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { applyCodexAppServerAuthProfile } from "./app-server/auth-bridge.js";
 import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
@@ -34,44 +13,23 @@ import { createClientHarness } from "./app-server/test-support.js";
 import { createCodexCommandHost } from "./command-host.test-support.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRpc from "./command-rpc.js";
+import { createContext, useCodexControlTestState } from "./commands.test-support.js";
 
 let root: string;
-let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 const clients: ReturnType<typeof createClientHarness>[] = [];
-
-beforeEach(async () => {
-  previousPluginRegistry = getActivePluginRegistry();
-  const registry = createEmptyPluginRegistry();
-  registry.providers.push({
-    pluginId: "openai",
-    provider: { id: "openai", label: "OpenAI", auth: [] },
-    source: "test",
-  });
-  setActivePluginRegistry(registry);
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-plugin-status-")));
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  vi.stubEnv("OPENAI_API_KEY", undefined);
-  vi.stubEnv("CODEX_API_KEY", undefined);
-});
-
-afterEach(async () => {
-  if (previousPluginRegistry) {
-    setActivePluginRegistry(previousPluginRegistry);
-  } else {
-    resetPluginRuntimeStateForTest();
-  }
-  for (const harness of clients.splice(0)) {
-    harness.client.close();
-  }
-  vi.useRealTimers();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  clearRuntimeAuthProfileStoreSnapshots();
-  clearRuntimeConfigSnapshot();
-  clearSessionStoreCacheForTest();
-  await fs.rm(root, { recursive: true, force: true });
+useCodexControlTestState({
+  prefix: "codex-plugin-status-",
+  realpath: true,
+  restoreMocks: true,
+  setup: (dir) => {
+    root = dir;
+  },
+  cleanup: () => {
+    for (const harness of clients.splice(0)) {
+      harness.client.close();
+    }
+    vi.useRealTimers();
+  },
 });
 
 function accountToken(accountId: string) {
@@ -109,7 +67,7 @@ async function fixture(stableAccount = true) {
       mutate: vi.fn(),
     },
   });
-  const ctx: PluginCommandContext = {
+  const ctx = createContext("plugins status notes@company-tools", undefined, {
     config: {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.5" } },
@@ -119,20 +77,16 @@ async function fixture(stableAccount = true) {
     agentId: "second",
     sessionId: "session-original",
     sessionKey: "agent:second:chat",
-    channel: "test",
-    isAuthorizedSender: true,
-    senderIsOwner: true,
-    commandBody: "/codex plugins status notes@company-tools",
-    getCurrentConversationBinding: async () => null,
-    requestConversationBinding: async () => ({ status: "error", message: "unused" }),
-    detachConversationBinding: async () => ({ removed: false }),
-  };
-  setRuntimeConfigSnapshot(ctx.config);
-  await upsertSessionEntry({
-    agentId: "second",
-    sessionKey: ctx.sessionKey!,
-    entry: { sessionId: ctx.sessionId!, updatedAt: Date.now() },
   });
+  setRuntimeConfigSnapshot(ctx.config);
+  const writeSession = (sessionId = ctx.sessionId!, storePath?: string) =>
+    upsertSessionEntry({
+      agentId: "second",
+      sessionKey: ctx.sessionKey!,
+      storePath,
+      entry: { sessionId, updatedAt: Date.now() },
+    });
+  await writeSession();
   const harness = createClientHarness();
   clients.push(harness);
   const acquire = vi
@@ -146,7 +100,51 @@ async function fixture(stableAccount = true) {
     callback: Parameters<typeof withCodexPluginCommandContext<T>>[1],
     pluginConfig: Parameters<typeof withCodexPluginCommandContext>[0]["pluginConfig"] = {},
   ) => withCodexPluginCommandContext({ deps, ctx, pluginConfig }, callback);
-  return { deps, ctx, harness, acquire, release, request, current, agentDir, workspaceDir, run };
+  const installed = (forceRefresh = false) =>
+    run(async (context) => context.request("app/installed", { forceRefresh }));
+  const accountUpdated = () =>
+    harness.send({
+      method: "account/updated",
+      params: { authMode: "chatgptAuthTokens", planType: "team" },
+    });
+  const readWrite = async (index: number) => JSON.parse(await harness.waitForWrite(index));
+  return {
+    deps,
+    ctx,
+    harness,
+    acquire,
+    release,
+    request,
+    agentDir,
+    workspaceDir,
+    run,
+    writeSession,
+    installed,
+    accountUpdated,
+    readWrite,
+  };
+}
+
+async function inspectPending(
+  test: Awaited<ReturnType<typeof fixture>>,
+  operation: Promise<unknown>,
+  inspect: (failure: () => unknown, pending: Promise<void>) => Promise<void>,
+  cleanup?: () => void,
+) {
+  let failure: unknown;
+  const pending = operation.then(
+    () => undefined,
+    (error: unknown) => {
+      failure = error;
+    },
+  );
+  try {
+    await inspect(() => failure, pending);
+  } finally {
+    cleanup?.();
+    test.harness.client.close();
+    await pending;
+  }
 }
 
 describe("Codex plugin command context", () => {
@@ -211,16 +209,11 @@ describe("Codex plugin command context", () => {
           method: "account/login/completed",
           params: { loginId: null, success: true, error: null },
         });
-        test.harness.send({
-          method: "account/updated",
-          params: { authMode: "chatgptAuthTokens", planType: "team" },
-        });
+        test.accountUpdated();
       }
       return { apps: [] };
     });
-    await expect(
-      test.run(async (context) => context.request("app/installed", { forceRefresh: false })),
-    ).resolves.toEqual({ apps: [] });
+    await expect(test.installed()).resolves.toEqual({ apps: [] });
     expect(test.request).toHaveBeenCalledWith(
       "account/login/start",
       expect.objectContaining({ type: "chatgptAuthTokens" }),
@@ -243,32 +236,27 @@ describe("Codex plugin command context", () => {
       test.request.mockRestore();
       // Install the clock before acquisition can create a deadline; leave filesystem work real.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      let failure: unknown;
-      const pending = test
-        .run(
+      await inspectPending(
+        test,
+        test.run(
           async (context) => context.request("app/installed", { forceRefresh: false }),
           pluginConfig,
-        )
-        .catch((error: unknown) => {
-          failure = error;
-        });
-      try {
-        const startup = JSON.parse(await test.harness.waitForWrite(0));
-        expect(startup.method).toBe("account/read");
-        const startupDelayMs = unansweredMethod === "app/installed" ? 20_000 : 0;
-        if (startupDelayMs) {
-          await vi.advanceTimersByTimeAsync(startupDelayMs);
-          test.harness.send({ id: startup.id, result: {} });
-          expect(JSON.parse(await test.harness.waitForWrite(1)).method).toBe("app/installed");
-        }
-        await vi.advanceTimersByTimeAsync(timeoutMs - startupDelayMs + 1);
-        expect(failure).toBeInstanceOf(Error);
-        expect(String(failure)).toMatch(/timed out|startup could not be confirmed/);
-        expect(test.release).toHaveBeenCalledOnce();
-      } finally {
-        test.harness.client.close();
-        await pending;
-      }
+        ),
+        async (failure) => {
+          const startup = await test.readWrite(0);
+          expect(startup.method).toBe("account/read");
+          const startupDelayMs = unansweredMethod === "app/installed" ? 20_000 : 0;
+          if (startupDelayMs) {
+            await vi.advanceTimersByTimeAsync(startupDelayMs);
+            test.harness.send({ id: startup.id, result: {} });
+            expect((await test.readWrite(1)).method).toBe("app/installed");
+          }
+          await vi.advanceTimersByTimeAsync(timeoutMs - startupDelayMs + 1);
+          expect(failure()).toBeInstanceOf(Error);
+          expect(String(failure())).toMatch(/timed out|startup could not be confirmed/);
+          expect(test.release).toHaveBeenCalledOnce();
+        },
+      );
     },
   );
 
@@ -282,26 +270,23 @@ describe("Codex plugin command context", () => {
       acquiring.resolve();
       return acquired.promise;
     });
-    let failure: unknown;
     const run = vi.fn(async () => "unused");
-    const pending = test.run(run).catch((error: unknown) => {
-      failure = error;
-    });
-    try {
-      await acquiring.promise;
-      await vi.advanceTimersByTimeAsync(600_001);
-      acquired.resolve(test.harness.client);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(failure).toBeInstanceOf(Error);
-      expect(failure).toMatchObject({ name: "AgentHarnessPreflightError" });
-      expect(test.harness.writes).toHaveLength(0);
-      expect(run).not.toHaveBeenCalled();
-      expect(test.release).toHaveBeenCalledOnce();
-    } finally {
-      acquired.resolve(test.harness.client);
-      test.harness.client.close();
-      await pending;
-    }
+    await inspectPending(
+      test,
+      test.run(run),
+      async (failure) => {
+        await acquiring.promise;
+        await vi.advanceTimersByTimeAsync(600_001);
+        acquired.resolve(test.harness.client);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(failure()).toBeInstanceOf(Error);
+        expect(failure()).toMatchObject({ name: "AgentHarnessPreflightError" });
+        expect(test.harness.writes).toHaveLength(0);
+        expect(run).not.toHaveBeenCalled();
+        expect(test.release).toHaveBeenCalledOnce();
+      },
+      () => acquired.resolve(test.harness.client),
+    );
   });
 
   it.each([
@@ -314,16 +299,10 @@ describe("Codex plugin command context", () => {
       const test = await fixture();
       test.request.mockRestore();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      let failure: unknown;
-      const pending = test
-        .run(async (context) => context.request("app/installed", { forceRefresh: true }))
-        .catch((error: unknown) => {
-          failure = error;
-        });
-      try {
-        const startup = JSON.parse(await test.harness.waitForWrite(0));
+      await inspectPending(test, test.installed(true), async (failure, pending) => {
+        const startup = await test.readWrite(0);
         test.harness.send({ id: startup.id, result: {} });
-        const refresh = JSON.parse(await test.harness.waitForWrite(1));
+        const refresh = await test.readWrite(1);
         expect(refresh).toMatchObject({ method: "app/installed", params: { forceRefresh: true } });
         if (response === "overload") {
           test.harness.send({
@@ -333,30 +312,23 @@ describe("Codex plugin command context", () => {
           await vi.advanceTimersByTimeAsync(0);
         }
         if (change === "account") {
-          test.harness.send({
-            method: "account/updated",
-            params: { authMode: "chatgptAuthTokens", planType: "team" },
-          });
+          test.accountUpdated();
         } else {
-          await upsertSessionEntry({
-            storePath: resolveStorePath(test.ctx.config.session?.store, { agentId: "second" }),
-            sessionKey: test.ctx.sessionKey!,
-            entry: { sessionId: "session-after-reset", updatedAt: 1 },
-          });
+          await test.writeSession(
+            "session-after-reset",
+            resolveStorePath(test.ctx.config.session?.store, { agentId: "second" }),
+          );
         }
         await vi.advanceTimersByTimeAsync(response === "overload" ? 1_000 : 0);
         await pending;
         expect(test.harness.writes).toHaveLength(2);
-        expect(String(failure)).toContain(
+        expect(String(failure())).toContain(
           change === "session"
             ? "Codex session generation is no longer current"
             : "Codex account, conversation, or plugin policy changed",
         );
         expect(test.release).toHaveBeenCalledOnce();
-      } finally {
-        test.harness.client.close();
-        await pending;
-      }
+      });
     },
   );
 
@@ -391,12 +363,7 @@ describe("Codex plugin command context", () => {
     const appCache = new CodexAppInventoryCache();
     let appCacheKey = "";
     const storePath = path.join(root, "explicit", "sessions.json");
-    await upsertSessionEntry({
-      agentId: "second",
-      storePath,
-      sessionKey: test.ctx.sessionKey!,
-      entry: { sessionId: test.ctx.sessionId!, updatedAt: Date.now() },
-    });
+    await test.writeSession(test.ctx.sessionId, storePath);
     test.ctx.sessionTarget = {
       agentId: "second",
       sessionId: test.ctx.sessionId!,
@@ -423,12 +390,7 @@ describe("Codex plugin command context", () => {
       if (method !== "app/installed") {
         return {};
       }
-      await upsertSessionEntry({
-        agentId: "second",
-        storePath,
-        sessionKey: test.ctx.sessionKey!,
-        entry: { sessionId: "session-after-reset", updatedAt: 1 },
-      });
+      await test.writeSession("session-after-reset", storePath);
       return { apps: [] };
     });
     await expect(

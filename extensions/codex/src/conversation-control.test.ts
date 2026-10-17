@@ -12,7 +12,7 @@ import {
   observeHostDataSql,
   useSessionStoreTempDirs,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
@@ -84,12 +84,31 @@ function trackTurn(
   threadId: string,
   harness: ReturnType<typeof createClientHarness>,
 ) {
-  return trackCodexConversationActiveTurn({
+  const stop = trackCodexConversationActiveTurn({
     identity: target.identity,
     client: harness.client,
     requestTimeoutMs: 60_000,
     threadId,
     turnId: "turn-1",
+  });
+  onTestFinished(() => {
+    stop();
+    harness.client.close();
+  });
+}
+
+async function boundTarget(binding: Parameters<typeof writeCodexAppServerBinding>[1]) {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  await writeCodexAppServerBinding(sessionFile, { cwd: tempDir, ...binding });
+  return { ...controlTarget(sessionFile), sessionFile };
+}
+
+function replyingHarness() {
+  return createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number };
+      send({ id: request.id, result: {} });
+    },
   });
 }
 
@@ -160,30 +179,27 @@ describe("codex conversation controls", () => {
   });
 
   it("persists fast mode on the binding and permissions on the session", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
     const test = await permissionSession("session-1", {
       permissionMode: "full",
       sessionRoot: tempDir,
     });
-    await writeCodexAppServerBinding(sessionFile, {
+    const target = await boundTarget({
       threadId: "thread-1",
-      cwd: tempDir,
       model: "gpt-5.4",
       modelProvider: "openai",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
 
-    await expect(setFast({ ...controlTarget(sessionFile), enabled: true })).resolves.toBe(
-      "Codex fast mode enabled.",
-    );
+    await expect(setFast({ ...target, enabled: true })).resolves.toBe("Codex fast mode enabled.");
     await expect(test.set("default")).resolves.toBe("Codex permissions set to guarded.");
 
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-1");
-    expect(binding?.serviceTier).toBe("priority");
-    expect(binding?.approvalPolicy).toBe("never");
-    expect(binding?.sandbox).toBe("danger-full-access");
+    expect(await readCodexAppServerBinding(target.sessionFile)).toMatchObject({
+      threadId: "thread-1",
+      serviceTier: "priority",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
     expect(test.read()).toMatchObject({ permissionMode: "guarded", sessionRoot: tempDir });
 
     await expect(test.set("yolo")).resolves.toBe("Codex permissions set to full access.");
@@ -191,33 +207,20 @@ describe("codex conversation controls", () => {
   });
 
   it("rejects prepared binding mutations after the selected binding changes", async () => {
-    const sessionFile = path.join(tempDir, "prepared-binding.jsonl");
-    const identity = controlTarget(sessionFile).identity;
     const prepared = {
       threadId: "thread-prepared",
       cwd: tempDir,
       model: "gpt-5.4",
       modelProvider: "openai",
     };
-    await writeCodexAppServerBinding(sessionFile, prepared);
-    const assertCurrent = () => {
-      expect(testCodexAppServerBindingStore.read(identity)).toEqual(prepared);
-    };
-    await testCodexAppServerBindingStore.mutate(identity, {
+    const target = await boundTarget(prepared);
+    await testCodexAppServerBindingStore.mutate(target.identity, {
       kind: "set",
       binding: { ...prepared, threadId: "thread-replacement" },
     });
 
-    await expect(
-      setFast({
-        identity,
-        bindingStore: testCodexAppServerBindingStore,
-        binding: prepared,
-        enabled: true,
-        assertCurrent,
-      }),
-    ).rejects.toThrow();
-    expect(testCodexAppServerBindingStore.read(identity)).not.toHaveProperty("serviceTier");
+    await expect(setFast({ ...target, enabled: true })).rejects.toThrow();
+    expect(testCodexAppServerBindingStore.read(target.identity)).not.toHaveProperty("serviceTier");
   });
 
   it.each([
@@ -239,169 +242,105 @@ describe("codex conversation controls", () => {
   });
 
   it("routes stop and steer through the client that owns the active turn", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
+    const target = await boundTarget({
       threadId: "thread-supervised",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-supervised",
       appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
-      cwd: tempDir,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      preserveNativeModel: true,
-      conversationSourceTransferComplete: true,
     });
-    const target = controlTarget(sessionFile);
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number };
-        send({ id: request.id, result: {} });
-      },
-    });
-    const stopTracking = trackTurn(target, "thread-supervised", harness);
+    const harness = replyingHarness();
+    trackTurn(target, "thread-supervised", harness);
 
-    try {
-      await expect(stopCodexConversationTurn(target)).resolves.toMatchObject({ stopped: true });
-      await expect(
-        steerCodexConversationTurn({ ...target, message: "focus tests" }),
-      ).resolves.toMatchObject({ steered: true });
-      expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
-        {
-          method: "turn/interrupt",
-          params: { threadId: "thread-supervised", turnId: "turn-1" },
+    await expect(stopCodexConversationTurn(target)).resolves.toMatchObject({ stopped: true });
+    await expect(
+      steerCodexConversationTurn({ ...target, message: "focus tests" }),
+    ).resolves.toMatchObject({ steered: true });
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      {
+        method: "turn/interrupt",
+        params: { threadId: "thread-supervised", turnId: "turn-1" },
+      },
+      {
+        method: "turn/steer",
+        params: {
+          threadId: "thread-supervised",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "focus tests", text_elements: [] }],
         },
-        {
-          method: "turn/steer",
-          params: {
-            threadId: "thread-supervised",
-            expectedTurnId: "turn-1",
-            input: [{ type: "text", text: "focus tests", text_elements: [] }],
-          },
-        },
-      ]);
-      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-    } finally {
-      stopTracking();
-      harness.client.close();
-    }
+      },
+    ]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("refuses to stop or steer when the active turn no longer matches the private binding", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "replacement-thread",
-      cwd: tempDir,
-    });
-    const target = controlTarget(sessionFile);
+    const target = await boundTarget({ threadId: "replacement-thread" });
     const harness = createClientHarness();
-    const stopTracking = trackTurn(target, "stale-active-thread", harness);
+    trackTurn(target, "stale-active-thread", harness);
 
-    try {
-      await expectStaleTurn(target, "do not send");
-      await testCodexAppServerBindingStore.mutate(target.identity, { kind: "clear" });
-      const clearedTarget = controlTarget(sessionFile);
-      await expectStaleTurn(clearedTarget, "still do not send");
-    } finally {
-      stopTracking();
-      harness.client.close();
-    }
+    await expectStaleTurn(target, "do not send");
+    await testCodexAppServerBindingStore.mutate(target.identity, { kind: "clear" });
+    const clearedTarget = controlTarget(target.sessionFile);
+    await expectStaleTurn(clearedTarget, "still do not send");
 
     expect(harness.writes).toHaveLength(0);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("rejects steer before a retained-client write after host rollover", async () => {
-    const sessionFile = path.join(tempDir, "steer-retained.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-steer-retained",
-      cwd: tempDir,
-    });
-    const target = controlTarget(sessionFile);
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number };
-        send({ id: request.id, result: {} });
-      },
-    });
-    const stopTracking = trackTurn(target, "thread-steer-retained", harness);
+    const target = await boundTarget({ threadId: "thread-steer-retained" });
+    const harness = replyingHarness();
+    trackTurn(target, "thread-steer-retained", harness);
 
-    try {
-      await expect(
-        steerCodexConversationTurn({
-          message: "focus tests",
-          ...target,
-          assertCurrent: () => {
-            throw new Error("host session rolled over");
-          },
-        }),
-      ).rejects.toThrow("host session rolled over");
-      expect(harness.writes).toHaveLength(0);
-    } finally {
-      stopTracking();
-      harness.client.close();
-    }
+    await expect(
+      steerCodexConversationTurn({
+        message: "focus tests",
+        ...target,
+        assertCurrent: () => {
+          throw new Error("host session rolled over");
+        },
+      }),
+    ).rejects.toThrow("host session rolled over");
+    expect(harness.writes).toHaveLength(0);
   });
 
   it("rejects direct model changes for private supervised bindings", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
+    const target = await boundTarget({
       threadId: "thread-supervised",
       connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-supervised",
-      cwd: tempDir,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      preserveNativeModel: true,
-      conversationSourceTransferComplete: true,
     });
 
-    await expect(setModel({ ...controlTarget(sessionFile), model: "gpt-5.4" })).rejects.toThrow(
+    await expect(setModel({ ...target, model: "gpt-5.4" })).rejects.toThrow(
       MODEL_SELECTION_LOCKED_MESSAGE,
     );
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("keeps the bound local provider when switching to another unqualified model", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const model = "local-model-2 <@U123> [trusted](evil)";
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-      model: "local-model",
-      modelProvider: "lmstudio",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-    await expect(setModel({ ...controlTarget(sessionFile), model })).resolves.toBe(
-      "Codex model set to local-model-2 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08evil\uff09.",
-    );
+  it.each([
+    [
+      "local-model",
+      "local-model-2 <@U123> [trusted](evil)",
+      "local-model-2 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08evil\uff09",
+    ],
+    ["openai/gpt-oss-20b", "openai/gpt-oss-20b", "openai/gpt-oss-20b"],
+  ])(
+    "keeps the bound local provider when selecting %s -> %s",
+    async (previousModel, model, display) => {
+      const target = await boundTarget({
+        threadId: "thread-1",
+        model: previousModel,
+        modelProvider: "lmstudio",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      });
+      await expect(setModel({ ...target, model })).resolves.toBe(`Codex model set to ${display}.`);
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      model,
-      modelProvider: "lmstudio",
-    });
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("keeps the bound local provider when reselecting a model id with a slash", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-      model: "openai/gpt-oss-20b",
-      modelProvider: "lmstudio",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-    await expect(
-      setModel({ ...controlTarget(sessionFile), model: "openai/gpt-oss-20b" }),
-    ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
-
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.model).toBe("openai/gpt-oss-20b");
-    expect(binding?.modelProvider).toBe("lmstudio");
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
+      await expect(readCodexAppServerBinding(target.sessionFile)).resolves.toMatchObject({
+        model,
+        modelProvider: "lmstudio",
+      });
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
