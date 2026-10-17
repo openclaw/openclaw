@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { RealtimeTranscriptionSessionCallbacks } from "../../realtime-transcription/provider-types.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
-import { mulawToPcm } from "../../talk/audio-codec.js";
+import { mulawToPcmInto } from "../../talk/audio-codec.js";
 
 export type TalkFileTranscriptionConfig = {
   cfg: OpenClawConfig;
@@ -93,22 +93,28 @@ export async function resolveTalkFileTranscriptionConfig(
   };
 }
 
-function encodeWav(audio: Buffer): Buffer {
-  const pcm = mulawToPcm(audio);
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
-  header.write("WAVEfmt ", 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(8000, 24);
-  header.writeUInt32LE(16000, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([header, pcm]);
+function encodeWav(chunks: readonly Buffer[], bytes: number): Buffer {
+  const pcmBytes = bytes * 2;
+  const wav = Buffer.alloc(44 + pcmBytes);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + pcmBytes, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24);
+  wav.writeUInt32LE(16000, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(pcmBytes, 40);
+  let offset = 44;
+  for (const chunk of chunks) {
+    const end = offset + chunk.length * 2;
+    mulawToPcmInto(chunk, wav.subarray(offset, end));
+    offset = end;
+  }
+  return wav;
 }
 
 /** Adapts the browser's existing audio frames to the file-transcription owner. */
@@ -141,7 +147,8 @@ export function createTalkFileTranscriptionSession(
       if (cancellation.signal.aborted || bytes === 0) {
         return;
       }
-      const audio = Buffer.concat(chunks, bytes);
+      // Encode before yielding: close() releases the captured chunks.
+      const wav = encodeWav(chunks, bytes);
       chunks.length = 0;
       bytes = 0;
       const root = resolvePreferredOpenClawTmpDir();
@@ -149,7 +156,7 @@ export function createTalkFileTranscriptionSession(
       const directory = await fs.mkdtemp(path.join(root, "talk-stt-"));
       try {
         const filePath = path.join(directory, "speech.wav");
-        await fs.writeFile(filePath, encodeWav(audio), { mode: 0o600 });
+        await fs.writeFile(filePath, wav, { mode: 0o600 });
         const { transcribeAudioFile } = await import("../../media-understanding/runtime.js");
         if (cancellation.signal.aborted) {
           return;
