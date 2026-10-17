@@ -15,7 +15,7 @@ import {
   consumeStructuredReplaySafeToolCall,
   consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
-import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   isDeliveredCoreCurrentChannelWidgetResult,
   readEmbeddedMessageDeliveryFact,

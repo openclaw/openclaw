@@ -1,16 +1,15 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
-  formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
-  getApiErrorPayloadFingerprint,
-  formatRawAssistantErrorForUi,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/error-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
+import { formatBillingErrorMessage, getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 import { isRawApiErrorPayload } from "./failover/user-copy.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-generation.js";

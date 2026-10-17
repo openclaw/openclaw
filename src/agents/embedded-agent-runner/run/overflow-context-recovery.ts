@@ -10,9 +10,9 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
-  isLikelyContextOverflowError,
-  isProviderRequestSizeCeilingError,
-} from "../../embedded-agent-helpers.js";
+} from "../../embedded-agent-helpers/context-overflow-observation.js";
+import { isLikelyContextOverflowError } from "../../failover/context-overflow.js";
+import { isProviderRequestSizeCeilingError } from "../../failover/message-patterns.js";
 import type { FailoverClassification } from "../../failover/signal.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { classifyCompactionReason } from "../compact-reasons.js";

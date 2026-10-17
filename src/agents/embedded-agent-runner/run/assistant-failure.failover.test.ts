@@ -4,9 +4,11 @@ import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
-import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../failover/user-copy.js";
+import {
+  AUTH_INVALID_TOKEN_USER_TEXT,
+  formatBillingErrorMessage,
+} from "../../failover/user-copy.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { log } from "../logger.js";

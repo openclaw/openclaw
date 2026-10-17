@@ -27,7 +27,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
