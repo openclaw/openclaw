@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 function splitModelRef(raw: string) {
@@ -20,14 +19,7 @@ function normalizeModelRef(raw: string) {
     : split;
 }
 
-function terminalReceipt(params: {
-  runId: string;
-  provider: string;
-  model: string;
-  responseModel?: string;
-  rerouted?: boolean;
-  effective?: { provider?: string; model?: string };
-}) {
+function terminalReceipt(params: TurnFixture & { runId: string; provider: string; model: string }) {
   const effective = {
     provider: params.effective?.provider ?? params.provider,
     model: params.effective?.model ?? params.model,
@@ -48,14 +40,12 @@ function terminalReceipt(params: {
 
 type TurnFixture = {
   replyText?: string;
-  outboundText?: string;
   responseModel?: string;
   rerouted?: boolean;
   effective?: { provider?: string; model?: string };
 };
 
 async function runFollowUp(params: { primary?: TurnFixture; alternate?: TurnFixture } = {}) {
-  const state = createQaBusState();
   let call = 0;
   const runAgentPrompt = vi.fn(
     async (_env: unknown, prompt: { provider?: string; model?: string; message: string }) => {
@@ -67,11 +57,6 @@ async function runFollowUp(params: { primary?: TurnFixture; alternate?: TurnFixt
       const replyText =
         turn.replyText ??
         (call === 1 ? "hello from the primary model" : "the model switch handoff completed");
-      state.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:qa-operator",
-        text: turn.outboundText ?? replyText,
-      });
       return {
         started: { runId },
         waited: {
@@ -89,7 +74,6 @@ async function runFollowUp(params: { primary?: TurnFixture; alternate?: TurnFixt
     },
   );
   const result = await runLoadedScenarioFlow("model-switch-follow-up", {
-    state,
     api: {
       env: {
         providerMode: "mock-openai",
@@ -98,7 +82,6 @@ async function runFollowUp(params: { primary?: TurnFixture; alternate?: TurnFixt
         gateway: {},
       },
       runAgentPrompt,
-      splitModelRef,
       normalizeModelRef,
       normalizeLowercaseStringOrEmpty,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
@@ -112,13 +95,11 @@ describe("model-switch follow-up terminal evidence", () => {
     const { result, runAgentPrompt } = await runFollowUp({
       primary: {
         replyText: "hello **from the primary model**",
-        outboundText: "hello from the primary model",
         responseModel: "primary-model-concrete",
         rerouted: false,
       },
       alternate: {
         replyText: "the **model switch** handoff completed",
-        outboundText: "the model switch handoff completed",
         responseModel: "alternate-model-concrete",
         rerouted: false,
       },
@@ -156,17 +137,13 @@ describe("model-switch follow-up terminal evidence", () => {
       : { alternate: { rerouted, effective } };
 
   it.each([
-    { run: "default" as const, changed: "model", effective: { model: "fallback-model" } },
-    { run: "default" as const, changed: "provider", effective: { provider: "fallback-provider" } },
-    { run: "alternate" as const, changed: "model", effective: { model: "fallback-model" } },
-    {
-      run: "alternate" as const,
-      changed: "provider",
-      effective: { provider: "fallback-provider" },
-    },
-  ])(
-    "requires a changed $run effective $changed to be marked rerouted",
-    async ({ run, effective }) => {
+    ["default", "model", { model: "fallback-model" }],
+    ["default", "provider", { provider: "fallback-provider" }],
+    ["alternate", "model", { model: "fallback-model" }],
+    ["alternate", "provider", { provider: "fallback-provider" }],
+  ] as const)(
+    "requires a changed %s effective %s to be marked rerouted",
+    async (run, _changed, effective) => {
       const { result } = await runFollowUp(receiptOverrides(run, true, effective));
       expect(result.status).toBe("pass");
 

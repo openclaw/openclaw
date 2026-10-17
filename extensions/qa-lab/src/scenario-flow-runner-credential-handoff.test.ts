@@ -35,9 +35,10 @@ type HandoffOptions = {
 };
 
 async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
+  const { file, reply, migrate, unrelatedMigration } = options;
   const state = createQaBusState();
   const stateDir = "/qa/state";
-  const providerPath = options.file?.path ?? path.join(stateDir, "secrets/key.txt");
+  const providerPath = file?.path ?? path.join(stateDir, "secrets/key.txt");
   const scenario = readQaScenarioById("operator-api-key-handoff-live");
   const oldKey = scenario.execution.config?.oldKey;
   if (typeof oldKey !== "string") {
@@ -67,16 +68,14 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
         providerMode: "live-frontier",
         gateway: {
           runtimeEnv: {
-            HOME: "/qa",
             OPENCLAW_CONFIG_PATH: "/qa/openclaw.json",
             OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_QA_TEMP_ROOT: "/qa",
           },
         },
       },
       fs: {
         realpath: async (filePath: string) =>
-          filePath === providerPath ? (options.file?.realPath ?? filePath) : filePath,
+          filePath === providerPath ? (file?.realPath ?? filePath) : filePath,
         readFile: async (filePath: string) => {
           if (filePath === "/qa/openclaw.json") {
             return configText;
@@ -93,10 +92,10 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
         lstat: async (filePath: string) => {
           expect(filePath).toBe(providerPath);
           return {
-            mtimeMs: options.file?.mtimeMs ?? 100,
+            mtimeMs: file?.mtimeMs ?? 100,
             mode: 0o100600,
             nlink: 1,
-            isFile: () => options.file?.isFile ?? true,
+            isFile: () => file?.isFile ?? true,
           };
         },
       },
@@ -105,7 +104,6 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
         if (!newKey) {
           throw new Error("operator request did not contain the new synthetic key");
         }
-        const file = options.file;
         const provider = file?.provider ?? "qa_key";
         const config = configWithKey(
           file
@@ -134,31 +132,31 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
               }
             : undefined,
           meta:
-            options.migrate || options.unrelatedMigration
+            migrate || unrelatedMigration
               ? {
-                  migrations: options.unrelatedMigration
+                  migrations: unrelatedMigration
                     ? { unrelatedMarker: true }
                     : { modelPolicyAllowlist: true, utilityModelSeparation: true },
                 }
               : undefined,
         })}`;
-        if (options.reply === "sent-key-echo" || options.reply === "edited-key-echo") {
-          const message = send(
-            options.reply === "sent-key-echo" ? `Temporary echo: ${newKey}` : "Working.",
-            200,
-          );
-          if (options.reply === "edited-key-echo") {
-            edit(message.id, `Temporary echo: ${newKey}`, 250);
-          }
-          edit(message.id, "Configuration updated.", 300);
+        const echo = reply === "sent-key-echo" || reply === "edited-key-echo";
+        const preview = send(
+          reply === "sent-key-echo"
+            ? `Temporary echo: ${newKey}`
+            : echo
+              ? "Working."
+              : "Working on the configuration.",
+          echo ? 200 : 50,
+        );
+        if (reply === "edited-key-echo") {
+          edit(preview.id, `Temporary echo: ${newKey}`, 250);
+        }
+        if (reply) {
+          edit(preview.id, "Configuration updated.", 300);
         } else {
-          const preview = send("Working on the configuration.", 50);
-          if (options.reply === "late-edited-final") {
-            edit(preview.id, "Configuration updated.", 300);
-          } else {
-            state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
-            send("Configuration updated.", 200);
-          }
+          state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
+          send("Configuration updated.", 200);
         }
       },
       waitForOutboundMessage: async (...args: Parameters<typeof waitForOutboundMessage>) => {

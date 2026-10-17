@@ -17,7 +17,6 @@ async function runSecretRedactionScenario(
     providerMode?: "mock-openai" | "live-frontier";
     leakSecret?: boolean;
     transcriptEvidence?:
-      | "fixture"
       | "unrelated-file"
       | "uncorrelated-result"
       | "uncorrelated-nested-call"
@@ -44,7 +43,6 @@ async function runSecretRedactionScenario(
     [unrelatedFilePath, "Unrelated workspace documentation without credential material.\n"],
   ]);
   const agentToolReads: Array<{ path: string; contents: string }> = [];
-  const outboundWaitCursors: number[] = [];
   const gatewayHistoryRequests: Array<{
     method: string;
     params: { sessionKey: string; limit: number; maxChars: number };
@@ -103,19 +101,12 @@ async function runSecretRedactionScenario(
           agentToolReads.push({ path: toolReadPath, contents: toolReadContents });
 
           const callId = `qa-redaction-${providerMode}-read`;
-          if (
-            providerMode === "live-frontier" &&
-            params.transcriptEvidence !== "uncorrelated-result"
-          ) {
+          if (providerMode === "live-frontier") {
             const history = nestedToolHistoryFixture({
               toolName: "read",
               toolCallId: callId,
               input: { path: toolReadPath },
-              text:
-                params.transcriptEvidence === "missing-secret"
-                  ? "Read completed."
-                  : toolReadContents,
-              isError: params.transcriptEvidence === "failed-result",
+              text: toolReadContents,
             });
             for (const block of history.content) {
               if (block.type === "toolResult") {
@@ -176,24 +167,6 @@ async function runSecretRedactionScenario(
           text: params.leakSecret ? `${safeMarker} ${fakeSecret}` : safeMarker,
         });
       },
-      waitForOutboundMessage: async (
-        currentState: ReturnType<typeof createQaBusState>,
-        predicate: (message: unknown) => boolean,
-        _timeoutMs: number,
-        options?: { sinceIndex?: number },
-      ) => {
-        const sinceIndex = options?.sinceIndex ?? 0;
-        outboundWaitCursors.push(sinceIndex);
-        const match = currentState
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .slice(sinceIndex)
-          .find((message) => predicate(message));
-        if (!match) {
-          throw new Error(`no outbound reply after outbound cursor ${sinceIndex}`);
-        }
-        return match;
-      },
     },
   });
 
@@ -203,7 +176,6 @@ async function runSecretRedactionScenario(
     fakeSecret,
     fixturePath,
     gatewayHistoryRequests,
-    outboundWaitCursors,
     result,
     state,
   };

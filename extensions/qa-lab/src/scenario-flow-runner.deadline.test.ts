@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
 import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { createFlowTestApi } from "./scenario-flow-runner.test-support.js";
 import type { QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
+const timeoutError = new Error("scenario deadline expired");
 
 const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
   ["generic call", { call: "sideEffect", args: [{ expr: "await resolveInput()" }] }],
@@ -17,17 +17,13 @@ describe("scenario flow deadline", () => {
     "does not invoke %s after aborting during async input resolution",
     async (_name, action) => {
       const controller = new AbortController();
-      const timeoutError = new Error("scenario deadline expired");
       const sideEffect = vi.fn();
       const inputStarted = Promise.withResolvers<void>();
       const input = Promise.withResolvers<unknown>();
 
       const pending = runScenarioFlow({
-        api: {
+        api: createFlowTestApi("flow-post-resolution-abort-fence", {
           signal: controller.signal,
-          state: createQaBusState(),
-          scenario: makeQaSuiteTestScenario("flow-post-resolution-abort-fence"),
-          config: {},
           resolveInput: async () => {
             inputStarted.resolve();
             return await input.promise;
@@ -35,18 +31,8 @@ describe("scenario flow deadline", () => {
           sideEffect,
           transport: {
             sendInbound: sideEffect,
-            sendNativeCommand: sideEffect,
-            waitForOutbound: sideEffect,
-            waitForOutboundSequence: sideEffect,
-            waitForNoOutbound: sideEffect,
           },
-          runScenario: async (name, steps) => {
-            for (const step of steps) {
-              await step.run();
-            }
-            return { name, status: "pass", steps: [] };
-          },
-        },
+        }),
         scenarioTitle: "flow-post-resolution-abort-fence",
         flow: { steps: [{ name: "resolve input", actions: [action] }] },
       });
@@ -62,7 +48,6 @@ describe("scenario flow deadline", () => {
 
   it("runs finally cleanup without advancing other actions after abort", async () => {
     const controller = new AbortController();
-    const timeoutError = new Error("scenario deadline expired");
     const nestedMutation = vi.fn();
     const catchMutation = vi.fn();
     const finallyMutation = vi.fn();
@@ -72,29 +57,23 @@ describe("scenario flow deadline", () => {
     const actionStarted = Promise.withResolvers<void>();
     const action = Promise.withResolvers<void>();
     const deadline = Promise.withResolvers<never>();
-    const thenKey = ["th", "en"].join("");
+    const nestedActions = [
+      {
+        forEach: {
+          items: [1],
+          item: "item",
+          actions: [{ call: "delayedAction" }, { call: "nestedMutation" }],
+        },
+      },
+    ];
     const ifAction = Object.fromEntries([
       ["expr", "true"],
-      [
-        thenKey,
-        [
-          {
-            forEach: {
-              items: [1],
-              item: "item",
-              actions: [{ call: "delayedAction" }, { call: "nestedMutation" }],
-            },
-          },
-        ],
-      ],
+      [["th", "en"].join(""), nestedActions],
     ]);
 
     const pending = runScenarioFlow({
-      api: {
+      api: createFlowTestApi("flow-abort-fence", {
         signal: controller.signal,
-        state: createQaBusState(),
-        scenario: makeQaSuiteTestScenario("flow-abort-fence"),
-        config: {},
         delayedAction: async () => {
           actionStarted.resolve();
           await action.promise;
@@ -118,7 +97,7 @@ describe("scenario flow deadline", () => {
             };
           }
         },
-      },
+      }),
       scenarioTitle: "flow-abort-fence",
       flow: {
         steps: [
