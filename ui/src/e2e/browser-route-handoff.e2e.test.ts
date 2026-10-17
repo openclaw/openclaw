@@ -17,7 +17,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const requestPath = (request: { params: unknown }) => asNullableRecord(request.params)?.path;
+const requestPath = (request: { params?: unknown }) => asNullableRecord(request.params)?.path;
 const browserCase = (path: string, response: unknown, address: Record<string, unknown> = {}) => ({
   match: { ...address, path },
   response,

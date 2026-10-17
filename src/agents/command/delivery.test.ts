@@ -14,6 +14,7 @@ import { registerAgentCommandReplyPolicyTests } from "./delivery.reply-policy.te
 import type { AgentCommandOpts } from "./types.js";
 
 const outboundMock = vi.hoisted(() => vi.fn<typeof deliverOutboundPayloads>());
+// mock-isolation: Replace both delivery entrypoints without loading live channel transports.
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: outboundMock,
   deliverOutboundPayloadsInternal: outboundMock,
@@ -649,7 +650,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
     const outcome = {
       index: 0,
       status: "suppressed" as const,
-      reason: "cancelled_by_message_sending_hook",
+      reason: "cancelled_by_message_sending_hook" as const,
       hookEffect: { cancelReason: "owned-by-other-agent" },
     };
     outboundMock.mockImplementationOnce(async (params) => {

@@ -417,7 +417,10 @@ suite.define(() => {
         timeout: 10_000,
       })
       .toBeGreaterThan(0);
-    await waitForMountedApp(page);
+    await page
+      .locator("mcp-app-view iframe")
+      .first()
+      .waitFor({ state: "attached", timeout: 15_000 });
     await page.waitForTimeout(500);
     const requests = await gateway.getRequests("board.widget.appView");
     expect(requests.length).toBeLessThan(48);

@@ -46,6 +46,9 @@ async function fixture() {
   const argv = (args = ["", "all", "memo-v1"]) => [...command, workspaceDir, ...args];
   return {
     home,
+    runtime,
+    identity,
+    argv: argv(),
     workspaceDir,
     capture: (args?: string[], signal?: AbortSignal) =>
       runtime.exec(

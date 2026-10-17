@@ -28,7 +28,7 @@ function createHarness() {
     },
   });
   harnesses.push(harness);
-  vi.mocked(CodexAppServerClient.start).mockResolvedValueOnce(harness.client);
+  vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
   return Object.assign(harness, {
     release: () => releaseLeasedSharedCodexAppServerClient(harness.client),
     retire: () => retireSharedCodexAppServerClientIfCurrent(harness.client),

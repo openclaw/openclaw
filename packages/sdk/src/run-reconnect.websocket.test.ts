@@ -68,6 +68,7 @@ function completionWait(history: (request: Request, reply: Reply) => unknown) {
       return runResult("timeout");
     }
     waiting.resolve();
+    return undefined;
   });
   return waiting.promise;
 }

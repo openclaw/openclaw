@@ -100,10 +100,13 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
     return { ...scenario, nativeCompact };
   };
-  const prepareSuccessor = (
+  const prepareSuccessor = async (
     suffix: string,
     result: Parameters<typeof prepareContextSuccessorScenario>[0]["result"],
-  ) => prepareContextSuccessorScenario({ tmpDir, suffix, result });
+  ) => {
+    const scenario = await prepareContextSuccessorScenario({ tmpDir, suffix, result });
+    return { ...scenario, record: scenario.recordCliCompactionInStore };
+  };
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
@@ -504,10 +507,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       const tokensAfter = ownsEngine ? 42 : 100;
       const selection = { agentHarnessId: "codex", modelSelectionLocked: locked, authProfileId };
       const calls: CompactParams[] = [];
-      const contextEngine = buildContextEngine({ compactCalls: calls });
-      if (ownsEngine) {
-        contextEngine.info = { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true };
-      }
+      const contextEngine = {
+        ...buildContextEngine({ compactCalls: calls }),
+        ...(ownsEngine
+          ? { info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true } }
+          : {}),
+      };
       const resolveContextEngine = vi.fn(async () => contextEngine);
       const lease = createPreparedRuntimeLease({
         config: {},

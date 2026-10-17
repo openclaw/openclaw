@@ -395,7 +395,7 @@ it("interleaves a bounded remote file command with a pending dynamic tool reques
     if (request.method !== "item/tool/call") {
       return undefined;
     }
-    const response = await harness.client.request("command/exec", params, {
+    const response = await harness.client.request<{ stdout: string }>("command/exec", params, {
       signal,
       timeoutMs: 10_000,
     });

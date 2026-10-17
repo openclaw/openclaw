@@ -26,7 +26,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       Object.assign(harness.gateway.snapshot, next);
       harness.publish(harness.gateway.snapshot.phase === "connected");
     },
-    sessionEvent(session: GatewaySessionRow, reason = "patch", agentId = "main") {
+    sessionEvent(this: void, session: GatewaySessionRow, reason = "patch", agentId = "main") {
       harness.emitEvent({
         type: "event",
         event: "sessions.changed",
@@ -192,7 +192,17 @@ function publicationHarness(responses?: {
     };
     harness.update({ hello });
   };
-  return { ...harness, request, sessions, row, attach, ready, pending, globalHello };
+  return {
+    ...harness,
+    publish: (...args: Parameters<typeof harness.publish>) => harness.publish(...args),
+    request,
+    sessions,
+    row,
+    attach,
+    ready,
+    pending,
+    globalHello,
+  };
 }
 async function publicationSettled(binding: GitHubPublicationBinding) {
   const nextChange = publicationChanges.get(binding)!;

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -60,13 +61,13 @@ function listView(sessions: SessionCapability, query: SessionListScope) {
 }
 
 function listRequest(
-  read: (params?: ListParams) => SessionsListResult | Promise<SessionsListResult>,
+  read: (params?: Record<string, unknown>) => SessionsListResult | Promise<SessionsListResult>,
 ) {
-  return vi.fn(async (method: string, params?: ListParams) => {
+  return vi.fn(async (method: string, params?: unknown) => {
     if (method !== "sessions.list") {
       throw new Error(`Unexpected request: ${method}`);
     }
-    return read(params);
+    return read(asOptionalRecord(params) ?? undefined);
   });
 }
 

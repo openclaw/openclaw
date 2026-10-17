@@ -201,7 +201,7 @@ function createLifecycle({
   ...overrides
 }: Omit<Partial<LifecycleParams>, "admission" | "context" | "session"> & {
   admission?: Partial<LifecycleParams["admission"]>;
-  context: ReturnType<typeof createContext>;
+  context: LifecycleParams["context"];
   session: Partial<LifecycleParams["session"]>;
 }) {
   return createChatSendDispatchErrorLifecycle({

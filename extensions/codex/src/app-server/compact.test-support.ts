@@ -85,7 +85,7 @@ type CompactTestParams = Omit<CompactParams, "hostCapabilities"> &
 /** Supplies only the admitted System host; explicit binding-store tests keep their own target. */
 export function compactCodexSessionWithTestHost(
   params: CompactTestParams,
-  options: CompactOptions | undefined,
+  options: CompactOptions,
 ) {
   setRuntimeConfigSnapshot(params.config ?? {});
   const cleanup = compactionTestCleanup;
@@ -118,7 +118,7 @@ export function compactCodexSessionWithTestHost(
   return pending;
 }
 
-function runCompactionWithTestHost(params: CompactTestParams, options: CompactOptions | undefined) {
+function runCompactionWithTestHost(params: CompactTestParams, options: CompactOptions) {
   if (params.hostCapabilities) {
     return maybeCompactCodexAppServerSessionImpl(
       { ...params, hostCapabilities: params.hostCapabilities },

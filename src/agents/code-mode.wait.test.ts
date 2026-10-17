@@ -521,7 +521,10 @@ describe("suspended-run owner scope", () => {
       const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
       rejections.set(
         missing,
-        String(await foreign.execute("missing-owner", { runId: first.runId }).catch(String)),
+        await foreign.execute("missing-owner", { runId: first.runId }).then(
+          () => "unexpected success",
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        ),
       );
       expect(testing.activeRuns.has(first.runId as string)).toBe(true);
     }

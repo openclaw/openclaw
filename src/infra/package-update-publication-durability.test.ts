@@ -366,8 +366,8 @@ it.skipIf(process.platform === "win32")(
       const f = await createPackageSwapFixture(fixture.root);
       const previous = await integrity.createPackageIntegrityReader().tree(f.packageRoot);
       const previousLauncher = await integrity.createPackageIntegrityReader().launcher(f.launcher);
-      const { promise: paused, resolve: release } = createDeferred<void>();
-      const { promise: inspecting, resolve: reached } = createDeferred<void>();
+      const { promise: paused, resolve: release } = createDeferred();
+      const { promise: inspecting, resolve: reached } = createDeferred();
       let preparing: ReturnType<typeof preparePackageActivation> | undefined;
       let original: (() => void) | undefined;
       const onPrepared = vi.fn();

@@ -1,5 +1,5 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -14,7 +14,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
+import {
+  parseWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest,
+} from "../gateway/worker-environments/workspace-manifest.js";
 import {
   closeServer,
   digest,
@@ -25,6 +28,7 @@ import {
   transferHandler,
   workspaceTransferHandler,
 } from "./node-worker-transfer-client.fixture.test-support.js";
+import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

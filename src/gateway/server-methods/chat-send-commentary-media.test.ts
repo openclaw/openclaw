@@ -241,7 +241,7 @@ it.for([
           throw new SessionTranscriptWriterClaimReboundError();
         }
       },
-      withTranscriptWrite: transcriptLifecycle.withTranscriptWrite,
+      withTranscriptWrite: transcriptLifecycle.withTranscriptWrite.bind(transcriptLifecycle),
     };
     const dispatch = createReplyDispatch(runId, {
       requesterContext: { SenderId: "cli" },

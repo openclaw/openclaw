@@ -313,7 +313,7 @@ async function assertGatewayExporters() {
     for (const [traceId, parentSpanId] of [
       [firstTraceId, "1111111111111111"],
       [secondTraceId, "2222222222222222"],
-    ]) {
+    ] as const) {
       const spans = rpcSpans(traceId);
       expect(spans.map((span) => span.name).toSorted()).toEqual(
         ["dispatch", "handler", "response"].map((phase) => `${rpcSpanPrefix}${phase}`),

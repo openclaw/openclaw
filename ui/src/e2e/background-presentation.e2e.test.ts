@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -15,8 +14,16 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1440, height: 1000 }, colorScheme: mode },
         async ({ page }) => {
-          const gray = mode === "dark" ? 255 : 0;
-          const bytes = createSolidPngBuffer(960, 540, { r: gray, g: gray, b: gray });
+          const encodedImage = await page.evaluate((colorMode) => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 960;
+            canvas.height = 540;
+            const context = canvas.getContext("2d")!;
+            context.fillStyle = colorMode === "dark" ? "#ffffff" : "#000000";
+            context.fillRect(0, 0, 960, 540);
+            return canvas.toDataURL("image/jpeg").split(",")[1]!;
+          }, mode);
+          const bytes = Buffer.from(encodedImage, "base64");
           let preference = {
             source: { kind: "custom" as const, assetId: "presentation-demo" },
             showOnNewSession: true,
@@ -29,19 +36,8 @@ suite.define(() => {
             width: 960,
             height: 540,
             byteLength: bytes.length,
-            mime: "image/png",
+            mime: "image/jpeg",
           };
-          const textMessage = (role: "user" | "assistant", text: string) => ({
-            role,
-            content: [{ type: "text", text }],
-          });
-          const responses = () => ({
-            "users.prefs.get": {
-              status: "ok",
-              entries: { "ui.theme": "claw", "ui.themeMode": mode, "ui.background": preference },
-            },
-            "users.background.get": { status: "ok", asset, preference },
-          });
           const gateway = await installMockGateway(page, {
             assistantName: "Assistant",
             agentModel: "demo/example",
@@ -54,64 +50,84 @@ suite.define(() => {
               "users.background.get",
             ],
             historyMessages: [
-              textMessage("user", "Keep the writing surface solid."),
-              textMessage(
-                "assistant",
-                Array.from({ length: 18 }, () =>
-                  "A clear response on the chosen backdrop. ".repeat(4),
-                ).join("\n\n"),
-              ),
+              {
+                role: "user",
+                content: [{ type: "text", text: "Keep the writing surface solid." }],
+              },
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: Array.from(
+                      { length: 18 },
+                      (_, index) =>
+                        `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
+                    ).join("\n\n"),
+                  },
+                ],
+              },
             ],
             methodResponses: {
               "config.get": configResponse({ themeMode: mode }, "presentation"),
+              "users.prefs.get": {
+                status: "ok",
+                entries: { "ui.theme": "claw", "ui.themeMode": mode, "ui.background": preference },
+              },
               "users.prefs.set": { status: "ok" },
-              ...responses(),
+              "users.background.get": { status: "ok", asset, preference },
             },
           });
           await page.route("**/__openclaw__/users/background/*", (route) =>
-            route.fulfill({ status: 200, contentType: "image/png", body: bytes }),
+            route.fulfill({ status: 200, contentType: "image/jpeg", body: bytes }),
           );
           const sync = async () => {
-            for (const [method, response] of Object.entries(responses())) {
-              await gateway.setMethodResponse(method, response);
-            }
+            await gateway.setMethodResponse("users.prefs.get", {
+              status: "ok",
+              entries: { "ui.theme": "claw", "ui.themeMode": mode, "ui.background": preference },
+            });
+            await gateway.setMethodResponse("users.background.get", {
+              status: "ok",
+              asset,
+              preference,
+            });
           };
           const newPageGeometry = async () => {
             await page
               .locator(".new-session-page openclaw-session-background img")
               .waitFor({ state: "visible" });
             return await page.evaluate(() => {
-              const element = (selector: string) => document.querySelector<HTMLElement>(selector)!;
-              const background = element(".new-session-page openclaw-session-background");
-              const canvas = element(".content--new-session");
-              const composer = element(".new-session-page .agent-chat__input");
-              const imageStyle = getComputedStyle(background.querySelector("img")!);
+              const background = document.querySelector<HTMLElement>(
+                ".new-session-page openclaw-session-background",
+              )!;
+              const canvas = document.querySelector<HTMLElement>(".content--new-session")!;
+              const composer = document.querySelector<HTMLElement>(
+                ".new-session-page .agent-chat__input",
+              )!;
               const b = background.getBoundingClientRect(),
                 c = canvas.getBoundingClientRect(),
                 input = composer.getBoundingClientRect();
-              const fade =
-                Number.parseFloat(
-                  background.style.getPropertyValue("--session-background-fade-end"),
-                ) + b.top;
               return {
-                edgeError: Math.max(Math.abs(b.left - c.left), Math.abs(b.right - c.right)),
-                fade,
-                fadeError: Math.abs(fade - (input.top + input.height / 2)),
-                composerInsets: [input.left - c.left, c.right - input.right],
-                mask: imageStyle.maskImage,
-                opacity: Number(imageStyle.opacity),
+                left: b.left,
+                right: b.right,
+                canvasLeft: c.left,
+                canvasRight: c.right,
+                fade:
+                  Number.parseFloat(
+                    background.style.getPropertyValue("--session-background-fade-end"),
+                  ) + b.top,
+                composerMiddle: input.top + input.height / 2,
+                composerLeft: input.left,
+                composerRight: input.right,
+                mask: getComputedStyle(background.querySelector("img")!).maskImage,
+                opacity: Number(getComputedStyle(background.querySelector("img")!).opacity),
                 underpaint: getComputedStyle(background).backgroundColor,
                 composerBackground: getComputedStyle(composer).backgroundColor,
-                overflow: document.body.scrollWidth - innerWidth,
+                width: innerWidth,
+                bodyWidth: document.body.scrollWidth,
               };
             });
           };
-          const expectAlignedFade = () =>
-            expect.poll(async () => (await newPageGeometry()).fadeError).toBeLessThan(2);
-          const transcriptFade = () =>
-            page
-              .locator(".chat-main__conversation")
-              .evaluate((element) => getComputedStyle(element, "::before").content);
           await page.goto(suite.server.baseUrl + "new");
           await expect.poll(async () => (await newPageGeometry()).fade).toBeGreaterThan(0);
           for (const viewport of [
@@ -119,22 +135,32 @@ suite.define(() => {
             { width: 390, height: 844 },
           ]) {
             await page.setViewportSize(viewport);
-            await expectAlignedFade();
+            await expect
+              .poll(async () => {
+                const g = await newPageGeometry();
+                return Math.abs(g.fade - g.composerMiddle);
+              })
+              .toBeLessThan(2);
             const g = await newPageGeometry();
-            expect(g.edgeError).toBeLessThan(1);
+            expect(Math.abs(g.left - g.canvasLeft)).toBeLessThan(1);
+            expect(Math.abs(g.right - g.canvasRight)).toBeLessThan(1);
             expect(g.mask).not.toBe("none");
             expect(g.composerBackground).toMatch(/^rgb\(/);
             if (viewport.width === 390) {
-              for (const inset of g.composerInsets) {
-                expect(inset).toBeCloseTo(20, 0);
-              }
+              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(20, 0);
+              expect(g.canvasRight - g.composerRight).toBeCloseTo(20, 0);
             }
-            expect(g.overflow).toBeLessThanOrEqual(0);
+            expect(g.bodyWidth).toBeLessThanOrEqual(g.width);
           }
           await page.setViewportSize({ width: 1440, height: 1000 });
           const editor = page.locator(".new-session-page .agent-chat__input textarea");
           await editor.fill("One\nTwo\nThree\nFour\nFive\nSix");
-          await expectAlignedFade();
+          await expect
+            .poll(async () => {
+              const g = await newPageGeometry();
+              return Math.abs(g.fade - g.composerMiddle);
+            })
+            .toBeLessThan(2);
           await editor.fill("");
           await page.goto(suite.server.baseUrl + "settings/appearance");
           const section = page.locator("#settings-appearance-background");
@@ -179,23 +205,57 @@ suite.define(() => {
               .locator(".sidebar-region__background openclaw-session-background img")
               .waitFor({ state: "visible" });
             await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
-            const surfaces = await page.evaluate((colorMode) => {
-              const element = (selector: string) => document.querySelector(selector)!;
-              const style = (selector: string, pseudo?: string) =>
-                getComputedStyle(element(selector), pseudo);
-              const header = ".sidebar-region__header";
-              const headerFade = style(header, "::before");
-              const styleFacts = {
-                headerFadeBottom: headerFade.bottom,
-                transcriptFade: style(".chat-main__conversation", "::before").content,
-                backgroundTop: element(".sidebar-region__background").getBoundingClientRect().top,
-                headerTop: element(header).getBoundingClientRect().top,
-                bubble: style(".chat-group.user .chat-bubble").backgroundColor,
-                composer: style(".chat .agent-chat__input").backgroundColor,
-                header: style(".chat-pane__header").backgroundColor,
-                fade: headerFade.backgroundImage,
+            const surfaces = await page.evaluate(() => {
+              const bg = document
+                .querySelector(".sidebar-region__background")!
+                .getBoundingClientRect();
+              const header = document
+                .querySelector(".sidebar-region__header")!
+                .getBoundingClientRect();
+              return {
+                headerFadeBottom: getComputedStyle(
+                  document.querySelector(".sidebar-region__header")!,
+                  "::before",
+                ).bottom,
+                transcriptFade: getComputedStyle(
+                  document.querySelector(".chat-main__conversation")!,
+                  "::before",
+                ).content,
+                backgroundTop: bg.top,
+                headerTop: header.top,
+                bubble: getComputedStyle(document.querySelector(".chat-group.user .chat-bubble")!)
+                  .backgroundColor,
+                composer: getComputedStyle(document.querySelector(".chat .agent-chat__input")!)
+                  .backgroundColor,
+                header: getComputedStyle(document.querySelector(".chat-pane__header")!)
+                  .backgroundColor,
+                fade: getComputedStyle(
+                  document.querySelector(".sidebar-region__header")!,
+                  "::before",
+                ).backgroundImage,
               };
-              const image = element(".sidebar-region__background img");
+            });
+            expect(Math.abs(surfaces.backgroundTop - surfaces.headerTop)).toBeLessThan(1);
+            expect(surfaces.bubble).toMatch(/^rgb\(/);
+            expect(surfaces.composer).toMatch(/^rgb\(/);
+            expect(surfaces.header).toBe("rgba(0, 0, 0, 0)");
+            expect(surfaces.fade).toContain("linear-gradient");
+            expect(surfaces.headerFadeBottom).toBe("0px");
+            expect(surfaces.transcriptFade).toBe("none");
+            for (const edge of ["top", "bottom"] as const) {
+              await page.locator(".chat-thread").evaluate((thread, position) => {
+                thread.scrollTop = position === "top" ? 0 : thread.scrollHeight;
+              }, edge);
+              expect(
+                await page
+                  .locator(".chat-main__conversation")
+                  .evaluate((element) => getComputedStyle(element, "::before").content),
+              ).toBe("none");
+            }
+            const contrast = await page.evaluate((colorMode) => {
+              const image = document.querySelector<HTMLImageElement>(
+                ".sidebar-region__background img",
+              )!;
               const opacity = Number(getComputedStyle(image).opacity);
               const probe = document.createElement("span");
               image.parentElement!.append(probe);
@@ -204,22 +264,26 @@ suite.define(() => {
               canvas.width = canvas.height = 1;
               const pixels = canvas.getContext("2d")!;
               type RGB = readonly [red: number, green: number, blue: number];
-              type RGBA = readonly [...RGB, alpha: number];
-              const blend = (front: RGB | RGBA, back: RGB | RGBA, alpha: number): RGB => {
-                const channel = (i: 0 | 1 | 2) => front[i] * alpha + back[i] * (1 - alpha);
-                return [channel(0), channel(1), channel(2)];
-              };
-              const color = (css: string): RGBA => {
+              const color = (css: string): readonly [number, number, number, number] => {
                 pixels.clearRect(0, 0, 1, 1);
                 pixels.fillStyle = css;
                 pixels.fillRect(0, 0, 1, 1);
                 const [red, green, blue, alpha] = pixels.getImageData(0, 0, 1, 1).data;
-                // A native 1×1 ImageData contains exactly one complete RGBA pixel.
-                return [red!, green!, blue!, alpha!];
+                if (
+                  red === undefined ||
+                  green === undefined ||
+                  blue === undefined ||
+                  alpha === undefined
+                ) {
+                  throw new Error("The contrast probe did not return a complete RGBA pixel");
+                }
+                return [red, green, blue, alpha];
               };
               const surface = color(getComputedStyle(probe).backgroundColor);
               const extreme = colorMode === "dark" ? 255 : 0;
-              const background = blend([extreme, extreme, extreme], surface, opacity);
+              const blendSurface = (channel: 0 | 1 | 2) =>
+                surface[channel] * (1 - opacity) + extreme * opacity;
+              const background: RGB = [blendSurface(0), blendSurface(1), blendSurface(2)];
               const luma = (rgb: RGB) => {
                 const linear = (value: number) => {
                   const n = value / 255;
@@ -230,38 +294,30 @@ suite.define(() => {
               const ratios = ["--text", "--text-strong", "--muted", "--chat-text"].map((token) => {
                 probe.style.color = "var(" + token + ")";
                 const foreground = color(getComputedStyle(probe).color);
-                const text = blend(foreground, background, foreground[3] / 255);
+                const alpha = foreground[3] / 255;
+                const blendText = (channel: 0 | 1 | 2) =>
+                  foreground[channel] * alpha + background[channel] * (1 - alpha);
+                const text: RGB = [blendText(0), blendText(1), blendText(2)];
                 return (
                   (Math.max(luma(text), luma(background)) + 0.05) /
                   (Math.min(luma(text), luma(background)) + 0.05)
                 );
               });
               probe.remove();
-              return { ...styleFacts, contrast: Math.min(...ratios) };
+              return Math.min(...ratios);
             }, mode);
-            expect(Math.abs(surfaces.backgroundTop - surfaces.headerTop)).toBeLessThan(1);
-            expect(surfaces.bubble).toMatch(/^rgb\(/);
-            expect(surfaces.composer).toMatch(/^rgb\(/);
-            expect(surfaces).toMatchObject({
-              header: "rgba(0, 0, 0, 0)",
-              headerFadeBottom: "0px",
-              transcriptFade: "none",
-            });
-            expect(surfaces.fade).toContain("linear-gradient");
-            expect(surfaces.contrast).toBeGreaterThanOrEqual(4.5);
-            for (const edge of ["top", "bottom"] as const) {
-              await page.locator(".chat-thread").evaluate((thread, position) => {
-                thread.scrollTop = position === "top" ? 0 : thread.scrollHeight;
-              }, edge);
-              expect(await transcriptFade()).toBe("none");
-            }
+            expect(contrast).toBeGreaterThanOrEqual(4.5);
           }
           preference = { ...preference, showInSessions: false };
           await sync();
           await page.goto(suite.server.baseUrl + "chat");
           await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
           expect(await page.locator(".sidebar-region__background img").count()).toBe(0);
-          expect(await transcriptFade()).toBe('""');
+          expect(
+            await page
+              .locator(".chat-main__conversation")
+              .evaluate((element) => getComputedStyle(element, "::before").content),
+          ).toBe('""');
         },
       );
     },

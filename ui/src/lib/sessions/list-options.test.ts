@@ -23,11 +23,11 @@ function fixture(
   return { ...harness, sessions: createTestSessionCapability(harness.gateway, agentId) };
 }
 
-function sessionRow<T extends object>(
+function sessionRow(
   key: string,
   sessionId: string,
   updatedAt: number,
-  fields?: T,
+  fields?: Partial<GatewaySessionRow>,
 ) {
   return { key, kind: "direct" as const, sessionId, updatedAt, ...fields };
 }

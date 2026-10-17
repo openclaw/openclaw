@@ -13,8 +13,10 @@ const { append, persist, warn } = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// mock-isolation: Keep the agent execution runtime out of this transcript-repair fixture.
 vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: persist }));
 
+// mock-isolation: Supply only the owned append boundary without loading transcript workers.
 vi.mock("./runtime-loaders.js", () => ({
   loadTranscriptAppendRuntime: async () => ({
     appendExactAssistantMessageToSessionTranscript: append,
@@ -25,6 +27,7 @@ vi.mock("../harness/hook-helpers.js", () => ({
   runAgentHarnessBeforeMessageWriteHook: ({ message }: { message: unknown }) => message,
 }));
 
+// mock-isolation: Capture repair warnings without installing global logging state.
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), warn }),
 }));
@@ -84,6 +87,7 @@ beforeEach(() => {
       params.sessionStore[params.sessionKey] = params.entry;
       return params.entry;
     }
+    return undefined;
   });
 });
 
