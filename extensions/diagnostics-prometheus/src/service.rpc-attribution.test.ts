@@ -8,8 +8,7 @@ it("accounts for session response bytes by sidebar row outcome", () => {
       "delta",
       "unchanged",
       "full-no-base",
-      "full-stale-base",
-      "full-delta-not-smaller",
+      "full-with-base",
       "not-sidebar",
     ] as const) {
       const event = {
@@ -36,7 +35,7 @@ it("accounts for session response bytes by sidebar row outcome", () => {
       );
     }
     expect(metrics.render()).toContain(
-      'openclaw_gateway_rpc_response_bytes_sum{method="sessions.list"} 7656\n',
+      'openclaw_gateway_rpc_response_bytes_sum{method="sessions.list"} 6380\n',
     );
   } finally {
     metrics.stop();

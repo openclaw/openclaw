@@ -105,9 +105,9 @@ export class GatewayRpcDiagnostics {
       outcome === "ok" && (this.sessionsList || this.chatHistoryClient)
         ? asOptionalRecord(response?.payload)
         : undefined;
+    const params = result ? asOptionalRecord(response?.params) : undefined;
     let chatHistory: ChatHistoryAttribution | undefined;
     if (this.chatHistoryClient && result && response) {
-      const params = asOptionalRecord(response.params);
       const limit = typeof params?.limit === "number" ? params.limit : 200;
       chatHistory = {
         ...this.chatHistoryClient,
@@ -132,11 +132,9 @@ export class GatewayRpcDiagnostics {
           ? "unchanged"
           : result?.rowsDelta !== undefined
             ? "delta"
-            : result?.rowsFullReason === "full-no-base" ||
-                result?.rowsFullReason === "full-stale-base" ||
-                result?.rowsFullReason === "full-delta-not-smaller"
-              ? result.rowsFullReason
-              : undefined;
+            : params?.ifRowsRevision === undefined
+              ? "full-no-base"
+              : "full-with-base";
     this.emit({
       type: "gateway.rpc",
       method: this.method,
@@ -144,7 +142,7 @@ export class GatewayRpcDiagnostics {
       outcome,
       firstResponse: sent ? firstResponse : undefined,
       responseBytes,
-      ...(this.sessionsList && result && rowsOutcome
+      ...(this.sessionsList && result
         ? {
             sessionsList: {
               ...this.sessionsList,

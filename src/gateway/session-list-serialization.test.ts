@@ -79,7 +79,6 @@ it("packs equal fields by their recipient rows without changing the input or wir
     rowsUnchanged: true,
   });
   expect(packed).toEqual({
-    rowsFullReason: "full-no-base",
     sessions: [
       {
         key: "one",
@@ -195,6 +194,7 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
       const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(frame.payload).not.toHaveProperty("rowsFullReason");
       expect(
         JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
       ).toBe(JSON.stringify(rows));

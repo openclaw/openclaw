@@ -825,9 +825,10 @@ at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
 `client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
 `openclaw_sessions_list_response_bytes_total` attributes successful response
 bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
-`full-no-base`, `full-stale-base`, `full-delta-not-smaller`, or `not-sidebar`).
-The sidebar sharing owner carries the full-response cause as `rowsFullReason`;
-diagnostics never recompute base retention or row changes.
+`full-no-base`, `full-with-base`, or `not-sidebar`). Full sidebar replies use
+`full-no-base` when the request omits `ifRowsRevision`; `full-with-base` covers
+stale or evicted bases and the rare case where every row changed. Attribution
+uses the request and existing response fields without changing the protocol payload.
 
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`

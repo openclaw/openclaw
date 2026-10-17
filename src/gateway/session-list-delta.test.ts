@@ -42,14 +42,12 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
   const c: GatewaySessionRow = { key: "c", kind: "direct", label: "C", updatedAt: 1 };
   const previous = [a, b, c];
   const first = shareSidebarSessionRows(previous);
-  expect(first.rowsFullReason).toBe("full-no-base");
   const revision = first.rowsRevision!;
   const changed = { ...a, label: "Changed" };
   const inserted: GatewaySessionRow = { key: "d", kind: "direct", label: "Inserted", updatedAt: 1 };
   const rows = [b, changed, inserted];
   const delta = shareSidebarSessionRows(rows, `${SESSION_ROWS_DELTA_PREFIX}${revision}`, previous);
   expect(delta.rowsDelta).toEqual({ baseRevision: revision, order: [1, 3, 4] });
-  expect(delta.rowsFullReason).toBeUndefined();
   const wire = JSON.parse(
     serializeGatewayFrame({ type: "res", id: "list", ok: true, payload: delta }).toString(),
   ).payload;
@@ -64,7 +62,6 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
   for (const token of [revision, `${SESSION_ROWS_DELTA_PREFIX}missing`]) {
     const full = shareSidebarSessionRows(rows, token, previous);
     expect(full.rowsDelta).toBeUndefined();
-    expect(full.rowsFullReason).toBe("full-stale-base");
     expect(expandSessionRowFacts(full.sessions, full.sharedFacts)).toEqual(rows);
   }
   expect(
@@ -74,13 +71,10 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
     rowsRevision: delta.rowsRevision,
     rowsUnchanged: true,
   });
-  const allChanged = shareSidebarSessionRows(
-    [changed],
-    `${SESSION_ROWS_DELTA_PREFIX}${revision}`,
-    previous,
-  );
-  expect(allChanged.rowsDelta).toBeUndefined();
-  expect(allChanged.rowsFullReason).toBe("full-delta-not-smaller");
+  expect(
+    shareSidebarSessionRows([changed], `${SESSION_ROWS_DELTA_PREFIX}${revision}`, previous)
+      .rowsDelta,
+  ).toBeUndefined();
 });
 
 it("keeps deltas inside the authorized owner, personal and paginated list owners", async () => {
@@ -143,7 +137,6 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
     const release = retainSessionListForegroundWork();
     try {
       const initial = await read(primary);
-      expect(initial.rowsFullReason).toBe("full-no-base");
       const initialPersonal = await read(personal);
       const initialOwned = await read(owned);
       const initialPage = await read(page);
@@ -186,7 +179,6 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
       expect(changedKeys(refilled)).toEqual([key("c")]);
       const missed = await read(primary, initial);
       expect(missed.rowsDelta).toBeUndefined();
-      expect(missed.rowsFullReason).toBe("full-stale-base");
       expect(changedKeys(missed)).toEqual([key("e"), key("a"), key("b")]);
       const differentLimit = await read({ ...primary, limit: 1 }, removed);
       expect(differentLimit.rowsDelta).toBeUndefined();

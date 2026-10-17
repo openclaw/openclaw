@@ -50,28 +50,32 @@ async function dispatch(
 }
 
 it.each([
-  { rowMode: "sidebar", payload: { rowsUnchanged: true }, rowsOutcome: "unchanged" },
   {
-    rowMode: "sidebar",
+    params: { rowMode: "sidebar", ifRowsRevision: "private-revision" },
+    payload: { rowsUnchanged: true },
+    rowsOutcome: "unchanged",
+  },
+  {
+    params: { rowMode: "sidebar", ifRowsRevision: "delta:private-revision" },
     payload: { rowsDelta: { baseRevision: "private-revision" } },
     rowsOutcome: "delta",
   },
-  { rowMode: "sidebar", payload: { rowsFullReason: "full-no-base" }, rowsOutcome: "full-no-base" },
+  { params: { rowMode: "sidebar" }, payload: { sessions: [] }, rowsOutcome: "full-no-base" },
   {
-    rowMode: "sidebar",
-    payload: { rowsFullReason: "full-stale-base" },
-    rowsOutcome: "full-stale-base",
+    params: { rowMode: "sidebar", ifRowsRevision: "delta:private-revision" },
+    payload: { sessions: [] },
+    rowsOutcome: "full-with-base",
   },
   {
-    rowMode: "sidebar",
-    payload: { rowsFullReason: "full-delta-not-smaller" },
-    rowsOutcome: "full-delta-not-smaller",
+    params: { rowMode: "sidebar", ifRowsRevision: "private-revision" },
+    payload: { sessions: [] },
+    rowsOutcome: "full-with-base",
   },
-  { rowMode: "compact", payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
+  { params: { rowMode: "compact" }, payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
 ])(
   "attributes session response bytes as $rowsOutcome",
-  async ({ rowMode, payload, rowsOutcome }) => {
-    const events = await dispatch("sessions.list", { rowMode, source: "sidebar" }, payload);
+  async ({ params, payload, rowsOutcome }) => {
+    const events = await dispatch("sessions.list", { ...params, source: "sidebar" }, payload);
     expect(events).toMatchObject([
       {
         responseBytes: 1234,
@@ -79,7 +83,7 @@ it.each([
           clientKind: "openclaw-control-ui",
           source: "wire",
           callerSource: "sidebar",
-          rowMode,
+          rowMode: params.rowMode,
           filter: "general",
           rowsOutcome,
         },
