@@ -119,6 +119,19 @@ function barrier() {
   };
 }
 
+async function waitAtGate(
+  gate: ReturnType<typeof barrier>,
+  operation: { result: Promise<unknown> },
+  signal: AbortSignal,
+  stage: 1 | 2 = 2,
+) {
+  const message = stage === 2 ? "COMMIT gate not reached" : "source validation not reached";
+  await withinTest(
+    awaitGateBeforeSettlement(gate.reached(stage), operation.result, message),
+    signal,
+  );
+}
+
 function owner(identity: SqliteSourceFenceIdentity) {
   const controller = new AbortController();
   const retained: Array<{ settled: boolean; outcome: Promise<SqliteWorkerOperationSettlement> }> =
@@ -180,6 +193,13 @@ function rows(database: DatabaseSync, id: string) {
   };
 }
 
+function assertRows(database: DatabaseSync, id: string, committed = false) {
+  expect(rows(database, id)).toEqual({
+    request: committed ? { revision: 1 } : undefined,
+    lifecycle: committed ? { id } : undefined,
+  });
+}
+
 describe("durable source fence through the real SQLite broker", () => {
   it("retains source exclusion after acceptance and settles independently of a synchronous MAIN waiter", async ({
     signal,
@@ -192,21 +212,15 @@ describe("durable source fence through the real SQLite broker", () => {
       barrier: gate.slot,
     });
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(2), operation.result, "COMMIT gate not reached"),
-        signal,
-      );
+      await waitAtGate(gate, operation, signal);
       expect(() => first.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
-      expect(rows(second, "native-waiter")).toEqual({ request: undefined, lifecycle: undefined });
+      assertRows(second, "native-waiter");
       first.exec("PRAGMA busy_timeout = 10000");
       gate.release();
       // This raw native call cannot service a host-message admission request.
       first.exec("BEGIN IMMEDIATE; UPDATE authority SET revision = 2 WHERE id = 1; COMMIT");
       expect(await operation.result).toEqual({ id: "native-waiter", revision: 1 });
-      expect(rows(second, "native-waiter")).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id: "native-waiter" },
-      });
+      assertRows(second, "native-waiter", true);
       expect(operation.receipts).toEqual([{ id: "native-waiter", revision: 1 }]);
     } finally {
       gate.release();
@@ -240,10 +254,7 @@ describe("durable source fence through the real SQLite broker", () => {
         { encoding: "utf8" },
       );
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(2), operation.result, "COMMIT gate not reached"),
-        signal,
-      );
+      await waitAtGate(gate, operation, signal);
       const blocked = write();
       expect(blocked.status).toBe(7);
       expect(blocked.stdout).toMatch(/locked|busy/i);
@@ -276,10 +287,7 @@ describe("durable source fence through the real SQLite broker", () => {
     });
     let right: ReturnType<typeof persist> | undefined;
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(1), left.result, "source validation not reached"),
-        signal,
-      );
+      await waitAtGate(gate, left, signal, 1);
       right = persist(reverse, { id: "reverse", expectedRevision: 1 });
       gate.release();
       await expect(Promise.all([left.result, right.result])).resolves.toEqual([
@@ -340,19 +348,12 @@ describe("durable source fence through the real SQLite broker", () => {
         barrier: gate.slot,
       });
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            gate.reached(1),
-            operation.result,
-            "source validation not reached",
-          ),
-          signal,
-        );
+        await waitAtGate(gate, operation, signal, 1);
         const controller = kind === "caller" ? operation.controller : operation[kind].controller;
         controller.abort(new Error("Fixture owner closed"));
         gate.release();
         await expect(operation.result).rejects.toThrow();
-        expect(rows(second, id)).toEqual({ request: undefined, lifecycle: undefined });
+        assertRows(second, id);
         expect(operation.receipts).toEqual([]);
       } finally {
         gate.release();
@@ -370,10 +371,7 @@ describe("durable source fence through the real SQLite broker", () => {
       barrier: gate.slot,
     });
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(2), operation.result, "COMMIT gate not reached"),
-        signal,
-      );
+      await waitAtGate(gate, operation, signal);
       operation.controller.abort(new Error("Fixture caller canceled"));
       operation.source.controller.abort(new Error("Fixture source closed"));
       operation.destination.controller.abort(new Error("Fixture destination closed"));
@@ -383,10 +381,7 @@ describe("durable source fence through the real SQLite broker", () => {
       }
       gate.release();
       await operation.result.catch(() => {});
-      expect(rows(second, "accepted-cancel")).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id: "accepted-cancel" },
-      });
+      assertRows(second, "accepted-cancel", true);
       expect(operation.receipts).toEqual([{ id: "accepted-cancel", revision: 1 }]);
       expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
       for (const retained of [operation.source.retained, operation.destination.retained]) {
@@ -408,7 +403,7 @@ describe("durable source fence through the real SQLite broker", () => {
     ] as const) {
       const operation = persist(forward, { id, ...command }, options);
       await expect(operation.result).rejects.toThrow();
-      expect(rows(second, id)).toEqual({ request: undefined, lifecycle: undefined });
+      assertRows(second, id);
       expect(operation.receipts).toEqual([]);
     }
   });
@@ -419,7 +414,7 @@ describe("durable source fence through the real SQLite broker", () => {
       await expect(persist(forward, { id: "absent", expectedRevision: 1 }).result).rejects.toThrow(
         /revoked/,
       );
-      expect(rows(second, "absent")).toEqual({ request: undefined, lifecycle: undefined });
+      assertRows(second, "absent");
     } finally {
       first.exec("INSERT INTO authority VALUES (1, 1)");
     }
@@ -427,7 +422,7 @@ describe("durable source fence through the real SQLite broker", () => {
     await expect(
       persist(forward, { id: "incarnation", expectedRevision: 1 }, { source: changed }).result,
     ).rejects.toThrow(/owners/);
-    expect(rows(second, "incarnation")).toEqual({ request: undefined, lifecycle: undefined });
+    assertRows(second, "incarnation");
     const missingPath = path.join(path.dirname(aliasPath), "missing.sqlite");
     await expect(
       openFixture(secondIdentity, {
@@ -446,10 +441,7 @@ describe("durable source fence through the real SQLite broker", () => {
       fault: "source-close",
     });
     await expect(operation.result).rejects.toThrow(/closed/);
-    expect(rows(second, "native-source-close")).toEqual({
-      request: undefined,
-      lifecycle: undefined,
-    });
+    assertRows(second, "native-source-close");
     expect(operation.receipts).toEqual([]);
     await fixture.broker.close();
   });
@@ -462,10 +454,7 @@ describe("durable source fence through the real SQLite broker", () => {
       const operation = persist(fixture, { id, expectedRevision: 1, fault });
       await expect(operation.result).rejects.toThrow();
       expect(operation.receipts).toEqual([{ id, revision: 1 }]);
-      expect(rows(database, id)).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id },
-      });
+      assertRows(database, id, true);
       expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
     }
   });
@@ -485,10 +474,7 @@ describe("durable source fence through the real SQLite broker", () => {
       expect(first.prepare("SELECT revision FROM authority WHERE id = 1").get()).toEqual({
         revision: 2,
       });
-      expect(rows(second, "postcommit-revoke")).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id: "postcommit-revoke" },
-      });
+      assertRows(second, "postcommit-revoke", true);
     } finally {
       await operation.result.catch(() => {});
       first.exec("UPDATE authority SET revision = 1 WHERE id = 1");
@@ -502,11 +488,7 @@ describe("durable source fence through the real SQLite broker", () => {
       const operation = persist(fixture, { id: fault, expectedRevision: 1, fault });
       await expect(operation.result).rejects.toThrow();
       const committed = fault === "after-commit-exit";
-      expect(rows(second, fault)).toEqual(
-        committed
-          ? { request: { revision: 1 }, lifecycle: { id: fault } }
-          : { request: undefined, lifecycle: undefined },
-      );
+      assertRows(second, fault, committed);
       expect(() => first.exec("BEGIN IMMEDIATE; ROLLBACK")).not.toThrow();
       expect(await Promise.all(operation.settlements)).toEqual([
         expect.objectContaining({ kind: "unknown", nativeStopped: true }),

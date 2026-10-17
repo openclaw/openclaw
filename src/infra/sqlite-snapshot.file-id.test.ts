@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
@@ -10,13 +9,33 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { publishVerifiedSqliteFile, createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { prepareUpdateDatabaseRestoreSourceInProcess } from "./update-database-restore-source.js";
 
-const directories: string[] = [];
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
+const directories = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+function withDatabase<T>(file: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(file, { readOnly });
+  try {
+    return run(db);
+  } finally {
+    db.close();
   }
-});
+}
+
+function assertSnapshot(file: string, query: string, expected: unknown) {
+  withDatabase(file, true, (db) => {
+    expect(db.prepare(query).all()).toEqual(expected);
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
+}
+
+function changeSnapshotBytes(file: string) {
+  const writer = fsSync.openSync(file, "r+");
+  try {
+    fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
+  } finally {
+    fsSync.closeSync(writer);
+  }
+}
 
 it.each([
   "publication",
@@ -26,19 +45,15 @@ it.each([
   "restore",
 ] as const)("preserves exact file identities above 2^53 (%s)", async (operationKind) => {
   const replace = operationKind.startsWith("replacement");
-  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sqlite-file-id-")));
-  directories.push(directory);
+  const directory = await fs.realpath(directories.make("sqlite-file-id-"));
   const sourcePath = path.join(directory, "source.sqlite");
   const targetPath = path.join(directory, "target.sqlite");
   const displacedPath = path.join(directory, "displaced.sqlite");
-  const database = new DatabaseSync(sourcePath);
-  try {
+  withDatabase(sourcePath, false, (database) => {
     database.exec(
       "CREATE TABLE evidence(value TEXT); INSERT INTO evidence(rowid,value) VALUES(71,'keep');",
     );
-  } finally {
-    database.close();
-  }
+  });
   const bytes = await fs.readFile(sourcePath);
   const native = getFsSafeNativeConfig();
   const open = fs.open.bind(fs);
@@ -159,17 +174,9 @@ it.each([
     } else {
       await operation;
       await expect(fs.readFile(targetPath)).resolves.toEqual(bytes);
-      const reopened = new DatabaseSync(targetPath, { readOnly: true });
-      try {
-        expect(reopened.prepare("SELECT rowid,value FROM evidence").all()).toEqual([
-          { rowid: 71, value: "keep" },
-        ]);
-        expect(reopened.prepare("PRAGMA integrity_check").get()).toEqual({
-          integrity_check: "ok",
-        });
-      } finally {
-        reopened.close();
-      }
+      assertSnapshot(targetPath, "SELECT rowid,value FROM evidence", [
+        { rowid: 71, value: "keep" },
+      ]);
     }
     await expect(fs.readFile(sourcePath)).resolves.toEqual(bytes);
     expect((await fs.readdir(directory)).toSorted()).toEqual(
@@ -181,9 +188,6 @@ it.each([
   }
 });
 
-const fuseDirectories = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
-
 it.each([
   ["async", false],
   ["async", true],
@@ -194,12 +198,12 @@ it.each([
 ] as const)(
   "verifies snapshot bytes despite FUSE timestamp drift (%s, changed bytes=%s)",
   async (mode, changeBytes) => {
-    const directory = fuseDirectories.make("sqlite-fuse-");
+    const directory = directories.make("sqlite-fuse-");
     const sourcePath = path.join(directory, "source.sqlite");
     const targetPath = path.join(directory, "snapshot.bak");
-    const source = new DatabaseSync(sourcePath);
-    source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('keep');");
-    source.close();
+    withDatabase(sourcePath, false, (source) => {
+      source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('keep');");
+    });
     const originalOpen = fs.open.bind(fs);
     let observations = 0;
     function settleMetadata(value: BigIntStats) {
@@ -208,12 +212,7 @@ it.each([
       value.birthtimeNs = value.ctimeNs;
       if (changeBytes && observations === 2) {
         // The first hash has read the original bytes; retain size and inode.
-        const writer = fsSync.openSync(targetPath, "r+");
-        try {
-          fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
-        } finally {
-          fsSync.closeSync(writer);
-        }
+        changeSnapshotBytes(targetPath);
       }
       return value;
     }
@@ -254,12 +253,7 @@ it.each([
           });
           guard.assertTargetUnchanged(() => {
             if (changeBytes) {
-              const writer = fsSync.openSync(targetPath, "r+");
-              try {
-                fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
-              } finally {
-                fsSync.closeSync(writer);
-              }
+              changeSnapshotBytes(targetPath);
             }
           });
           return;
@@ -280,13 +274,7 @@ it.each([
       const bytes = fsSync.readFileSync(targetPath);
       expect(result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
       expect(result.sizeBytes).toBe(bytes.length);
-      const snapshot = new DatabaseSync(targetPath, { readOnly: true });
-      try {
-        expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([{ value: "keep" }]);
-        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        snapshot.close();
-      }
+      assertSnapshot(targetPath, "SELECT value FROM records", [{ value: "keep" }]);
     }
     expect(observations).toBeGreaterThan(1);
   },

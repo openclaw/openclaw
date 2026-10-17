@@ -225,6 +225,26 @@ function releaseReplyGate(gate: ReplyGate | undefined): void {
   }
 }
 
+function holdReply(kind: ReplyGate["kind"]): ReplyGate {
+  return (observation.replyGate = { kind, entered: createDeferredCore(), open: false });
+}
+
+function startPreparation(root: string, pathname: string, signal?: AbortSignal) {
+  const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
+  return captureSqliteSnapshotStagingOwner().start(
+    {
+      type: "prepare",
+      root,
+      pathname,
+      allowLegacyWorker: false,
+      preserveSourceArtifacts: true,
+      deadlineOwnedByCaller: false,
+      launch: { env, cwd, transport: { kind: "native" } },
+    },
+    signal,
+  );
+}
+
 beforeEach(() => {
   observation.tasks = 0;
   observation.admitted = [];
@@ -266,16 +286,13 @@ it.each(["pre-aborted", "queued", "accepted"] as const)(
   async (phase) => {
     const root = directories.make("staging-prepare-cancel-");
     const pathname = createProbe(root);
-    const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
     const controller = new AbortController();
     const reason = new Error("snapshot caller canceled");
     const gate = phase === "queued" ? holdRelease(1) : undefined;
     const first = gate
       ? createSqliteSnapshotStagingDirectory(root, false, undefined, true)
       : undefined;
-    let request:
-      | ReturnType<ReturnType<typeof captureSqliteSnapshotStagingOwner>["start"]>
-      | undefined;
+    let request: ReturnType<typeof startPreparation> | undefined;
     // oxlint-disable-next-line typescript/unbound-method -- call keeps the real MessagePort receiver.
     const nativePost = MessagePort.prototype.postMessage;
     const posts = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
@@ -302,18 +319,7 @@ it.each(["pre-aborted", "queued", "accepted"] as const)(
       if (phase === "pre-aborted") {
         controller.abort(reason);
       }
-      request = captureSqliteSnapshotStagingOwner().start(
-        {
-          type: "prepare",
-          root,
-          pathname,
-          allowLegacyWorker: false,
-          preserveSourceArtifacts: true,
-          deadlineOwnedByCaller: false,
-          launch: { env, cwd, transport: { kind: "native" } },
-        },
-        controller.signal,
-      );
+      request = startPreparation(root, pathname, controller.signal);
       const rejected =
         phase === "accepted"
           ? expect(request.result).rejects.toThrow("SQLite snapshot preparation stopped")
@@ -358,8 +364,7 @@ it.each(["queued", "accepted"] as const)(
         await waitForGate(gate, first);
       } else {
         await first;
-        replyGate = { kind: "allocated", entered: createDeferredCore(), open: false };
-        observation.replyGate = replyGate;
+        replyGate = holdReply("allocated");
       }
       second = createSqliteSnapshotStagingDirectory(root, false, controller.signal, true);
       const rejected = expect(second).rejects.toBe(reason);
@@ -465,12 +470,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
   const sqlite = requireNodeSqlite();
   const sources = ["first", "second"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
-  const replyGate: ReplyGate = {
-    kind: "prepared",
-    entered: createDeferredCore(),
-    open: false,
-  };
-  observation.replyGate = replyGate;
+  const replyGate = holdReply("prepared");
   const first = requestContext.run("first", () =>
     startSqliteReadOnlyLocationAsync(sources[0]!, { preserveSourceArtifacts: true }),
   );
@@ -563,18 +563,8 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
 it("retains an early preparation close until its original accepted result joins", async () => {
   const root = directories.make("staging-request-early-close-");
   const source = createProbe(root, "source", "early");
-  const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
-  const gate: ReplyGate = { kind: "prepared", entered: createDeferredCore(), open: false };
-  observation.replyGate = gate;
-  const request = captureSqliteSnapshotStagingOwner().start({
-    type: "prepare",
-    root,
-    pathname: source,
-    allowLegacyWorker: false,
-    preserveSourceArtifacts: true,
-    deadlineOwnedByCaller: false,
-    launch: { env, cwd, transport: { kind: "native" } },
-  });
+  const gate = holdReply("prepared");
+  const request = startPreparation(root, source);
   try {
     await waitForGate(gate, request.result);
     const closing = request.startClose();

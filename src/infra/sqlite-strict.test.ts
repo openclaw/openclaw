@@ -7,11 +7,22 @@ import { migrateSqliteSchemaToStrict, withSqliteForeignKeysDisabled } from "./sq
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 
-function createDatabase(): import("node:sqlite").DatabaseSync {
+function createDatabase(schema = ""): import("node:sqlite").DatabaseSync {
   const sqlite = requireNodeSqlite();
   const database = new sqlite.DatabaseSync(":memory:");
   openDatabases.push(database);
+  database.exec(schema);
   return database;
+}
+
+function query(database: import("node:sqlite").DatabaseSync, sql: string) {
+  return database.prepare(sql).get();
+}
+
+function strictSchema(schema: string) {
+  return schema
+    .replace(/CREATE TABLE /g, "CREATE TABLE IF NOT EXISTS ")
+    .replace(/\);/g, ") STRICT;");
 }
 
 function readStrictFlag(database: import("node:sqlite").DatabaseSync, tableName: string): number {
@@ -40,8 +51,7 @@ afterEach(() => {
 
 describe("withSqliteForeignKeysDisabled", () => {
   it.each([0, 1])("restores previous enforcement %i after success and failure", (enabled) => {
-    const database = createDatabase();
-    database.exec(`PRAGMA foreign_keys = ${enabled};`);
+    const database = createDatabase(`PRAGMA foreign_keys = ${enabled};`);
     const operation = () => {
       expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
       return 42;
@@ -58,8 +68,7 @@ describe("withSqliteForeignKeysDisabled", () => {
   });
 
   it("rejects an active transaction before invoking the callback", () => {
-    const database = createDatabase();
-    database.exec("PRAGMA foreign_keys = ON; BEGIN;");
+    const database = createDatabase("PRAGMA foreign_keys = ON; BEGIN;");
     let called = false;
     expect(() => withSqliteForeignKeysDisabled(database, () => (called = true))).toThrow(
       "cannot change inside a transaction",
@@ -70,8 +79,7 @@ describe("withSqliteForeignKeysDisabled", () => {
   });
 
   it("rejects asynchronous work and restores enforcement", () => {
-    const database = createDatabase();
-    database.exec("PRAGMA foreign_keys = ON;");
+    const database = createDatabase("PRAGMA foreign_keys = ON;");
     expect(() => withSqliteForeignKeysDisabled(database, async () => 42)).toThrow(
       "must be synchronous",
     );
@@ -121,8 +129,7 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("keeps database-local indexes and triggers", () => {
-    const database = createDatabase();
-    database.exec(`
+    const database = createDatabase(`
       CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE item_audit (item_id INTEGER NOT NULL, action TEXT NOT NULL);
       CREATE UNIQUE INDEX items_name_custom ON items(name);
@@ -155,8 +162,11 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("preserves cross-table triggers and views while their target is rebuilt", () => {
-    const database = createDatabase();
-    database.exec(`
+    const schema = `
+      CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);
+      CREATE TABLE events (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL);
+    `;
+    const database = createDatabase(`
       CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);
       CREATE TABLE events (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL) STRICT;
       INSERT INTO counters (id, value) VALUES (1, 0);
@@ -166,19 +176,7 @@ describe("migrateSqliteSchemaToStrict", () => {
       END;
     `);
 
-    migrateSqliteSchemaToStrict(
-      database,
-      `
-        CREATE TABLE IF NOT EXISTS counters (
-          id INTEGER PRIMARY KEY,
-          value INTEGER NOT NULL
-        ) STRICT;
-        CREATE TABLE IF NOT EXISTS events (
-          id INTEGER PRIMARY KEY,
-          amount INTEGER NOT NULL
-        ) STRICT;
-      `,
-    );
+    migrateSqliteSchemaToStrict(database, strictSchema(schema));
     database.prepare("INSERT INTO events (id, amount) VALUES (?, ?)").run(1, 7);
 
     expect(database.prepare("SELECT * FROM counter_totals").all()).toEqual([{ id: 1, value: 7 }]);
@@ -195,18 +193,15 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it.each([false, true])("preserves AUTOINCREMENT high-water marks (catalog=%s)", (useCatalog) => {
-    const database = createDatabase();
-    database.exec(`
+    const database = createDatabase(`
       CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);
       INSERT INTO entries (value) VALUES ('first'), ('second'), ('third');
       DELETE FROM entries WHERE id = 3;
       UPDATE sqlite_sequence SET seq = 40.0 WHERE name = 'entries';
     `);
 
-    const schema = `CREATE TABLE IF NOT EXISTS entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        value TEXT NOT NULL
-      ) STRICT;`;
+    const schema =
+      "CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL) STRICT;";
     migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, useCatalog));
     database.prepare("INSERT INTO entries (value) VALUES (?)").run("fourth");
 
@@ -220,84 +215,47 @@ describe("migrateSqliteSchemaToStrict", () => {
   it.each([false, true])(
     "preserves row identities across table shapes (catalog=%s)",
     (useCatalog) => {
-      const database = createDatabase();
-      database.exec(`
-      CREATE TABLE implicit_items (value TEXT NOT NULL);
-      INSERT INTO implicit_items (rowid, value) VALUES (100, 'implicit');
-
-      CREATE TABLE composite_items (
-        left_key TEXT NOT NULL,
-        right_key TEXT NOT NULL,
-        value TEXT NOT NULL,
-        PRIMARY KEY (left_key, right_key)
-      );
-      INSERT INTO composite_items (rowid, left_key, right_key, value)
-      VALUES (200, 'left', 'right', 'composite');
-
-      CREATE TABLE shadowed_items (rowid TEXT NOT NULL, value TEXT NOT NULL);
-      INSERT INTO shadowed_items (_rowid_, rowid, value) VALUES (300, 'named', 'shadowed');
-
-      CREATE TABLE integer_items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO integer_items (id, value) VALUES (400, 'integer-primary-key');
-
-      CREATE TABLE without_items (
-        id TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      ) WITHOUT ROWID;
-      INSERT INTO without_items (id, value) VALUES ('without', 'without-rowid');
-    `);
-
       const schema = `
-        CREATE TABLE IF NOT EXISTS implicit_items (value TEXT NOT NULL) STRICT;
-        CREATE TABLE IF NOT EXISTS composite_items (
-          left_key TEXT NOT NULL,
-          right_key TEXT NOT NULL,
-          value TEXT NOT NULL,
-          PRIMARY KEY (left_key, right_key)
-        ) STRICT;
-        CREATE TABLE IF NOT EXISTS shadowed_items (
-          rowid TEXT NOT NULL,
-          value TEXT NOT NULL
-        ) STRICT;
-        CREATE TABLE IF NOT EXISTS integer_items (
-          id INTEGER PRIMARY KEY,
-          value TEXT NOT NULL
-        ) STRICT;
-        CREATE TABLE IF NOT EXISTS without_items (
-          id TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        ) STRICT, WITHOUT ROWID;
+        CREATE TABLE implicit_items (value TEXT NOT NULL);
+        CREATE TABLE composite_items (left_key TEXT NOT NULL, right_key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (left_key, right_key));
+        CREATE TABLE shadowed_items (rowid TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE integer_items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE without_items (id TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
       `;
-      migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, useCatalog));
+      const database = createDatabase(
+        schema +
+          `
+        INSERT INTO implicit_items (rowid, value) VALUES (100, 'implicit');
+        INSERT INTO composite_items (rowid, left_key, right_key, value) VALUES (200, 'left', 'right', 'composite');
+        INSERT INTO shadowed_items (_rowid_, rowid, value) VALUES (300, 'named', 'shadowed');
+        INSERT INTO integer_items (id, value) VALUES (400, 'integer-primary-key');
+        INSERT INTO without_items (id, value) VALUES ('without', 'without-rowid');
+      `,
+      );
+      const strict = strictSchema(schema).replace(") WITHOUT ROWID;", ") STRICT, WITHOUT ROWID;");
+      migrateSqliteSchemaToStrict(database, strict, catalogMigrationOptions(strict, useCatalog));
 
-      expect(database.prepare("SELECT rowid, value FROM implicit_items").get()).toEqual({
-        rowid: 100,
-        value: "implicit",
-      });
-      expect(database.prepare("SELECT rowid, value FROM composite_items").get()).toEqual({
-        rowid: 200,
-        value: "composite",
-      });
-      expect(
-        database.prepare("SELECT _rowid_ AS hidden_rowid, rowid, value FROM shadowed_items").get(),
-      ).toEqual({ hidden_rowid: 300, rowid: "named", value: "shadowed" });
-      expect(
-        database.prepare("SELECT rowid AS stored_rowid, id, value FROM integer_items").get(),
-      ).toEqual({
-        stored_rowid: 400,
-        id: 400,
-        value: "integer-primary-key",
-      });
-      expect(database.prepare("SELECT id, value FROM without_items").get()).toEqual({
-        id: "without",
-        value: "without-rowid",
+      expect({
+        implicit: query(database, "SELECT rowid, value FROM implicit_items"),
+        composite: query(database, "SELECT rowid, value FROM composite_items"),
+        shadowed: query(
+          database,
+          "SELECT _rowid_ AS hidden_rowid, rowid, value FROM shadowed_items",
+        ),
+        integer: query(database, "SELECT rowid AS stored_rowid, id, value FROM integer_items"),
+        without: query(database, "SELECT id, value FROM without_items"),
+      }).toEqual({
+        implicit: { rowid: 100, value: "implicit" },
+        composite: { rowid: 200, value: "composite" },
+        shadowed: { hidden_rowid: 300, rowid: "named", value: "shadowed" },
+        integer: { stored_rowid: 400, id: 400, value: "integer-primary-key" },
+        without: { id: "without", value: "without-rowid" },
       });
     },
   );
 
   it("rejects implicit-rowid tables that shadow every usable alias", () => {
-    const database = createDatabase();
-    database.exec("CREATE TABLE aliases (rowid TEXT, _rowid_ TEXT, oid TEXT);");
+    const database = createDatabase("CREATE TABLE aliases (rowid TEXT, _rowid_ TEXT, oid TEXT);");
 
     expect(() =>
       migrateSqliteSchemaToStrict(
@@ -309,30 +267,26 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("rejects migrations that change the table rowid model", () => {
-    const database = createDatabase();
-    database.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT NOT NULL);");
+    const database = createDatabase(
+      "CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    );
 
     expect(() =>
       migrateSqliteSchemaToStrict(
         database,
-        `CREATE TABLE IF NOT EXISTS entries (
-          id INTEGER PRIMARY KEY,
-          value TEXT NOT NULL
-        ) STRICT;`,
+        "CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT;",
       ),
     ).toThrow("changes rowid storage from implicit to integer-primary-key");
     expect(readStrictFlag(database, "entries")).toBe(0);
   });
 
   it.each([false, true])("rolls back a canonical type violation (catalog=%s)", (useCatalog) => {
-    const database = createDatabase();
-    database.exec("PRAGMA foreign_keys = ON; CREATE TABLE counters (id TEXT, value TEXT);");
+    const database = createDatabase(
+      "PRAGMA foreign_keys = ON; CREATE TABLE counters (id TEXT, value TEXT);",
+    );
     database.prepare("INSERT INTO counters (id, value) VALUES (?, ?)").run("one", "not-a-number");
 
-    const schema = `CREATE TABLE IF NOT EXISTS counters (
-          id TEXT,
-          value INTEGER NOT NULL
-        ) STRICT;`;
+    const schema = "CREATE TABLE IF NOT EXISTS counters (id TEXT, value INTEGER NOT NULL) STRICT;";
     expect(() =>
       migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, useCatalog)),
     ).toThrow("Failed migrating SQLite table counters to STRICT");
@@ -346,8 +300,7 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("rolls back when existing rows violate a foreign key", () => {
-    const database = createDatabase();
-    database.exec(`
+    const database = createDatabase(`
       PRAGMA foreign_keys = OFF;
       CREATE TABLE parents (id INTEGER PRIMARY KEY);
       CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id));
@@ -360,10 +313,7 @@ describe("migrateSqliteSchemaToStrict", () => {
         database,
         `
           CREATE TABLE IF NOT EXISTS parents (id INTEGER PRIMARY KEY) STRICT;
-          CREATE TABLE IF NOT EXISTS children (
-            id INTEGER PRIMARY KEY,
-            parent_id INTEGER REFERENCES parents(id)
-          ) STRICT;
+          CREATE TABLE IF NOT EXISTS children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id)) STRICT;
         `,
       ),
     ).toThrow("foreign_key_check failed");
@@ -374,16 +324,12 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("rejects schema drift without changing the existing table", () => {
-    const database = createDatabase();
-    database.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, obsolete TEXT);");
+    const database = createDatabase("CREATE TABLE entries (id TEXT PRIMARY KEY, obsolete TEXT);");
 
     expect(() =>
       migrateSqliteSchemaToStrict(
         database,
-        `CREATE TABLE IF NOT EXISTS entries (
-          id TEXT PRIMARY KEY,
-          current TEXT
-        ) STRICT;`,
+        "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, current TEXT) STRICT;",
       ),
     ).toThrow("SQLite table entries does not match its canonical columns");
 
@@ -408,8 +354,7 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("ignores virtual tables while migrating ordinary tables", () => {
-    const database = createDatabase();
-    database.exec(`
+    const database = createDatabase(`
       CREATE TABLE documents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
       CREATE VIRTUAL TABLE documents_fts USING fts5(body);
       INSERT INTO documents (id, body) VALUES (1, 'hello');
@@ -419,10 +364,7 @@ describe("migrateSqliteSchemaToStrict", () => {
     const result = migrateSqliteSchemaToStrict(
       database,
       `
-        CREATE TABLE IF NOT EXISTS documents (
-          id INTEGER PRIMARY KEY,
-          body TEXT NOT NULL
-        ) STRICT;
+        CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY, body TEXT NOT NULL) STRICT;
         CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(body);
       `,
     );
@@ -477,8 +419,9 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("creates missing catalog tables while preserving existing rows during migration", () => {
-    const database = createDatabase();
-    database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY); INSERT INTO entries VALUES (7);");
+    const database = createDatabase(
+      "CREATE TABLE entries (id INTEGER PRIMARY KEY); INSERT INTO entries VALUES (7);",
+    );
     const schema = `
       CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY) STRICT;
       CREATE TABLE IF NOT EXISTS added (value TEXT) STRICT;

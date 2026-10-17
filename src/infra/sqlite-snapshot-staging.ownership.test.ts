@@ -127,6 +127,20 @@ function createFixture() {
   return { root, cache, source };
 }
 
+async function reclaimWithLog(root: string, cache: string) {
+  const log = path.join(root, "cleanup.log");
+  setLoggerOverride({ level: "warn", file: log });
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  await testApi.flushFileLogQueueForTests();
+  return fs.readFileSync(log, "utf8");
+}
+
+function drainReclamation(cache: string, report?: (message: string) => void) {
+  for (const _ of reclaimAbandonedSqliteSnapshots(cache, report)) {
+    // The generator bounds each reclamation pass.
+  }
+}
+
 function assertReadable(location: string) {
   const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
   try {
@@ -307,18 +321,15 @@ it("reclaims released-worker cache layouts only after 24 hours", async () => {
       const now = new Date();
       fs.utimesSync(copy, now, now);
     }
-    const log = path.join(root, "cleanup.log");
-    setLoggerOverride({ level: "warn", file: log });
-    await reclaimAbandonedSqliteSnapshotsAsync(cache);
+    const log = await reclaimWithLog(root, cache);
     expect(fs.existsSync(parent)).toBe(fresh);
-    await testApi.flushFileLogQueueForTests();
     if (fresh) {
       assertReadable(copy);
       expect(fs.existsSync(path.join(parent, "owner.sqlite"))).toBe(false);
       expect(fs.existsSync(path.join(inner, "owner.sqlite"))).toBe(false);
-      expect(fs.readFileSync(log, "utf8")).toContain("Skipped SQLite snapshot reclamation");
+      expect(log).toContain("Skipped SQLite snapshot reclamation");
     } else {
-      expect(fs.readFileSync(log, "utf8")).toContain(`Reclaimed ${fs.statSync(source).size} bytes`);
+      expect(log).toContain(`Reclaimed ${fs.statSync(source).size} bytes`);
     }
   }
 });
@@ -337,9 +348,7 @@ it.each(["sync", "async"] as const)(
         if (mode === "async") {
           await reclaimAbandonedSqliteSnapshotsAsync(cache);
         } else {
-          for (const _ of reclaimAbandonedSqliteSnapshots(cache)) {
-            // Exercise cleanup independently of allocation.
-          }
+          drainReclamation(cache);
         }
       };
       await reclaim();
@@ -368,18 +377,12 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
   });
   const reports: string[] = [];
   try {
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message) => {
-      reports.push(message);
-    })) {
-      // Drain the bounded reclamation pass.
-    }
+    drainReclamation(cache, (message) => reports.push(message));
     expect(abandoned.filter((directory) => fs.existsSync(directory))).toHaveLength(1);
     expect(reports).toContain(
       `Reclaimed ${512 * 1024 * 1024 + 1} bytes of interrupted SQLite snapshot data.`,
     );
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache, () => {})) {
-      // A new pass must make progress on the remaining oversized directory.
-    }
+    drainReclamation(cache, () => {});
     expect(abandoned.some((directory) => fs.existsSync(directory))).toBe(false);
   } finally {
     for (const directory of abandoned) {
@@ -406,15 +409,12 @@ it("reclaims only legacy snapshots older than 24 hours", async () => {
   // A stale root does not authorize removing or refreshing a recent descendant.
   fs.utimesSync(young, stale, stale);
   const youngDirectoryMtime = fs.statSync(young).mtimeMs;
-  const log = path.join(root, "cleanup.log");
-  setLoggerOverride({ level: "warn", file: log });
-  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  const log = await reclaimWithLog(root, cache);
   expect(fs.existsSync(old)).toBe(false);
   expect(fs.readFileSync(path.join(young, "first"), "utf8")).toBe("recently active legacy copy");
   expect(fs.statSync(young).mtimeMs).toBe(youngDirectoryMtime);
   expect(fs.existsSync(path.join(young, "owner.sqlite"))).toBe(false);
-  await testApi.flushFileLogQueueForTests();
-  expect(fs.readFileSync(log, "utf8")).toContain(`Reclaimed ${oldBytes.length} bytes`);
+  expect(log).toContain(`Reclaimed ${oldBytes.length} bytes`);
 });
 
 it.skipIf(process.platform === "win32")(
@@ -455,18 +455,13 @@ it.skipIf(process.platform === "win32")(
       const childTime = new Date(Date.now() - fixture.childAgeHours * 60 * 60 * 1000);
       fs.utimesSync(location, childTime, childTime);
       const recentChild = fixture.childAgeHours < 24;
-      const log = path.join(root, "cleanup.log");
-      setLoggerOverride({ level: "warn", file: log });
-      await reclaimAbandonedSqliteSnapshotsAsync(cache);
+      const log = await reclaimWithLog(root, cache);
       expect(fs.existsSync(outer), JSON.stringify(fixture)).toBe(recentChild);
-      await testApi.flushFileLogQueueForTests();
       if (recentChild) {
         assertReadable(location);
-        expect(fs.readFileSync(log, "utf8")).toContain("Skipped SQLite snapshot reclamation");
+        expect(log).toContain("Skipped SQLite snapshot reclamation");
       } else {
-        expect(fs.readFileSync(log, "utf8")).toContain(
-          `Reclaimed ${fs.statSync(source).size} bytes`,
-        );
+        expect(log).toContain(`Reclaimed ${fs.statSync(source).size} bytes`);
       }
     }
 

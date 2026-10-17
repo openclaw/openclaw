@@ -14,6 +14,20 @@ import {
   startSingleFlightSqliteSnapshot,
 } from "./sqlite-snapshot-single-flight.js";
 
+function createSnapshot(
+  location: string,
+  cleanup: () => boolean = () => true,
+  cleanupAsync = async () => cleanup(),
+): PreparedSqliteReadOnlyLocation {
+  return { location, cleanup, cleanupAsync };
+}
+
+function completed<T>(value: T) {
+  const retained = createRetainedOperation<T>(() => {});
+  retained.resolve(value);
+  return retained.operation;
+}
+
 it("does not replay a synchronously refused producer even if a second attempt could succeed", () => {
   const failure = new Error("snapshot producer admission refused");
   let attempts = 0;
@@ -25,23 +39,16 @@ it("does not replay a synchronously refused producer even if a second attempt co
       if (attempts === 1) {
         throw failure;
       }
-      const unexpected = createRetainedOperation<
+      const unexpected = completed<
         PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
-      >(() => {});
-      unexpected.resolve({
-        location: "untracked-second-snapshot.sqlite",
-        cleanup: () => true,
-        cleanupAsync: async () => true,
-        startCleanup() {
-          const cleanup = createRetainedOperation<boolean>(() => {});
-          cleanup.resolve(true);
-          return cleanup.operation;
-        },
+      >({
+        ...createSnapshot("untracked-second-snapshot.sqlite"),
+        startCleanup: () => completed(true),
       });
       return {
-        ...unexpected.operation,
+        ...unexpected,
         startClose: () =>
-          flatMapRetainedOperation(unexpected.operation, (prepared) =>
+          flatMapRetainedOperation(unexpected, (prepared) =>
             mapRetainedOperation(prepared.startCleanup(), (cleaned) => {
               if (!cleaned) {
                 throw new Error("Unexpected snapshot cleanup failed");
@@ -123,17 +130,7 @@ it.each(["all", 0, 1] as const)(
         async (signal) => {
           signal.throwIfAborted();
           copies += 1;
-          return {
-            location: "surviving-snapshot.sqlite",
-            cleanup: () => {
-              removed = true;
-              return true;
-            },
-            cleanupAsync: async () => {
-              removed = true;
-              return true;
-            },
-          };
+          return createSnapshot("surviving-snapshot.sqlite", () => (removed = true));
         },
         controller.signal,
       ),
@@ -171,15 +168,15 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
     async () => {
       admitted.resolve();
       await produced.promise;
-      return {
-        location: "orphan-snapshot.sqlite",
-        cleanup: () => true,
-        cleanupAsync: async () => {
+      return createSnapshot(
+        "orphan-snapshot.sqlite",
+        () => true,
+        async () => {
           cleanupStarted.resolve();
           await cleanupFinished.promise;
           return true;
         },
-      };
+      );
     },
     controller.signal,
     { trackProducer: (producer) => tracked.push(producer) },
@@ -211,17 +208,10 @@ it("retains the snapshot until a signalled joined waiter acquires its lease", as
   const producer = async () => {
     copies += 1;
     await produced.promise;
-    return {
-      location: "joined-snapshot.sqlite",
-      cleanup: () => {
-        exists = false;
-        return true;
-      },
-      cleanupAsync: async () => {
-        exists = false;
-        return true;
-      },
-    };
+    return createSnapshot("joined-snapshot.sqlite", () => {
+      exists = false;
+      return true;
+    });
   };
   const first = prepareSingleFlightSqliteSnapshot("joined-source.sqlite", "test", producer);
   await Promise.resolve();
