@@ -1,4 +1,5 @@
 /** One-run rollback for agent-selected session models. */
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -15,7 +16,6 @@ import {
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
