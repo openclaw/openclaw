@@ -301,6 +301,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
                 loader={props.host.settingsSidebar}
+                host={props.host}
                 sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}
               />
             </Show>
@@ -395,6 +396,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <Show when={view().embedNavigation}>
             <LazySettingsSidebar
               loader={props.host.settingsSidebar}
+              host={props.host}
               sidebarProps={view().settingsSidebarProps}
             />
           </Show>

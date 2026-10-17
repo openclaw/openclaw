@@ -2,8 +2,10 @@ import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
-import type { SettingsSidebarLoader } from "../components/settings-sidebar-lazy.tsx";
-import type { SettingsSidebarProps } from "../components/settings-sidebar.tsx";
+import type {
+  SettingsSidebarFallbackProps,
+  SettingsSidebarLoader,
+} from "../components/settings-sidebar-lazy.tsx";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
@@ -109,9 +111,6 @@ export function readShellView(host: ShellViewHost) {
     (connectionStatus === "connecting" ||
       connectionStatus === "starting" ||
       connectionStatus === "restoring");
-  // The install keeps running after `update.run` answers, so the reconciliation
-  // — not the request — decides how long the update surfaces stay busy.
-  const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
@@ -152,7 +151,6 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "skills" ||
       activeRoute === "cron");
   const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
-  const runtimeConfig = context.runtimeConfig.state;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
   const navDrawerOpen = host.navDrawerOpen && !onboarding && !nativeEmbed;
@@ -269,31 +267,10 @@ export function readShellView(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.navigate,
   };
-  const settingsSidebarProps: SettingsSidebarProps = {
+  const settingsSidebarProps: SettingsSidebarFallbackProps = {
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
-    basePath: context.basePath,
     activeRouteId: activeRoute,
-    agents: context.agents.state.agentsList?.agents ?? [],
-    agentIdentity: context.agentIdentity,
-    settingsAgentSelection: context.settingsAgentSelection,
-    activePathname: host.routeState.location?.pathname ?? "",
-    activeSearch: host.routeState.location?.search ?? "",
-    activeHash: host.routeState.location?.hash ?? "",
     connectionStatus,
-    lastError: gatewaySnapshot.lastError,
-    gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
-    searchQuery: embedSettingsRoot ? "" : host.settingsSearchQuery,
-    searchParams: {
-      query: host.settingsSearchQuery,
-      schema: runtimeConfig.configSchema,
-      value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
-      uiHints: runtimeConfig.configUiHints,
-      identityAvailable: Boolean(gatewaySnapshot.selfUser),
-      multipleProfiles: gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
-      basePath: context.basePath,
-      canAdmin: operatorAccess.canAdmin,
-      nativeDeviceSettings: context.nativeDeviceSettings,
-    },
     onExit: () => {
       if (!nativeEmbed) {
         host.exitSettings();
@@ -304,27 +281,6 @@ export function readShellView(host: ShellViewHost) {
       } else {
         host.navigate("settings");
       }
-    },
-    onRetryConnect: callbacks.retryGateway,
-    onNavigate: host.navigate,
-    onPreload: callbacks.preloadRoute,
-    onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
-    preloadTimers: host.settingsPreloadTimers,
-    saveIndicator: {
-      status: runtimeConfig.configRecoveryError ? "recovery" : runtimeConfig.configAutoSaveStatus,
-      lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,
-      needsApply: runtimeConfig.configNeedsApply,
-      applying: runtimeConfig.configApplying,
-      applyDisabled:
-        context.runtimeConfig.canApply === false ||
-        runtimeConfig.configLoading ||
-        runtimeConfig.configSaving ||
-        (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
-        updateBusy,
-      onRetry: () => void context.runtimeConfig.retry(),
-      onSave: () => void context.runtimeConfig.save(),
-      onReload: () => void context.runtimeConfig.discardDraft(),
-      onApply: () => void context.runtimeConfig.apply(),
     },
     canAdmin: operatorAccess.canAdmin,
     nativeDeviceSettings: context.nativeDeviceSettings,
