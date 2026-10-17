@@ -53,7 +53,7 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
   state.sessionKey = "agent:main:draft-source";
   state.chatMessage = overrides.draft ?? "";
   state.chatGoalDraftMode = overrides.goalDraftMode ?? null;
-  state.composerDraftChanged();
+  state.handleChatDraftChange(state.chatMessage);
   const view = mountComposer(
     createComposerProps({
       ...overrides,
