@@ -98,9 +98,23 @@ function installAnimationFrameQueue() {
   };
 }
 
+function immediateFrames() {
+  vi.useFakeTimers();
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+    cb(0);
+    return 1;
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("handleChatScroll", () => {
   it("shows the scroll-to-bottom affordance only beyond the shared end boundary", () => {
-    const { host } = createScrollHost({});
+    const { host } = createScrollHost();
     host.chatLastScrollTop = 1600;
 
     handleChatScroll(
@@ -118,7 +132,6 @@ describe("handleChatScroll", () => {
 
   it("keeps reader control when a shrinking dock clamps the viewport to its new end", () => {
     const { host, container } = createScrollHost({
-      scrollHeight: 2000,
       scrollTop: 1600,
       clientHeight: 400,
     });
@@ -144,22 +157,10 @@ describe("handleChatScroll", () => {
 });
 
 describe("scheduleChatScroll", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
-      cb(0);
-      return 1;
-    });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  beforeEach(immediateFrames);
 
   it("does not read layout until the requested render commits", () => {
     const { host, container } = createScrollHost({
-      scrollHeight: 2000,
       scrollTop: 1600,
       clientHeight: 400,
     });
@@ -179,7 +180,7 @@ describe("scheduleChatScroll", () => {
   });
 
   it("cancels a pending commit before it can touch detached DOM", () => {
-    const { host } = createScrollHost({});
+    const { host } = createScrollHost();
     let commit: (() => void) | undefined;
     const cancelCommit = vi.fn();
     host.renderLifecycle.afterCommit = vi.fn((effect) => {
@@ -248,7 +249,6 @@ describe("scheduleChatScroll", () => {
 
   it("preserves a locked viewport across the same resize", async () => {
     const { host, container } = createScrollHost({
-      scrollHeight: 2000,
       scrollTop: 1100,
       clientHeight: 900,
     });
@@ -268,7 +268,6 @@ describe("scheduleChatScroll", () => {
 
   it("does not re-stick streaming after a user scrolls slightly up near the bottom", async () => {
     const { host, container } = createScrollHost({
-      scrollHeight: 2000,
       scrollTop: 1589,
       clientHeight: 400,
     });
@@ -333,10 +332,8 @@ describe("scheduleChatScroll", () => {
 });
 
 describe("resetChatScroll", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   it("resets state for new chat session", () => {
-    const { host } = createScrollHost({});
+    const { host } = createScrollHost();
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
     host.chatFollowLocked = true;
@@ -353,19 +350,7 @@ describe("resetChatScroll", () => {
 });
 
 describe("programmatic scroll ownership", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
-      cb(0);
-      return 1;
-    });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  beforeEach(immediateFrames);
 
   it("leaves restoration policy unchanged when automatic follow is declined", () => {
     const { host, container } = createScrollHost({ scrollTop: 420 });
@@ -442,7 +427,6 @@ describe("programmatic scroll ownership", () => {
 });
 
 describe("reader-controlled panel takeover", () => {
-  afterEach(() => vi.restoreAllMocks());
   it("retires pending follow at the physical end and publishes the locked state once", () => {
     const { host } = createScrollHost();
     const invalidate = vi.fn();

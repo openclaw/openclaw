@@ -11,6 +11,8 @@ import {
   sessionRouteListResult,
 } from "./route-resolution.test-support.ts";
 
+const location = (pathname: string) => ({ pathname, search: "", hash: "" });
+
 function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "workspace") {
   const fixture = createSessionRouteContext();
   const { context } = fixture;
@@ -34,6 +36,13 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
     ...fixture,
     cache,
     waiting: waiting.promise,
+    load: (pathname: string, signal = new AbortController().signal) =>
+      loadChatRoute(
+        context,
+        location(pathname),
+        pathname.startsWith("/dashboard/") ? "dashboard" : "chat",
+        signal,
+      ),
     connect(this: void) {
       context.gateway.snapshot.phase = "connected";
       context.gateway.snapshot.client = connectedClient;
@@ -59,22 +68,15 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
 
 describe("cached session route startup", () => {
   it("settles the cached roster before presenting an exact dashboard route", async () => {
-    const { context, cache, request } = warmRoute();
+    const { context, cache, request, load } = warmRoute();
     const row = createSessionRouteRow({
       key: "agent:roboclaw:dashboard:12345678-90ab-cdef-1234-567890abcdef",
       displayName: "Cached dashboard",
     });
     const complete = vi.fn();
-    const pending = loadChatRoute(
-      context,
-      {
-        pathname: "/chat/roboclaw/dashboard/12345678-90ab-cdef-1234-567890abcdef",
-        search: "",
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
-    ).then(complete);
+    const pending = load("/chat/roboclaw/dashboard/12345678-90ab-cdef-1234-567890abcdef").then(
+      complete,
+    );
     await Promise.resolve();
     await Promise.resolve();
     expect(complete).not.toHaveBeenCalled();
@@ -89,16 +91,11 @@ describe("cached session route startup", () => {
   });
 
   it("resolves a global-scope literal route once hello makes its defaults authoritative", async () => {
-    const { context, connect, installResolver, waiting } = warmRoute("global");
+    const { load, connect, installResolver, waiting } = warmRoute("global");
     const row = createSessionRouteRow({ key: "agent:roboclaw:thread" });
     const request = installResolver([row]);
     const completed = vi.fn();
-    const pending = loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/thread", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    ).then(completed);
+    const pending = load("/chat/roboclaw/thread").then(completed);
 
     await waiting;
     expect(completed).not.toHaveBeenCalled();
@@ -118,15 +115,10 @@ describe("cached session route startup", () => {
   ])(
     "resolves cached %s before requesting a Gateway client without agent discovery",
     async (pathname) => {
-      const { context, cache, request, waiting } = warmRoute();
+      const { context, cache, request, waiting, load } = warmRoute();
       const row = createSessionRouteRow({ displayName: "Cached conversation" });
       const controller = new AbortController();
-      const pending = loadChatRoute(
-        context,
-        { pathname, search: "", hash: "" },
-        pathname.startsWith("/dashboard/") ? "dashboard" : "chat",
-        controller.signal,
-      );
+      const pending = load(pathname, controller.signal);
       context.sessions.state.result = sessionRouteListResult([row]);
       context.sessions.state.resultCached = true;
       cache.resolve();
@@ -150,11 +142,10 @@ describe("cached session route startup", () => {
   it("keeps a configured main key that resembles a short link literal before hello", () => {
     const { context } = warmRoute("per-sender", "cached-conversation-12345678");
     expect(
-      sessionRouteTargetFromLocation(context, {
-        pathname: "/chat/roboclaw/cached-conversation-12345678",
-        search: "",
-        hash: "",
-      })?.target,
+      sessionRouteTargetFromLocation(
+        context,
+        location("/chat/roboclaw/cached-conversation-12345678"),
+      )?.target,
     ).toMatchObject({
       kind: "literal",
       sessionKey: "agent:roboclaw:cached-conversation-12345678",
@@ -162,18 +153,13 @@ describe("cached session route startup", () => {
   });
 
   it("uses cached routing defaults for a known literal key", async () => {
-    const { context, request, cache } = warmRoute();
+    const { context, request, cache, load } = warmRoute();
     const sessionKey = "agent:roboclaw:thread";
     context.sessions.state.result = sessionRouteListResult([
       createSessionRouteRow({ key: sessionKey, displayName: "Cached conversation" }),
     ]);
     context.sessions.state.resultCached = true;
-    const pending = loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/thread", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const pending = load("/chat/roboclaw/thread");
     cache.resolve();
     expect(context.sessions.state.result?.sessions[0]?.displayName).toBe("Cached conversation");
     expect(request).not.toHaveBeenCalled();
@@ -182,23 +168,14 @@ describe("cached session route startup", () => {
   });
 
   it("keeps missing cached short resolution on the Gateway path", async () => {
-    const { context, cache, connect, installResolver, waiting } = warmRoute();
+    const { context, cache, connect, installResolver, waiting, load } = warmRoute();
     const row = createSessionRouteRow({ displayName: "Cached conversation" });
     context.sessions.state.result = sessionRouteListResult([]);
     context.sessions.state.resultCached = true;
     const request = installResolver([row]);
     cache.resolve();
     const completed = vi.fn();
-    const pending = loadChatRoute(
-      context,
-      {
-        pathname: "/chat/roboclaw/cached-conversation-12345678",
-        search: "",
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
-    ).then(completed);
+    const pending = load("/chat/roboclaw/cached-conversation-12345678").then(completed);
 
     await waiting;
     expect(completed).not.toHaveBeenCalled();
@@ -206,10 +183,7 @@ describe("cached session route startup", () => {
     connect();
     await pending;
     expect(completed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "session",
-        sessionKey: row.key,
-      }),
+      expect.objectContaining({ kind: "session", sessionKey: row.key }),
     );
     expect(request).toHaveBeenCalledOnce();
   });

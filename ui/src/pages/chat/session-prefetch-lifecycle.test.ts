@@ -21,12 +21,40 @@ describe("session prefetch pane and navigation ownership", () => {
   let fixture: ReturnType<typeof createSessionPrefetchFixture>;
   let cache: ChatMessageCache;
   let shell: HTMLElement;
+  let request: ReturnType<typeof historyRequest>;
   let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
   beforeEach(() => {
     fixture = createSessionPrefetchFixture();
     ({ cache, shell, updatePrefetch } = fixture);
+    request = historyRequest();
   });
   afterEach(async () => fixture.dispose());
+
+  function historyRequest() {
+    return vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+  }
+  async function advance() {
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+  }
+  function homePane() {
+    const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+      sessionKey: "agent:main:main",
+      transcriptLoading: false,
+    });
+    shell.append(pane);
+    return pane;
+  }
+  function startHome(home: { sessionKey: string }) {
+    updatePrefetch({
+      client: createTestGatewayClient(request),
+      listRevision: 1,
+      openSessionKeys: ["agent:main:selected"],
+      rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
+    });
+  }
 
   function intend(sessionKey: string): void {
     const target = document.createElement("a");
@@ -43,17 +71,13 @@ describe("session prefetch pane and navigation ownership", () => {
       fixture.host.remove();
       fixture.mountPrefetch();
       shell.append(fixture.host);
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        historyResult((params as { sessionKey: string }).sessionKey),
-      );
       updatePrefetch({
         client: createTestGatewayClient(request),
         listRevision: 1,
         openSessionKeys: ["agent:main:selected"],
         rows: [row(intended, NOW - 1)],
       });
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
+      await advance();
       expect(request).not.toHaveBeenCalled();
 
       const sidebar = document.createElement("openclaw-app-sidebar");
@@ -62,8 +86,7 @@ describe("session prefetch pane and navigation ownership", () => {
       sidebar.append(target);
       shell.append(sidebar);
       target.dispatchEvent(new Event(eventType, { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
+      await advance();
 
       expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
       expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
@@ -90,13 +113,13 @@ describe("session prefetch pane and navigation ownership", () => {
       if (phase === "stored read") {
         vi.spyOn(fixture.store, "read").mockReturnValueOnce(read.promise);
       }
-      const request = vi.fn(async (_method: string, params: unknown) =>
+      const cursorRequest = vi.fn(async (_method: string, params: unknown) =>
         (params as { sessionKey: string }).sessionKey === first
           ? reset.promise
           : historyResult(next),
       );
       updatePrefetch({
-        client: createTestGatewayClient(request),
+        client: createTestGatewayClient(cursorRequest),
         listRevision: 1,
         openSessionKeys: [dashboard],
         hiddenConversationSessionKeys: [dashboard],
@@ -106,9 +129,8 @@ describe("session prefetch pane and navigation ownership", () => {
       target.dataset.sessionKey = first;
       shell.append(target);
       target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
+      await advance();
+      expect(cursorRequest.mock.calls.map(sessionKeyFromCall)).toEqual(
         phase === "cursor reset" ? [first] : [],
       );
 
@@ -120,20 +142,15 @@ describe("session prefetch pane and navigation ownership", () => {
         reset.resolve({ kind: "reset", reason: "stale-cursor" });
       }
       await settlePromises();
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
+      await advance();
+      expect(cursorRequest.mock.calls.map(sessionKeyFromCall)).toEqual(
         phase === "cursor reset" ? [first, next] : [next],
       );
     },
   );
 
   it("excludes the Home pane beside the page without borrowing another app's panes", async () => {
-    const home = Object.assign(document.createElement("openclaw-chat-pane"), {
-      sessionKey: "agent:main:main",
-      transcriptLoading: false,
-    });
-    shell.append(home);
+    const home = homePane();
     const otherShell = document.createElement("openclaw-app-shell");
     otherShell.append(
       Object.assign(document.createElement("openclaw-chat-pane"), {
@@ -143,23 +160,13 @@ describe("session prefetch pane and navigation ownership", () => {
     );
     document.body.append(otherShell);
     onTestFinished(() => otherShell.remove());
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:selected"],
-      rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
-    });
+    startHome(home);
     intend(home.sessionKey);
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advance();
     expect(request).not.toHaveBeenCalled();
     intend("agent:main:recent");
 
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
+    await advance();
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
   });
@@ -167,26 +174,13 @@ describe("session prefetch pane and navigation ownership", () => {
   it.each(["commit", "remove"])(
     "waits for the sibling Home transcript and resumes on %s",
     async (completion) => {
-      const home = Object.assign(document.createElement("openclaw-chat-pane"), {
-        sessionKey: "agent:main:main",
-        transcriptLoading: false,
-      });
-      shell.append(home);
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        historyResult((params as { sessionKey: string }).sessionKey),
-      );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: ["agent:main:selected"],
-        rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
-      });
+      const home = homePane();
+      startHome(home);
       intend("agent:main:recent");
       // Home hydrates in its own update, without re-rendering the chat page.
       home.transcriptLoading = true;
       home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
+      await advance();
       expect(request).not.toHaveBeenCalled();
 
       if (completion === "commit") {
@@ -198,8 +192,7 @@ describe("session prefetch pane and navigation ownership", () => {
         home.remove();
         shell.dispatchEvent(new Event("openclaw-chat-pane-lifecycle-changed"));
       }
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
+      await advance();
       expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
     },
   );
