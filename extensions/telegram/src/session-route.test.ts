@@ -139,6 +139,24 @@ describe("telegram session route", () => {
     expect(route?.sessionKey).toBe("agent:fallback:telegram:drafts:direct:12345");
   });
 
+  it("keeps the caller's agent for unbound destinations in an explicit multi-agent roster", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        session: { dmScope: "per-channel-peer" },
+        agents: {
+          ownership: "explicit",
+          entries: { drafts: {}, other: {} },
+        },
+        channels: { telegram: { accounts: { default: {}, drafts: {} } } },
+      },
+      agentId: "drafts",
+      accountId: "drafts",
+      target: "12345",
+    });
+
+    expect(route?.sessionKey).toBe("agent:drafts:telegram:drafts:direct:12345");
+  });
+
   it("keeps direct-message and forum topics with the same id in distinct group routes", async () => {
     const direct = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {},

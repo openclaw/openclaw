@@ -249,6 +249,8 @@ export function resolveTelegramOutboundDirectBaseSessionKey(params: {
   const inboundRoute = resolveAgentRoute({
     cfg: params.cfg,
     channel: "telegram",
+    // Unbound destinations keep the caller's agent instead of requiring a fleet default.
+    defaultAgentId: params.agentId,
     accountId: params.accountId,
     peer: { kind: "direct", id: params.chatId },
   });
