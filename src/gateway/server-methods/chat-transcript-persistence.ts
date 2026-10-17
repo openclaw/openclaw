@@ -43,6 +43,7 @@ import {
   type AssistantDisplayMediaBySource,
 } from "./chat-assistant-content.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { readCleanedTtsAnswer } from "./chat-tts-markers.js";
 
 type AssistantTranscriptScopeParams = {
   sessionId: string;
@@ -600,6 +601,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
   mediaBySource?: AssistantDisplayMediaBySource;
   idempotencyKey: string;
   managedMediaUrls?: readonly string[];
+  preserveModelContent?: true;
   scope: SessionTranscriptWriteScope;
 }): Promise<{ messageId: string } | null> {
   const idempotencyKey = params.idempotencyKey.trim();
@@ -612,18 +614,28 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     if (!target) {
       return null;
     }
-    const rewrittenEvents = events.map((event) =>
-      transcriptEventId(event) === target.messageId
-        ? Object.assign({}, event as Record<string, unknown>, {
-            message: buildAssistantDisplayRewrite({
-              message: target.message,
-              displayContent: params.content,
-              mediaBySource: params.mediaBySource,
-              managedMediaUrls: params.managedMediaUrls,
-            }),
-          })
-        : event,
-    );
+    const rewrittenEvents = events.map((event) => {
+      if (transcriptEventId(event) !== target.messageId) {
+        return event;
+      }
+      const isAudioOnlySupplement =
+        params.preserveModelContent &&
+        !params.content.some(
+          (block) => block.type === "text" && typeof block.text === "string" && block.text.trim(),
+        );
+      const visibleText = isAudioOnlySupplement ? readCleanedTtsAnswer(target.message) : "";
+      const rewritten = buildAssistantDisplayRewrite({
+        message: target.message,
+        displayContent: visibleText
+          ? [{ type: "text", text: visibleText }, ...params.content]
+          : params.content,
+        mediaBySource: params.mediaBySource,
+        managedMediaUrls: params.managedMediaUrls,
+      });
+      return Object.assign({}, event as Record<string, unknown>, {
+        message: rewritten,
+      });
+    });
     await transcript.replaceEvents(rewrittenEvents);
     return { messageId: target.messageId };
   });
