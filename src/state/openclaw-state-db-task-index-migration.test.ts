@@ -9,7 +9,6 @@ import {
 } from "../cron/store/run-history.kernel.js";
 import type { CronRunHistoryWrite } from "../cron/store/run-history.types.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -17,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { expectSchemaVersion } from "./openclaw-state-schema-version-assert.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
@@ -52,11 +52,8 @@ function retainedTaskState(db: EngineConnection) {
     tasks: db.prepare("SELECT rowid, * FROM task_runs ORDER BY rowid").all(),
     deliveries: db.prepare("SELECT * FROM task_delivery_state ORDER BY task_id").all(),
     localSchema: db
-      .prepare(
-        `SELECT name, sql FROM sqlite_schema
-         WHERE name = 'idx_task_runs_local_label'`,
-      )
-      .all(),
+      .prepare("SELECT name, sql FROM sqlite_schema WHERE name = ?")
+      .all("idx_task_runs_local_label"),
   };
 }
 
@@ -127,30 +124,23 @@ it.each([
   { owner: "runtime", previousVersion: 23 },
   { owner: "doctor", previousVersion: 23 },
 ] as const)(
-  "migrates v$previousVersion task indexes through $owner without losing retained tasks or subsequent cron writes",
+  "migrates v$previousVersion via $owner, preserving tasks and cron writes",
   async ({ owner, previousVersion }) => {
     const { options, retained } = legacyTaskDatabase(previousVersion);
     if (owner === "doctor") {
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
     }
     const { db } = openOpenClawStateDatabase(options);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    expect(
-      db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-    ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+    expectSchemaVersion(db);
     expect(retainedTaskState(db)).toEqual(retained);
     expect(taskIndexNames(db)).toEqual(
       ["idx_task_runs_local_label", ...replacementIndexes.map(([name]) => name)].toSorted(),
     );
     for (const [name, columns, partial] of replacementIndexes) {
-      expect(
-        db
-          .prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno")
-          .all(name)
-          .map((row) => row.name),
-      ).toEqual(columns);
+      const indexColumns = db
+        .prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno")
+        .all(name);
+      expect(indexColumns.map((row) => row.name)).toEqual(columns);
       expect(
         db.prepare("SELECT partial FROM pragma_index_list('task_runs') WHERE name = ?").get(name),
       ).toEqual({ partial });
@@ -162,32 +152,26 @@ it.each([
     }
 
     const storeKey = path.join(options.env.OPENCLAW_STATE_DIR, "cron", "jobs.json");
-    const input: CronRunHistoryWrite = {
+    const input: Omit<CronRunHistoryWrite, "endedAt" | "summary"> = {
       storeKey,
       jobId: "new-job",
       runId: "new-run",
       startedAt: 200,
-      endedAt: 210,
       status: "succeeded",
-      summary: "first result",
       detail: { kind: "cron-run", storeKey, runId: "new-run", status: "ok" },
     };
-    runOpenClawStateWriteTransaction(
-      ({ db: writeDb }) => recordCronRunInDatabase(writeDb, input),
-      options,
-    );
-    const first = readCronRunRecordsInDatabase(db, input.jobId, input.runId);
-    expect(first).toEqual([
-      expect.objectContaining({ runId: "new-run", endedAt: 210, summary: "first result" }),
-    ]);
-    runOpenClawStateWriteTransaction(
-      ({ db: writeDb }) =>
-        recordCronRunInDatabase(writeDb, { ...input, endedAt: 220, summary: "updated result" }),
-      options,
-    );
-    const updated = readCronRunRecordsInDatabase(db, input.jobId, input.runId);
+    const writeRun = (endedAt: number, summary: string) => {
+      runOpenClawStateWriteTransaction(
+        ({ db: writeDb }) => recordCronRunInDatabase(writeDb, { ...input, endedAt, summary }),
+        options,
+      );
+      const records = readCronRunRecordsInDatabase(db, input.jobId, input.runId);
+      expect(records).toEqual([expect.objectContaining({ runId: "new-run", endedAt, summary })]);
+      return records;
+    };
+    const first = writeRun(210, "first result");
+    const updated = writeRun(220, "updated result");
     expect(updated.map(({ id }) => id)).toEqual(first.map(({ id }) => id));
-    expect(updated).toEqual([expect.objectContaining({ endedAt: 220, summary: "updated result" })]);
     const schemaVersion = db.prepare("PRAGMA schema_version").get();
     await closeOpenClawStateDatabaseAsync();
     const reopened = openOpenClawStateDatabase(options).db;
@@ -201,10 +185,7 @@ it("rolls back task index replacement when schema publication fails", async () =
   expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
   await closeOpenClawStateDatabaseAsync();
   using db = new DatabaseSync(pathname, { readOnly: true });
-  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
-  expect(
-    db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-  ).toEqual({ schema_version: 23 });
+  expectSchemaVersion(db, 23);
   expect(retainedTaskState(db)).toEqual(retained);
   expect(taskIndexNames(db)).toEqual(
     ["idx_task_runs_local_label", ...legacyIndexes.map(([name]) => name)].toSorted(),

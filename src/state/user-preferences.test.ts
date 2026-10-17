@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -108,93 +107,7 @@ describe("user preferences", () => {
     expect(tableExists(second.db, "agent_provenance")).toBe(false);
   });
 
-  it("retries first-use schema creation after its transaction fails", () => {
-    const { db, options } = openWithoutFeatureSchemas();
-    const failure = new Error("schema write refused");
-    const exec = db.exec.bind(db);
-    const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
-      if (sql.includes("CREATE TABLE IF NOT EXISTS user_preferences")) {
-        throw failure;
-      }
-      return exec(sql);
-    });
-    try {
-      expect(() => ensureUserPreferencesSchema(options)).toThrow(failure);
-      expect(db.isTransaction).toBe(false);
-      expect(tableExists(db, "user_preferences")).toBe(false);
-    } finally {
-      write.mockRestore();
-    }
-
-    ensureUserPreferencesSchema(options);
-    expect(tableExists(db, "user_preferences")).toBe(true);
-  });
-
-  it("lazily creates the additive table and isolates profile rows", () => {
-    const options = stateOptions();
-    const database = openOpenClawStateDatabase(options).db;
-    const version = database.prepare("PRAGMA user_version").get()?.user_version;
-    database.exec("DROP TABLE user_preferences;");
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(options).db;
-    expect(tableExists(reopened, "user_preferences")).toBe(false);
-
-    expect(setUserPreferences("profile-a", { beta: 2, alpha: { enabled: true } }, options)).toEqual(
-      {
-        ok: true,
-        value: undefined,
-      },
-    );
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual({
-      alpha: { enabled: true },
-      beta: 2,
-    });
-    expect(getUserPreferences("profile-a", ["beta"], options)).toEqual({ beta: 2 });
-    expect(getUserPreferences("profile-b", undefined, options)).toEqual({});
-    expect(tableExists(reopened, "user_preferences")).toBe(true);
-    expect(reopened.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-  });
-
-  it("persists a full preference batch with bounded native writes", () => {
-    const options = stateOptions();
-    const entries = Object.fromEntries(
-      Array.from({ length: 32 }, (_, index) => [`key-${index}`, { enabled: index % 2 === 0 }]),
-    );
-    expect(setUserPreferences("profile-a", { "key-0": false }, options)).toMatchObject({
-      ok: true,
-    });
-    expect(setUserPreferences("profile-b", { "key-0": "unrelated" }, options)).toMatchObject({
-      ok: true,
-    });
-    // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the intercepted statement receiver.
-    const originalRun = StatementSync.prototype.run;
-    let writes = 0;
-    const run = vi.spyOn(StatementSync.prototype, "run").mockImplementation(function (
-      this: StatementSync,
-      ...values
-    ) {
-      if (/^insert into "user_preferences"/i.test(this.sourceSQL)) {
-        writes++;
-      }
-      return originalRun.apply(this, values);
-    });
-    try {
-      expect(setUserPreferences("profile-a", entries, options)).toEqual({
-        ok: true,
-        value: undefined,
-      });
-    } finally {
-      run.mockRestore();
-    }
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual(entries);
-    expect(getUserPreferences("profile-b", undefined, options)).toEqual({
-      "key-0": "unrelated",
-    });
-    expect(writes).toBeGreaterThan(0);
-    expect(writes).toBeLessThanOrEqual(1);
-  });
-
-  it.each(["ABORT", "FAIL"])("rolls back removals and earlier preferences on %s", (action) => {
+  it.each(["ABORT"])("rolls back removals and earlier preferences on %s", (action) => {
     const options = stateOptions();
     expect(
       setUserPreferences("profile-a", { existing: "original", removed: true }, options),

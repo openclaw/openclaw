@@ -63,6 +63,13 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+At the checkout root, `.cache/vitest/` caches and `.artifacts/dist-artifacts.lock/`
+runtime ownership files stay with the runtime that produced them. Synchronization
+and recovery of older pending results exclude these exact paths. Other
+guest-created files under `.cache/` and `.artifacts/` still reconcile; an ignore
+rule alone does not make a file disposable. Source changes cannot remove a
+runtime-owned lock subtree by replacing its parent directory.
+
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
 workspace. The Gateway fetches with its host identity and preserves saved guest

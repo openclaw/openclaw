@@ -509,35 +509,30 @@ describe("xai web search config resolution", () => {
     expect(recovered.content).toContain("Recovered Grok answer");
   });
 
-  it.each([true])(
-    "bypasses Grok cache reads and writes at zero TTL (populated: %s)",
-    async (populated) => {
-      vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-      const mockFetch = vi.fn(async () => xaiAnswerResponse("Fresh Grok answer"));
-      vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-      const query = `Grok zero TTL cache policy ${populated}`;
-      const search = (cacheTtlMinutes: number) =>
-        requireXaiWebSearchTool({
-          config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
-          searchConfig: { cacheTtlMinutes },
-        }).execute({ query });
-      if (populated) {
-        mockFetch.mockResolvedValueOnce(xaiAnswerResponse("Original Grok answer"));
-        await search(15);
-      }
+  it("bypasses populated Grok cache reads and writes at zero TTL", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const mockFetch = vi.fn(async () => xaiAnswerResponse("Fresh Grok answer"));
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const query = "Grok zero TTL cache policy true";
+    const search = (cacheTtlMinutes: number) =>
+      requireXaiWebSearchTool({
+        config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
+        searchConfig: { cacheTtlMinutes },
+      }).execute({ query });
+    mockFetch.mockResolvedValueOnce(xaiAnswerResponse("Original Grok answer"));
+    await search(15);
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const uncached = await search(0);
-        expect(uncached.cached).toBeUndefined();
-        expect(uncached.content).toContain("Fresh Grok answer");
-      }
-      const enabled = await search(15);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const uncached = await search(0);
+      expect(uncached.cached).toBeUndefined();
+      expect(uncached.content).toContain("Fresh Grok answer");
+    }
+    const enabled = await search(15);
 
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-      expect(enabled.cached).toBe(populated ? true : undefined);
-      expect(enabled.content).toContain(populated ? "Original Grok answer" : "Fresh Grok answer");
-    },
-  );
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(enabled.cached).toBe(true);
+    expect(enabled.content).toContain("Original Grok answer");
+  });
 
   it("applies a shortened Grok cache TTL to an existing result", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);

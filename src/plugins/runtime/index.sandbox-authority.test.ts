@@ -1,4 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -34,6 +35,34 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   sandboxContextMocks.resolveSandboxContext.mockReset();
+});
+
+it("uses the supplied session store without a prepared global config", async () => {
+  const stateDir = tempDirs.make("plugin-sandbox-config-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const storePath = path.join(stateDir, "custom", "sessions.sqlite");
+  const config: OpenClawConfig = {
+    agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } },
+    session: { store: storePath },
+  };
+  setRuntimeConfigSnapshot(config);
+  const scope = { agentId: "main", sessionKey: "agent:main:custom-sandbox", storePath };
+  replaceSessionEntrySync(scope, {
+    sessionId: "custom-sandbox",
+    updatedAt: 1,
+    sandboxMode: "off",
+  });
+  clearRuntimeConfigSnapshot();
+
+  await expect(
+    createPluginRuntime().sandbox.prepareWorkspaceAuthority({
+      config,
+      agentId: scope.agentId,
+      sessionKey: scope.sessionKey,
+      workspaceDir: path.join(stateDir, "workspace"),
+    }),
+  ).resolves.toEqual({ sandboxed: false, workspaceAccess: "rw" });
+  expect(sandboxContextMocks.resolveSandboxContext).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(

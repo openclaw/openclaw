@@ -844,6 +844,37 @@ OpenTelemetry exports the corresponding
 `openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
 `openclaw.gateway.ws.operator_connections` metrics.
 
+`openclaw_gateway_ws_session_event_frames_total{event,reason,delivery}` and
+`openclaw_gateway_ws_session_event_bytes_total{event,reason,delivery}` add session
+traffic attribution. OpenTelemetry exports
+`openclaw.gateway.ws.session_event_frames` and
+`openclaw.gateway.ws.session_event_bytes` with `openclaw.gateway.ws.event`,
+`openclaw.gateway.ws.reason`, and `openclaw.gateway.ws.delivery` attributes.
+
+The session counters use `event`, `reason`, and `delivery`. `event` is only
+`sessions.changed` or `session.message`. For `sessions.changed`, `reason` is the
+producer's reason (or lifecycle phase when no reason is present):
+`abort`, `activity-summary`, `agent.input.settled`, `agent.run.started`,
+`archive`, `board`, `branch-switch`, `chat.dispatch-error`, `chat.title`,
+`cleanup`, `compact`, `create`, `cron-continuation`, `delete`, `dispatch`,
+`fork`, `github-publication`, `goal`, `groups`, `involvement`, `move`, `new`,
+`owner`, `participants`, `patch`, `placement`, `plugin-patch`, `progress-card-reset`,
+`project`, `reclaim`, `recovery`, `reset`, `rewind`, `run-capacity`, `send`,
+`sharing`, `steer`, `subagent-status`, `swarm-note`, `title`, `unarchive`,
+`update`, `updated`, `worker-disk-space`, and `worker-runtime-install`.
+Lifecycle phases are `start`, `model`, `end`, `error`, and `message`.
+For `session.message`, `reason` is the message role: `user`, `assistant`, `system`,
+`developer`, `tool`, or `toolResult`; an absent role uses `message`.
+Unknown reasons, phases, and roles use `other`.
+`delivery="subscribed"` means the recipient holds an exact
+`sessions.messages.subscribe` subscription for that session, including its
+producer-resolved alias; all other recipients use `delivery="roster"`.
+This describes subscription membership, not whether a tab is visible or a peer
+acknowledged receipt. Keyless roster invalidations use `roster`.
+The counters reuse the existing encoded byte length without serializing again,
+and batch by label set within the same event-loop turn. No message content,
+IDs, or session keys enter the labels. Existing event counter labels stay unchanged.
+
 ## RPC response size and heap changes
 
 The [Prometheus exporter](/gateway/prometheus) records
@@ -866,6 +897,36 @@ bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
 `full-no-base` when the request omits `ifRowsRevision`; `full-with-base` covers
 stale or evicted bases and the rare case where every row changed. Attribution
 uses the request and existing response fields without changing the protocol payload.
+
+`openclaw_sessions_list_baseline_retirements_total{cause}` counts one event per
+view-cache clear or eviction that retires sidebar rows or history, not rows or
+views removed. Selection-only and non-sidebar views do not count; an empty
+sidebar row list is still a baseline. Its bounded
+causes are `projection-revision`, `config`, `identity`, `selection-reset`,
+`view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
+order at 512 cache slots or 32 MiB estimated retention per projection; each view
+retains at most 32 prior row generations.
+For invalidations observed together on a read, config wins over identity, then
+projection revision; selection resets count where they clear the cache.
+
+`openclaw_sessions_list_base_misses_total{reason}` separates successful
+`full-with-base` sidebar replies into `unknown-base` (no eligible base in history)
+and `all-rows-changed` (base found, delta not smaller, including an empty list).
+Unknown bases can follow a restart, eviction, or a non-delta revision token;
+correlate them with retirement counters and `openclaw_gateway_build_info` rather
+than treating every miss as a restart. The reason is carried out-of-band through
+shared responses, without adding wire fields or inspecting rows again. Both
+counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
+names are `openclaw.sessions.list.baseline_retirements` and
+`openclaw.sessions.list.base_misses`, with the same labels.
+
+`openclaw_session_event_rows_retained_entries` and
+`openclaw_session_event_rows_retained_bytes` report aggregate count and estimated
+memory for the field-hash vectors retained by session-event connections. Both
+gauges have no labels and return to zero when the last retained connection state
+is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entries`
+and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
+identities; they do not retain or charge copies of the presented session rows.
 
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`

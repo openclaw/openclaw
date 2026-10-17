@@ -28,13 +28,11 @@ import {
 import type { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
-import type { loadAgentSchemaInspectionOperations } from "./openclaw-agent-schema-inspection-operations.worker.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
 
 export { loadAgentAuthProfileOperations };
-export { loadAgentSchemaInspectionOperations } from "./openclaw-agent-schema-inspection-operations.worker.js";
 
 export async function loadAgentTranscriptReadOperations() {
   const [
@@ -412,9 +410,9 @@ export async function loadAgentTrajectoryOperations() {
   return {
     "trajectory.events.append": (
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
-      { writeTransaction, admit },
+      { open, writeTransaction, admit },
     ) => {
-      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, open(), (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
           deferSqliteWorkerCommitReceipt(current.db, result.receipt);
@@ -681,7 +679,6 @@ export async function loadSessionRowBackfillOperations() {
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadAgentAuthProfileOperations>> &
-    Awaited<ReturnType<typeof loadAgentSchemaInspectionOperations>> &
     Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
     Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &

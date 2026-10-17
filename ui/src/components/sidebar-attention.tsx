@@ -2,9 +2,9 @@ import { createEffect, createMemo, createSignal, flush, onCleanup, Show, untrack
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import { isCustodianPanelAvailable } from "../app/panel-availability.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
@@ -47,6 +47,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const [panelRenderer, setPanelRenderer] = createSignal<PanelRenderer | null>(null);
   const panelLoad = createIdleImport(() => import("./sidebar-attention-panel.runtime.tsx"));
   let panelTrigger: HTMLElement | null = null;
+  let list: HTMLDivElement | null = null;
   let panelGeneration = 0;
   let disposed = false;
   const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
@@ -80,7 +81,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   );
 
   const syncOverflowCue = () => {
-    const list = host.querySelector<HTMLElement>(".sidebar-issues-panel__list");
     setOverflowAbove(Boolean(list && list.scrollTop > 2));
     setOverflowBelow(Boolean(list && list.scrollHeight - list.scrollTop - list.clientHeight > 2));
   };
@@ -109,7 +109,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     setPanelOpen(true);
     queueMicrotask(() => {
       if (!disposed && generation === panelGeneration) {
-        host.querySelector<HTMLElement>(".sidebar-issues-panel__list")?.focus();
+        list?.focus();
       }
     });
   }
@@ -119,7 +119,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       if (disposed || !panelOpen() || selectedTab() !== tab) {
         return;
       }
-      const list = host.querySelector<HTMLElement>(".sidebar-issues-panel__list");
       if (list) {
         list.scrollTop = 0;
       }
@@ -134,7 +133,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
     custodianAlertStore.present(item.action.alert);
-    if (canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")) {
+    if (isCustodianPanelAvailable(context.gateway)) {
       window.dispatchEvent(
         new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
       );
@@ -208,8 +207,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const focusOrder = Array.from(host.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
     const row = target.closest<HTMLElement>("[data-approval-id]");
-    const rowFocus = row?.querySelector<HTMLElement>("[data-issue-row-focus]") ?? null;
-    const rowIndex = rowFocus ? focusOrder.indexOf(rowFocus) : 0;
+    const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
     flush();
@@ -220,14 +218,12 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
   }
 
-  let previousRoute = untrack(() => props.activeRouteId);
   createEffect(
     () => props.activeRouteId,
-    (route) => {
+    (route, previousRoute) => {
       if (previousRoute !== undefined && previousRoute !== route) {
         closePanel(false);
       }
-      previousRoute = route;
     },
   );
   createEffect(
@@ -296,6 +292,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
             }}
             onOpen={(item) => void open(item)}
             onScroll={syncOverflowCue}
+            listRef={(element) => (list = element)}
             onSelectTab={selectTab}
             overflowAbove={overflowAbove()}
             overflowBelow={overflowBelow()}

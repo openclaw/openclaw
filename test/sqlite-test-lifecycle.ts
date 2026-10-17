@@ -13,30 +13,74 @@ const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
 // These owners retain module closures and each other's lifecycle callbacks.
 // Keep their native custody intact through drainage, then retire the whole generation.
-export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new Map([
-  [source("src/sessions/session-state-notices.ts"), sessionStateNoticesKey],
+export const sqliteTestSingletonPublications: ReadonlyMap<string, readonly symbol[]> = new Map([
+  [source("src/sessions/session-state-notices.ts"), [sessionStateNoticesKey]],
   [
     source("src/cron/store/receipt-authority-owner.ts"),
-    Symbol.for("openclaw.cron.receiptAuthority"),
+    [Symbol.for("openclaw.cron.receiptAuthority")],
   ],
   [
     source("src/state/openclaw-state-worker-owner.ts"),
-    Symbol.for("openclaw.sharedStateWorkerOwner"),
+    [Symbol.for("openclaw.sharedStateWorkerOwner")],
   ],
-  [source("src/infra/sqlite-worker-store.ts"), brokerKey],
-  [source("src/config/sessions/disk-budget-runtime.ts"), diskBudgetKey],
+  [source("src/infra/sqlite-worker-store.ts"), [brokerKey]],
+  [source("src/config/sessions/disk-budget-runtime.ts"), [diskBudgetKey]],
   [
     source("src/infra/device-pairing-publication.ts"),
-    Symbol.for("openclaw.devicePairingPublications"),
+    [Symbol.for("openclaw.devicePairingPublications")],
   ],
-  [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
+  [source("src/state/openclaw-state-db-cache.ts"), [Symbol.for("openclaw.stateDatabaseLifecycle")]],
   [
     source("src/state/openclaw-state-db-snapshot-owner.ts"),
-    Symbol.for("openclaw.stateSnapshotOwners"),
+    [Symbol.for("openclaw.stateSnapshotOwners")],
   ],
-  [source("src/state/openclaw-state-read-worker.ts"), Symbol.for("openclaw.stateReadWorkers")],
-  [source("src/gateway/session-group-catalog.ts"), Symbol.for("openclaw.sessionGroupCatalog")],
-  [agentSource, agentKey],
+  [source("src/state/openclaw-state-read-worker.ts"), [Symbol.for("openclaw.stateReadWorkers")]],
+  [source("src/gateway/session-group-catalog.ts"), [Symbol.for("openclaw.sessionGroupCatalog")]],
+  [agentSource, [agentKey]],
+  [source("src/infra/agent-database-readers.ts"), [Symbol.for("openclaw.agentDatabaseReaders")]],
+  [
+    source("src/infra/sqlite-wal-checkpoint.ts"),
+    [Symbol.for("openclaw.sqliteWalCheckpointListeners")],
+  ],
+  [source("src/infra/device-pairing-worker.ts"), [Symbol.for("openclaw.devicePairSetupChanges")]],
+  [
+    source("src/state/user-model-account-authority.ts"),
+    [
+      Symbol.for("openclaw.stateDomainPublication.personal-model-credentials"),
+      Symbol.for("openclaw.stateDomainPublication.auth-profile-credentials"),
+    ],
+  ],
+  [
+    source("src/state/github-publication-receipts.ts"),
+    [Symbol.for("openclaw.stateDomainPublication.github-publication")],
+  ],
+  [
+    source("src/state/session-repository-workspaces.receipts.ts"),
+    [Symbol.for("openclaw.stateDomainPublication.repository-workspace")],
+  ],
+  [
+    source("src/plugin-state/plugin-state-publication.ts"),
+    [
+      Symbol.for("openclaw.stateDomainPublication.plugin-state"),
+      Symbol.for("openclaw.pluginStatePublication"),
+    ],
+  ],
+  [
+    source("src/plugin-state/plugin-state-observation-cache.ts"),
+    [Symbol.for("openclaw.pluginStateObservationCache")],
+  ],
+  [
+    source("src/agents/workspace-state-publication.ts"),
+    [Symbol.for("openclaw.stateDomainPublication.workspace-state")],
+  ],
+  [
+    source("src/infra/exec-approvals-publication.ts"),
+    [Symbol.for("openclaw.stateDomainPublication.exec-approvals")],
+  ],
+  [
+    source("src/agents/sandbox/registry-publication.ts"),
+    [Symbol.for("openclaw.stateDomainPublication.sandbox-registry")],
+  ],
 ]);
 
 type AgentLifecycleModule = Pick<
@@ -85,7 +129,9 @@ export async function drainSqliteTestSingletons(
   );
   // Notice callbacks retain their module graph, but must drain before the storage they use.
   const sqliteKeys = new Set(
-    [...sqliteTestSingletonPublications.values()].filter((key) => key !== sessionStateNoticesKey),
+    [...sqliteTestSingletonPublications.values()]
+      .flat()
+      .filter((key) => key !== sessionStateNoticesKey),
   );
   await Promise.all(
     entries

@@ -432,6 +432,16 @@ Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
 
+### `classifyErrorCode`: backend-native failure details
+
+Set `classifyErrorCode(message)` to attach a diagnostic code to a selected CLI
+failure. OpenClaw calls it for structured terminal errors and failed process
+exits, after extracting the error message. Return `undefined` for unrecognized
+errors. This hook does not select the failover reason or change retry policy;
+host-owned terminal-stop, context-overflow, and empty-exit codes take precedence.
+For example, `refresh_contention` selects the sign-in-in-progress message instead
+of treating a refresh lock as an expired login.
+
 ### `parseJsonlLifecycleEvent`: provider-native lifecycle records
 
 Set `parseJsonlLifecycleEvent` when a backend emits JSONL records for lifecycle

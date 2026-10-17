@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUsage } from "../../agents/usage.js";
+import { jsonExtractText } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -49,9 +50,7 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
       .select((eb) => [
         "seq",
         "event_json",
-        eb
-          .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
-          .as("report_json"),
+        jsonExtractText(database.db, eb.ref("navigation_json"), "report").as("report_json"),
       ])
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),

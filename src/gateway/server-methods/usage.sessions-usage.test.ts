@@ -263,6 +263,10 @@ it.each(["time", "report allowance"])(
         expect(result.sessions).toHaveLength(50);
         expect(result.partial?.reason).toBe("time-budget");
         expect(result.overview?.queryWarnings).toContain(result.partial?.message);
+        // A failed refresh can serve the prior subtotal, but must retain its warning.
+        load.mockRejectedValueOnce(new Error("Usage store unavailable"));
+        const fallback = await readSessionsUsage(params);
+        expect(fallback.partial).toEqual(result.partial);
         // A timed-out subtotal must not be cached as a complete result.
         load.mockImplementation(originalLoad);
         const retried = await readSessionsUsage(params);

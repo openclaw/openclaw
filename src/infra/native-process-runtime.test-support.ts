@@ -1,10 +1,5 @@
 // Native process probes start their deadlines after the invocation owner prepares these modules.
 export const nativeProcessTestEntrypoints = {
-  updateCandidateIo: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "update-candidate-io",
-    distWorkerPath: "infra/update-candidate-io.js",
-  },
   tailscale: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "tailscale",

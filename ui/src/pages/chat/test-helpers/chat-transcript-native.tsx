@@ -6,7 +6,6 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import {
-  closeTranscriptSearch,
   getTranscriptState,
   type ChatThreadProps,
 } from "../components/chat-thread-interactions.ts";
@@ -23,15 +22,12 @@ class ThreadFixture {
   constructor(
     readonly props: ChatThreadProps,
     readonly transcript: ChatTranscript,
-    readonly search?: () => void,
+    readonly search?: boolean,
   ) {}
 }
 
 class SearchFixture {
-  constructor(
-    readonly paneId: string,
-    readonly requestUpdate: () => void,
-  ) {}
+  constructor(readonly paneId: string) {}
 }
 
 type NativeContent = JSX.Element | ThreadFixture | SearchFixture;
@@ -45,23 +41,14 @@ function Content(props: { value: NativeContent }) {
       return value;
     }
     if (value instanceof ThreadFixture && value.search) {
-      return new SearchFixture(value.props.paneId, value.search);
+      return new SearchFixture(value.props.paneId);
     }
     return undefined;
   });
   return (
     <>
       <Show when={search()}>
-        {(value) => (
-          <TranscriptSearch
-            revision={value()}
-            state={getTranscriptState(value().paneId)}
-            requestUpdate={value().requestUpdate}
-            onClose={() =>
-              closeTranscriptSearch(getTranscriptState(value().paneId), value().requestUpdate)
-            }
-          />
-        )}
+        {(value) => <TranscriptSearch search={getTranscriptState(value().paneId).search} />}
       </Show>
       <Show when={thread()}>
         {(value) => <ChatThread props={value().props} transcript={value().transcript} />}
@@ -76,13 +63,13 @@ function Content(props: { value: NativeContent }) {
 export function renderChatThread(
   props: ChatThreadProps,
   transcript: ChatTranscript,
-  options?: { search: () => void },
+  options?: { search: boolean },
 ) {
   return new ThreadFixture(props, transcript, options?.search);
 }
 
-export function renderTranscriptSearch(paneId: string, requestUpdate: () => void) {
-  return new SearchFixture(paneId, requestUpdate);
+export function renderTranscriptSearch(paneId: string) {
+  return new SearchFixture(paneId);
 }
 
 /** Retain native components between commits, including moves of session-owned row roots. */
@@ -116,6 +103,7 @@ export class TranscriptTestHost extends HTMLElement {
   renderTranscript: () => NativeContent = () => null;
   committedRenders = 0;
   private pending: Promise<boolean> | undefined;
+  private stopTranscript?: () => void;
 
   get updateComplete() {
     return this.pending ?? Promise.resolve(true);
@@ -123,11 +111,14 @@ export class TranscriptTestHost extends HTMLElement {
 
   connectedCallback() {
     this.append(this.transcriptRoot);
+    this.stopTranscript = this.transcript?.subscribe(() => this.requestRender());
     this.transcript?.start();
     this.requestRender();
   }
 
   disconnectedCallback() {
+    this.stopTranscript?.();
+    this.stopTranscript = undefined;
     this.transcript?.dispose();
     queueMicrotask(() => {
       if (!this.isConnected) {

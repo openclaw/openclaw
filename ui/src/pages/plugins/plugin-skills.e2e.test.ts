@@ -161,8 +161,13 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
           for (const width of [1440, 390]) {
             await page.setViewportSize({ width, height: 1000 });
             expect(await description.textContent()).toBe(skill.description);
-            const layouts = await description.evaluateAll((elements) =>
-              elements.map((element) => {
+            // Keep selection and measurement together when owner updates replace skill rows.
+            const layouts = await page.evaluate(() =>
+              [
+                ...document.querySelectorAll(
+                  ".plugin-skills-section .plugin-capability__copy > span",
+                ),
+              ].map((element) => {
                 const style = getComputedStyle(element);
                 return {
                   lineClamp: style.webkitLineClamp,

@@ -40,6 +40,103 @@ it("exports trusted WebSocket event totals and the current operator socket count
   }
 });
 
+it("exports session traffic attribution while keeping aggregate event labels unchanged", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const [event, reason] of [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ] as const) {
+      for (const delivery of ["subscribed", "roster"] as const) {
+        const observation = {
+          type: "gateway.ws.event",
+          event,
+          count: 2,
+          bytes: 256,
+          sessionEvent: { reason, delivery },
+        } as const;
+        metrics.record(observation);
+        metrics.record({ ...observation, count: 1, bytes: 128 });
+        metrics.record(observation, untrusted);
+      }
+    }
+    const rendered = metrics.render();
+    for (const [event, reason] of [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ]) {
+      expect(rendered).toContain(`openclaw_gateway_ws_events_total{event="${event}"} 6`);
+      expect(rendered).toContain(`openclaw_gateway_ws_event_bytes_total{event="${event}"} 768`);
+      for (const delivery of ["subscribed", "roster"]) {
+        const labels = `delivery="${delivery}",event="${event}",reason="${reason}"`;
+        expect(rendered).toContain(`openclaw_gateway_ws_session_event_frames_total{${labels}} 3`);
+        expect(rendered).toContain(`openclaw_gateway_ws_session_event_bytes_total{${labels}} 384`);
+      }
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("exports trusted session retention gauges and clears them on retirement", () => {
+  const metrics = createMetricsHarness();
+  const retentionLines = () =>
+    metrics
+      .render()
+      .split("\n")
+      .filter(
+        (line) =>
+          line.startsWith("openclaw_sessions_list_retained_") ||
+          line.startsWith("openclaw_session_event_rows_retained_"),
+      );
+  try {
+    metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    metrics.record({
+      type: "sessions.event.retention",
+      entries: 25_600,
+      estimatedBytes: 24_985_600,
+    });
+    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+      metrics.record(
+        { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
+        metadata,
+      );
+      metrics.record(
+        { type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 },
+        metadata,
+      );
+    }
+    for (const suffix of ["views", "refs", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
+      );
+    }
+    for (const suffix of ["entries", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_session_event_rows_retained_${suffix} gauge\n`,
+      );
+    }
+    expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 24985600",
+      "openclaw_session_event_rows_retained_entries 25600",
+      "openclaw_sessions_list_retained_bytes 3504",
+      "openclaw_sessions_list_retained_refs 17",
+      "openclaw_sessions_list_retained_views 3",
+    ]);
+    metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
+    metrics.record({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
+    expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 0",
+      "openclaw_session_event_rows_retained_entries 0",
+      "openclaw_sessions_list_retained_bytes 0",
+      "openclaw_sessions_list_retained_refs 0",
+      "openclaw_sessions_list_retained_views 0",
+    ]);
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
   const exporter = createDiagnosticsPrometheusExporter();
   const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));

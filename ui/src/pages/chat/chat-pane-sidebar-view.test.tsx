@@ -37,7 +37,6 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
         layout={fitSidebarLayout(layout, width())!}
         panelDefinitions={sidebarPanelDefinitions()}
         regionError={null}
-        requestUpdate={() => {}}
       />
     );
   });
@@ -84,7 +83,6 @@ it("retains the primary input and the region-owned outlet while changing the lay
         panelDefinitions={sidebarPanelDefinitions()}
         regionError={null}
         primary={primary}
-        requestUpdate={() => {}}
       />
     );
   });

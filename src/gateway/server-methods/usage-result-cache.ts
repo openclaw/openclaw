@@ -31,7 +31,7 @@ import type { UsageSessionSelection, UsageGroupingMode } from "./usage-session-s
 const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
 export type SessionsUsageSnapshot = Pick<
   SessionsUsageResult,
-  "updatedAt" | "sessions" | "cacheStatus"
+  "updatedAt" | "sessions" | "cacheStatus" | "partial"
 > & { sources: UsageSessionSelection[]; accessRevision: number; sessionRevision: number };
 const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot>>();
 
@@ -53,11 +53,12 @@ type SessionsUsageCacheKeyParams = {
   endMs: number;
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
-  limit: number;
   groupingMode: UsageGroupingMode;
   specificKey: string | null;
   includeContextWeight: boolean;
-  overviewKey?: string;
+  overview: boolean;
+  committedOnly: boolean;
+  includeAllContext: boolean;
 };
 
 // Revisions replace the value for a stable query instead of retaining every rollup.
@@ -68,12 +69,13 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.endMs,
     params.includeUntimestamped === true,
     usageDayBucketCacheKey(params.dayBucket),
-    params.limit,
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
-    params.overviewKey,
+    params.overview,
+    params.committedOnly,
+    params.includeAllContext,
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -90,7 +92,7 @@ export async function loadSessionsUsageSnapshotCached(
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
     revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
-    revisionOnly: params.overviewKey !== undefined,
+    revisionOnly: params.overview,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",

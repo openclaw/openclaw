@@ -159,6 +159,7 @@ suite.define(() => {
       scope: "agent",
     });
     await gateway.resolveDeferred("chat.metadata", { commands: [] });
+    await gateway.waitForRequest("models.list");
     await gateway.resolveDeferred("models.list", {
       models: [
         {

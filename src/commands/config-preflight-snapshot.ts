@@ -9,6 +9,7 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -159,6 +160,48 @@ async function readConfigPreflightSnapshot(
   });
 }
 
+/** Resolve the final config target without observing or opening its storage. */
+export async function readConfigSnapshotBeforeEngineSelection(
+  env: NodeJS.ProcessEnv = process.env,
+  options: Pick<ConfigSnapshotReadOptions, "isolateEnv" | "onSourceEnvApplied"> = {},
+): Promise<ConfigFileSnapshot> {
+  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
+  const read = () =>
+    createConfigIO({
+      env: readEnv,
+      observe: false,
+      pluginValidation: "core-only",
+    }).readConfigFileSnapshot({ onSourceEnvApplied: options.onSourceEnvApplied });
+  let snapshot = await read();
+  // One-shot config env may select another target before storage becomes process-stable.
+  while (snapshot.path !== resolveConfigPath(readEnv)) {
+    snapshot = await read();
+  }
+  return snapshot;
+}
+
+/** Select storage and retain its routed environment for subsequent config and state reads. */
+export async function readConfigSnapshotForEngineSelection(
+  env: NodeJS.ProcessEnv = process.env,
+  options: Pick<ConfigSnapshotReadOptions, "isolateEnv" | "onSourceEnvApplied"> = {},
+): Promise<ConfigFileSnapshot> {
+  const readEnv = options.isolateEnv === true ? cloneEnvWithPlatformSemantics(env) : env;
+  const snapshot = await readConfigSnapshotBeforeEngineSelection(readEnv, {
+    ...options,
+    isolateEnv: false,
+  });
+  if (
+    !isConfigReadFailure(snapshot) &&
+    !snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+  ) {
+    installDatabaseEngineSelection(
+      getDatabaseEngineSelection() ??
+        (await resolveDatabaseEngineSelection(snapshot.config, readEnv)),
+    );
+  }
+  return snapshot;
+}
+
 /** Admit the same config and state before the lease and again before persistent writes. */
 export async function readAdmittedConfigSnapshot(params: {
   env: NodeJS.ProcessEnv;
@@ -173,11 +216,12 @@ export async function readAdmittedConfigSnapshot(params: {
       refuseStartupMigrationsForLiveGatewayOwner(params.env),
     );
     try {
+      let restoreSelectedSourceEnv: (() => void) | undefined;
       const selected = await measureDoctorConfigPreflightStep("admission.core-config", () =>
-        readConfigFileSnapshot({
-          observe: false,
-          isolateEnv: true,
-          pluginValidation: "core-only",
+        readConfigSnapshotForEngineSelection(params.env, {
+          onSourceEnvApplied: (restore) => {
+            restoreSelectedSourceEnv = restore;
+          },
         }),
       );
       // Retain definitive source failures before storage admission. Provisional
@@ -194,12 +238,8 @@ export async function readAdmittedConfigSnapshot(params: {
         getDatabaseEngineSelection() ??
         (await resolveDatabaseEngineSelection(selected.config, params.env));
       installDatabaseEngineSelection(selection);
-      const withStateSnapshot: typeof withOpenClawStateDatabaseReadSnapshot =
-        selection.effectiveEngines.state === "postgres"
-          ? (operation) => operation()
-          : withOpenClawStateDatabaseReadSnapshot;
       const admitted = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
-        withStateSnapshot(
+        withOpenClawStateDatabaseReadSnapshot(
           async () => {
             const recoveryOptions = {
               configPath: selected.path,
@@ -214,6 +254,10 @@ export async function readAdmittedConfigSnapshot(params: {
                   pluginValidation: "core-only",
                 }).prepareConfigRecovery(selected),
             );
+            if (coreRecovery) {
+              // Discard only the final JSON source; accepted redirect and dotenv layers remain.
+              restoreSelectedSourceEnv?.();
+            }
             const candidate = coreRecovery?.snapshot ?? selected;
             // Both readers use the admitted snapshot. Pin schema selection before the
             // full config read applies env defaults, and join both before releasing it.

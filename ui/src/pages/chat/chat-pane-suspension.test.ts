@@ -29,26 +29,26 @@ describe("chat pane suspension", () => {
     const lifecycle = Object.assign(pane, { render: () => ({ layout: null }) });
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;
-    const requestUpdate = vi.spyOn(lifecycle, "requestUpdate");
+    const invalidate = vi.spyOn(lifecycle, "invalidate");
     const render = vi.spyOn(lifecycle, "render");
     try {
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(invalidate).toHaveBeenCalledOnce();
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));
       // Parking itself invalidates the view; subsequent hidden minutes stay idle.
-      requestUpdate.mockClear();
+      invalidate.mockClear();
       render.mockClear();
       await vi.advanceTimersByTimeAsync(600_000);
-      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(invalidate).not.toHaveBeenCalled();
       expect(render).not.toHaveBeenCalled();
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
       await lifecycle.updateComplete;
       expect(render).toHaveBeenCalledOnce();
-      requestUpdate.mockClear();
+      invalidate.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(invalidate).toHaveBeenCalledOnce();
       expect(render).toHaveBeenCalledTimes(2);
     } finally {
       Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });

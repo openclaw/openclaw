@@ -296,6 +296,7 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         <button
           type="button"
           class="btn btn--sm"
+          disabled={!params.props.channels.connected}
           onClick={() => params.props.onStartSetup(params.channelId)}
         >
           {t("channels.hub.setUp")}
@@ -310,6 +311,7 @@ function renderBrowseAllRow(props: ChannelsProps) {
     <button
       type="button"
       class="settings-row settings-row--nav channels-item"
+      disabled={!props.channels.connected}
       onClick={() => props.onStartSetup(null)}
     >
       <span

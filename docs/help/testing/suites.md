@@ -87,8 +87,11 @@ Arguments after `--` go to the normal test runner. Start with a file or director
 to replace the default targets; options alone retain all suites. For example,
 append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
 Use `--shard infra` for infrastructure and state tests or `--shard integrations`
-for the remaining groups. Each shard retains normal test-runner options after
-`--`; explicit target overrides require omitting `--shard`.
+for the remaining groups, including `src/infra/database-engine/**/*.integration.test.ts`.
+New database-engine integration files inherit that assignment. Each shard retains
+normal test-runner options after `--`; explicit target overrides require omitting
+`--shard`. Add `--list` to inspect a shard's targets without opening a database;
+`--connection` is unnecessary in that mode.
 
 For a local Homebrew `postgresql@17` cluster, use a temporary directory on a disk
 with enough free space. This subshell stops and removes its cluster on exit:

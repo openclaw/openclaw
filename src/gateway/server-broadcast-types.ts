@@ -1,7 +1,7 @@
 import type { GatewayClientCap } from "../../packages/gateway-protocol/src/client-info.js";
 import type { LiveTextProjectionText } from "./live-text-continuity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
-import type { SessionAncestorReferences } from "./session-ancestor-references.js";
+import type { ConnectionSessionRows } from "./session-ancestor-references.js";
 
 export type SessionEventProjection = {
   payload: unknown;
@@ -25,7 +25,7 @@ type SessionEventProjectionContext = {
     agentId?: string,
   ) => readonly [string | undefined, string | undefined, string | undefined] | null;
   forgetAncestors: (key?: string) => void;
-  references: (client: GatewayClient) => SessionAncestorReferences;
+  references: (client: GatewayClient) => ConnectionSessionRows;
   forgetConnectionAncestors: (client: GatewayClient) => void;
   createRunProjector: () => (selection: {
     requestedKey: string;
@@ -56,6 +56,8 @@ export type GatewayBroadcastOpts = {
   excludeClientCapability?: GatewayClientCap;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];
+  /** Producer-resolved exact subscription keys for traffic attribution; never changes recipients. */
+  sessionEventSubscriptionKeys?: readonly string[];
   /** Prepared facts remain valid only during this synchronous publication. */
   prepareSessionProjection?: PrepareSessionEventProjection;
   /** Target recipients were selected from subscriptions at ingress. */

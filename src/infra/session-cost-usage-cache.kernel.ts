@@ -97,7 +97,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
         (budget
           ? eb
               .case()
-              .when(eb.fn<number>("length", [eb.cast("value_json", "blob")]), "<=", 64 * 1024)
+              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
               .then(eb.ref("value_json"))
               .else(null)
               .end()
@@ -119,7 +119,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
           : eb.val(null)
         ).as("blob"),
         eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
-        eb.fn<number>("length", [eb.cast("value_json", "blob")]).as("header_bytes"),
+        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
       ])
       .where("scope", "=", ROLLUP_SCOPE);
     for (const row of iterateSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query)) {

@@ -178,7 +178,7 @@ export function createChatPageStateContext() {
     },
     gateway: { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
     chatSubmissions: createChatSubmissions(),
-    sessions: {},
+    sessions: createChatPageSessions(gateway),
   } as unknown as ApplicationContext;
 }
 

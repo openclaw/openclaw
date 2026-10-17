@@ -290,6 +290,11 @@ describe("saved message attachment response authority", () => {
   };
   const source = "media://inbound/selection-comment.txt";
   const text = "Saved selection comment";
+  const cronProvenance = {
+    kind: "inter_session",
+    sourceTool: "sessions_send",
+    sourceSessionKey: "agent:main:cron:daily-report:run:completed-run",
+  } as const;
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let listener: Awaited<
     ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
@@ -377,6 +382,17 @@ describe("saved message attachment response authority", () => {
             sourceRole: "subagent",
           },
           __openclaw: { media: [{ url: source }] },
+        },
+      },
+      {
+        type: "message",
+        id: "cron-forwarded",
+        parentId: "hidden",
+        message: {
+          role: "user",
+          content: "Scheduled report",
+          provenance: cronProvenance,
+          __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
         },
       },
     ]);
@@ -508,6 +524,7 @@ describe("saved message attachment response authority", () => {
     for (const [messageId, file, expected] of [
       ["comment", source, text],
       ["ordinary", ordinary, "Ordinary attachment"],
+      ["cron-forwarded", source, text],
     ]) {
       const query = { source: file!, messageId: messageId! };
       const mediaTicket = await metadata(query);
@@ -578,9 +595,13 @@ describe("saved message attachment response authority", () => {
     expect((await request({ ...query, messageId: "user-directive", meta: "1" })).status).toBe(404);
   });
 
-  it("reads queued and stopped inputs and withholds bytes after their attachment is withdrawn", async () => {
-    for (const stopped of [false, true]) {
-      const runId = `attachment-pending-${stopped}`;
+  it("reads queued and stopped inputs, including automation, and withholds bytes after withdrawal", async () => {
+    for (const [stopped, forwarded] of [
+      [false, false],
+      [true, false],
+      [false, true],
+    ] as const) {
+      const runId = `attachment-pending-${stopped}-${forwarded}`;
       const receipt = await stageSessionPendingInput(scope, {
         runId,
         assertCurrent: () => {},
@@ -589,6 +610,7 @@ describe("saved message attachment response authority", () => {
           content: "Saved pending comment",
           timestamp: 1,
           idempotencyKey: `${runId}:user`,
+          ...(forwarded ? { provenance: cronProvenance } : {}),
           __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
         },
       });

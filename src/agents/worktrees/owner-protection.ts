@@ -28,7 +28,6 @@ import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export function createManagedWorktreeOwnerPolicy(
   cfg: OpenClawConfig,
-  now: () => number = Date.now,
 ): Required<
   Pick<WorktreeCleanupOwnerPolicy, "prepareOwners" | "readOwnerState" | "withOwnerCleanup">
 > {
@@ -67,7 +66,11 @@ export function createManagedWorktreeOwnerPolicy(
       }
       const entry = target.entry;
       const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
-      if (entry?.archivedAt === undefined && activityAt > 0 && now() - activityAt <= IDLE_GC_MS) {
+      if (
+        entry?.archivedAt === undefined &&
+        activityAt > 0 &&
+        Date.now() - activityAt <= IDLE_GC_MS
+      ) {
         return "active";
       }
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });

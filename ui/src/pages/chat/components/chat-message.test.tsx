@@ -24,7 +24,7 @@ import {
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
 import { managedSource } from "./chat-message-media.test-helpers.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
@@ -49,7 +49,7 @@ import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import "./chat-detail-panel.tsx";
 
 let view: HTMLDivElement;
-const mediaSubscribers = new Set<() => void>();
+const mediaSubscribers = new Set<object>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const renderStreamingMarkdown = markdown.toStreamingMarkdownParts;
 const markdownRenderMock = vi.fn((value: string) => value);
@@ -184,8 +184,8 @@ function renderTestMessageGroup(
   group: MessageGroup,
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
-  if (opts.onRequestUpdate) {
-    mediaSubscribers.add(opts.onRequestUpdate);
+  if (opts.mediaOwner) {
+    mediaSubscribers.add(opts.mediaOwner);
   }
   return renderMessageGroup(group, {
     showReasoning: true,
@@ -215,9 +215,9 @@ function renderReactiveAssistant(
   options: Partial<RenderMessageGroupOptions>,
   container: HTMLElement = view,
 ) {
-  const onRequestUpdate = () =>
-    renderAssistantMessage(message(), { ...options, onRequestUpdate }, container);
-  onRequestUpdate();
+  const rerender = () =>
+    renderAssistantMessage(message(), { ...options, mediaOwner: rerender }, container);
+  rerender();
 }
 
 function renderAssistantMessages(
@@ -406,7 +406,7 @@ afterEach(() => {
   view.remove();
   // These detached render fixtures own the callbacks a live chat pane normally releases.
   for (const subscriber of mediaSubscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
   mediaSubscribers.clear();
   markdownRenderMock.mockClear();
@@ -2037,7 +2037,7 @@ describe("grouped chat rendering", () => {
           sessionKey: "agent:main:transcript-images",
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
-          onRequestUpdate: rerender,
+          mediaOwner: rerender,
         });
       rerender();
     };
@@ -2106,10 +2106,9 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
+  it("expires pairing QR images without requesting a pane refresh", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
-    const onRequestUpdate = vi.fn();
 
     renderAssistantMessage(
       createAssistantMessage([
@@ -2120,16 +2119,20 @@ describe("grouped chat rendering", () => {
           expiresAtMs: Date.now() + 1_000,
         },
       ]),
-      { showToolCalls: false, onRequestUpdate },
+      { showToolCalls: false },
     );
 
     const image = view.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,cXJwbmc=");
     expect(image?.getAttribute("alt")).toBe("OpenClaw pairing QR code");
+    const bubble = view.querySelector(".chat-bubble");
+    expect(bubble).not.toBeNull();
     await vi.advanceTimersByTimeAsync(999);
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(view.querySelector(".chat-message-image")).toBe(image);
     await vi.advanceTimersByTimeAsync(1);
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(view.querySelector(".chat-bubble")).toBe(bubble);
+    expect(view.querySelector(".chat-message-image")).toBeNull();
+    expect(view.textContent).toContain("Pairing QR expired");
 
     renderAssistantMessage(
       createAssistantMessage([

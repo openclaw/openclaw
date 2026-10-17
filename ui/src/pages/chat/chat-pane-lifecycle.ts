@@ -111,6 +111,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               presented: this.presented,
               agentId: this.agentId,
               launch: this.mcpAppLaunch,
+              replaceAttachments: this.chatState.attachmentInputProps(state).onAttachmentsChange,
               openFile: (path) => openSessionWorkspaceFile(state, { path }),
             }
           : null;
@@ -172,7 +173,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         return;
       }
       state.handleChatDraftChange(draft, []);
-      state.requestUpdate?.();
     });
   }
 
@@ -188,14 +188,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
+    const state = this.state;
     if (
+      !state ||
       !admitBrowserAnnotation(
-        this.state,
+        state,
         this.active && this.presented,
         event,
         this.chatState.attachmentReads.pendingBytes(
-          resolveChatAttachmentLimits(this.state?.hello?.policy),
+          resolveChatAttachmentLimits(state.hello?.policy),
         ),
+        this.chatState.attachmentInputProps(state).onAttachmentsChange,
       )
     ) {
       return;
@@ -225,7 +228,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
       (entry) => entry && matchesShortcutCombo(entry.combo, event),
     );
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     if (
       shortcut?.available({
         state,
@@ -319,14 +322,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
-    // Effective-tools previews key their requests on the model override, so a
-    // post-switch refresh only needs a re-render.
-    pageState.refreshCurrentSessionTools = async () => {
-      pageState.requestUpdate?.();
-    };
     pageState.refreshCurrentChat = async () => {
       await refreshPageChat(pageState);
-      pageState.requestUpdate?.();
     };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     pageState.openSessionCompanion = (question) => this.openSessionCompanion(pageState, question);
@@ -366,7 +363,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        pageState.requestUpdate?.();
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
@@ -415,7 +411,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           ...this.context.theme.settings,
           token: this.context.gateway.connection.token,
         };
-        pageState.requestUpdate();
       }),
     );
     // Agent changes retire scoped owners and subscriptions before admitting another action.
@@ -426,8 +421,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeSessionObservation();
         const agentChanged = this.state?.assistantAgentId !== previousAgentId;
         if (agentChanged) {
-          this.swarmHydrator?.dispose();
-          this.swarmHydrator = null;
+          this.swarm.hydrator?.dispose();
+          this.swarm.hydrator = null;
         }
         this.synchronizeForegroundTranscript();
         if (agentChanged) {
@@ -458,7 +453,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           // preview admission before the roster refresh can publish access loss.
           state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           this.invalidateSessionSharing(event.payload);
-          state.requestUpdate?.();
         }
         if (event.event === "sessions.changed" || event.event === "session.message") {
           return;
@@ -466,7 +460,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (event.event === "presence") {
           const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);
-          this.presencePayload = presence ? { presence } : undefined;
+          this.presence.update(presence ? { presence } : undefined);
           this.pruneTypingActors();
           if (!this.hasMultipleIdentities()) {
             this.resetSessionSuggestions();
@@ -478,11 +472,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (state) {
           if (event.event === "config.changed") {
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
-            state.requestUpdate?.();
           }
           if (event.event === "config.changed" || event.event === "agent.identity.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
-            void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            void chatAvatars.refreshChatAvatar(state);
             void chatAvatars.refreshSenderAgentAvatars(state);
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
@@ -562,7 +555,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (nextSessionKey) {
         // Availability belongs to one activation. The replacement probe starts
         // after its transcript commit in deferSessionHydrationUntilTranscript.
-        this.sessionDiscussionStates.delete(nextSessionKey);
+        this.sessionDiscussion.forgetState(nextSessionKey);
       }
       if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
@@ -647,7 +640,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       isPresented: () => this.presented && this.visuallyPresented,
       commit: (layout, automaticResource) =>
         this.commitSidebarLayout(layout, { persist: false, automaticResource }),
-      requestUpdate: () => this.invalidate(),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);
@@ -709,8 +701,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);
-    this.taskSuggestionBusyIds.clear();
-    this.taskSuggestionOperations.clear();
+    this.tasks.busyIds = new Set();
+    this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();
     this.clearTypingActors();
@@ -722,11 +714,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       window.clearTimeout(this.headerCopiedTimer);
       this.headerCopiedTimer = null;
     }
-    this.swarmHydrator?.dispose();
-    this.swarmHydrator = null;
-    this.headerWorktreePaths.clear();
-    this.headerBranches.clear();
-    this.presencePayload = undefined;
+    this.swarm.hydrator?.dispose();
+    this.swarm.hydrator = null;
+    this.headerPresentation.worktreePaths = new Map();
+    this.headerPresentation.branches = new Map();
+    this.presence.update(undefined);
     this.announceCommandPaletteTarget(null);
     dismissConfirmedActionPopovers(this.element);
     resetChatViewState(this.presentationId);

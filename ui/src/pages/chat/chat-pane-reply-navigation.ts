@@ -114,7 +114,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         }
         if (!state.chatHistoryPagination.hasMore) {
           state.lastError = t("chat.messages.originalUnavailable");
-          state.requestUpdate?.();
           return;
         }
         const loaded = await this.loadOlderMessages();
@@ -124,7 +123,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         if (!loaded) {
           if (!state.chatHistoryPagination.hasMore && !state.lastError) {
             state.lastError = t("chat.messages.originalUnavailable");
-            state.requestUpdate?.();
           }
           return;
         }

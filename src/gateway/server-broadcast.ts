@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
 import { concatGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
@@ -36,7 +37,8 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import type { GatewayWsClient, PresenceDeliverySnapshot } from "./server/ws-types.js";
+import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -196,6 +198,7 @@ export function createGatewayBroadcaster(params: {
     },
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
+  onSessionDeliveryLost?: (client: GatewayWsClient) => void;
   canReceiveSessionEvent?: (
     client: GatewayWsClient,
     sessionKeys: readonly string[],
@@ -249,6 +252,7 @@ export function createGatewayBroadcaster(params: {
       opts?.sessionKeys,
       opts?.agentId,
     );
+    let sessionEventMetrics: ReturnType<typeof prepareSessionEventMetrics> | null = null;
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
@@ -449,12 +453,17 @@ export function createGatewayBroadcaster(params: {
         });
       }
       if (slow && opts?.dropIfSlow) {
+        if (presencePayload) {
+          c.presenceSnapshot = undefined;
+        }
         // Consume the seq for the dropped frame so the client's gap detector
         // sees the loss instead of a silently thinner stream.
         clientSeq.set(c, nextSeq);
+        params.onSessionDeliveryLost?.(c);
         continue;
       }
       if (slow) {
+        params.onSessionDeliveryLost?.(c);
         delivery.retireDelivery(state);
         closeGatewayTransportWithGrace(state.socket, 1008, "slow consumer");
         continue;
@@ -558,6 +567,7 @@ export function createGatewayBroadcaster(params: {
           : (frames.snapshot ??= frameBaseFor(payload));
       let frame: Buffer;
       let delivered: (() => void) | undefined;
+      let presenceSnapshot: PresenceDeliverySnapshot | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
@@ -592,13 +602,24 @@ export function createGatewayBroadcaster(params: {
           projectPresence ??= params.preparePresenceProjection(presencePayload.presence);
           // Preserve source reads before checking the recipient's current authority.
           const projectedPayload = { ...presencePayload, presence: projectPresence(c) };
-          const reusable =
-            Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
-          const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
-          payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
-          if (reusable && typeof payloadFragment === "string") {
-            payloadFragment = Buffer.from(payloadFragment);
-            (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
+          if (acceptsPresenceDeltas(c) && opts?.stateVersion?.presence !== undefined) {
+            const prepared = preparePresenceDelivery(
+              c,
+              presencePayload.presence,
+              projectedPayload.presence,
+              opts.stateVersion.presence,
+            );
+            payloadFragment = prepared.fragment;
+            presenceSnapshot = prepared.snapshot;
+          } else {
+            const reusable =
+              Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
+            const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
+            payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
+            if (reusable && typeof payloadFragment === "string") {
+              payloadFragment = Buffer.from(payloadFragment);
+              (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
+            }
           }
         }
         if (projectSession) {
@@ -638,7 +659,17 @@ export function createGatewayBroadcaster(params: {
         } else {
           frame = cached;
         }
+        // Preserve frame snapshots before metrics inspect getter-backed payloads.
+        if (sessionEventMetrics === null) {
+          sessionEventMetrics = prepareSessionEventMetrics(
+            event,
+            payload,
+            opts?.sessionEventSubscriptionKeys ?? sessionKeys,
+            params.sessionMessageSubscribers,
+          );
+        }
       } catch (err) {
+        params.onSessionDeliveryLost?.(c);
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;
       }
@@ -661,6 +692,8 @@ export function createGatewayBroadcaster(params: {
           return;
         }
         if (err) {
+          c.presenceSnapshot = undefined;
+          params.onSessionDeliveryLost?.(c);
           delivery.retireDelivery(state);
           log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
             event,
@@ -675,7 +708,10 @@ export function createGatewayBroadcaster(params: {
         delivered?.();
         state.socket.batchWrites?.();
         state.socket.send(frame, { binary: false }, sent);
-        state.socket.recordEventSent?.(event, frame.byteLength);
+        if (presenceSnapshot && !state.retired) {
+          c.presenceSnapshot = presenceSnapshot;
+        }
+        state.socket.recordEventSent?.(event, frame.byteLength, sessionEventMetrics?.(c.connId));
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
       }

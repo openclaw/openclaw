@@ -105,7 +105,19 @@ describe("PostgreSQL conformance selection", () => {
       "max-parallel": 2,
       matrix: { shard: ["infra", "integrations"] },
     });
-    expect(job["timeout-minutes"]).toBe(30);
+    for (const [shard, timeout] of [
+      ["infra", 60],
+      ["integrations", 30],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(job["timeout-minutes"], {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { shard },
+        }),
+      ).toBe(timeout);
+    }
     expect(
       evaluateWorkflowExpression(job["runs-on"], {
         eventName: "pull_request",
@@ -981,11 +993,11 @@ describe("channel detail presentation CI selection", () => {
 });
 
 describe("curated plugin settings CI selection", () => {
-  it("selects the actual consumer proof for a presentation-only change", () => {
-    expect(
-      detectChangedScope(["extensions/memory-core/control-ui.settings-presentation.json"])
-        .runUiTests,
-    ).toBe(true);
+  it.each([
+    "extensions/memory-core/control-ui.settings-presentation.json",
+    "extensions/acpx/control-ui.session-source.json",
+  ])("selects the actual consumer proof for %s", (file) => {
+    expect(detectChangedScope([file]).runUiTests).toBe(true);
   });
 });
 
