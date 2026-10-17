@@ -683,7 +683,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         throw new Error("wiki apply synthesis requires at least one --source-id.");
       }
       const body = await resolveWikiApplyBody({ body: opts.body, bodyFile: opts.bodyFile });
-      await syncMemoryWikiImportedSources({ config, appConfig });
+      await syncMemoryWikiImportedSources({ config, appConfig, deferIndexRefresh: true });
       const result = await applyMemoryWikiMutation({
         config,
         mutation: {
@@ -707,7 +707,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiApplyMetadataCommandOptions) => {
       const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
+      await syncMemoryWikiImportedSources({ config, appConfig, deferIndexRefresh: true });
       const result = await applyMemoryWikiMutation({
         config,
         mutation: {

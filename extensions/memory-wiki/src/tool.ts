@@ -253,7 +253,7 @@ export function createWikiApplyTool(
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
       const mutation = normalizeMemoryWikiMutationInput(rawParams);
-      await syncMemoryWikiImportedSources({ config, appConfig, signal });
+      await syncMemoryWikiImportedSources({ config, appConfig, signal, deferIndexRefresh: true });
       const result = await applyMemoryWikiMutation({
         config,
         mutation,

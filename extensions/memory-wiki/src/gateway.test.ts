@@ -716,7 +716,11 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: {} });
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig: {},
+      deferIndexRefresh: true,
+    });
     expect(applyMemoryWikiMutation).toHaveBeenCalledWith({
       config,
       mutation: {
