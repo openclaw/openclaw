@@ -30,8 +30,16 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 const createOkIsolatedCronState = createOkIsolatedCronStateFactory(logger);
 
-function createCronServiceState(params: Parameters<typeof createCronRegressionState>[0]) {
-  return createCronRegressionState({ log: logger, ...params });
+type RegressionParams = Parameters<typeof createCronRegressionState>[0];
+function createCronServiceState(
+  params: Omit<RegressionParams, "runIsolatedAgentJob"> &
+    Partial<Pick<RegressionParams, "runIsolatedAgentJob">>,
+) {
+  return createCronRegressionState({
+    log: logger,
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...params,
+  });
 }
 
 async function withStateDirForStorePath<T>(
@@ -66,14 +74,11 @@ function createFutureEveryJob(params: { id: string; now: number; nextRunAtMs?: n
 
 function createInterruptedMainJob(now: number): CronJob {
   return {
-    id: "startup-interrupted",
+    ...createFutureEveryJob({ id: "startup-interrupted", now }),
     name: "startup interrupted",
-    enabled: true,
     createdAtMs: now - 86_400_000,
     updatedAtMs: now - 30 * 60_000,
     schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "should not replay on startup" },
     state: {
       nextRunAtMs: now - 60_000,
@@ -86,25 +91,13 @@ function createInterruptedMainJob(now: number): CronJob {
 
 function createDueIsolatedJob(now: number): CronJob {
   return {
-    id: "isolated-timeout",
+    ...createFutureEveryJob({ id: "isolated-timeout", now, nextRunAtMs: now - 1 }),
     name: "isolated timeout",
-    enabled: true,
-    createdAtMs: now - 60_000,
-    updatedAtMs: now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "do work" },
     sessionKey: "agent:main:main",
-    state: { nextRunAtMs: now - 1 },
   };
-}
-
-async function writeDueIsolatedJobSnapshot(storePath: string, now: number) {
-  await writeCronStoreSnapshot({
-    storePath,
-    jobs: [createDueIsolatedJob(now)],
-  });
 }
 
 function insertCronJobRow(storePath: string, job: CronJob) {
@@ -193,19 +186,6 @@ describe("cron stale job-family adoption", () => {
   });
 });
 
-function expectCronRun(params: { runId: string; status: string; jobId: string }) {
-  const task = findCronTaskByBaseRunId(params.runId);
-  expect(task?.status).toBe(params.status);
-  expect(task?.jobId).toBe(params.jobId);
-}
-
-function findCronTaskByBaseRunId(baseRunId: string) {
-  return (
-    findCronRunForTests(baseRunId) ??
-    readCronRunRecordsForTests().find((task) => task.runId?.startsWith(`${baseRunId}:`))
-  );
-}
-
 describe("cron service ops seam coverage", () => {
   it("starts and lists future jobs after upgrading from a database without receipts", async () => {
     const { storePath } = await makeStorePath();
@@ -238,14 +218,10 @@ describe("cron service ops seam coverage", () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T09:00:00.000Z");
     const legacyJob = {
-      id: "legacy-notify",
+      ...createFutureEveryJob({ id: "legacy-notify", now }),
       name: "legacy notify",
-      enabled: true,
-      createdAtMs: now - 60_000,
-      updatedAtMs: now - 60_000,
       schedule: { kind: "every", everyMs: 3_600_000, anchorMs: now },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "do work" },
       delivery: { to: "telegram:chat-1" },
       notify: true,
@@ -263,7 +239,6 @@ describe("cron service ops seam coverage", () => {
       storePath,
       cronConfig: { webhook: "https://example.invalid/cron" } as never,
       nowMs: () => now,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await start(state);
@@ -320,7 +295,6 @@ describe("cron service ops seam coverage", () => {
         const state = createCronServiceState({
           storePath,
           nowMs: () => now,
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           onEvent: (event) => events.push(structuredClone(event)),
         });
         const taskRunId =
@@ -429,91 +403,84 @@ describe("cron service ops seam coverage", () => {
     },
   );
 
-  it.each([{ deleteAfterRun: true, status: "error" as const, overdue: true }])(
-    "recovers a rescheduled one-shot after a finalized $status run (deleteAfterRun=$deleteAfterRun, overdue=$overdue)",
-    async ({ deleteAfterRun, status, overdue }) => {
-      const { storePath } = await makeStorePath();
-      const now = Date.parse("2026-03-23T12:00:00.000Z");
-      const startedAt = now - 30_000;
-      const endedAt = startedAt + 4_000;
-      const replacementAt = now - 5_000;
+  it("recovers a rescheduled delete-after-run one-shot after a finalized error", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const endedAt = startedAt + 4_000;
+    const replacementAt = now - 5_000;
 
-      await withStateDirForStorePath(storePath, async () => {
-        const replacement = createDueIsolatedJob(now);
-        replacement.id = `startup-rescheduled-finalized-one-shot-${deleteAfterRun}`;
-        replacement.name = "startup rescheduled finalized one-shot";
-        replacement.deleteAfterRun = deleteAfterRun;
-        replacement.schedule = { kind: "at", at: new Date(replacementAt).toISOString() };
-        replacement.updatedAtMs = now - 10_000;
-        replacement.state = { runningAtMs: startedAt, nextRunAtMs: replacementAt };
-        await writeCronStoreSnapshot({ storePath, jobs: [replacement] });
+    await withStateDirForStorePath(storePath, async () => {
+      const replacement = createDueIsolatedJob(now);
+      replacement.id = "startup-rescheduled-finalized-one-shot-true";
+      replacement.name = "startup rescheduled finalized one-shot";
+      replacement.deleteAfterRun = true;
+      replacement.schedule = { kind: "at", at: new Date(replacementAt).toISOString() };
+      replacement.updatedAtMs = now - 10_000;
+      replacement.state = { runningAtMs: startedAt, nextRunAtMs: replacementAt };
+      await writeCronStoreSnapshot({ storePath, jobs: [replacement] });
 
-        const original = structuredClone(replacement);
-        original.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
-        original.updatedAtMs = startedAt;
-        original.state.nextRunAtMs = startedAt;
+      const original = structuredClone(replacement);
+      original.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      original.updatedAtMs = startedAt;
+      original.state.nextRunAtMs = startedAt;
 
-        const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-        const state = createCronServiceState({
-          storePath,
-          nowMs: () => now,
-          runIsolatedAgentJob,
-        });
-        const taskRunId = taskRuns.createCronRunHandle({
-          state,
-          job: original,
-          startedAt,
-        })?.runId;
-        if (!taskRunId) {
-          throw new Error("expected cron task run");
-        }
-        await taskRuns.finishCronRun(state, {
-          taskRunId,
-          job: original,
-          event: {
-            jobId: original.id,
-            action: "finished",
-            job: original,
-            status,
-            completionStatus: "failed",
-            error: "original failed before restart",
-            summary: "original completed before restart",
-            runAtMs: startedAt,
-            durationMs: endedAt - startedAt,
-          },
-        });
-
-        try {
-          await start(state);
-
-          const persisted = await loadCronStore(storePath);
-          const restored = persisted.jobs.find((job) => job.id === replacement.id);
-          expect(restored?.enabled).toBe(true);
-          if (overdue) {
-            expect(restored?.state.nextRunAtMs).toBeGreaterThan(now);
-            expect(restored?.state.startupCatchupAtMs).toBe(restored?.state.nextRunAtMs);
-          } else {
-            expect(restored?.state.nextRunAtMs).toBe(replacementAt);
-            expect(restored?.state.startupCatchupAtMs).toBeUndefined();
-          }
-          expect(restored?.state.runningAtMs).toBeUndefined();
-          expect(restored?.state.lastRunAtMs).toBe(startedAt);
-          expect(restored?.state.lastRunStatus).toBe(status);
-          expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-          expect(findCronRunForTests(taskRunId)?.status).toBe("failed");
-        } finally {
-          stop(state);
-        }
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        storePath,
+        nowMs: () => now,
+        runIsolatedAgentJob,
       });
-    },
-  );
+      const taskRunId = taskRuns.createCronRunHandle({
+        state,
+        job: original,
+        startedAt,
+      })?.runId;
+      if (!taskRunId) {
+        throw new Error("expected cron task run");
+      }
+      await taskRuns.finishCronRun(state, {
+        taskRunId,
+        job: original,
+        event: {
+          jobId: original.id,
+          action: "finished",
+          job: original,
+          status: "error",
+          completionStatus: "failed",
+          error: "original failed before restart",
+          summary: "original completed before restart",
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+        },
+      });
+
+      try {
+        await start(state);
+
+        const persisted = await loadCronStore(storePath);
+        const restored = persisted.jobs.find((job) => job.id === replacement.id);
+        expect(restored).toMatchObject({
+          enabled: true,
+          state: { lastRunAtMs: startedAt, lastRunStatus: "error" },
+        });
+        expect(restored?.state.nextRunAtMs).toBeGreaterThan(now);
+        expect(restored?.state.startupCatchupAtMs).toBe(restored?.state.nextRunAtMs);
+        expect(restored?.state.runningAtMs).toBeUndefined();
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+        expect(findCronRunForTests(taskRunId)?.status).toBe("failed");
+      } finally {
+        stop(state);
+      }
+    });
+  });
 
   it("keeps manual acknowledgement IDs separate from recoverable task run IDs", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
 
     await withStateDirForStorePath(storePath, async () => {
-      await writeDueIsolatedJobSnapshot(storePath, now);
+      await writeCronStoreSnapshot({ storePath, jobs: [createDueIsolatedJob(now)] });
 
       const state = createOkIsolatedCronState({ storePath, now, summary: "done" });
       const manualRunId = `manual:isolated-timeout:${now}:1`;
@@ -532,11 +499,10 @@ describe("cron service ops seam coverage", () => {
         .get(cronStoreKey(storePath), "isolated-timeout") as { receiptId: string };
       expect(receipt.receiptId).toBe(manualRunId);
       const taskRunId = `cron:isolated-timeout:${now}:${manualRunId}`;
-      expectCronRun({
-        runId: taskRunId,
-        status: "succeeded",
-        jobId: "isolated-timeout",
-      });
+      expect(
+        findCronRunForTests(taskRunId) ??
+          readCronRunRecordsForTests().find((task) => task.runId?.startsWith(`${taskRunId}:`)),
+      ).toMatchObject({ status: "succeeded", jobId: "isolated-timeout" });
       expect(findCronRunForTests(manualRunId)).toBeUndefined();
     });
   });
@@ -583,16 +549,12 @@ describe("cron service ops seam coverage", () => {
       storePath,
       jobs: [
         {
-          id: "broken-job",
+          ...createFutureEveryJob({ id: "broken-job", now, nextRunAtMs: 0 }),
           name: "broken",
-          enabled: true,
           createdAtMs: now - 86_400_000,
           updatedAtMs: now - 3_600_000,
           schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "test" },
-          state: { nextRunAtMs: 0 },
         },
       ],
     });
@@ -602,7 +564,6 @@ describe("cron service ops seam coverage", () => {
     const updated = await update(state, "broken-job", { description: "fixed" });
 
     expect(updated.description).toBe("fixed");
-    expect(updated.state.nextRunAtMs).toBeGreaterThan(0);
     expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
