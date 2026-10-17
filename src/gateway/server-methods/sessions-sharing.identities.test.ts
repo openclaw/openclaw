@@ -57,10 +57,30 @@ import type { GatewayRequestContext } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function seed(
+  key: string,
+  sessionId: string,
+  entry: Partial<Parameters<typeof upsertSessionEntryCore>[1]> = {},
+) {
+  return upsertSessionEntryCore(
+    { agentId: "main", sessionKey: key },
+    { updatedAt: 1, sessionId, ...entry },
+  );
+}
+
+function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
+  return withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      setRuntimeConfigSnapshot({});
+      return run(state);
+    },
+  );
+}
+
 describe("session member picker identities", () => {
   it("lists sharing evidence independently of placement display failures", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:sharing-display-failure";
       const scope = { agentId: "main", sessionKey };
       replaceSessionEntrySync(scope, { sessionId: "sharing-display-failure", updatedAt: 1 });
@@ -140,140 +160,125 @@ describe("session member picker identities", () => {
   });
 
   it("lists current identities and adds members without decoding unrelated saved prompts", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
-      async ({ env }) => {
-        setRuntimeConfigSnapshot({});
-        const sessionKey = "agent:main:profile-member";
-        const profile = ensureProfileForEmail("member@example.com");
-        setDisplayName(profile.id, "Member");
+    await withState(async ({ env }) => {
+      const sessionKey = "agent:main:profile-member";
+      const profile = ensureProfileForEmail("member@example.com");
+      setDisplayName(profile.id, "Member");
+      await seed(sessionKey, "session-profile-member", { visibility: "read-only" });
+      const savedPrompt = "unrelated saved sharing prompt".repeat(512);
+      for (const [agentId, createdActor] of [
+        ["main", { type: "human", source: "profile", id: profile.id, label: "Old member name" }],
+        ["research", { type: "agent", id: "research", label: "Alpha Research" }],
+      ] as const) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
+          { agentId, sessionKey: `agent:${agentId}:unrelated-sharing` },
           {
-            sessionId: "session-profile-member",
+            sessionId: `unrelated-sharing-${agentId}`,
             updatedAt: 1,
-            visibility: "read-only",
+            createdActor,
+            skillsSnapshot: { prompt: savedPrompt, skills: [] },
           },
         );
-        const savedPrompt = "unrelated saved sharing prompt".repeat(512);
-        for (const [agentId, createdActor] of [
-          ["main", { type: "human", source: "profile", id: profile.id, label: "Old member name" }],
-          ["research", { type: "agent", id: "research", label: "Alpha Research" }],
-        ] as const) {
-          await upsertSessionEntryCore(
-            { agentId, sessionKey: `agent:${agentId}:unrelated-sharing` },
-            {
-              sessionId: `unrelated-sharing-${agentId}`,
-              updatedAt: 1,
-              createdActor,
-              skillsSnapshot: { prompt: savedPrompt, skills: [] },
-            },
-          );
-        }
-        for (const [agentId, key, id, label, archivedAt] of [
-          ["main", "agent:main:archived", "archived-creator", "Archive", 1],
-          ["main", "agent:main:duplicate-a", "duplicate", "First label", undefined],
-          ["main", "agent:main:duplicate-z", "duplicate", "Last label", 1],
-          ["main", "global", "sentinel-main", "Main sentinel", undefined],
-          ["research", "global", "sentinel-research", "Research sentinel", undefined],
-        ] as const) {
-          replaceSessionEntrySync(
-            { agentId, sessionKey: key },
-            {
-              sessionId: key + agentId,
-              updatedAt: 1,
-              archivedAt,
-              createdActor: { type: "agent", id, label },
-            },
-          );
-        }
-        const incognitoKey = "agent:main:dashboard:incognito-picker";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: incognitoKey },
+      }
+      for (const [agentId, key, id, label, archivedAt] of [
+        ["main", "agent:main:archived", "archived-creator", "Archive", 1],
+        ["main", "agent:main:duplicate-a", "duplicate", "First label", undefined],
+        ["main", "agent:main:duplicate-z", "duplicate", "Last label", 1],
+        ["main", "global", "sentinel-main", "Main sentinel", undefined],
+        ["research", "global", "sentinel-research", "Research sentinel", undefined],
+      ] as const) {
+        replaceSessionEntrySync(
+          { agentId, sessionKey: key },
           {
-            sessionId: "incognito-picker",
+            sessionId: key + agentId,
             updatedAt: 1,
-            incognito: true,
-            createdActor: { type: "agent", id: "incognito-creator", label: "Incognito" },
+            archivedAt,
+            createdActor: { type: "agent", id, label },
           },
         );
-        try {
-          const profileOnly = ensureProfileForEmail("profile-only@example.com");
-          setDisplayName(profileOnly.id, "Profile only");
-          const requestContext = context(vi.fn(), {
-            agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-          });
-          setRuntimeConfigSnapshot(requestContext.getRuntimeConfig());
-          await call("session.members.list", { sessionKey }, requestContext);
-          const projection = getSessionRowProjection(requestContext)!;
-          await projection.ensureMaterialized();
-          const expected = [
-            { type: "agent", id: "research", label: "Alpha Research" },
-            { type: "agent", id: "archived-creator", label: "Archive" },
-            { type: "agent", id: "incognito-creator", label: "Incognito" },
-            { type: "agent", id: "duplicate", label: "Last label" },
-            { type: "agent", id: "sentinel-main", label: "Main sentinel" },
-            { type: "human", id: profile.id, label: "Member" },
-            { type: "human", id: profileOnly.id, label: "Profile only" },
-          ];
-          const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
-          const profileReads = vi
-            .spyOn(userProfileReads, "listProfiles")
-            .mockRejectedValue(new Error("Profile worker enumeration is unavailable"));
-          const parse = JSON.parse;
-          let unrelatedDecodes = 0;
-          const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-            if (typeof value === "string" && value.includes(savedPrompt)) {
-              unrelatedDecodes++;
-            }
-            return parse(value, reviver);
-          });
-          try {
-            for (const method of [
-              "session.members.list",
-              "session.members.listEvidence",
-            ] as const) {
-              const listed = await call(method, { sessionKey }, requestContext);
-              expect(listed[0]?.[1]).toMatchObject({ identities: expected });
-            }
-            expect(scans).not.toHaveBeenCalled();
-            expect(
-              projection.capture({ agentId: "main", key: "agent:main:archived" })?.materialized,
-            ).toBeUndefined();
-            expect(
-              await call(
-                "session.members.add",
-                { sessionKey, identityId: profile.id },
-                requestContext,
-              ),
-            ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
-          } finally {
-            parsed.mockRestore();
-            scans.mockRestore();
-            profileReads.mockRestore();
+      }
+      const incognitoKey = "agent:main:dashboard:incognito-picker";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: incognitoKey },
+        {
+          sessionId: "incognito-picker",
+          updatedAt: 1,
+          incognito: true,
+          createdActor: { type: "agent", id: "incognito-creator", label: "Incognito" },
+        },
+      );
+      try {
+        const profileOnly = ensureProfileForEmail("profile-only@example.com");
+        setDisplayName(profileOnly.id, "Profile only");
+        const requestContext = context(vi.fn(), {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        });
+        setRuntimeConfigSnapshot(requestContext.getRuntimeConfig());
+        await call("session.members.list", { sessionKey }, requestContext);
+        const projection = getSessionRowProjection(requestContext)!;
+        await projection.ensureMaterialized();
+        const expected = [
+          { type: "agent", id: "research", label: "Alpha Research" },
+          { type: "agent", id: "archived-creator", label: "Archive" },
+          { type: "agent", id: "incognito-creator", label: "Incognito" },
+          { type: "agent", id: "duplicate", label: "Last label" },
+          { type: "agent", id: "sentinel-main", label: "Main sentinel" },
+          { type: "human", id: profile.id, label: "Member" },
+          { type: "human", id: profileOnly.id, label: "Profile only" },
+        ];
+        const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
+        const profileReads = vi
+          .spyOn(userProfileReads, "listProfiles")
+          .mockRejectedValue(new Error("Profile worker enumeration is unavailable"));
+        const parse = JSON.parse;
+        let unrelatedDecodes = 0;
+        const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+          if (typeof value === "string" && value.includes(savedPrompt)) {
+            unrelatedDecodes++;
           }
+          return parse(value, reviver);
+        });
+        try {
+          for (const method of ["session.members.list", "session.members.listEvidence"] as const) {
+            const listed = await call(method, { sessionKey }, requestContext);
+            expect(listed[0]?.[1]).toMatchObject({ identities: expected });
+          }
+          expect(scans).not.toHaveBeenCalled();
           expect(
-            await authorizeResolvedSessionMutationAsync({
-              cfg: {},
-              client: identifiedClient(profile.id, "Member"),
-              sessionKey,
-              agentId: "main",
-            }),
-          ).toBeNull();
-          expect(unrelatedDecodes).toBe(0);
+            projection.capture({ agentId: "main", key: "agent:main:archived" })?.materialized,
+          ).toBeUndefined();
+          expect(
+            await call(
+              "session.members.add",
+              { sessionKey, identityId: profile.id },
+              requestContext,
+            ),
+          ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
         } finally {
-          memorySessionActorOwners.closeDatabase({
-            agentId: "main",
-            path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-          });
+          parsed.mockRestore();
+          scans.mockRestore();
+          profileReads.mockRestore();
         }
-      },
-    );
+        expect(
+          await authorizeResolvedSessionMutationAsync({
+            cfg: {},
+            client: identifiedClient(profile.id, "Member"),
+            sessionKey,
+            agentId: "main",
+          }),
+        ).toBeNull();
+        expect(unrelatedDecodes).toBe(0);
+      } finally {
+        memorySessionActorOwners.closeDatabase({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+        });
+      }
+    });
   });
 
   it("refreshes picker creators after creation and deletion without retaining request actors", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:picker-target";
       replaceSessionEntrySync(
         { agentId: "main", sessionKey },
@@ -346,17 +351,11 @@ describe("session member picker identities", () => {
 
 describe("session sharing authority", () => {
   it("adds, lists, and removes session members without caller-thread SQL after collaboration admission", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:sharing-authority";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "sharing-authority",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        },
-      );
+      await seed(sessionKey, "sharing-authority", {
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      });
       // Collaboration owns its cold admission; the worker-only entry seed does not admit it.
       await sharingStore.removeSessionMember(
         { agentId: "main", sessionKey },
@@ -405,8 +404,7 @@ describe("session sharing authority", () => {
   it("refuses membership evidence after a published foreign ownership change", async ({
     signal,
   }) => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:sharing-snapshot-owner";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(scope, {
@@ -503,16 +501,10 @@ describe("session sharing authority", () => {
   });
 
   it("refuses revoked managers and dirty membership at the worker commit grant", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:sharing-guest" },
-        {
-          sessionId: "sharing-guest",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "guest" },
-        },
-      );
+    await withState(async () => {
+      await seed("agent:main:sharing-guest", "sharing-guest", {
+        createdActor: { type: "human", source: "profile", id: "guest" },
+      });
       for (const method of ["session.members.add", "session.members.remove"] as const) {
         for (const change of ["caller", "role", "dirty"] as const) {
           const sessionKey = `agent:main:${method}-${change}`;
@@ -586,8 +578,7 @@ describe("session sharing authority", () => {
   });
 
   it("keeps the original session bound while membership preparation yields", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:sharing-preparation";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 1 });
@@ -635,63 +626,54 @@ describe("session sharing authority", () => {
   it.each(["session.members.list", "session.members.add"] as const)(
     "rechecks the current manager after projection preparation for %s",
     async (method) => {
-      await withOpenClawTestState(
-        { scenario: "minimal", prepareProfileCatalog: true },
-        async () => {
-          setRuntimeConfigSnapshot({});
-          const sessionKey = "agent:main:profile-enumeration-authority";
-          const owner = ensureProfileForEmail("owner-enumeration@example.test");
-          const foreign = ensureProfileForEmail("foreign-enumeration@example.test");
-          const member = ensureProfileForEmail("member-enumeration@example.test");
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            {
-              sessionId: "profile-enumeration-authority",
-              updatedAt: 1,
-              createdActor: { type: "human", source: "profile", id: owner.id },
-            },
-          );
-          const client = identifiedClient(owner.id);
-          const requestContext = context(vi.fn());
-          await initializeSessionReadContext(requestContext);
-          const projection = getSessionRowProjection(requestContext)!;
-          const preparation =
-            method === "session.members.list" ? "prepareSelection" : "ensureMaterialized";
-          const prepare = projection[preparation].bind(projection);
-          const ready = createDeferredCore();
-          const release = createDeferredCore();
-          const read = vi.spyOn(projection, preparation).mockImplementationOnce(async () => {
-            await prepare();
-            ready.resolve();
-            await release.promise;
-          });
-          const respond = vi.fn();
-          const pending = sessionSharingHandlers[method]!({
-            params: {
-              sessionKey,
-              ...(method === "session.members.add" ? { identityId: member.id } : {}),
-            },
-            context: requestContext,
-            client,
-            respond,
-          } as never);
-          const rejected = expect(pending).rejects.toThrow(/session .* before sharing/);
-          try {
-            await ready.promise;
-            client.authenticatedUserProfile = identifiedClient(foreign.id).authenticatedUserProfile;
-            release.resolve();
-            await rejected;
-            expect(respond).not.toHaveBeenCalled();
-            expect(
-              (await readSessionMembersInWorker({ agentId: "main", sessionKey })).members,
-            ).toEqual([]);
-          } finally {
-            release.resolve();
-            await Promise.allSettled([pending]);
-            read.mockRestore();
-          }
-        },
-      );
+      await withState(async () => {
+        const sessionKey = "agent:main:profile-enumeration-authority";
+        const owner = ensureProfileForEmail("owner-enumeration@example.test");
+        const foreign = ensureProfileForEmail("foreign-enumeration@example.test");
+        const member = ensureProfileForEmail("member-enumeration@example.test");
+        await seed(sessionKey, "profile-enumeration-authority", {
+          createdActor: { type: "human", source: "profile", id: owner.id },
+        });
+        const client = identifiedClient(owner.id);
+        const requestContext = context(vi.fn());
+        await initializeSessionReadContext(requestContext);
+        const projection = getSessionRowProjection(requestContext)!;
+        const preparation =
+          method === "session.members.list" ? "prepareSelection" : "ensureMaterialized";
+        const prepare = projection[preparation].bind(projection);
+        const ready = createDeferredCore();
+        const release = createDeferredCore();
+        const read = vi.spyOn(projection, preparation).mockImplementationOnce(async () => {
+          await prepare();
+          ready.resolve();
+          await release.promise;
+        });
+        const respond = vi.fn();
+        const pending = sessionSharingHandlers[method]!({
+          params: {
+            sessionKey,
+            ...(method === "session.members.add" ? { identityId: member.id } : {}),
+          },
+          context: requestContext,
+          client,
+          respond,
+        } as never);
+        const rejected = expect(pending).rejects.toThrow(/session .* before sharing/);
+        try {
+          await ready.promise;
+          client.authenticatedUserProfile = identifiedClient(foreign.id).authenticatedUserProfile;
+          release.resolve();
+          await rejected;
+          expect(respond).not.toHaveBeenCalled();
+          expect(
+            (await readSessionMembersInWorker({ agentId: "main", sessionKey })).members,
+          ).toEqual([]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending]);
+          read.mockRestore();
+        }
+      });
     },
   );
 });
@@ -708,10 +690,7 @@ describe("session sharing board ticket authority", () => {
         },
       } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       setRuntimeConfigSnapshot(cfg);
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "global" },
-        { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
-      );
+      await seed("global", "session-main-global", { visibility: "shared" });
       await upsertSessionEntryCore(
         { agentId: "work", sessionKey: "global" },
         {
@@ -760,54 +739,35 @@ describe("session sharing board ticket authority", () => {
         },
       };
       const authorize = async (
-        request: Parameters<typeof resolveSessionMutationAuthorizationAsync>[0],
+        client = identifiedClient("owner@example.com"),
+        requestContext = gatewayA,
+        method = "board.action",
+        signedTicket = ticket,
       ) => {
-        const result = await resolveSessionMutationAuthorizationAsync(request);
+        const result = await resolveSessionMutationAuthorizationAsync({
+          client,
+          context: requestContext,
+          method,
+          requestParams: { ticket: signedTicket, agentId: "work" },
+        });
         authorizations.push(result);
         return result.error;
       };
 
-      expect(
-        await authorize({
-          client: memberClient,
-          method: "board.action",
-          requestParams: { ticket, agentId: "work" },
-          context: gatewayA,
-        }),
-      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-      expect(
-        await authorize({
-          client: identifiedClient("owner@example.com"),
-          method: "board.action",
-          requestParams: { ticket, agentId: "work" },
-          context: gatewayA,
-        }),
-      ).toBeNull();
-      expect(
-        await authorize({
-          client: identifiedClient("owner@example.com"),
-          method: "board.action",
-          requestParams: { ticket, agentId: "work" },
-          context: gatewayB,
-        }),
-      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+      expect(await authorize(memberClient)).toMatchObject({
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      });
+      expect(await authorize()).toBeNull();
+      expect(await authorize(undefined, gatewayB)).toMatchObject({
+        details: { code: "SESSION_MUTATION_TARGET_REQUIRED" },
+      });
       gatewayAActive = false;
-      expect(
-        await authorize({
-          client: identifiedClient("owner@example.com"),
-          method: "board.event",
-          requestParams: { ticket, agentId: "work" },
-          context: gatewayA,
-        }),
-      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
-      expect(
-        await authorize({
-          client: memberClient,
-          method: "board.action",
-          requestParams: { ticket: unscopedTicket, agentId: "work" },
-          context: gatewayA,
-        }),
-      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+      expect(await authorize(undefined, gatewayA, "board.event")).toMatchObject({
+        details: { code: "SESSION_MUTATION_TARGET_REQUIRED" },
+      });
+      expect(await authorize(memberClient, gatewayA, "board.action", unscopedTicket)).toMatchObject(
+        { details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } },
+      );
     });
   });
 });

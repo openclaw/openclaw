@@ -61,12 +61,32 @@ beforeEach(() => mocks.afterSuggestionClaim.mockReset());
 // Register shared mocks before the handlers capture their presence dependency.
 const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
+function seed(
+  key: string,
+  sessionId: string,
+  entry: Partial<Parameters<typeof upsertSessionEntryCore>[1]> = {},
+) {
+  return upsertSessionEntryCore(
+    { agentId: "main", sessionKey: key },
+    { updatedAt: 1, sessionId, ...entry },
+  );
+}
+
+function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
+  return withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      setRuntimeConfigSnapshot({});
+      return run(state);
+    },
+  );
+}
+
 describe("session suggestion visibility and role ceilings", () => {
   it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
     "rechecks %s after a delayed suggestion list reply",
     async (change) => {
-      await withOpenClawTestState(profileState, async () => {
-        setRuntimeConfigSnapshot({});
+      await withState(async () => {
         await upsertDefaultSuggestionSession();
         for (const authorId of ["alice", "bob"]) {
           await addSessionSuggestionInWorker(
@@ -169,8 +189,7 @@ describe("session suggestion visibility and role ceilings", () => {
   );
 
   it("retains committed suggestion visibility through a tentative role relaxation", async () => {
-    await withOpenClawTestState(profileState, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withState(async (state) => {
       const owner = ensureProfileForEmail("policy-suggestion-owner@example.test");
       const reader = ensureProfileForEmail("policy-suggestion-reader@example.test");
       const requestClient = client(reader.id, "Reader");
@@ -189,15 +208,10 @@ describe("session suggestion visibility and role ceilings", () => {
       let committed = policy("view");
       await state.writeConfig(runtime);
       setRuntimeConfigSnapshot(runtime);
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "policy-suggestions",
-          updatedAt: 1,
-          visibility: "suggest",
-          createdActor: { type: "human", source: "profile", id: owner.id },
-        },
-      );
+      await seed(sessionKey, "policy-suggestions", {
+        visibility: "suggest",
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      });
       for (const [id, authorId] of [
         ["own-idea", reader.id],
         ["other-idea", owner.id],
@@ -251,19 +265,13 @@ describe("session suggestion visibility and role ceilings", () => {
   });
 
   it("enforces view, suggest, and hidden role ceilings while honoring explicit membership", async () => {
-    await withOpenClawTestState(profileState, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const ownerProfile = ensureProfileForEmail("suggestion-owner@example.test");
       const guestProfile = ensureProfileForEmail("suggestion-guest@example.test");
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: ownerProfile.id },
-          visibility: "suggest",
-        },
-      );
+      await seed(sessionKey, "session-main", {
+        createdActor: { type: "human", source: "profile", id: ownerProfile.id },
+        visibility: "suggest",
+      });
       const guest = client(guestProfile.id, "Guest");
       const roleConfig = (others: "none" | "view" | "suggest"): OpenClawConfig => ({
         gateway: {
@@ -336,18 +344,12 @@ describe("session suggestion visibility and role ceilings", () => {
   });
 
   it("hides draft suggestions from members while owner and admin can list", async () => {
-    await withOpenClawTestState(profileState, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const draftKey = "agent:main:draft-suggestions";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: draftKey },
-        {
-          sessionId: "session-draft",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "draft",
-        },
-      );
+      await seed(draftKey, "session-draft", {
+        createdActor: { type: "human", source: "profile", id: "owner" },
+        visibility: "draft",
+      });
       addSessionMember(
         { agentId: "main", sessionKey: draftKey },
         { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
@@ -363,6 +365,8 @@ describe("session suggestion visibility and role ceilings", () => {
       );
 
       const member = client("member", "Member");
+      const request = (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+        call(method, { sessionKey: draftKey, ...params }, member);
       const expectHiddenDraft = (result: Awaited<ReturnType<typeof call>>) => {
         expect(result.responses[0]?.[0]).toBe(false);
         expect(result.responses[0]?.[1]).toBeUndefined();
@@ -376,25 +380,17 @@ describe("session suggestion visibility and role ceilings", () => {
         });
       };
 
-      expectHiddenDraft(await call("session.suggestions.list", { sessionKey: draftKey }, member));
+      expectHiddenDraft(await request("session.suggestions.list"));
+      expectHiddenDraft(await request("session.suggestions.add", { text: "leak draft" }));
       expectHiddenDraft(
-        await call("session.suggestions.add", { sessionKey: draftKey, text: "leak draft" }, member),
-      );
-      expectHiddenDraft(
-        await call(
-          "session.suggestions.resolve",
-          { sessionKey: draftKey, id: "draft-suggestion", resolution: "dismiss" },
-          member,
-        ),
+        await request("session.suggestions.resolve", {
+          id: "draft-suggestion",
+          resolution: "dismiss",
+        }),
       );
       expect(
-        (
-          await call(
-            "session.typing",
-            { sessionKey: draftKey, sessionId: "session-draft", typing: true },
-            member,
-          )
-        ).responses[0]?.[1],
+        (await request("session.typing", { sessionId: "session-draft", typing: true }))
+          .responses[0]?.[1],
       ).toEqual({ ok: true, broadcast: false });
 
       const ownerList = await call(
@@ -419,20 +415,14 @@ describe("session suggestion visibility and role ceilings", () => {
   });
 
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
-    await withOpenClawTestState(profileState, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       vi.useFakeTimers();
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: incognitoKey },
-        {
-          sessionId: "session-incognito",
-          updatedAt: 1,
-          incognito: true,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await seed(incognitoKey, "session-incognito", {
+        incognito: true,
+        createdActor: { type: "human", source: "profile", id: "owner" },
+        visibility: "suggest",
+      });
       await addSessionSuggestionInWorker(
         { agentId: "main", sessionKey: incognitoKey },
         {
@@ -443,6 +433,8 @@ describe("session suggestion visibility and role ceilings", () => {
         },
       );
       const owner = client("owner", "Owner");
+      const request = (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+        call(method, { sessionKey: incognitoKey, ...params }, owner);
       const expectHidden = (result: Awaited<ReturnType<typeof call>>) => {
         expect(result.responses[0]?.[0]).toBe(false);
         expect(result.responses[0]?.[1]).toBeUndefined();
@@ -451,30 +443,17 @@ describe("session suggestion visibility and role ceilings", () => {
         );
       };
 
-      expectHidden(await call("session.suggestions.list", { sessionKey: incognitoKey }, owner));
+      expectHidden(await request("session.suggestions.list"));
+      expectHidden(await request("session.suggestions.add", { text: "probe" }));
       expectHidden(
-        await call("session.suggestions.add", { sessionKey: incognitoKey, text: "probe" }, owner),
+        await request("session.suggestions.resolve", {
+          id: "incognito-suggestion",
+          resolution: "dismiss",
+        }),
       );
+      expectHidden(await request("session.typing", { sessionId: "wrong-session", typing: true }));
       expectHidden(
-        await call(
-          "session.suggestions.resolve",
-          { sessionKey: incognitoKey, id: "incognito-suggestion", resolution: "dismiss" },
-          owner,
-        ),
-      );
-      expectHidden(
-        await call(
-          "session.typing",
-          { sessionKey: incognitoKey, sessionId: "wrong-session", typing: true },
-          owner,
-        ),
-      );
-      expectHidden(
-        await call(
-          "session.typing",
-          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true },
-          owner,
-        ),
+        await request("session.typing", { sessionId: "session-incognito", typing: true }),
       );
 
       const adminList = await call(
@@ -655,8 +634,7 @@ describe("suggestions queued behind provider review", () => {
   it.for(["add", "edit", "dismiss", "queue"] as const)(
     "preserves the lifecycle boundary for %s without replacing the session",
     async (action, { signal }) => {
-      await withOpenClawTestState(profileState, async (state) => {
-        setRuntimeConfigSnapshot({});
+      await withState(async (state) => {
         const metadataWrites =
           await import("../../config/sessions/session-metadata-write.async.js");
         const scope = { agentId: "main", sessionKey, env: state.env };
