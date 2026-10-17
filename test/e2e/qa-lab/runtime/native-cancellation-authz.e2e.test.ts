@@ -61,23 +61,22 @@ afterEach(async () => {
   resetPluginRuntimeStateForTest();
 });
 
+function writeSession(sessionKey: string, sessionId: string, ownerKey = ROUTE_OWNER) {
+  replaceSessionEntrySync(
+    {
+      sessionKey,
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    },
+    { sessionId, updatedAt: Date.now(), spawnedBy: ownerKey, parentSessionKey: ownerKey },
+  );
+}
+
 async function registerRunningSubagent(
   runId: string,
   childSessionKey: string,
   ownerKey = ROUTE_OWNER,
 ) {
-  replaceSessionEntrySync(
-    {
-      sessionKey: childSessionKey,
-      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-    },
-    {
-      sessionId: `session-${childSessionKey}`,
-      updatedAt: Date.now(),
-      spawnedBy: ownerKey,
-      parentSessionKey: ownerKey,
-    },
-  );
+  writeSession(childSessionKey, `session-${childSessionKey}`, ownerKey);
   await registerSubagentRun({
     runId,
     childSessionKey,
@@ -108,6 +107,21 @@ async function readAcpTrace(tracePath: string): Promise<AcpFixtureTraceEntry[]> 
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as AcpFixtureTraceEntry);
+}
+
+function heldElicitation(question: string, onEntered = () => {}) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    onElicitation: async () => {
+      onEntered();
+      entered.resolve();
+      await release.promise;
+      return { action: "accept" as const, content: { question } };
+    },
+  };
 }
 
 it("allows the owner and rejects foreign or replaced backing runs before termination", async ({
@@ -301,18 +315,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         const reusedAcpRunId = "run-native-acp-reused";
         const acpManager = getAcpSessionManager();
         async function initializeAcpSession(sessionKey: string, sessionId: string) {
-          replaceSessionEntrySync(
-            {
-              sessionKey,
-              storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
-            },
-            {
-              sessionId,
-              updatedAt: Date.now(),
-              spawnedBy: ROUTE_OWNER,
-              parentSessionKey: ROUTE_OWNER,
-            },
-          );
+          writeSession(sessionKey, sessionId);
           await acpManager.initializeSession({
             cfg: config,
             sessionKey,
@@ -323,6 +326,18 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         }
         const traceEntries = async (method: string) =>
           (await readAcpTrace(acpxTracePath)).filter((entry) => entry.method === method);
+        const cancelAcp = (
+          sessionKey: string,
+          runId: string,
+          context: AcpRunTurnInput["admittedRunContext"],
+        ) =>
+          acpManager.cancelSession({
+            cfg: config,
+            sessionKey,
+            expectedRunId: runId,
+            expectedInstanceId: context.operationalRunInstance.instanceId,
+            expectedOwnerKey: ROUTE_OWNER,
+          });
         async function runAcpTurn(
           input: Omit<AcpRunTurnInput, "admittedRunContext" | "cfg" | "provenance" | "mode">,
           onAdmitted?: (context: AcpRunTurnInput["admittedRunContext"]) => void,
@@ -358,37 +373,23 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
             content: { question: "complete normally" },
           }),
         });
-        const elicitationEntered = createDeferred();
-        const releaseElicitation = createDeferred();
+        const replacement = heldElicitation("complete normally");
         const replacementAcpTurn = runAcpTurn({
           sessionKey: acpChild,
           text: "Keep the same-id replacement active for cancellation fencing proof.",
           requestId: reusedAcpRunId,
-          onElicitation: async () => {
-            elicitationEntered.resolve();
-            await releaseElicitation.promise;
-            return { action: "accept", content: { question: "complete normally" } };
-          },
+          onElicitation: replacement.onElicitation,
         });
-        let acpxMethodsBeforeRelease: string[] = [];
         try {
-          await elicitationEntered.promise;
-          await expect(
-            acpManager.cancelSession({
-              cfg: config,
-              sessionKey: acpChild,
-              expectedRunId: reusedAcpRunId,
-              expectedInstanceId: firstAcpAdmission.operationalRunInstance.instanceId,
-              expectedOwnerKey: ROUTE_OWNER,
-            }),
-          ).rejects.toThrow();
-          acpxMethodsBeforeRelease = (await readAcpTrace(acpxTracePath)).map(
+          await replacement.entered;
+          await expect(cancelAcp(acpChild, reusedAcpRunId, firstAcpAdmission)).rejects.toThrow();
+          const acpxMethodsBeforeRelease = (await readAcpTrace(acpxTracePath)).map(
             (entry) => entry.method,
           );
           expect(acpxMethodsBeforeRelease).toContain("turn/start");
           expect(acpxMethodsBeforeRelease).not.toContain("turn/interrupt");
         } finally {
-          releaseElicitation.resolve();
+          replacement.release();
           await replacementAcpTurn;
         }
         const queuedAcpChild = "agent:main:acp:native-queued-successor";
@@ -435,30 +436,20 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
           turnId: expect.any(String),
         });
         const interruptsBeforeQueuedCancel = (await traceEntries("turn/interrupt")).length;
-        const queuedSuccessorEntered = createDeferred();
-        const releaseQueuedSuccessor = createDeferred();
+        const successor = heldElicitation("complete successor", () =>
+          queuedTurnOrder.push("successor-entered"),
+        );
         const queuedSuccessorEvents: AcpRuntimeEvent[] = [];
         const queuedSuccessorTurn = runAcpTurn({
           sessionKey: queuedAcpChild,
           text: "Complete the same-id successor without inheriting cancellation.",
           requestId: queuedAcpRunId,
-          onElicitation: async () => {
-            queuedTurnOrder.push("successor-entered");
-            queuedSuccessorEntered.resolve();
-            await releaseQueuedSuccessor.promise;
-            return { action: "accept", content: { question: "complete successor" } };
-          },
+          onElicitation: successor.onElicitation,
           onEvent: (event) => {
             queuedSuccessorEvents.push(event);
           },
         });
-        const queuedCancelPromise = acpManager.cancelSession({
-          cfg: config,
-          sessionKey: queuedAcpChild,
-          expectedRunId: queuedAcpRunId,
-          expectedInstanceId: queuedTargetContext.operationalRunInstance.instanceId,
-          expectedOwnerKey: ROUTE_OWNER,
-        });
+        const queuedCancelPromise = cancelAcp(queuedAcpChild, queuedAcpRunId, queuedTargetContext);
         // Cancellation joins the native interrupt and target turn; the fixture traces before replying.
         await withinTest(queuedCancelPromise, signal);
         const interruptsAfterTargetCancel = await traceEntries("turn/interrupt");
@@ -475,13 +466,13 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
           status: "cancelled",
           stopReason: "cancelled",
         });
-        await queuedSuccessorEntered.promise;
+        await successor.entered;
         expect(queuedTurnOrder).toEqual(["target-cancelled", "successor-entered"]);
         const successorTurnStart = (await traceEntries("turn/start")).at(-1);
         expect(successorTurnStart?.threadId).toBe(targetTurnStart?.threadId);
         expect(successorTurnStart?.turnId).toEqual(expect.any(String));
         expect(successorTurnStart?.turnId).not.toBe(targetTurnStart?.turnId);
-        releaseQueuedSuccessor.resolve();
+        successor.release();
         await queuedSuccessorTurn;
         expect(queuedSuccessorEvents.at(-1)).toEqual({
           type: "done",

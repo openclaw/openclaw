@@ -1,18 +1,15 @@
 // QA Lab product proof for the Workboard-owned managed-worktree lifecycle.
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
-import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { describe, expect, it } from "vitest";
 import type { ManagedWorktreeRecord } from "../../../../src/agents/worktrees/types.js";
 import { withinTest } from "../../../helpers/promise.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-
-const execFileAsync = promisify(execFile);
+import {
+  git,
+  initializeRepository,
+  useWorktreeGateway,
+} from "./managed-worktrees-product-proof-fixture.js";
 
 type WorkboardWorkspace = {
   kind: "worktree";
@@ -28,75 +25,17 @@ type WorkboardCard = {
   metadata?: { automation?: { workspace?: WorkboardWorkspace } };
 };
 type WorkboardCreateResult = { card: WorkboardCard };
-type WorkboardCompleteResult = { card: WorkboardCard };
 type WorkboardListResult = { cards: WorkboardCard[] };
 type WorkboardDispatchResult = {
   started: Array<{ cardId: string; runId: string; sessionKey: string; title: string }>;
   startFailures: Array<{ cardId: string; error: string; title: string }>;
 };
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
-type GatewayRunResult = { status?: unknown };
-
-let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
-
-afterEach(async () => {
-  if (gatewayOwner) {
-    await stopQaGatewayFixture(gatewayOwner);
-  }
-  harness = undefined;
-  gatewayOwner = undefined;
-});
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trimEnd();
-}
-
-async function initializeRepository(root: string): Promise<string> {
-  const repo = path.join(root, "source");
-  const remote = path.join(root, "origin.git");
-  await fs.mkdir(repo, { recursive: true });
-  await git(repo, "init", "-b", "main");
-  await git(repo, "config", "user.name", "OpenClaw Test");
-  await git(repo, "config", "user.email", "openclaw-test@example.invalid");
-  await fs.writeFile(path.join(repo, "README.md"), "base\n");
-  await git(repo, "add", "README.md");
-  await git(repo, "commit", "-m", "initialize Workboard worktree fixture");
-  await git(root, "init", "--bare", remote);
-  await git(repo, "remote", "add", "origin", remote);
-  await git(repo, "push", "-u", "origin", "main");
-  await git(remote, "symbolic-ref", "HEAD", "refs/heads/main");
-  return await fs.realpath(repo);
-}
+const fixture = useWorktreeGateway(true);
+let harness: Awaited<ReturnType<typeof fixture.start>>;
 
 async function startHarness() {
-  gatewayOwner = createQaLiveLaneGateway();
-  harness = await gatewayOwner.start({
-    repoRoot: process.cwd(),
-    providerMode: "mock-openai",
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    alternateModel: "mock-openai/gpt-5.6-luna",
-    transport: {
-      requiredPluginIds: [],
-      createGatewayConfig: () => ({}),
-    },
-    transportBaseUrl: "http://127.0.0.1",
-    controlUiEnabled: false,
-    mutateConfig: (config) => ({
-      ...config,
-      plugins: {
-        ...config.plugins,
-        allow: [...new Set([...(config.plugins?.allow ?? []), "workboard"])],
-        entries: {
-          ...config.plugins?.entries,
-          workboard: { enabled: true },
-        },
-      },
-    }),
-  });
+  harness = await fixture.start();
   return harness;
 }
 
@@ -108,29 +47,19 @@ function managedWorktreeName(cardId: string): string {
   return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
 }
 
-async function createCard(params: {
-  boardId: string;
-  repo: string;
-  title: string;
-}): Promise<WorkboardCard> {
-  if (!harness) {
-    throw new Error("QA gateway harness is not running");
-  }
-  const created = (await harness.gateway.call("workboard.cards.create", {
-    title: params.title,
+async function createCard(boardId: string, repo: string, title: string): Promise<WorkboardCard> {
+  const created = await harness.call<WorkboardCreateResult>("workboard.cards.create", {
+    title,
     status: "ready",
     agentId: "qa",
-    boardId: params.boardId,
-    workspace: { kind: "worktree", path: params.repo, branch: "main" },
-  })) as WorkboardCreateResult;
+    boardId,
+    workspace: { kind: "worktree", path: repo, branch: "main" },
+  });
   return created.card;
 }
 
 async function listWorktrees(): Promise<WorktreeListResult> {
-  if (!harness) {
-    throw new Error("QA gateway harness is not running");
-  }
-  return (await harness.gateway.call("worktrees.list", {})) as WorktreeListResult;
+  return harness.call<WorktreeListResult>("worktrees.list");
 }
 
 async function waitForMaterializedWorktree(params: {
@@ -190,10 +119,7 @@ async function dispatchCardAndWaitForWorktree(params: {
   stateDir: string;
   signal: AbortSignal;
 }): Promise<{ materializedPath: string; started: WorkboardDispatchResult["started"][number] }> {
-  if (!harness) {
-    throw new Error("QA gateway harness is not running");
-  }
-  const dispatchPromise = harness.gateway.call("workboard.cards.dispatch", {
+  const dispatchPromise = harness.call<WorkboardDispatchResult>("workboard.cards.dispatch", {
     boardId: params.boardId,
   });
   const observation = new AbortController();
@@ -205,7 +131,7 @@ async function dispatchCardAndWaitForWorktree(params: {
   });
   void materializedPromise.catch(() => {});
   try {
-    const dispatch = (await withinTest(dispatchPromise, params.signal)) as WorkboardDispatchResult;
+    const dispatch = await withinTest(dispatchPromise, params.signal);
     expect(dispatch.startFailures).toEqual([]);
     expect(dispatch.started).toEqual([
       expect.objectContaining({ cardId: params.cardId, runId: expect.any(String) }),
@@ -221,21 +147,19 @@ async function dispatchCardAndWaitForWorktree(params: {
   }
 }
 
-async function waitForWorktreeState(params: {
-  id: string;
-  predicate: (record: ManagedWorktreeRecord | undefined) => boolean;
-  timeoutMs?: number;
-}): Promise<ManagedWorktreeRecord | undefined> {
-  const deadline = Date.now() + (params.timeoutMs ?? 10_000);
-  let record: ManagedWorktreeRecord | undefined;
+async function waitForWorktreeState(id: string, outcome: "removed-lossless" | "retained-dirty") {
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    record = (await listWorktrees()).worktrees.find((entry) => entry.id === params.id);
-    if (params.predicate(record)) {
+    const record = (await listWorktrees()).worktrees.find((entry) => entry.id === id);
+    if (
+      record?.runEndCleanup?.outcome === outcome &&
+      (outcome !== "removed-lossless" || record.removedAt !== undefined)
+    ) {
       return record;
     }
     await sleep(50);
   }
-  throw new Error(`timed out waiting for managed worktree state ${params.id}`);
+  throw new Error(`timed out waiting for managed worktree state ${id}`);
 }
 
 describe("managed worktrees Workboard-owner product proof", () => {
@@ -244,58 +168,50 @@ describe("managed worktrees Workboard-owner product proof", () => {
     { timeout: 120_000 },
     async () => {
       const activeHarness = await startHarness();
-      const addResult = (await activeHarness.gateway.call("cron.add", {
+      const { call } = activeHarness;
+      const addResult = await call<{ id: string }>("cron.add", {
         name: "Workboard event nudge proof",
         enabled: true,
         schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Workboard event nudge proof" },
-      })) as { id: string };
+      });
       const boardId = "qa-event-nudge";
-      await activeHarness.gateway.call("workboard.boards.upsert", {
+      await call("workboard.boards.upsert", {
         id: boardId,
         automationJobId: addResult.id,
       });
-      const boards = (await activeHarness.gateway.call("workboard.boards.list", {})) as {
-        boards: Array<{ id: string; automationJobId?: string }>;
-      };
+      const boards = await call<{ boards: Array<{ id: string; automationJobId?: string }> }>(
+        "workboard.boards.list",
+      );
       expect(boards.boards).toContainEqual(
         expect.objectContaining({ id: boardId, automationJobId: addResult.id }),
       );
-      const card = (await activeHarness.gateway.call("workboard.cards.create", {
+      const card = await call<WorkboardCreateResult>("workboard.cards.create", {
         title: "Event nudge lifecycle",
         status: "ready",
         agentId: "qa",
         boardId,
-      })) as WorkboardCreateResult;
+      });
 
-      const dispatch = (await activeHarness.gateway.call("workboard.cards.dispatch", {
-        boardId,
-      })) as WorkboardDispatchResult;
+      const dispatch = await call<WorkboardDispatchResult>("workboard.cards.dispatch", { boardId });
       expect(dispatch.startFailures).toEqual([]);
       expect(dispatch.started).toEqual([
         expect.objectContaining({ cardId: card.card.id, runId: expect.any(String) }),
       ]);
-      const terminal = (await activeHarness.gateway.call(
-        "agent.wait",
-        { runId: dispatch.started[0]!.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      )) as GatewayRunResult;
-      expect(terminal.status).toBe("ok");
+      await activeHarness.waitForRun(dispatch.started[0]!.runId);
 
       const deadline = Date.now() + 15_000;
       let entries: unknown[] = [];
       let lifecycleStatus: string | undefined;
       while (Date.now() < deadline) {
-        const cards = (await activeHarness.gateway.call("workboard.cards.list", {
-          boardId,
-        })) as WorkboardListResult;
+        const cards = await call<WorkboardListResult>("workboard.cards.list", { boardId });
         lifecycleStatus = cards.cards.find((entry) => entry.id === card.card.id)?.status;
-        const runs = (await activeHarness.gateway.call("cron.runs", {
+        const runs = await call<{ entries?: unknown[] }>("cron.runs", {
           id: addResult.id,
           limit: 5,
-        })) as { entries?: unknown[] };
+        });
         entries = runs.entries ?? [];
         if (entries.length > 0) {
           break;
@@ -312,13 +228,17 @@ describe("managed worktrees Workboard-owner product proof", () => {
     "removes clean card worktrees and records dirty run-end retention",
     { timeout: 240_000 },
     async ({ signal }) => {
-      const canonicalTmp = await fs.realpath(os.tmpdir());
-      const fixtureRoot = tempDirs.make("openclaw-managed-worktree-workboard-", canonicalTmp);
-      const repo = await initializeRepository(fixtureRoot);
+      const fixtureRoot = await fixture.tempDir("openclaw-managed-worktree-workboard-");
+      const { repo } = await initializeRepository(fixtureRoot);
+      const remote = path.join(fixtureRoot, "origin.git");
+      await git(fixtureRoot, "init", "--bare", remote);
+      await git(repo, "remote", "add", "origin", remote);
+      await git(repo, "push", "-u", "origin", "main");
+      await git(remote, "symbolic-ref", "HEAD", "refs/heads/main");
       const activeHarness = await startHarness();
       const stateDir = path.join(await fs.realpath(activeHarness.gateway.tempRoot), "state");
       const boardId = "qa-worktree-clean";
-      const card = await createCard({ boardId, repo, title: "Clean worktree lifecycle" });
+      const card = await createCard(boardId, repo, "Clean worktree lifecycle");
       const name = managedWorktreeName(card.id);
 
       const { materializedPath, started } = await dispatchCardAndWaitForWorktree({
@@ -329,9 +249,9 @@ describe("managed worktrees Workboard-owner product proof", () => {
         signal,
       });
 
-      const cards = (await activeHarness.gateway.call("workboard.cards.list", {
+      const cards = await activeHarness.call<WorkboardListResult>("workboard.cards.list", {
         boardId,
-      })) as WorkboardListResult;
+      });
       const dispatchedCard = cards.cards.find((entry) => entry.id === card.id);
       const dispatchedWorkspace = dispatchedCard?.metadata?.automation?.workspace;
       expect(dispatchedWorkspace).toMatchObject({
@@ -355,19 +275,9 @@ describe("managed worktrees Workboard-owner product proof", () => {
       });
       expect(await fs.realpath(activeRecord?.path ?? "")).toBe(materializedPath);
 
-      const terminal = (await activeHarness.gateway.call(
-        "agent.wait",
-        { runId: started.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      )) as GatewayRunResult;
-      expect(terminal.status).toBe("ok");
+      await activeHarness.waitForRun(started.runId);
 
-      const removed = await waitForWorktreeState({
-        id: activeRecord?.id ?? "",
-        predicate: (record) =>
-          record?.removedAt !== undefined && record.runEndCleanup?.outcome === "removed-lossless",
-        timeoutMs: 30_000,
-      });
+      const removed = await waitForWorktreeState(activeRecord?.id ?? "", "removed-lossless");
       expect(removed).toMatchObject({
         id: activeRecord?.id,
         snapshotRef: `refs/openclaw/snapshots/${activeRecord?.id}`,
@@ -381,18 +291,17 @@ describe("managed worktrees Workboard-owner product proof", () => {
 
       // The mock provider reaches terminal without calling the Workboard worker protocol.
       // Close the first card at the operator boundary so its agent-global owner slot is free.
-      const completed = (await activeHarness.gateway.call("workboard.cards.complete", {
-        id: card.id,
-        summary: "Clean worktree lifecycle completed.",
-      })) as WorkboardCompleteResult;
+      const completed = await activeHarness.call<WorkboardCreateResult>(
+        "workboard.cards.complete",
+        {
+          id: card.id,
+          summary: "Clean worktree lifecycle completed.",
+        },
+      );
       expect(completed.card).toMatchObject({ id: card.id, status: "done" });
 
       const dirtyBoardId = "qa-worktree-dirty";
-      const dirtyCard = await createCard({
-        boardId: dirtyBoardId,
-        repo,
-        title: "Dirty worktree retention",
-      });
+      const dirtyCard = await createCard(dirtyBoardId, repo, "Dirty worktree retention");
       const dirtyName = managedWorktreeName(dirtyCard.id);
       const { materializedPath: dirtyPath, started: dirtyStarted } =
         await dispatchCardAndWaitForWorktree({
@@ -414,18 +323,9 @@ describe("managed worktrees Workboard-owner product proof", () => {
         ownerId: dirtyCard.id,
       });
 
-      const dirtyTerminal = (await activeHarness.gateway.call(
-        "agent.wait",
-        { runId: dirtyStarted.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      )) as GatewayRunResult;
-      expect(dirtyTerminal.status).toBe("ok");
+      await activeHarness.waitForRun(dirtyStarted.runId);
 
-      const retained = await waitForWorktreeState({
-        id: dirtyRecord?.id ?? "",
-        predicate: (record) => record?.runEndCleanup?.outcome === "retained-dirty",
-        timeoutMs: 30_000,
-      });
+      const retained = await waitForWorktreeState(dirtyRecord?.id ?? "", "retained-dirty");
       expect(retained).toMatchObject({
         id: dirtyRecord?.id,
         runEndCleanup: {

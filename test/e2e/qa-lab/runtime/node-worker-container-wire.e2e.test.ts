@@ -84,6 +84,10 @@ type ControlUiProof = {
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const waitForProof = (callback: () => unknown, interval = 100) =>
+  vi.waitFor(callback, { timeout: PROOF_TIMEOUT_MS, interval });
+const launchFilter = (launchId: string) =>
+  `label=openclaw.node-worker.launch=${Buffer.from(launchId).toString("base64url")}`;
 
 async function dockerOutput(args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("docker", args, {
@@ -195,14 +199,8 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
   let patchSessionKey: string | undefined;
   let releaseHeldPatch: (() => void) | undefined;
   const requests: ControlUiProof["requests"] = [];
-  let notifyPatchHeld: () => void;
-  let notifyPrematureChatSend: () => void;
-  const patchHeld = new Promise<void>((resolve) => {
-    notifyPatchHeld = resolve;
-  });
-  const prematureChatSend = new Promise<"premature-chat-send">((resolve) => {
-    notifyPrematureChatSend = () => resolve("premature-chat-send");
-  });
+  const patchHeld = createDeferred();
+  const prematureChatSend = createDeferred<"premature-chat-send">();
   await context.routeWebSocket(gateway.wsUrl, (socket) => {
     const upstream = socket.connectToServer();
     socket.onMessage((message) => {
@@ -230,11 +228,11 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
           releaseHeldPatch = undefined;
           upstream.send(message);
         };
-        notifyPatchHeld();
+        patchHeld.resolve();
         return;
       }
       if (releaseHeldPatch && request.method === "chat.send") {
-        notifyPrematureChatSend();
+        prematureChatSend.resolve("premature-chat-send");
       }
       upstream.send(message);
     });
@@ -250,8 +248,8 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
         patchSessionKey = sessionKey;
         patchArmed = true;
       },
-      held: patchHeld,
-      prematureChatSend,
+      held: patchHeld.promise,
+      prematureChatSend: prematureChatSend.promise,
       release: () => releaseHeldPatch?.(),
     },
   };
@@ -316,6 +314,16 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
           { runId, timeoutMs: PROOF_TIMEOUT_MS },
           { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
         );
+      const describeSession = () =>
+        gateway!.call("sessions.describe", { key: sessionKey }) as Promise<{
+          session?: {
+            execCwd?: string;
+            spawnedCwd?: string;
+            status?: string;
+            lastRunError?: string;
+            placement?: { state?: string; remoteWorkspaceDir?: string; recoveryError?: string };
+          };
+        }>;
 
       const initialApprovals = await operator.request<{ hash: string }>("exec.approvals.get", {});
       await operator.request("exec.approvals.set", {
@@ -367,15 +375,12 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         await captureControlUiProof(controlUiProof, "02-remote-device-selected");
         await controlUiProof.page.locator(".new-session-page__message").fill(INITIAL_PROMPT);
         await controlUiProof.page.getByRole("button", { name: "Start session" }).click();
-        await vi.waitFor(
-          () => {
-            expect(controlUiProof!.requests.map((request) => request.method)).toEqual([
-              "sessions.create",
-              "sessions.dispatch",
-              "sessions.send",
-            ]);
-          },
-          { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+        await waitForProof(() =>
+          expect(controlUiProof!.requests.map((request) => request.method)).toEqual([
+            "sessions.create",
+            "sessions.dispatch",
+            "sessions.send",
+          ]),
         );
         const [created, dispatched, sent] = controlUiProof.requests;
         expect(created?.params).toMatchObject({ agentId: "qa" });
@@ -392,23 +397,14 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         });
         const initialRunId = sent?.params?.idempotencyKey;
         expect(initialRunId).toBeTruthy();
-        await vi.waitFor(() => expect(launchId).toBeTruthy(), {
-          timeout: PROOF_TIMEOUT_MS,
-          interval: 100,
-        });
+        await waitForProof(() => expect(launchId).toBeTruthy());
         await expect(waitForRun(initialRunId)).resolves.toMatchObject({ status: "ok" });
         const firstLaunchId = launchId;
         expect(firstLaunchId).toBeTruthy();
         await workerNode.waitForWorkersIdle();
-        await expect(
-          containerIds(
-            `label=openclaw.node-worker.launch=${Buffer.from(firstLaunchId!).toString("base64url")}`,
-          ),
-        ).resolves.toBe("");
+        await expect(containerIds(launchFilter(firstLaunchId!))).resolves.toBe("");
         await expectAssistantMarker(operator, sessionKey, INITIAL_MARKER);
-        const described = (await gateway.call("sessions.describe", { key: sessionKey })) as {
-          session?: { placement?: { state?: string; remoteWorkspaceDir?: string } };
-        };
+        const described = await describeSession();
         expect(described.session?.placement).toMatchObject({ state: "active" });
         remoteWorkspaceDir = described.session?.placement?.remoteWorkspaceDir;
         launchId = undefined;
@@ -463,14 +459,11 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
         await captureControlUiProof(controlUiProof, "03-full-access-selected");
         const activeOperator = operator;
-        await vi.waitFor(
-          async () => {
-            expect(launchId).toBeTruthy();
-            expect(browserRunId).toBeTruthy();
-            await expectAssistantMarker(activeOperator, sessionKey, EXEC_MARKER);
-          },
-          { timeout: PROOF_TIMEOUT_MS, interval: 250 },
-        );
+        await waitForProof(async () => {
+          expect(launchId).toBeTruthy();
+          expect(browserRunId).toBeTruthy();
+          await expectAssistantMarker(activeOperator, sessionKey, EXEC_MARKER);
+        }, 250);
         const completed = await waitForRun(browserRunId);
         if (completed.status !== "ok") {
           throw new Error(
@@ -522,9 +515,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         EXEC_MARKER,
       );
 
-      const described = (await gateway.call("sessions.describe", { key: sessionKey })) as {
-        session?: { execCwd?: string; spawnedCwd?: string };
-      };
+      const described = await describeSession();
       const gatewayWorkspaceDir = described.session?.execCwd ?? described.session?.spawnedCwd;
       expect(gatewayWorkspaceDir).toBeTruthy();
       await expect(fs.readFile(path.join(gatewayWorkspaceDir!, EXEC_FILE), "utf8")).resolves.toBe(
@@ -545,23 +536,18 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         const previousLaunchId = launchId;
         browserRunId = undefined;
         await sendUiMessage(controlUiProof, CANCEL_PROMPT);
-        await vi.waitFor(
-          () => {
-            expect(launchId).toBeTruthy();
-            expect(launchId).not.toBe(previousLaunchId);
-            expect(browserRunId).toBeTruthy();
-          },
-          { timeout: PROOF_TIMEOUT_MS, interval: 100 },
-        );
+        await waitForProof(() => {
+          expect(launchId).toBeTruthy();
+          expect(launchId).not.toBe(previousLaunchId);
+          expect(browserRunId).toBeTruthy();
+        });
         const cancelledLaunchId = launchId!;
         const cancelledRunId = browserRunId!;
         const cancelledContainer = await observedContainer!;
-        await vi.waitFor(
-          async () =>
-            expect(
-              await fs.readFile(path.join(remoteWorkspaceDir!, CANCEL_STARTED_FILE), "utf8"),
-            ).toBe("started"),
-          { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+        await waitForProof(async () =>
+          expect(
+            await fs.readFile(path.join(remoteWorkspaceDir!, CANCEL_STARTED_FILE), "utf8"),
+          ).toBe("started"),
         );
 
         await controlUiProof.page.getByRole("button", { name: "Stop generating" }).click();
@@ -585,26 +571,9 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         await controlUiProof.page.getByRole("button", { name: "Stop generating" }).waitFor();
         releasePendingCancellation();
         releasePendingCancellation = undefined;
-        const recovered = await operator.request<{
-          status?: string;
-          error?: string;
-          summary?: string;
-          stopReason?: string;
-        }>(
-          "agent.wait",
-          { runId: recoveryRunId, timeoutMs: PROOF_TIMEOUT_MS },
-          { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
-        );
+        const recovered = await waitForRun(recoveryRunId);
         if (recovered.status !== "ok") {
-          const recoveryPlacement = (await gateway.call("sessions.describe", {
-            key: sessionKey,
-          })) as {
-            session?: {
-              status?: string;
-              lastRunError?: string;
-              placement?: { state?: string; recoveryError?: string };
-            };
-          };
+          const recoveryPlacement = await describeSession();
           const cancelled = await workerNode.supervisor.status(cancelledLaunchId);
           throw new Error(
             `replacement worker turn failed: ${JSON.stringify({

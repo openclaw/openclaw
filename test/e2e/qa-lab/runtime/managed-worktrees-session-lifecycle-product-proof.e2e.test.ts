@@ -1,21 +1,18 @@
 // QA Lab product proof for the session-owned managed-worktree lifecycle.
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
-import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { expect, it } from "vitest";
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ManagedWorktreeGcReceipt,
   ManagedWorktreeRecord,
 } from "../../../../src/agents/worktrees/types.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-
-const execFileAsync = promisify(execFile);
+import {
+  git,
+  initializeRepository,
+  useWorktreeGateway,
+} from "./managed-worktrees-product-proof-fixture.js";
 
 type SessionWorktree = { id: string; branch: string; repoRoot: string };
 type SessionCreateResult = {
@@ -33,59 +30,16 @@ type SessionListResult = {
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { runId?: unknown; status?: unknown };
 
-let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
-
-afterEach(async () => {
-  if (gatewayOwner) {
-    await stopQaGatewayFixture(gatewayOwner);
-  }
-  harness = undefined;
-  gatewayOwner = undefined;
-});
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trimEnd();
-}
-
-async function initializeRepository(root: string): Promise<{ baseCommit: string; repo: string }> {
-  const repo = path.join(root, "source");
-  await fs.mkdir(repo, { recursive: true });
-  await git(repo, "init", "-b", "main");
-  await git(repo, "config", "user.name", "OpenClaw Test");
-  await git(repo, "config", "user.email", "openclaw-test@example.invalid");
-  await fs.writeFile(path.join(repo, "README.md"), "base\n");
-  await git(repo, "add", "README.md");
-  await git(repo, "commit", "-m", "initialize session worktree fixture");
-  return {
-    baseCommit: await git(repo, "rev-parse", "HEAD"),
-    repo: await fs.realpath(repo),
-  };
-}
+const fixture = useWorktreeGateway();
 
 it(
   "creates, protects, snapshots, restores, and reports preserved session worktrees",
   { timeout: 240_000 },
   async () => {
-    const canonicalTmp = await fs.realpath(os.tmpdir());
-    const fixtureRoot = tempDirs.make("openclaw-managed-worktree-session-", canonicalTmp);
+    const fixtureRoot = await fixture.tempDir("openclaw-managed-worktree-session-");
     const { baseCommit, repo } = await initializeRepository(fixtureRoot);
-    gatewayOwner = createQaLiveLaneGateway();
-    harness = await gatewayOwner.start({
-      repoRoot: process.cwd(),
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna",
-      transport: {
-        requiredPluginIds: [],
-        createGatewayConfig: () => ({}),
-      },
-      transportBaseUrl: "http://127.0.0.1",
-      controlUiEnabled: false,
-    });
+    const harness = await fixture.start();
+    const { call, waitForRun } = harness;
     const gateway = harness.gateway;
     const createSessionWorktree = (name: string) =>
       gateway.call(
@@ -137,9 +91,7 @@ it(
     );
     expect(await git(repo, "rev-parse", `refs/heads/${clean.worktree.branch}`)).toBe(baseCommit);
 
-    const sessions = (await harness.gateway.call("sessions.list", {
-      agentId: "qa",
-    })) as SessionListResult;
+    const sessions = await call<SessionListResult>("sessions.list", { agentId: "qa" });
     expect(sessions.sessions).toContainEqual(
       expect.objectContaining({
         key: clean.key,
@@ -152,7 +104,7 @@ it(
       }),
     );
 
-    const started = (await harness.gateway.call(
+    const started = await call<GatewayRunResult>(
       "chat.send",
       {
         sessionKey: clean.key,
@@ -160,15 +112,10 @@ it(
         deliver: false,
         idempotencyKey: randomUUID(),
       },
-      { timeoutMs: 30_000 },
-    )) as GatewayRunResult;
+      30_000,
+    );
     expect(started).toMatchObject({ runId: expect.any(String), status: "started" });
-    const terminal = (await harness.gateway.call(
-      "agent.wait",
-      { runId: started.runId, timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
-    )) as GatewayRunResult;
-    expect(terminal.status).toBe("ok");
+    await waitForRun(started.runId);
 
     let gc = (await gateway.call("worktrees.gc", {})) as ManagedWorktreeGcReceipt;
     expect(gc).toMatchObject({ jobId: expect.any(String), state: "queued" });
@@ -220,9 +167,9 @@ it(
     const dirtySnapshotRef = `refs/openclaw/snapshots/${dirty.worktree.id}`;
     const dirtySnapshotCommit = await git(repo, "rev-parse", dirtySnapshotRef);
 
-    const restored = (await harness.gateway.call("worktrees.restore", {
+    const restored = await call<ManagedWorktreeRecord>("worktrees.restore", {
       id: dirty.worktree.id,
-    })) as ManagedWorktreeRecord;
+    });
     expect(restored).toMatchObject({
       id: dirty.worktree.id,
       branch: dirty.worktree.branch,
@@ -238,9 +185,7 @@ it(
 
     const locked = await createSessionWorktree("qa-session-locked");
     await git(repo, "worktree", "lock", locked.worktree.path);
-    const lockedDeleted = (await harness.gateway.call("sessions.delete", {
-      key: locked.key,
-    })) as SessionsDeleteResult;
+    const lockedDeleted = await call<SessionsDeleteResult>("sessions.delete", { key: locked.key });
     expect(lockedDeleted).toEqual(
       expect.objectContaining({
         deleted: true,
