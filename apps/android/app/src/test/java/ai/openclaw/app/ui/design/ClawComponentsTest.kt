@@ -7,7 +7,9 @@ import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.parseClawHubSearchResults
+import ai.openclaw.app.ui.HealthStatus
 import ai.openclaw.app.ui.SettingsRefreshControls
+import ai.openclaw.app.ui.SettingsStatusPanel
 import ai.openclaw.app.ui.SettingsSummaryContent
 import ai.openclaw.app.ui.chat.ChatMarkdown
 import android.graphics.Bitmap
@@ -117,6 +119,28 @@ class ClawComponentsTest {
     val largeTitle = composeRule.onNodeWithText(title.value).fetchSemanticsNode().boundsInRoot
     val largeValue = composeRule.onNodeWithText(value.value).fetchSemanticsNode().boundsInRoot
     assertTrue("Long status moves below the complete title", largeValue.top >= largeTitle.bottom)
+  }
+
+  @Test
+  fun statusPanelKeepsLabelsAndBadgesInsideItsHorizontalInset() {
+    val rows = listOf(HealthStatus("Gateway", "Connected", healthy = true), HealthStatus("Phone Node", "Waiting", healthy = false))
+    composeRule.setContent {
+      ClawDesignTheme {
+        LazyColumn(Modifier.width(320.dp)) {
+          item { SettingsStatusPanel(rows = rows, modifier = Modifier.testTag("status-panel")) }
+        }
+      }
+    }
+    // mdpi keeps 1dp == 1px. The badge surface extends 8dp beyond its text.
+    val panelInset = 12f
+    val badgeTextPadding = 8f
+    val panel = composeRule.onNodeWithTag("status-panel").fetchSemanticsNode().boundsInRoot
+    for (row in rows) {
+      val label = composeRule.onNodeWithText(row.title).fetchSemanticsNode().boundsInRoot
+      val badgeText = composeRule.onNodeWithText(row.value).fetchSemanticsNode().boundsInRoot
+      assertTrue("${row.title} label keeps the panel inset", label.left - panel.left >= panelInset)
+      assertTrue("${row.value} badge keeps the panel inset", panel.right - (badgeText.right + badgeTextPadding) >= panelInset)
+    }
   }
 
   @Test
