@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,11 +49,15 @@ function sourceFixture() {
     ).run(stateKey, JSON.stringify({ source: value }), 1);
     db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
   };
-  return { root, options, stateKey, seed };
+  const read = (context: ReturnType<typeof captureReadContext>) =>
+    preserveArtifacts(() =>
+      readExisting(options, { type: "tui.lastSession.read", stateKey }, { context }),
+    );
+  return { root, options, seed, read };
 }
 
 it("rejects successor bytes substituted after fresh validation and before snapshot preparation", async () => {
-  const { root, options, stateKey, seed } = sourceFixture();
+  const { root, options, seed, read } = sourceFixture();
   const replacement = path.join(root, "replacement.sqlite");
   const archived = path.join(root, "original.sqlite");
   seed(options.path, "original");
@@ -77,18 +82,11 @@ it("rejects successor bytes substituted after fresh validation and before snapsh
       fs.renameSync(replacement, options.path);
       return startPreparation(pathname, preparationOptions);
     });
-  const outcome = await settle(
-    preserveArtifacts(() =>
-      readExisting(options, { type: "tui.lastSession.read", stateKey }, { context }),
-    ),
-  );
+  const outcome = await settle(read(context));
 
   expect(preparation).toHaveBeenCalledOnce();
   expect(readDatabasePathIdentitySync(options.path).key).toBe(replacementIdentity.key);
-  expect(outcome).toHaveProperty("error");
-  if (!("error" in outcome)) {
-    throw new Error("The original read admission accepted a replacement database");
-  }
+  assert("error" in outcome, "The original read admission accepted a replacement database");
   expect(
     collectNestedErrorCandidates(outcome.error).some(
       (error) => error instanceof Error && /identity|source.*changed/i.test(error.message),
@@ -101,7 +99,7 @@ it("rejects successor bytes substituted after fresh validation and before snapsh
 it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
   "reads the admitted source after a same-inode birthtime metadata change",
   async () => {
-    const { options, stateKey, seed } = sourceFixture();
+    const { options, seed, read } = sourceFixture();
     const value = JSON.stringify({ source: "original" });
     seed(options.path, "original");
     await closeState();
@@ -119,11 +117,7 @@ it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
     expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
     expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
     expect(() => context.admission.assertCurrent()).not.toThrow();
-    expect(
-      await preserveArtifacts(() =>
-        readExisting(options, { type: "tui.lastSession.read", stateKey }, { context }),
-      ),
-    ).toMatchObject({
+    expect(await read(context)).toMatchObject({
       ok: true,
       type: "tui.lastSession.read",
       row: { value_json: value, updated_at_ms: 1 },
@@ -133,35 +127,26 @@ it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
     expect(fs.readdirSync(stagingRoot).toSorted()).toEqual(stagingBefore);
     expect(fs.readFileSync(options.path)).toEqual(sourceBytes);
     expect(fs.readdirSync(path.dirname(options.path)).toSorted()).toEqual(sourceFiles);
-    const retained = fs.statSync(options.path, { bigint: true });
-    expect([retained.dev, retained.ino, retained.birthtimeNs]).toEqual([
-      after.dev,
-      after.ino,
-      after.birthtimeNs,
-    ]);
+    const { dev, ino, birthtimeNs } = after;
+    expect(fs.statSync(options.path, { bigint: true })).toMatchObject({ dev, ino, birthtimeNs });
   },
 );
 
-function source() {
-  const pathname = path.join(directories.make("openclaw-readonly-exclusion-"), "openclaw.sqlite");
-  const owner = openState({ path: pathname });
-  owner.db
-    .prepare(
-      "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-    )
-    .run("readonly-exclusion", "preserved", "{}", 1);
-  resetState();
-  return pathname;
-}
-
 it("shares one online backup across concurrent snapshots of the live state owner", async () => {
-  const pathname = source();
-  const owner = openState({ path: pathname });
-  owner.db
-    .prepare(
-      "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-    )
-    .run("readonly-exclusion", "single-flight", "{}", 2);
+  const pathname = path.join(directories.make("openclaw-readonly-exclusion-"), "openclaw.sqlite");
+  for (const [eventKey, createdAt] of [
+    ["preserved", 1],
+    ["single-flight", 2],
+  ] as const) {
+    openState({ path: pathname })
+      .db.prepare(
+        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+      )
+      .run("readonly-exclusion", eventKey, "{}", createdAt);
+    if (createdAt === 1) {
+      resetState();
+    }
+  }
   const sqlite = await import("../infra/node-sqlite.js").then((module) =>
     module.requireNodeSqlite(),
   );

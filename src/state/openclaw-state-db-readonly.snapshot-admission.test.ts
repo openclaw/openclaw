@@ -8,24 +8,14 @@ import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectCalls, makeReadSource, settle } from "./openclaw-state-db-fixtures.test-support.js";
 import { createReadWorkerFixture } from "./openclaw-state-db-readonly.test-support.js";
-import type {
-  OpenClawStateReadAuthority,
-  OpenClawStateReadLocation,
-  OpenClawStateReadOutcome,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 
 const mocks = vi.hoisted(() => ({
   capture: vi.fn(),
-  assertCurrent: vi.fn<() => void>(),
   assertFresh: vi.fn<() => void>(),
   prepare: vi.fn(),
   cleanup: vi.fn<() => Promise<boolean>>(),
-  read: vi.fn<
-    (
-      source: OpenClawStateReadLocation,
-      authority: OpenClawStateReadAuthority,
-    ) => Promise<OpenClawStateReadOutcome>
-  >(),
+  read: vi.fn<Parameters<typeof createReadWorkerFixture>[0]>(),
   forbiddenNative: vi.fn(() => {
     throw new Error("Native reads must not be reached by rejected admission");
   }),
@@ -84,20 +74,21 @@ import { captureOpenClawStateWorkerContext as captureContext } from "./openclaw-
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 let source: string;
+let options: { path: string };
 
 beforeEach(() => {
   source = makeReadSource(directories, "state-snapshot-admission-").path;
+  options = { path: source };
   mocks.forbiddenNative.mockClear();
   mocks.read.mockReset().mockResolvedValue({
     value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
-  mocks.assertCurrent.mockReset();
   mocks.assertFresh.mockReset();
   mocks.cleanup.mockReset().mockResolvedValue(true);
   mocks.capture.mockReset().mockImplementation((databasePath: string) => ({
     databasePath,
     identity: {},
-    assertCurrent: mocks.assertCurrent,
+    assertCurrent() {},
   }));
   mocks.prepare.mockReset().mockResolvedValue({
     location: "/fixture/private.sqlite",
@@ -171,16 +162,13 @@ it.each([
     } else if (kind === "shutdown") {
       await cleanupSnapshotOperations();
     }
-    expect(await outcome).toMatchObject({
-      error: {
-        cause:
-          kind === "cancelled"
-            ? { name: "AbortError", cause: cancelled }
-            : kind === "shutdown"
-              ? { name: "AbortError" }
-              : refusal,
-      },
-    });
+    const cause =
+      kind === "cancelled"
+        ? { name: "AbortError", cause: cancelled }
+        : kind === "shutdown"
+          ? { name: "AbortError" }
+          : refusal;
+    expect(await outcome).toMatchObject({ error: { cause } });
     expectCalls(0, mocks.capture, mocks.prepare, operation, mocks.cleanup);
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -196,7 +184,7 @@ it("preserves discovery capture failure without preparing bytes", async () => {
     throw failure;
   });
   const operation = vi.fn(async () => 1);
-  await expect(withSnapshot(operation, { path: source })).rejects.toMatchObject({
+  await expect(withSnapshot(operation, options)).rejects.toMatchObject({
     message: expect.stringContaining("Cannot read shared state for discovery: " + source),
     cause: failure,
   });
@@ -207,31 +195,27 @@ it("retires snapshot admission even when discovery cleanup fails", async () => {
   mocks.cleanup.mockResolvedValueOnce(false);
   let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
   await expect(
-    withSnapshot(
-      async () => {
-        escape = AsyncLocalStorage.snapshot();
-        expect(activeSnapshot({ path: source })).toBeDefined();
-        return 1;
-      },
-      { path: source },
-    ),
+    withSnapshot(async () => {
+      escape = AsyncLocalStorage.snapshot();
+      expect(activeSnapshot(options)).toBeDefined();
+      return 1;
+    }, options),
   ).rejects.toThrow("snapshot cleanup failed");
-  await escape(() => expectRetiredAdmission(source));
+  await escape(expectRetiredAdmission);
   const other = { path: path.join(path.dirname(source), "other") };
   expect(escape(() => activeSnapshot(other))).toBeUndefined();
   expectCalls(0, mocks.forbiddenNative, mocks.read);
 });
 
 // Escaped continuations retain ALS, but admission ends before private bytes are removed.
-async function expectRetiredAdmission(pathname: string) {
-  const options = { path: pathname };
+async function expectRetiredAdmission() {
   const attempts = {
     getter: () => activeSnapshot(options),
     native: () => readOnly(() => "read", options),
     currentRows: () => readCurrent(() => "read", options),
     currentSnapshot: () => withSyncSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withSnapshot(async () => "nested", options),
-    nestedDisposable: () => withDisposableOpenClawStateReads(pathname, async () => "nested"),
+    nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
     worker: () => readExisting(options, { type: "backup.runs" }),
   };
   await Promise.all(
@@ -266,17 +250,17 @@ it.each(["snapshot", "disposable"] as const)(
     let read!: ReturnType<typeof readExisting>;
     const callback = async () => {
       escape = AsyncLocalStorage.snapshot();
-      read = readExisting({ path: source }, { type: "backup.runs" });
+      read = readExisting(options, { type: "backup.runs" });
       await started.promise;
     };
     const closing =
       kind === "snapshot"
-        ? withSnapshot(callback, { path: source })
+        ? withSnapshot(callback, options)
         : withDisposableOpenClawStateReads(source, callback);
     await startedClosing.promise;
     try {
       expect(mocks.cleanup).not.toHaveBeenCalled();
-      await escape(() => expectRetiredAdmission(source));
+      await escape(expectRetiredAdmission);
       expect(mocks.read).toHaveBeenCalledOnce();
     } finally {
       finishRead.resolve();
@@ -284,30 +268,26 @@ it.each(["snapshot", "disposable"] as const)(
       await closing;
     }
     expect(await read).toEqual(expected.value);
-    await escape(() => expectRetiredAdmission(source));
+    await escape(expectRetiredAdmission);
     expect(mocks.forbiddenNative).not.toHaveBeenCalled();
     expect(mocks.cleanup).toHaveBeenCalledTimes(kind === "snapshot" ? 1 : 0);
   },
 );
 
 it("keeps captured schema authority while selecting current rows", async () => {
-  await withExistingSchema({ path: source }, () =>
-    withSnapshot(
-      async () => {
-        const context = captureContext({ path: source });
-        mocks.read.mockImplementation(async (location) => {
-          expect(location.context).toBe(context);
-          expect(existingSchemaPath()).toBe(source);
-          expect(location.location).toBe(source);
-          return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
-        });
-        await expect(
-          readExisting({ path: source }, { type: "backup.runs" }, { current: true, context }),
-        ).resolves.toMatchObject({ ok: true, runs: [] });
-        expect(mocks.read).toHaveBeenCalledOnce();
-      },
-      { path: source },
-    ),
+  await withExistingSchema(options, () =>
+    withSnapshot(async () => {
+      const context = captureContext(options);
+      mocks.read.mockImplementation(async (location) => {
+        expect(location.context).toBe(context);
+        expect([existingSchemaPath(), location.location]).toEqual([source, source]);
+        return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
+      });
+      await expect(
+        readExisting(options, { type: "backup.runs" }, { current: true, context }),
+      ).resolves.toMatchObject({ ok: true, runs: [] });
+      expect(mocks.read).toHaveBeenCalledOnce();
+    }, options),
   );
   expect(mocks.forbiddenNative).not.toHaveBeenCalled();
   expect(mocks.cleanup).toHaveBeenCalledOnce();

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -45,10 +46,10 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    mock.close.mockResolvedValue();
-    mock.closePool.mockResolvedValue();
-    mock.closeResources.mockResolvedValue();
-    mock.rotate.mockResolvedValue();
+    for (const method of [mock.close, mock.closePool, mock.closeResources, mock.rotate]) {
+      method.mockResolvedValue();
+    }
+    vi.restoreAllMocks();
     await closeState();
     cleanup();
   }),
@@ -61,10 +62,9 @@ const reply: OpenClawStateReadReply = {
 };
 beforeEach(() => {
   mock.run.mockReset().mockResolvedValue(reply);
-  mock.close.mockReset().mockResolvedValue();
-  mock.closePool.mockReset().mockResolvedValue();
-  mock.closeResources.mockReset().mockResolvedValue();
-  mock.rotate.mockReset().mockResolvedValue();
+  for (const method of [mock.close, mock.closePool, mock.closeResources, mock.rotate]) {
+    method.mockReset().mockResolvedValue();
+  }
 });
 function source() {
   return makeReadSource(tempDirs, "state-read-error-phase-");
@@ -78,22 +78,18 @@ function mapper() {
 }
 
 it("rotates mapped readers when explicit SQLite close cannot release native resources", async () => {
-  const capabilities = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
+  vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
     explicitSqliteCloseReleasesNativeResources: false,
     decided: true,
     reason: "test policy",
   });
-  try {
-    const options = source();
-    await readExisting(options, { type: "backup.runs" });
-    await closePath(options.path);
-    expect(mock.rotate).toHaveBeenCalledOnce();
-    expectCalls(0, mock.closeResources, mock.closePool);
-    await closeState();
-    expect(mock.closePool).toHaveBeenCalledOnce();
-  } finally {
-    capabilities.mockRestore();
-  }
+  const options = source();
+  await readExisting(options, { type: "backup.runs" });
+  await closePath(options.path);
+  expect(mock.rotate).toHaveBeenCalledOnce();
+  expectCalls(0, mock.closeResources, mock.closePool);
+  await closeState();
+  expect(mock.closePool).toHaveBeenCalledOnce();
 });
 
 it.each(["retired", "different-source", "schema"] as const)(
@@ -119,18 +115,16 @@ it.each(["retired", "different-source", "schema"] as const)(
     } else {
       await expect(Promise.resolve().then(read)).rejects.toBe(mapped);
     }
-    expect(mapError).toHaveBeenCalledOnce();
-    expect(mapError.mock.calls[0]?.[1]).toBe("before-read");
-    if (kind !== "schema") {
-      expect(mapError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining(
-          kind === "retired"
-            ? { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }
-            : { message: "Shared-state read context does not match its selected source" },
-        ),
-        "before-read",
-      );
-    }
+    expect(mapError).toHaveBeenCalledExactlyOnceWith(
+      kind === "schema"
+        ? expect.anything()
+        : expect.objectContaining(
+            kind === "retired"
+              ? { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }
+              : { message: "Shared-state read context does not match its selected source" },
+          ),
+      "before-read",
+    );
     expectCalls(0, mock.run, mock.close);
   },
 );
@@ -138,13 +132,14 @@ it.each(["retired", "different-source", "schema"] as const)(
 it.each(["before-read", "read", "unobserved"] as const)(
   "maps the complete %s failure after transport cleanup",
   async (phase) => {
+    const blobDetails = {
+      code: "PLUGIN_BLOB_CORRUPT" as const,
+      operation: "lookup" as const,
+      path: "/fixture/blob.sqlite",
+    };
     const original =
       phase === "read"
-        ? new PluginBlobStoreError("query failed", {
-            code: "PLUGIN_BLOB_CORRUPT",
-            operation: "lookup",
-            path: "/fixture/blob.sqlite",
-          })
+        ? new PluginBlobStoreError("query failed", blobDetails)
         : new Error("source admission or transport failed");
     const cleanup = new Error("cleanup failed");
     if (phase === "unobserved") {
@@ -171,16 +166,9 @@ it.each(["before-read", "read", "unobserved"] as const)(
     const [error, observedPhase] = mapError.mock.calls[0]!;
     expect(observedPhase).toBe(phase);
     if (phase === "read") {
-      expect(error).toBeInstanceOf(AggregateError);
-      if (!(error instanceof AggregateError)) {
-        throw new Error("Expected aggregate");
-      }
+      assert(error instanceof AggregateError);
       expect(error.errors[0]).toBeInstanceOf(PluginBlobStoreError);
-      expect(error.errors[0]).toMatchObject({
-        code: "PLUGIN_BLOB_CORRUPT",
-        operation: "lookup",
-        path: "/fixture/blob.sqlite",
-      });
+      expect(error.errors[0]).toMatchObject(blobDetails);
       expect(error.errors[1]).toBe(cleanup);
       expect(error.cause).toBe(error.errors[0]);
     } else {

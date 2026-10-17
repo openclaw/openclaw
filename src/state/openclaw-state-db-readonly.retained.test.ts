@@ -154,19 +154,15 @@ it("retains failed preparation custody through a pending close and canonical ret
   let maintenanceClose: Promise<void> | undefined;
   let canonicalClose: Promise<unknown> | undefined;
   let completion: ReturnType<typeof readExisting> | undefined;
-  let readSettled = false;
+  const settled = vi.fn();
   try {
     completion = maintenance.run(() =>
       preserveArtifacts(() => readExisting(options, { type: "backup.runs" }, { mapError })),
     );
-    const settled = () => {
-      readSettled = true;
-    };
     void completion.then(settled, settled);
     preparation.reject(preparationFailure);
     await firstStarted.promise;
-    expect(readSettled).toBe(false);
-    expectCalls(0, mapError, released);
+    expectCalls(0, settled, mapError, released);
     expect(startClose).toHaveBeenCalledOnce();
     expect(taskCount).toBe(1); // Admission only; preparation never yielded a query location.
     maintenanceClose = maintenance.close();

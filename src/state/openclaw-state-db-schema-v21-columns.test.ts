@@ -32,6 +32,10 @@ const retentionColumns = [
   "retention_max_age_ms",
   "retention_max_entries",
 ] as const;
+const policy = (prefix: string, age = "1", count = "2") =>
+  `{"completionRetention":{"idPrefix":${prefix},"maxAgeMs":${age},"maxEntries":${count}}}`;
+const retention = (values?: readonly [string, number, number]) =>
+  Object.fromEntries(retentionColumns.map((column, i) => [column, values?.[i] ?? null]));
 
 function openMigrationFixture() {
   const db = new DatabaseSync(":memory:");
@@ -130,8 +134,6 @@ it("derives historical transcript strings without converting other JSON types", 
 it("preserves the shipped retention predicate for raw JSON scalar and compound values", () => {
   using db = openMigrationFixture();
   type Case = { json: string; id?: string; expected?: [string, number, number] };
-  const policy = (prefix: string, age = "1", count = "2") =>
-    `{"completionRetention":{"idPrefix":${prefix},"maxAgeMs":${age},"maxEntries":${count}}}`;
   const cases: Case[] = [
     { json: policy('"kept:"'), expected: ["kept:", 1, 2] },
     {
@@ -175,9 +177,7 @@ it("preserves the shipped retention predicate for raw JSON scalar and compound v
   }
   migratePredicateColumnsV21(db, 20);
   for (const [index, specimen] of cases.entries()) {
-    const expected = Object.fromEntries(
-      retentionColumns.map((column, field) => [column, specimen.expected?.[field] ?? null]),
-    );
+    const expected = retention(specimen.expected);
     expect(
       readRow(
         db,
@@ -208,8 +208,7 @@ it("keeps promoted JSON paths out of runtime reader and retention SQL", () => {
 });
 
 describe("schema 20 migration through shared-state owners", () => {
-  const retainedJson =
-    '{"completionRetention":{"idPrefix":"kept:","maxAgeMs":86400000,"maxEntries":2}}';
+  const retainedJson = policy('"kept:"', "86400000");
   const directories = useAutoCleanupTempDirTracker((cleanup) => {
     afterAll(async () => {
       await closeState();
@@ -265,17 +264,13 @@ describe("schema 20 migration through shared-state owners", () => {
       const historicalFailures = [
         {
           id: "boolean:row",
-          json: '{"completionRetention":{"idPrefix":"boolean:","maxAgeMs":86400000,"maxEntries":true}}',
-          retention_id_prefix: "boolean:",
-          retention_max_age_ms: 86400000,
-          retention_max_entries: 1,
+          json: policy('"boolean:"', "86400000", "true"),
+          expected: retention(["boolean:", 86400000, 1]),
         },
         {
           id: "real:row",
-          json: '{"completionRetention":{"idPrefix":"real:","maxAgeMs":1.0,"maxEntries":2}}',
-          retention_id_prefix: null,
-          retention_max_age_ms: null,
-          retention_max_entries: null,
+          json: policy('"real:"', "1.0"),
+          expected: retention(),
         },
       ];
       if (owner === "runtime") {
@@ -317,9 +312,7 @@ describe("schema 20 migration through shared-state owners", () => {
         db,
         `SELECT ${retentionColumns.join(", ")}, entry_json FROM delivery_queue_entries WHERE id = 'kept:row'`,
         {
-          retention_id_prefix: "kept:",
-          retention_max_age_ms: 86400000,
-          retention_max_entries: 2,
+          ...retention(["kept:", 86400000, 2]),
           entry_json: retainedJson,
         },
       );
@@ -329,9 +322,7 @@ describe("schema 20 migration through shared-state owners", () => {
             db,
             `SELECT ${retentionColumns.join(", ")}, entry_json, status FROM delivery_queue_entries WHERE id = ?`,
             {
-              retention_id_prefix: row.retention_id_prefix,
-              retention_max_age_ms: row.retention_max_age_ms,
-              retention_max_entries: row.retention_max_entries,
+              ...row.expected,
               entry_json: row.json,
               status: "failed",
             },

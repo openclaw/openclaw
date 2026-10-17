@@ -44,6 +44,17 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 const { openDatabase } = useSqliteSchemaTestFixture();
 
+function expectRepeatedSqlAbsent(pattern: (sql: string) => boolean, run: () => void) {
+  const observation = observeHostDataSql();
+  try {
+    run();
+    run();
+    expect(observation.queries.filter(pattern)).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+}
+
 it.each([
   [
     "audit lifecycle binding",
@@ -58,19 +69,14 @@ it.each([
   "never issues persistent DDL on first or repeated warm %s use",
   (_name, schema, ensure) => {
     const database = openDatabase(schema);
-    const observation = observeHostDataSql();
-    try {
-      for (let call = 0; call < 2; call += 1) {
+    expectRepeatedSqlAbsent(
+      (sql) => classifySqliteMutation(sql, "batch").mainSchemaChange,
+      () => {
         database.exec("BEGIN IMMEDIATE");
         ensure(database);
         database.exec("COMMIT");
-      }
-      expect(
-        observation.queries.filter((sql) => classifySqliteMutation(sql, "batch").mainSchemaChange),
-      ).toEqual([]);
-    } finally {
-      observation.restore();
-    }
+      },
+    );
   },
 );
 
@@ -78,12 +84,12 @@ it("installs only the secret-store table and index on first use", () => {
   using database = new DatabaseSync(":memory:");
 
   ensureSecretStoreSchema(database);
-  const names = readRows(
-    database,
-    "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
-  ).map((row) => row.name);
-
-  expect(names).toEqual(["secret_store_entries", "secret_store_entries_live_idx"]);
+  expect(
+    readRows(
+      database,
+      "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+    ),
+  ).toEqual([{ name: "secret_store_entries" }, { name: "secret_store_entries_live_idx" }]);
 });
 
 it("lazily adds allowed_hosts to a v6 secret store without changing user_version", () => {
@@ -140,17 +146,12 @@ it("adds lease provenance without certifying legacy owners or changing their ide
   expectRow(database, "SELECT * FROM agent_database_leases", before);
 
   ensureAgentDatabaseLeaseSchema(database);
-  expectRow(database, "SELECT * FROM agent_database_leases", {
-    ...before,
-    provenance: null,
-  });
+  expectRow(database, "SELECT * FROM agent_database_leases", { ...before, provenance: null });
   expectRow(database, "PRAGMA user_version", { user_version: 6 });
 });
 
 it("adds the caption retry index to populated same-version state without changing its rows", async () => {
-  const options = {
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-caption-index-") },
-  };
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-caption-index-") } };
   const database = openState(options);
   database.db.exec(`
     INSERT INTO meeting_transcript_sessions
@@ -235,18 +236,10 @@ it("reuses admitted journal columns while observing managed DDL and rollback", (
   const check = () =>
     runSqliteReadOperationSync(database.db, () => assertAgentDeletionJournalAvailable(database.db));
   check();
-  const observation = observeHostDataSql();
-  try {
-    check();
-    check();
-    expect(
-      observation.queries.filter((sql) =>
-        /pragma\s+table_info\(agent_deletion_journal\)/i.test(sql),
-      ),
-    ).toEqual([]);
-  } finally {
-    observation.restore();
-  }
+  expectRepeatedSqlAbsent(
+    (sql) => /pragma\s+table_info\(agent_deletion_journal\)/i.test(sql),
+    check,
+  );
   const foreign = openNodeSqliteDatabase(database.path);
   try {
     foreign.exec("ALTER TABLE agent_deletion_journal RENAME COLUMN agent_id TO retired_agent_id");
