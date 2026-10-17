@@ -65,7 +65,19 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
         const observation = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(readStateSchemaContentVersion(db)).toBe(19);
-          expect(observation.queries).toEqual([]);
+          // Managed reads qualify the retained catalog once after sibling DDL.
+          const qualificationQueries =
+            kind === "managed transaction"
+              ? [
+                  "PRAGMA schema_version",
+                  "PRAGMA user_version",
+                  "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
+                  'select "value_json" from "config_machine_state" where "state_key" = ?',
+                ]
+              : [];
+          expect(observation.queries).toEqual(qualificationQueries);
+          expect(readStateSchemaContentVersion(db)).toBe(19);
+          expect(observation.queries).toEqual(qualificationQueries);
         } finally {
           observation.restore();
         }

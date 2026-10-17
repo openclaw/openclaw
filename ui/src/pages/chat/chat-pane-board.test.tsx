@@ -130,6 +130,7 @@ function createTestPane(
     ...createInitialChatRealtimeState(),
     chatError: null,
     chatLoading: false,
+    chatHistoryPagination: { hasMore: false },
     chatMessages: [],
     chatToolMessages: [],
     chatQueue: [],

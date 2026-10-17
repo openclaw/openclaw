@@ -9,6 +9,7 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -76,7 +77,7 @@ function gatewayWithClient(
     phase: connected ? "connected" : "stopped",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: gatewayHelloForMethods([]),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -168,7 +169,11 @@ function contextWithMutableGateway(
   return {
     context,
     emitConnected(connected: boolean) {
-      currentSnapshot = { ...currentSnapshot, phase: connected ? "connected" : "stopped" };
+      currentSnapshot = {
+        ...currentSnapshot,
+        phase: connected ? "connected" : "stopped",
+        hello: connected ? gatewayHelloForMethods([]) : currentSnapshot.hello,
+      };
       for (const listener of listeners) {
         listener(currentSnapshot);
       }
@@ -313,7 +318,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const context = contextWithClient(client, { connected: true });
     const staleResult = usageResult("stale");
     const page = await createUsagePage(client, false, context);
-    page.routeData = usageRouteData(context, staleResult, { ...context.gateway.snapshot });
+    page.routeData = usageRouteData(context, staleResult, {
+      ...context.gateway.snapshot,
+      hello: gatewayHelloForMethods([]),
+    });
 
     document.body.append(page.element);
     await page.updateComplete;
@@ -377,7 +385,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const harness = contextWithMutableGateway(client);
     const result = usageResult();
     const page = await createUsagePage(client, false, harness.context);
-    page.routeData = usageRouteData(harness.context, result);
+    page.routeData = usageRouteData(harness.context, result, {
+      ...harness.context.gateway.snapshot,
+    });
 
     document.body.append(page.element);
     await page.updateComplete;
@@ -506,7 +516,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createModelProvidersPage(context);
     page.routeData = {
       gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
+      gatewaySnapshot: { ...context.gateway.snapshot, hello: gatewayHelloForMethods([]) },
       data: staleData,
       client,
       agentId: "main",
@@ -545,7 +555,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agentsList: { defaultId: "main", agents: [{ id: "main" }] },
       selectedAgentId: "main",
     });
-    const mounted = mountSkillsPage(context, skillsRouteData(context, linkedSkillReport()));
+    const mounted = mountSkillsPage(
+      context,
+      skillsRouteData(context, linkedSkillReport(), { ...context.gateway.snapshot }),
+    );
     await waitForSolid(() =>
       expect(mounted.page.querySelector(".plugins-item")?.textContent).toContain("Clean"),
     );
@@ -555,14 +568,31 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" });
   });
 
-  it("discards pending route verdicts when the connected gateway lifecycle ends", async () => {
+  it("retains skills while retiring pending verdicts across disconnect and resets on source replacement", async () => {
     const pending = deferred<{ schema: string; items: unknown[] }>();
+    const verdicts = {
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        {
+          registry: "https://clawhub.ai",
+          ok: true,
+          decision: "pass",
+          requestedSlug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          securityStatus: "clean",
+        },
+      ],
+    };
+    let verdictRequests = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "skills.library.list") {
         return emptySkillLibrary;
       }
+      if (method === "skills.status") {
+        return linkedSkillReport();
+      }
       if (method === "skills.securityVerdicts") {
-        return pending.promise;
+        return ++verdictRequests === 1 ? pending.promise : verdicts;
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -578,28 +608,30 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await waitForSolid(() =>
       expect(mounted.page.querySelector(".plugins-item")?.textContent).toContain("Refreshing"),
     );
+    const row = mounted.page.querySelector(".plugins-item");
     harness.emitConnected(false);
-    pending.resolve({
-      schema: "openclaw.skills.security-verdicts.v1",
-      items: [
-        {
-          registry: "https://clawhub.ai",
-          ok: true,
-          decision: "pass",
-          requestedSlug: "agentreceipt",
-          requestedVersion: "1.2.3",
-          securityStatus: "clean",
-        },
-      ],
-    });
+    pending.resolve(verdicts);
     await pending.promise;
-    await waitForSolid(() => expect(mounted.page.querySelector(".plugins-item")).toBeNull());
+    await waitForSolid(() => expect(mounted.page.textContent).not.toContain("Refreshing"));
+    expect(mounted.page.querySelector(".plugins-item")).toBe(row);
+    expect(row?.textContent).toContain("Repo Skill");
     expect(mounted.page.textContent).not.toContain("Clean");
-    expect(mounted.page.textContent).not.toContain("Refreshing");
     expect(mounted.page.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" });
     expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" });
+
+    harness.emitConnected(true);
+    await waitForSolid(() =>
+      expect(mounted.page.querySelector(".plugins-item")?.textContent).toContain("Clean"),
+    );
+    expect(mounted.page.textContent).toContain("Repo Skill");
+    expect(verdictRequests).toBe(2);
+
+    mounted.replaceContext(contextWithClient(client));
+    await waitForSolid(() => expect(mounted.page.querySelector(".plugins-item")).toBeNull());
+    expect(mounted.page.textContent).not.toContain("Repo Skill");
+    expect(mounted.page.textContent).not.toContain("Clean");
   });
 
   it("rejects skills route data from an earlier same-client gateway epoch", async () => {
@@ -621,7 +653,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const mounted = mountSkillsPage(
       context,
-      skillsRouteData(context, skillReport("Stale skill"), { ...context.gateway.snapshot }),
+      skillsRouteData(context, skillReport("Stale skill"), {
+        ...context.gateway.snapshot,
+        hello: gatewayHelloForMethods([]),
+      }),
     );
     await waitForSolid(() => expect(mounted.page.textContent).toContain("Fresh skill"));
     expect(mounted.page.textContent).not.toContain("Stale skill");
@@ -775,7 +810,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const context = contextWithClient(client, { connected: true, ensureList });
     const mounted = mountSkillsPage(
       context,
-      skillsRouteData(context, null, { ...context.gateway.snapshot }),
+      skillsRouteData(context, null, {
+        ...context.gateway.snapshot,
+        hello: gatewayHelloForMethods([]),
+      }),
     );
     await waitForSolid(() => expect(ensureList).toHaveBeenCalled());
     const replacementAgents = {

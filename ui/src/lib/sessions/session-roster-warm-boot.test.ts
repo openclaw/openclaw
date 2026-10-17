@@ -62,6 +62,8 @@ afterEach(() => {
   }
   activeCapabilities.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function harness(
@@ -285,18 +287,17 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it.each(["task", "connect", "dispose"] as const)(
-    "publishes the cached roster before yielding route settlement and releases on %s",
+  it.each(["frame", "background", "connect", "dispose"] as const)(
+    "publishes the cached roster before yielding past paint and releases on %s",
     async (release) => {
-      const channel = new MessageChannel();
-      const resume = channel.port2.postMessage.bind(channel.port2);
-      const queued = createDeferred();
-      const delivered = createDeferred();
-      channel.port1.addEventListener("message", () => delivered.resolve(), { once: true });
-      vi.spyOn(channel.port2, "postMessage").mockImplementation(() => queued.resolve());
-      vi.spyOn(globalThis, "MessageChannel").mockImplementationOnce(function () {
-        return channel;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const queued = createDeferred<FrameRequestCallback>();
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        queued.resolve(callback);
+        return 1;
       });
+      const cancelFrame = vi.fn();
+      vi.stubGlobal("cancelAnimationFrame", cancelFrame);
       const cached = createDeferred<BootRoster | null>();
       const h = harness({ cached: cached.promise });
       const settlement = h.sessions.whenCachedRosterSettled();
@@ -307,10 +308,10 @@ describe("session capability warm roster", () => {
         expect(h.sessions.state.groups).toEqual(["Work"]);
         expect(h.sessions.state.result).toBeNull();
         cached.resolve(roster());
-        await Promise.race([
+        const frame = await Promise.race([
           queued.promise,
           settlement.then(() => {
-            throw new Error("Cached route settled before yielding to a browser task");
+            throw new Error("Cached route settled before yielding to a browser frame");
           }),
         ]);
         expect(settled).not.toHaveBeenCalled();
@@ -322,7 +323,7 @@ describe("session capability warm roster", () => {
         expect(h.sessions.canonicalListRevision).toBe(0);
         expect(h.request).not.toHaveBeenCalled();
         expect(h.sessions.captureBootRoster()).toBeNull();
-        if (release !== "task") {
+        if (release === "connect" || release === "dispose") {
           if (release === "connect") {
             h.connect();
           } else {
@@ -333,12 +334,22 @@ describe("session capability warm roster", () => {
           expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
         }
         const currentResult = h.sessions.state.result;
-        resume(null);
-        await delivered.promise;
+        if (release === "frame") {
+          frame(16);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          // rAF callbacks precede paint; routing must wait for the following task.
+          expect(settled).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          await vi.advanceTimersByTimeAsync(100);
+          expect(cancelFrame).toHaveBeenCalledWith(1);
+        }
         await settlement;
         expect(settled).toHaveBeenCalledOnce();
         expect(h.sessions.state.result).toBe(currentResult);
-        if (release === "task") {
+        if (release === "frame" || release === "background") {
           h.publish({ phase: "reconnecting" });
           expect(h.sessions.state.result?.sessions).toHaveLength(2);
           expect(h.sessions.state.resultCached).toBe(true);
@@ -347,8 +358,6 @@ describe("session capability warm roster", () => {
         h.sessions.dispose();
         cached.resolve(null);
         h.live.resolve(sessionsResult([], 2));
-        channel.port1.close();
-        channel.port2.close();
       }
     },
   );

@@ -123,7 +123,6 @@ extensions/codex/src/app-server/event-projector-values.ts	1
 extensions/codex/src/app-server/event-projector.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
 extensions/codex/src/app-server/native-mcp-app.ts	9
-extensions/codex/src/app-server/native-skill-isolation.ts	1
 extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
@@ -1242,7 +1241,7 @@ src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	2
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
-src/agents/embedded-agent-tool-results.ts	7
+src/agents/embedded-agent-tool-results.ts	6
 src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
@@ -2300,7 +2299,7 @@ src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
-src/plugins/plugin-metadata-snapshot.runtime.ts	2
+src/plugins/plugin-metadata-snapshot.runtime.ts	1
 src/plugins/plugin-package-update.ts	1
 src/plugins/plugin-peer-link.ts	2
 src/plugins/plugin-sdk-native-resolver.ts	1

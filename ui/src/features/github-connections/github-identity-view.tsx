@@ -365,7 +365,8 @@ export function GitHubConnectionError(props: { error: string | null; control?: J
 
 export function GitHubConnectionSetup(props: IdentityProps) {
   const view = () => props.identity.read();
-  const disabled = () => view().busy || !view().configurable || view().authorizationActive;
+  const disabled = () =>
+    !view().connectionReady || view().busy || !view().configurable || view().authorizationActive;
   const authorRow = (field: "name" | "email", label: string) => (
     <SettingsRow
       title={label}

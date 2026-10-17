@@ -72,6 +72,27 @@ it.each([undefined, "full"] as const)(
         database.exec("PRAGMA writable_schema = OFF");
       }
 
+      const sourceChecks = new Map<DatabaseSync, string[]>();
+      // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted native database receiver.
+      const prepare = DatabaseSync.prototype.prepare;
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        const statement = prepare.call(this, sql);
+        if (this.location() !== sourcePath || !/^PRAGMA (?:quick|integrity)_check\b/u.test(sql)) {
+          return statement;
+        }
+        const all = statement.all.bind(statement);
+        statement.all = () => {
+          const checks = sourceChecks.get(this) ?? [];
+          checks.push(sql);
+          sourceChecks.set(this, checks);
+          return all();
+        };
+        return statement;
+      });
+
       const result = await migrateSharedAuthStore({
         detected: { sourcePath, hasLegacy: true },
         stateDir: state.stateDir,
@@ -79,11 +100,20 @@ it.each([undefined, "full"] as const)(
         integrityCheck,
       });
       if (integrityCheck === "full") {
+        expect([...sourceChecks.values()]).toEqual([["PRAGMA integrity_check;"]]);
         expect(result.changes).toEqual([]);
         expect(result.warnings).toEqual([
           expect.stringMatching(/integrity_check.*idx_agent_cache_updated/su),
         ]);
       } else {
+        expect([...sourceChecks.values()]).toEqual([
+          ["PRAGMA quick_check;"],
+          [
+            "PRAGMA quick_check;",
+            "PRAGMA integrity_check('auth_profile_store');",
+            "PRAGMA integrity_check('auth_profile_state');",
+          ],
+        ]);
         expect(result.warnings).toEqual([]);
         const context = captureOpenClawStateWorkerContext({ env: state.env });
         expect(await readSharedAuthProfileRows(context)).toMatchObject({
@@ -110,6 +140,7 @@ it.each([undefined, "full"] as const)(
         ).toThrow(/integrity_check.*idx_agent_cache_updated/su);
       }
     } finally {
+      vi.restoreAllMocks();
       await closeOpenClawAgentDatabasesAsync();
       await state.cleanup();
     }

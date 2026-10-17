@@ -31,6 +31,7 @@ import { voiceTestMocks as mocks } from "./voice-test-mocks.test-support.js";
 const { getDiscordAudioTestWorker } = await import("./audio-worker.test-support.js");
 // Parallel entry points can race Vitest's async audio mock and capture different exports.
 const managerModule = await import("./voice-runtime.js");
+const listenersModule = await import("./listeners.js");
 const realtimeModule = await import("./realtime-session.runtime.js");
 type Manager = InstanceType<typeof managerModule.DiscordVoiceManager>;
 type ManagerParams = ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0];
@@ -415,6 +416,7 @@ function buildVoiceTestHarness() {
     createDefaultVoiceStates,
     ...mocks,
     managerModule,
+    listenersModule,
     realtimeModule,
     configureVoiceStateGateway,
     createClient,

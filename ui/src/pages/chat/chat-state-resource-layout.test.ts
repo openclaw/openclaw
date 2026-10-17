@@ -24,10 +24,6 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
       });
       const beforeDismissalReload = createPageState(context, renderLifecycle, host);
       expect(beforeDismissalReload.sidebarLayout.columns).toEqual([]);
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"), {
-        persist: false,
-        automaticResource: "browser",
-      });
       state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
       const afterLayoutChange = createPageState(context, renderLifecycle, host);
       expect(

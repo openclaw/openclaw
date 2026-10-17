@@ -237,6 +237,27 @@ stopping the connection, authentication or pairing rejection, and protocol/build
 rejection clear that presentation. Canvas capability URLs retain their separate
 live-connection lease and are not kept by this policy.
 
+Model Providers, Plugins, Devices, Skills, Profile, Channels, Cloud Workers,
+GitHub connection editors, and Session Storage keep loaded data
+and unsaved in-memory drafts through a temporary loss of the same Gateway
+connection. Editors stay open; actions that require the Gateway remain unavailable
+until it is connected. Reconnect refreshes the loaded data without
+discarding your edits. Switching identities or losing access still clears the
+affected settings. These drafts are not persisted by this behavior: reloading
+or closing the tab can discard them, including entered credentials.
+
+Rejected model-default saves return the pickers to the saved configuration.
+**Retry** keeps the rejected change with the configuration write owner. Model
+edits that have not been sent still survive a temporary disconnect. After
+reconnecting, defaults remain unavailable until the current configuration loads;
+a failed read does not present the previous connection's defaults as current.
+
+Unsent configuration form edits resume autosave after reconnect only when a
+fresh read confirms that their base revision is unchanged. If a submission was
+in flight or the revision changed, autosave stays paused for explicit recovery.
+Raw configuration edits remain manual-save-only. Reconnect does not replay
+plugin installations, setup answers, or other arbitrary actions.
+
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
 stays visible, and one connection status in its sidebar footer explains whether the Gateway is
 suspending, suspended, restarting, reconnecting, or finishing recovery. Planned transitions and

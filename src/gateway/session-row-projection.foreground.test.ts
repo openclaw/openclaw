@@ -325,6 +325,37 @@ it("keeps a committed append preview when an older background read finishes", as
   });
 });
 
+it("drops an older backfill after broad invalidation clears retained preview facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, query } = await seedPreview("preview-invalidated", "Older preview", cfg);
+    clearStoredSessionRowTranscriptForTest(scope);
+    const backfill = holdBackfillPublication();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      projection.describe(query);
+      expect(await backfill.prepared).toMatchObject({ lastMessagePreview: "Older preview" });
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [{ message: { role: "assistant", content: "Committed preview" } }],
+        touchSessionEntry: false,
+      });
+      await projection.ensureMaterialized();
+      const row = projection.describe(query)!;
+      expect(row.lastMessagePreview).toBe("Committed preview");
+      sessionChanges.emit({ all: true, scope: { agentId: "main" }, factsInvalidated: true });
+      expect(row.retainedDatabaseFacts).toBeUndefined();
+      await backfill.publish();
+      expect(row.lastMessagePreview).toBe("Committed preview");
+      await projection.ensureMaterialized();
+      expect(preview(projection, query)).toBe("Committed preview");
+    } finally {
+      projection.dispose();
+      await backfill.close();
+    }
+  });
+});
+
 it("keeps pending Worker metadata, membership, and summary facts across optional publication", ({
   signal,
   onTestFinished,

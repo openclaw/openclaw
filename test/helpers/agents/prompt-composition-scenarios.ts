@@ -9,7 +9,7 @@ import {
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { buildGroupChatContext } from "../../../src/auto-reply/reply/groups.js";
+import { buildSourceConversationContext } from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -104,7 +104,7 @@ function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string 
 function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: TemplateContext }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
-    buildGroupChatContext({
+    buildSourceConversationContext({
       sessionCtx: params.sessionCtx,
     }),
   ].filter(Boolean);

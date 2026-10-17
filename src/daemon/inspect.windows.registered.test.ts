@@ -26,16 +26,15 @@ it.each(["single foreign launcher", "later wrapped Gateway launcher"])(
   async (kind) => {
     const taskName = "\\Microsoft\\Windows\\Hotpatch\\Monitoring";
     const first = "C:\\fixtures\\maintenance.cmd";
-    const second = "C:\\fixtures\\assistant.vbs";
     const wrapped = kind === "later wrapped Gateway launcher";
-    const gateway = `C:\\fixtures\\assistant.${wrapped ? "bat" : "cmd"}`;
+    const gateway = "C:\\fixtures\\assistant.bat";
     const task = {
       taskPath: taskName,
       state: 4,
-      actions: (kind === "single foreign launcher" ? [first] : [first, second]).map((pathname) => ({
+      actions: (wrapped ? [first, "C:\\Windows\\System32\\cmd.exe"] : [first]).map((pathname) => ({
         type: 0,
-        path: pathname === second && wrapped ? "C:\\Windows\\System32\\cmd.exe" : pathname,
-        arguments: pathname === second && wrapped ? `/d /c "${gateway}"` : "",
+        path: pathname,
+        arguments: pathname === first ? "" : `/d /c "${gateway}"`,
         workingDirectory: "",
       })),
     };
@@ -43,17 +42,12 @@ it.each(["single foreign launcher", "later wrapped Gateway launcher"])(
       .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
       .mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
     vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-      if (pathname === second) {
-        return Buffer.from(
-          `Set shell = CreateObject("WScript.Shell")\r\nWScript.Quit shell.Run("""${gateway}""", 0, True)`,
-        );
-      }
-      if (pathname === gateway && kind.startsWith("later")) {
+      if (pathname === gateway && wrapped) {
         return Buffer.from(
           '@echo off\r\n"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" --profile rescue gateway run\r\n',
         );
       }
-      if (pathname !== first && pathname !== gateway) {
+      if (pathname !== first) {
         throw new Error("Unexpected launcher read");
       }
       return Buffer.from('@echo off\r\nif "%HOTPATCH_ENABLED%"=="1" call maintenance.exe\r\n');
@@ -104,34 +98,27 @@ it("excludes a static non-Gateway runtime command without admitting its missing 
   ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
 });
 
-it.each(["Node runtime"])("binds the selected profile to effective argv for a %s", async (kind) => {
+it("binds the selected profile to effective argv for a Node runtime", async () => {
   const taskName = "\\Services\\Recovery";
-  const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
-  const direct = kind === "direct executable";
-  const launcher = kind === "CMD launcher";
-  const argv = direct
-    ? ["C:\\OpenClaw\\openclaw.exe", "--profile=rescue", "gateway"]
-    : [
-        "C:\\Node\\node.exe",
-        "--import",
-        "bootstrap.mjs",
-        "C:\\OpenClaw\\openclaw.mjs",
-        "--profile=rescue",
-        "gateway",
-      ];
+  const argv = [
+    "C:\\Node\\node.exe",
+    "--import",
+    "bootstrap.mjs",
+    "C:\\OpenClaw\\openclaw.mjs",
+    "--profile=rescue",
+    "gateway",
+  ];
   const task = {
     taskPath: taskName,
     state: 3,
     actions: [
       {
         type: 0,
-        path: launcher ? scriptPath : argv[0],
-        arguments: launcher
-          ? ""
-          : argv
-              .slice(1)
-              .map((arg) => `"${arg}"`)
-              .join(" "),
+        path: argv[0],
+        arguments: argv
+          .slice(1)
+          .map((arg) => `"${arg}"`)
+          .join(" "),
         workingDirectory: "",
       },
     ],
@@ -152,7 +139,6 @@ it.each(["Node runtime"])("binds the selected profile to effective argv for a %s
       }),
     ).resolves.toMatchObject({
       programArguments: argv,
-      ...(launcher ? { environment: { OPENCLAW_PROFILE: "default" } } : {}),
     });
   }
 });

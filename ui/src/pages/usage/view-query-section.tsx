@@ -71,6 +71,7 @@ export function UsageQuerySection(props: {
               label={t(`usage.filters.${filterKey}`)}
               options={props.filterOptions[filterKey]}
               queryDraft={props.filters.queryDraft}
+              queryTerms={props.queryTerms}
               onQueryDraftChange={props.actions.onQueryDraftChange}
             />
           )}

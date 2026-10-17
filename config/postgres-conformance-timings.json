@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "source": "Hosted PostgreSQL conformance run 39062485709; per-target three-worker makespan of observed case spans. Includes failure timeouts; weights are advisory, never inventory.",
+  "source": "Hosted PostgreSQL conformance run 39062485709, plus interactive setup from 39061916848; per-target three-worker makespan of observed case spans. Includes failure timeouts; weights are advisory, never inventory.",
   "targetSeconds": {
     "extensions/logbook/src/postgres-store.test.ts": 1,
     "extensions/matrix/src/matrix/account-state.postgres.test.ts": 8.523,
@@ -35,6 +35,7 @@
     "src/infra/database-engine/gateway-session-startup.conformance.test.ts": 33.596,
     "src/infra/database-engine/git-backup-secrets.postgres.test.ts": 23.022,
     "src/infra/database-engine/git-backup.postgres.test.ts": 121.441,
+    "src/infra/database-engine/interactive-setup.integration.test.ts": 416.622,
     "src/infra/database-engine/json-values.test.ts": 1,
     "src/infra/database-engine/logbook-port.postgres.test.ts": 1,
     "src/infra/database-engine/maintenance-custody.conformance.test.ts": 5.114,

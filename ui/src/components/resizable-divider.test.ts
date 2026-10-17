@@ -304,6 +304,7 @@ describe("resizable-divider", () => {
     const resizeEnded = vi.fn();
     divider.setPointerCapture = vi.fn();
     divider.releasePointerCapture = vi.fn();
+    divider.hasPointerCapture = vi.fn(() => true);
     divider.addEventListener("resize", resized);
     divider.addEventListener("resize-end", resizeEnded);
 

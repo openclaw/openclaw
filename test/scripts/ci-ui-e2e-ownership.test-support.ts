@@ -49,8 +49,13 @@ export function assertControlUiE2eOwnership(
       if (ownsPrivateServer) {
         return;
       }
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-        if (node.expression.text === "createGatewayHttpServer") {
+      if (ts.isCallExpression(node)) {
+        const callName = ts.isIdentifier(node.expression)
+          ? node.expression.text
+          : ts.isPropertyAccessExpression(node.expression)
+            ? node.expression.name.text
+            : undefined;
+        if (callName === "createGatewayHttpServer") {
           ownsPrivateServer = true;
           return;
         }
@@ -58,20 +63,20 @@ export function assertControlUiE2eOwnership(
         // a separate backend in a test can still use the shared UI bundle.
         if (
           inSuiteServer &&
-          (node.expression.text === "createOpenClawTestInstance" ||
-            node.expression.text === "createBackgroundWorkInstance" ||
-            node.expression.text === "createWaitClockInstance" ||
-            node.expression.text === "startBuiltControlUiE2eServer" ||
-            node.expression.text === "startProductionControlUiE2eServer" ||
-            node.expression.text === "startProviderBrowserLoginFixture" ||
-            node.expression.text === "createServer")
+          (callName === "createOpenClawTestInstance" ||
+            callName === "createBackgroundWorkInstance" ||
+            callName === "createWaitClockInstance" ||
+            callName === "startBuiltControlUiE2eServer" ||
+            callName === "startProductionControlUiE2eServer" ||
+            callName === "startProviderBrowserLoginFixture" ||
+            callName === "createServer")
         ) {
           ownsPrivateServer = true;
           return;
         }
         const options = node.arguments[0];
         if (
-          node.expression.text === "createControlUiE2eSuite" &&
+          callName === "createControlUiE2eSuite" &&
           options &&
           ts.isObjectLiteralExpression(options)
         ) {
@@ -86,8 +91,8 @@ export function assertControlUiE2eOwnership(
           }
         }
         if (
-          node.expression.text === "createQuotaResetFixture" ||
-          (node.expression.text === "createSessionManagementE2eSuite" &&
+          callName === "createQuotaResetFixture" ||
+          (callName === "createSessionManagementE2eSuite" &&
             node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword)
         ) {
           ownsPrivateServer = true;
@@ -95,7 +100,7 @@ export function assertControlUiE2eOwnership(
         }
         const buildInfo = node.arguments[1];
         if (
-          node.expression.text === "createSidebarFooterProofSuite" &&
+          callName === "createSidebarFooterProofSuite" &&
           buildInfo &&
           !(ts.isIdentifier(buildInfo) && buildInfo.text === "undefined")
         ) {
@@ -143,6 +148,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
     "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+    "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
     "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",

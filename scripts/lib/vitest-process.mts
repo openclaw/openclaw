@@ -67,9 +67,11 @@ export function spawnOwnedVitestProcess(spec: {
     tempRoot = tempDirs.make("oc-vt-", containingRoot);
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
-    // TSX queues unawaited disk writes during synchronous imports, exhausting
-    // descriptors on deep graphs. Keep its in-memory cache and Vitest's own cache.
-    childEnv.TSX_DISABLE_CACHE = "1";
+    if (mode !== "tooling") {
+      // Source subprocesses share this owned cache until the invocation joins.
+      // Fixtures with descriptor-heavy source Workers can opt out locally.
+      delete childEnv.TSX_DISABLE_CACHE;
+    }
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
       fs.mkdirSync(nativeHome);

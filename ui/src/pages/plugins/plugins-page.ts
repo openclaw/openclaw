@@ -5,7 +5,7 @@ import {
   pluginSettingsIdFromPath,
 } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -106,6 +106,8 @@ export function createPluginsPage(options: {
   let pluginConfigEditPending = false;
   let routeDataConsumed = false;
   let pluginGeneration: number | undefined;
+  let adminAccess: boolean | undefined;
+  let readAccess: boolean | undefined;
   const icons = createPluginsPageIcons({
     getContext: () => context,
     isConnected: () => active,
@@ -116,12 +118,15 @@ export function createPluginsPage(options: {
   const gateway = new GatewayPageBinding(publish, {
     getGateway: () => context.gateway,
     onIdentityChange: () => {
+      adminAccess = undefined;
+      readAccess = undefined;
       setState({ result: null, error: null, messages: {}, pageNotice: null });
     },
     invalidateRequests: (change) =>
       active &&
       invalidateRequests(
         change.identityChanged || change.snapshot.phase !== "connected" || !change.snapshot.client,
+        change.identityChanged,
       ),
     onSnapshot: handleGatewaySnapshot,
   });
@@ -340,6 +345,19 @@ export function createPluginsPage(options: {
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
+    if (snapshot.phase === "connected") {
+      const allowed = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+      const canRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+      if ((adminAccess && !allowed) || (readAccess && !canRead)) {
+        gateway.invalidate();
+        invalidateRequests(true);
+        if (!canRead) {
+          setState({ result: null, error: null, messages: {}, pageNotice: null });
+        }
+      }
+      adminAccess = allowed;
+      readAccess = canRead;
+    }
     const generation = snapshot.pluginCapabilities?.generation;
     const pluginsChanged = generation !== undefined && generation !== pluginGeneration;
     pluginGeneration = generation;
@@ -403,6 +421,9 @@ export function createPluginsPage(options: {
             : installedPluginDetailTabFromHash(data.location.hash),
       });
     }
+    if (readAccess === false) {
+      return;
+    }
     if (gateway.isRouteDataCurrent(data)) {
       // Route loading can complete after publication on the same connection.
       if (pluginGeneration !== undefined && (data.result?.generation ?? -1) < pluginGeneration) {
@@ -421,15 +442,16 @@ export function createPluginsPage(options: {
     ensureInitialData();
   }
 
-  function invalidateRequests(invalidateCatalog: boolean) {
+  function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
     mcpLogin.reset();
     if (invalidateCatalog) {
       catalogTask.reset();
       discovery.invalidate();
     }
     skillPreview.close();
-    // Inspection results belong to one connection epoch, including same-client reconnects.
-    setState({ detail: null, catalogDetail: null });
+    if (retirePresentation) {
+      setState({ detail: null, catalogDetail: null });
+    }
     installRequestGeneration += 1;
     consent.reset();
   }
@@ -486,6 +508,9 @@ export function createPluginsPage(options: {
   }
 
   function ensureInitialData() {
+    if (readAccess === false) {
+      return;
+    }
     // Category navigation needs neither installed inventory nor catalog cards.
     // Start it as soon as this discovery page has a connection, even while the
     // route's plugins.list request is pending.
@@ -511,7 +536,7 @@ export function createPluginsPage(options: {
   }
 
   async function refreshCatalog(client = gateway.connected ? gateway.client : null) {
-    if (!client) {
+    if (!client || readAccess === false) {
       return;
     }
     setState({ error: null });

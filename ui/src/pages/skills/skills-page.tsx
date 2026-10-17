@@ -2,6 +2,11 @@ import { createEffect, createMemo, createStore, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  hasOperatorAdminAccess,
+  hasOperatorReadAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -94,6 +99,7 @@ export function SkillsPage(props: SkillsPageProps) {
   let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let routeDataInitialized = false;
   let routeDataEnabled = true;
+  let accessSignature = "";
   const skills = observeSkillState<SkillsState>({
     ...createSkillsData(),
     get client() {
@@ -124,13 +130,43 @@ export function SkillsPage(props: SkillsPageProps) {
   );
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
-    invalidateRequests: () => {
-      // Disposal already retires request custody; only a live page resets presentation.
-      if (gateway.snapshot) {
+    onIdentityChange: resetLoadedSkillState,
+    onSnapshot: ({ snapshot }) => {
+      if (snapshot.phase !== "connected" || !snapshot.hello) {
+        return;
+      }
+      const auth = snapshot.hello.auth ?? null;
+      const nextAccess = [
+        hasOperatorReadAccess(auth),
+        hasOperatorWriteAccess(auth),
+        hasOperatorAdminAccess(auth),
+      ];
+      const nextSignature = nextAccess.join(":");
+      if (accessSignature === nextSignature) {
+        return;
+      }
+      accessSignature = nextSignature;
+      gateway.invalidate();
+      invalidateSkillRequests();
+      if (!nextAccess[0]) {
         resetLoadedSkillState();
+      } else {
+        if (!nextAccess[1]) {
+          library.reset();
+        }
+        if (!nextAccess[2]) {
+          data.skillEdits = {};
+        }
       }
     },
-    ensureInitialData,
+    invalidateRequests: invalidateSkillRequests,
+    ensureInitialData: (change) => {
+      if (change.becameConnected && !change.initial) {
+        void loadSkills(data);
+        void library.load();
+      }
+      ensureInitialData();
+    },
   });
   const viewState = createMemo(() => ({ ...skills.read(), ...local }));
   const config = context.config ? projectApplicationConfig(context.config) : undefined;
@@ -215,9 +251,8 @@ export function SkillsPage(props: SkillsPageProps) {
 
   async function runSearch() {
     searchRequest.cancel();
-    data.clawhubSearchResults = null;
     data.clawhubSearchError = null;
-    data.clawhubSearchLoading = gateway.connected && surface() === "discovery";
+    data.clawhubSearchLoading = gateway.connected && canReadSkills() && surface() === "discovery";
     const client = gateway.client;
     if (!data.clawhubSearchLoading || !client || clawhubSearchTimer) {
       return;
@@ -242,6 +277,20 @@ export function SkillsPage(props: SkillsPageProps) {
     }
   }
 
+  function invalidateSkillRequests() {
+    data.skillsAgentRevision++;
+    data.skillsLoading = false;
+    data.skillOperation = null;
+    data.clawhubDetailLoading = false;
+    data.clawhubVerdictsLoading = false;
+    data.skillCardLoadingKey = null;
+    data.clawhubSearchLoading = false;
+    searchRequest.cancel();
+    clearClawHubSearchTimer();
+    clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
+    library.invalidateRequests();
+  }
+
   function resetLoadedSkillState() {
     library.reset();
     searchRequest.cancel();
@@ -263,7 +312,7 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     routeDataInitialized = true;
     routeDataEnabled = true;
-    if (!gateway.isRouteDataCurrent(route) || route.agents !== context.agents) {
+    if (!gateway.isRouteDataCurrent(route) || route.agents !== context.agents || !canReadSkills()) {
       routeDataEnabled = false;
       return;
     }
@@ -296,6 +345,9 @@ export function SkillsPage(props: SkillsPageProps) {
   }
 
   function ensureInitialData() {
+    if (!canReadSkills()) {
+      return;
+    }
     if (!library.state.list && !library.state.loading && !library.state.error) {
       void library.load();
     }
@@ -313,6 +365,10 @@ export function SkillsPage(props: SkillsPageProps) {
     if (!data.skillsReport && !data.skillsLoading) {
       void loadSkills(data);
     }
+  }
+
+  function canReadSkills() {
+    return hasOperatorReadAccess(gateway.snapshot?.hello?.auth ?? null);
   }
 
   async function loadAgents() {

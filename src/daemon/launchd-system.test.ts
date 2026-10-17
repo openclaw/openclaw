@@ -134,7 +134,6 @@ exit 1
     launchctlShim,
     `#!/bin/sh
 printf 'query\\n' >> "$OPENCLAW_TEST_PROBE_LOG"
-query_count=$(/usr/bin/grep -c '^query$' "$OPENCLAW_TEST_PROBE_LOG")
 ${launchctlBody}
 `,
     { mode: 0o700 },
@@ -230,25 +229,16 @@ describe("system LaunchDaemon ownership", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.each(["missing native parser"])(
-    "refuses an unreadable native result for a readable plist: %s",
-    async (failure) => {
-      const plistPath = "/Library/LaunchDaemons/com.vendor.worker.plist";
-      state.files.set(plistPath, "native-input");
-      runExec.mockRejectedValueOnce(
-        failure === "missing native parser"
-          ? fsError("ENOENT", "/usr/bin/plutil")
-          : new Error(failure),
-      );
-      await expect(
-        inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway"),
-      ).resolves.toMatchObject({
-        status: "unverifiable",
-        operation: "filesystem",
-        detail: expect.stringContaining(plistPath),
-      });
-    },
-  );
+  it("refuses inspection when the native plist parser is missing", async () => {
+    const plistPath = "/Library/LaunchDaemons/com.vendor.worker.plist";
+    state.files.set(plistPath, "native-input");
+    runExec.mockRejectedValueOnce(fsError("ENOENT", "/usr/bin/plutil"));
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
+      status: "unverifiable",
+      operation: "filesystem",
+      detail: expect.stringContaining(plistPath),
+    });
+  });
 
   it("detects a readable owner after an unreadable foreign plist", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
@@ -308,33 +298,28 @@ describe("system LaunchDaemon ownership", () => {
   });
 
   it.each([
-    ["loaded", "exit 0", 1, "loaded system LaunchDaemon"],
-    ["absent", absentQuery, 1, ""],
-    ["query error", 'printf "Operation not permitted\\n" >&2\nexit 1', 1, "could not verify"],
-    ["signal", 'printf "Could not find service\\n" >&2\nkill -TERM $$', 1, "could not verify"],
+    ["loaded", "exit 0", "loaded system LaunchDaemon"],
+    ["absent", absentQuery, ""],
+    ["query error", 'printf "Operation not permitted\\n" >&2\nexit 1', "could not verify"],
+    ["signal", 'printf "Could not find service\\n" >&2\nkill -TERM $$', "could not verify"],
     [
       "execution failure",
       'printf "Could not find service\\n" >&2\nexec "$OPENCLAW_TEST_PROBE_DIR/non-executable"',
-      1,
       "could not verify",
     ],
     [
       "missing command",
       'printf "Could not find service\\n" >&2\nexec "$OPENCLAW_TEST_PROBE_DIR/missing"',
-      1,
       "could not verify",
     ],
-  ] as const)(
-    "executes the rendered ownership query with %s outcome",
-    (scenario, body, _queries, detail) => {
-      const result = runRenderedProbe("foreign.plist", "unlabeled", body);
-      expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");
-      if (detail) {
-        expect(result.detail).toContain(detail);
-      } else {
-        expect(result.detail).toBe("");
-      }
-      expect(result.events).toEqual(scenario === "absent" ? ["query", "scan", "scan"] : ["query"]);
-    },
-  );
+  ] as const)("executes the rendered ownership query with %s outcome", (scenario, body, detail) => {
+    const result = runRenderedProbe("foreign.plist", "unlabeled", body);
+    expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");
+    if (detail) {
+      expect(result.detail).toContain(detail);
+    } else {
+      expect(result.detail).toBe("");
+    }
+    expect(result.events).toEqual(scenario === "absent" ? ["query", "scan", "scan"] : ["query"]);
+  });
 });

@@ -387,6 +387,16 @@ describe("tool terminal outcome observer", () => {
     });
   });
 
+  it("clears a failure after the same normalized tool succeeds", () => {
+    const observe = createToolTerminalObserver("run-normalized-recovery");
+    observe({
+      toolName: " Write ",
+      outcome: "failure",
+      failure: { error: "write failed" },
+    });
+    expect(observe({ toolName: "WRITE", outcome: "success" }).lastToolError).toBeUndefined();
+  });
+
   it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {
     const observe = createToolTerminalObserver("run-spawn-retry");
     const failedArgs = {

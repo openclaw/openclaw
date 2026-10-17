@@ -392,7 +392,7 @@ export function createPageState(
       void resumeStoredChatOutboxes(state);
     }
   };
-  const transientResources = new Set<"desktop" | "browser">();
+  const transientResources = new Set<"desktop">();
   let transientResourceScope = "";
   state.updateSidebarLayout = (layout, options) => {
     const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
@@ -417,7 +417,7 @@ export function createPageState(
         .flatMap((column) => column.panels)
         .find((entry) => entry.slot === resource);
       // Explicit targets are saved choices, even when discovery first opened the tab.
-      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+      if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
     }
@@ -483,7 +483,7 @@ export function createPageState(
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
-    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
+    if (selected === "desktop" && transientResources.has(selected)) {
       return;
     }
     state.settings = patchSettings({

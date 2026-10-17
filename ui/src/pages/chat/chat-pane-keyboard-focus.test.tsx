@@ -71,11 +71,14 @@ describe("chat pane keyboard focus", () => {
       vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
       state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
       pane.historyAutoLoadBlocked = true;
-      vi.stubGlobal("IntersectionObserver", undefined);
       const { container } = mountSolid(() => (
         <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>
       ));
-      const thread = container.firstElementChild!;
+      const thread = container.querySelector("div")!;
+      thread.append(
+        Object.assign(document.createElement("div"), { className: "chat-history-sentinel" }),
+      );
+      vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
       const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
       try {
         thread.firstElementChild!.dispatchEvent(

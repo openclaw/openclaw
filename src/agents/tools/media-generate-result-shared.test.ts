@@ -103,10 +103,9 @@ it("stages only the current outputs for follow-up references and retains deliver
   const result = await build({ sandbox: acquireSandbox });
   const relativePath = await expectStaged(result, workspace);
   expect(relativePath).toMatch(/^media\/inbound\/openclaw-staged-[^/]+\/image\.png$/);
-  await expect(fs.readdir(path.dirname(path.join(workspace, relativePath)))).resolves.toEqual([
-    ".gitignore",
-    "image.png",
-  ]);
+  expect(new Set(await fs.readdir(path.dirname(path.join(workspace, relativePath))))).toEqual(
+    new Set([".gitignore", "image.png"]),
+  );
   await expect(
     fs.readFile(path.join(workspace, path.dirname(relativePath), ".gitignore"), "utf8"),
   ).resolves.toBe(STAGED_INPUT_GITIGNORE);

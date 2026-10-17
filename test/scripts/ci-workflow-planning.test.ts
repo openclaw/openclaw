@@ -5764,7 +5764,7 @@ describe("ci workflow guards", () => {
       expect(coverage(qualification.outputs)).toEqual(coverage(ordinaryPush.outputs));
       const rows = JSON.parse(qualification.outputs.checks_node_core_nondist_matrix!).include;
       expect(rows).toHaveLength(1);
-      expect(rows[0].test_runtime_policy).toBe("node");
+      expect(rows[0].test_runtime_policy).toBe("bun-all");
       expect(qualification.outputs.run_qa_smoke_ci).toBe("true");
       expect(JSON.parse(qualification.outputs.qa_smoke_ci_matrix!).include).toHaveLength(4);
       expect(qualification.outputs.run_docker_seed_e2e).toBe("true");
@@ -7669,16 +7669,16 @@ describe("ci workflow guards", () => {
       eventName: "pull_request",
       capability: true,
       uiCapability: true,
-      policy: "bun-compatible",
-      uiPolicy: "bun-compatible",
+      policy: "bun-all",
+      uiPolicy: "bun-all",
       bun: true,
     },
     {
       eventName: "workflow_dispatch",
       capability: true,
       uiCapability: true,
-      policy: "dual",
-      uiPolicy: "dual",
+      policy: "dual-all",
+      uiPolicy: "dual-all",
       bun: true,
     },
     {
@@ -7686,17 +7686,17 @@ describe("ci workflow guards", () => {
       releaseGate: true,
       capability: true,
       uiCapability: true,
-      policy: "bun-compatible",
-      uiPolicy: "bun-compatible",
+      policy: "dual-all",
+      uiPolicy: "dual-all",
       bun: true,
     },
     {
       eventName: "push",
       capability: true,
       uiCapability: true,
-      policy: "node",
-      uiPolicy: "node",
-      bun: false,
+      policy: "bun-all",
+      uiPolicy: "bun-all",
+      bun: true,
     },
     {
       eventName: "workflow_dispatch",
@@ -7710,7 +7710,7 @@ describe("ci workflow guards", () => {
       eventName: "pull_request",
       capability: true,
       uiCapability: false,
-      policy: "bun-compatible",
+      policy: "bun-all",
       uiPolicy: "node",
       bun: true,
     },
@@ -7718,7 +7718,7 @@ describe("ci workflow guards", () => {
       eventName: "workflow_dispatch",
       capability: true,
       uiCapability: "requires-ftl-flag",
-      policy: "dual",
+      policy: "dual-all",
       uiPolicy: "node",
       bun: true,
     },
@@ -7727,7 +7727,7 @@ describe("ci workflow guards", () => {
       historicalCompatibility: true,
       capability: true,
       uiCapability: true,
-      policy: "dual",
+      policy: "dual-all",
       uiPolicy: "node",
       bun: true,
     },
@@ -9903,7 +9903,7 @@ describe("ci workflow guards", () => {
       ]);
     }
     for (const compatibilityTarget of [false, true]) {
-      for (const policy of ["node", "bun-compatible", "dual", "bun-all", "dual-all"]) {
+      for (const policy of ["node", "bun-all", "dual-all"]) {
         const result = runWorkflowShellScript(uiTest.run, {
           cwd: commandRoot,
           env: {
@@ -10494,7 +10494,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  // Main runs UI on Node, so these PR rows are the only automatic Bun UI proof.
+  // Runtime-owner changes keep complete Bun UI proof in the affected PR plan.
   it.each([
     { paths: ["scripts/lib/ci-test-runtime.mts"], selected: true },
     { paths: ["scripts/lib/ci-test-native-bun-qualification.json"], selected: false },
@@ -10539,7 +10539,7 @@ describe("ci workflow guards", () => {
           expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
         ).flat(),
       ).toEqual(expectedUi);
-      expect(manifest.outputs.ui_test_runtime_policy).toBe("bun-compatible");
+      expect(manifest.outputs.ui_test_runtime_policy).toBe("bun-all");
       const ui = workflow.jobs["checks-ui"];
       const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
         eventName: "pull_request",

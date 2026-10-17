@@ -57,6 +57,7 @@ const realGatewayFiles = [
   "command-palette-search.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
+  "deepseek-search.real-gateway",
   "desktop-resize.real-gateway",
   "device-alias-rename.real-gateway",
   "device-platform-family.real-gateway",
@@ -494,6 +495,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

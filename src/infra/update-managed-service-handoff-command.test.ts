@@ -80,6 +80,8 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 beforeEach(async () => {
+  // Source Workers share this process's FD table; deep TSX cache writes can exhaust it.
+  vi.stubEnv("TSX_DISABLE_CACHE", "1");
   vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({ kind: "none" });
   // Helpers in one fixture share a coordinator without touching the operator's database.
   const coordinatorDir = await fs.realpath(
@@ -107,6 +109,7 @@ afterEach(async () => {
   }
   await tempDirs.cleanup();
   vi.resetModules();
+  vi.unstubAllEnvs();
 });
 
 async function startHandoffAndReadCommand(params: {

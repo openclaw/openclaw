@@ -290,6 +290,7 @@ type OnboardingGatewayProbeParams = {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 function runOnboardingGatewayProbe(
@@ -313,6 +314,7 @@ function runOnboardingGatewayProbe(
       ? { preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs }
       : {}),
     detailLevel,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -399,10 +401,12 @@ export async function waitForGatewayReachable(
   let lastDetail: string | undefined;
 
   while (Date.now() - startedAt < deadlineMs) {
+    params.signal?.throwIfAborted();
     const probe = await probeGatewayReachable({
       ...probeParams,
       timeoutMs: probeTimeoutMs,
     });
+    params.signal?.throwIfAborted();
     if (probe.ok) {
       return probe;
     }
@@ -411,7 +415,7 @@ export async function waitForGatewayReachable(
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(pollDelayMs, remainingMs));
+    await sleep(Math.min(pollDelayMs, remainingMs), params.signal);
   }
 
   return { ok: false, detail: lastDetail };

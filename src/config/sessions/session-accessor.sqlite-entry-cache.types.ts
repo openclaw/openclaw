@@ -122,8 +122,11 @@ export function sessionSharingEntriesEqual(
 }
 
 export type SessionEntryPublicationSource = {
-  /** The anchor routes receipts; PostgreSQL facts belong to this admitted store lifetime. */
-  admission?: Pick<PostgresPhysicalFacts, "engine" | "namespace" | "storeId" | "admissionId">;
+  /** The anchor routes receipts; null marks PostgreSQL capture without an admitted store. */
+  admission?: Pick<
+    PostgresPhysicalFacts,
+    "engine" | "namespace" | "storeId" | "admissionId"
+  > | null;
   identity: string | symbol;
   birthtime: string | undefined;
   incarnation: string;

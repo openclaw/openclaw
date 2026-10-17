@@ -169,39 +169,35 @@ describe("readGatewayServiceState", () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
   });
 
-  it.each([{ platform: "win32" as const, requireLoadedCommand: true, selected: "registered" }])(
-    "uses the $selected launcher for $platform loaded-only=$requireLoadedCommand status",
-    async ({ platform, requireLoadedCommand, selected }) => {
-      mockProcessPlatform(platform);
-      const configured = "C:\\config\\gateway.cmd";
-      const registered = "C:\\registered\\gateway.cmd";
-      const expected = selected === "registered" ? registered : configured;
-      const service = createService({
-        readCommand: vi.fn(async () => ({
-          programArguments: ["node", "openclaw", "gateway", "run"],
-          sourcePath: registered,
-        })),
-        isLoaded: vi.fn<GatewayService["isLoaded"]>(
-          async (options = {}) => options.env?.OPENCLAW_TASK_SCRIPT === expected,
-        ),
-        readRuntime: vi.fn<GatewayService["readRuntime"]>(async (env) => ({
-          status: env?.OPENCLAW_TASK_SCRIPT === expected ? "running" : "unknown",
-        })),
-      });
+  it("uses the registered Windows launcher for loaded-only status", async () => {
+    mockProcessPlatform("win32");
+    const configured = "C:\\config\\gateway.cmd";
+    const registered = "C:\\registered\\gateway.cmd";
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["node", "openclaw", "gateway", "run"],
+        sourcePath: registered,
+      })),
+      isLoaded: vi.fn<GatewayService["isLoaded"]>(
+        async (options = {}) => options.env?.OPENCLAW_TASK_SCRIPT === registered,
+      ),
+      readRuntime: vi.fn<GatewayService["readRuntime"]>(async (env) => ({
+        status: env?.OPENCLAW_TASK_SCRIPT === registered ? "running" : "unknown",
+      })),
+    });
 
-      const state = await readGatewayServiceState(service, {
-        env: { OPENCLAW_TASK_SCRIPT: configured },
-        requireEffective: true,
-        requireLoadedCommand,
-      });
+    const state = await readGatewayServiceState(service, {
+      env: { OPENCLAW_TASK_SCRIPT: configured },
+      requireEffective: true,
+      requireLoadedCommand: true,
+    });
 
-      expect(state).toMatchObject({
-        loadState: { status: "loaded" },
-        running: true,
-        env: { OPENCLAW_TASK_SCRIPT: expected },
-      });
-    },
-  );
+    expect(state).toMatchObject({
+      loadState: { status: "loaded" },
+      running: true,
+      env: { OPENCLAW_TASK_SCRIPT: registered },
+    });
+  });
 
   it.each(
     managerlessPreflightCases.filter(
@@ -211,7 +207,7 @@ describe("readGatewayServiceState", () => {
     ),
   )(
     "handles managerless Linux inspection for $updateInstallKind restart=$shouldRestart ($condition)",
-    async ({ updateInstallKind, shouldRestart, condition, portUsage, portSource }) => {
+    async ({ updateInstallKind, shouldRestart, condition, portUsage }) => {
       const { maybeStopManagedServiceBeforeMutableUpdate } =
         await import("../cli/update-cli/update-command-service-maintenance.js");
       const home = await makeTempWorkspace("openclaw-managerless-preflight-");
@@ -246,16 +242,8 @@ describe("readGatewayServiceState", () => {
         process.env.HOME = home;
         process.env.PATH = home;
         process.env.XDG_RUNTIME_DIR = path.join(home, "runtime");
-        const expectedPort = portSource === "config" ? 19902 : 19901;
-        if (portSource === "config") {
-          await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-          await fs.writeFile(
-            path.join(home, ".openclaw/openclaw.json"),
-            JSON.stringify({ gateway: { port: expectedPort } }),
-          );
-        } else {
-          process.env.OPENCLAW_GATEWAY_PORT = String(expectedPort);
-        }
+        const expectedPort = 19901;
+        process.env.OPENCLAW_GATEWAY_PORT = String(expectedPort);
         if (portUsage) {
           probePortUsage.mockResolvedValue(portUsage);
         }
@@ -264,12 +252,9 @@ describe("readGatewayServiceState", () => {
           home,
           `.config/systemd/user/openclaw-${node ? "node" : "gateway"}.service`,
         );
-        if (condition === "installed" || condition === "node installed") {
+        if (condition === "node installed") {
           await fs.mkdir(path.dirname(unit), { recursive: true });
-          await fs.writeFile(
-            unit,
-            `[Service]\nExecStart=/missing/openclaw ${node ? "node run" : "gateway"}\n`,
-          );
+          await fs.writeFile(unit, "[Service]\nExecStart=/missing/openclaw node run\n");
         }
         const native = await import("./systemd-peer-native.js");
         for (const method of ["openSystemdBroker", "openSystemdPrivatePeer"] as const) {
@@ -300,13 +285,6 @@ describe("readGatewayServiceState", () => {
           const name = String(target);
           if (node && !name.startsWith(`${home}${path.sep}`)) {
             throw Object.assign(new Error("missing"), { code: "ENOENT" });
-          }
-          if (
-            (condition === "manager" && name === "/run/systemd") ||
-            (condition === "global definition" &&
-              name === "/etc/systemd/user/openclaw-gateway.service")
-          ) {
-            return lstat(home, options);
           }
           if (condition === "unreadable" && name === unit) {
             throw Object.assign(new Error("permission denied"), { code: "EACCES" });
@@ -384,80 +362,60 @@ describe("readGatewayServiceState", () => {
     },
   );
 
-  it.each([
-    { read: "strict with unavailable capability", requireEffective: true, capabilityFails: true },
-  ])(
-    "tracks service state and reads only needed capability for $read reads",
-    async ({ requireEffective, capabilityFails }) => {
-      const hasInstalledDefinition = vi.fn(async () => false);
-      const readDefinitionMutationCapability = vi.fn<
-        NonNullable<GatewayService["readDefinitionMutationCapability"]>
-      >(async () => {
-        if (capabilityFails) {
-          throw new Error("capability unavailable");
-        }
-        return { kind: "sealed", reason: "foreign-owner" };
-      });
-      const service = createService({
-        hasInstalledDefinition,
-        readDefinitionMutationCapability,
-        isLoaded: vi.fn(async () => true),
-        readCommand: vi.fn(async () => ({
-          programArguments: ["openclaw", "gateway", "run"],
-          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-        })),
-        readRuntime: vi.fn(async () => ({ status: "running" })),
-      });
+  it("retains service state when strict capability inspection fails", async () => {
+    const hasInstalledDefinition = vi.fn(async () => false);
+    const readDefinitionMutationCapability = vi.fn<
+      NonNullable<GatewayService["readDefinitionMutationCapability"]>
+    >(async () => {
+      throw new Error("capability unavailable");
+    });
+    const service = createService({
+      hasInstalledDefinition,
+      readDefinitionMutationCapability,
+      isLoaded: vi.fn(async () => true),
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      })),
+      readRuntime: vi.fn(async () => ({ status: "running" })),
+    });
 
-      const state = await readGatewayServiceState(service, {
-        env: { OPENCLAW_GATEWAY_PORT: "1" },
-        requireEffective,
-        timeoutMs: 100,
-      });
+    const state = await readGatewayServiceState(service, {
+      env: { OPENCLAW_GATEWAY_PORT: "1" },
+      requireEffective: true,
+      timeoutMs: 100,
+    });
 
-      expect(state.installed).toBe(true);
-      expect(state.loadState).toEqual({ status: "loaded" });
-      expect(state.running).toBe(true);
-      expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
-      expect(hasInstalledDefinition).not.toHaveBeenCalled();
-      if (requireEffective) {
-        expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
-          env: { OPENCLAW_GATEWAY_PORT: "1" },
-          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-          timeoutMs: 100,
-        });
-        expect(state.definitionMutationCapability).toEqual(
-          capabilityFails
-            ? { kind: "unknown", reason: "inspection-failed" }
-            : { kind: "sealed", reason: "foreign-owner" },
-        );
-      } else {
-        expect(readDefinitionMutationCapability).not.toHaveBeenCalled();
-        expect(state.definitionMutationCapability).toBeUndefined();
-      }
-    },
-  );
+    expect(state.installed).toBe(true);
+    expect(state.loadState).toEqual({ status: "loaded" });
+    expect(state.running).toBe(true);
+    expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(hasInstalledDefinition).not.toHaveBeenCalled();
+    expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
+      env: { OPENCLAW_GATEWAY_PORT: "1" },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      timeoutMs: 100,
+    });
+    expect(state.definitionMutationCapability).toEqual({
+      kind: "unknown",
+      reason: "inspection-failed",
+    });
+  });
 
-  it.each([{ name: "failed service definition inspection", failure: true, installed: false }])(
-    "preserves installed ownership for a $name without command details",
-    async (scenario) => {
-      const hasInstalledDefinition = vi.fn(async () => {
-        if (scenario.failure) {
-          throw new Error("service definition inspection failed");
-        }
-        return false;
-      });
-      const service = createService({ hasInstalledDefinition });
-      const env = { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" };
+  it("does not infer installed ownership from failed definition inspection", async () => {
+    const hasInstalledDefinition = vi.fn(async () => {
+      throw new Error("service definition inspection failed");
+    });
+    const service = createService({ hasInstalledDefinition });
+    const env = { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" };
 
-      const state = await readGatewayServiceState(service, { env, timeoutMs: 100 });
+    const state = await readGatewayServiceState(service, { env, timeoutMs: 100 });
 
-      expect(state.installed).toBe(scenario.installed);
-      expect(state.command).toBeNull();
-      expect(state.env).toBe(env);
-      expect(hasInstalledDefinition).toHaveBeenCalledWith({ env, timeoutMs: 100 });
-    },
-  );
+    expect(state.installed).toBe(false);
+    expect(state.command).toBeNull();
+    expect(state.env).toBe(env);
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env, timeoutMs: 100 });
+  });
 
   it("bounds structured runtime inspection diagnostics", async () => {
     const service = createService({

@@ -130,7 +130,7 @@ on scheduled main CI, manual CI validations, and PRs touching `src/infra/databas
 `src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
 `src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
 Unknown PR paths conservatively select it; older targets without the runner
-omit it. Both selected shards are required by `openclaw/ci-gate`.
+omit it. All selected shards are required by `openclaw/ci-gate`.
 
 ### Unit / integration (default)
 

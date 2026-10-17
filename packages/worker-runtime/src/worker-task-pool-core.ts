@@ -441,7 +441,6 @@ export class WorkerTaskPoolCore<Input, Output> {
       slot,
       options: this.options,
       host: this.host,
-      bootstrapError: this.bootstrap.error,
       runInContext: runInWorkerPoolContext,
       unavailableError: (message, cause) => new WorkerTaskError(message, "unavailable", { cause }),
       onStarted: (worker) => {

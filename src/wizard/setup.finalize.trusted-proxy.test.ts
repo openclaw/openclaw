@@ -136,8 +136,9 @@ const hasAuthProfileForProvider = vi.hoisted(() =>
   >(() => false),
 );
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
-const startGatewayServer = vi.hoisted(() =>
+const startOnboardingGatewayProcess = vi.hoisted(() =>
   vi.fn(async () => ({
+    wait: new Promise<void>(() => {}),
     close: vi.fn(async () => {}),
   })),
 );
@@ -247,8 +248,9 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment,
 }));
 
-vi.mock("../gateway/server.js", () => ({
-  startGatewayServer,
+vi.mock("../commands/onboard-gateway-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-gateway-process.js")>()),
+  startOnboardingGatewayProcess,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
@@ -408,8 +410,11 @@ describe("finalizeSetupWizard", () => {
     hasAuthProfileForProvider.mockReturnValue(false);
     isContainerEnvironment.mockReset();
     isContainerEnvironment.mockReturnValue(false);
-    startGatewayServer.mockReset();
-    startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
+    startOnboardingGatewayProcess.mockReset();
+    startOnboardingGatewayProcess.mockResolvedValue({
+      wait: new Promise<void>(() => {}),
+      close: vi.fn(async () => {}),
+    });
     inspectWindowsGatewayFirewall.mockReset();
     inspectWindowsGatewayFirewall.mockResolvedValue({
       applies: false,

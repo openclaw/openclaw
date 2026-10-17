@@ -7,6 +7,7 @@ import {
   markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   appendRegularFile,
@@ -26,11 +27,7 @@ export function resolveHomePath(input: string): string {
 export { pathExists as exists };
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(dirPath)).isDirectory();
-  } catch {
-    return false;
-  }
+  return (await safeStat(dirPath))?.isDirectory() === true;
 }
 
 export function sanitizeName(name: string): string {

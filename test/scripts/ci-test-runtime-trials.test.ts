@@ -16,7 +16,7 @@ const processConfig = "test/vitest/vitest.process.config.ts";
 const nodeFile = "src/process/spawn-broker/cleanup.test.ts";
 const bunFile = "src/process/spawn-broker/context.test.ts";
 
-describe("explicit all-test runtime trials", () => {
+describe("CI test runtime policies", () => {
   it("keeps the blocked socket reset contract on Node", () => {
     for (const policy of ["bun-all", "dual-all"] as const) {
       expect(
@@ -56,7 +56,46 @@ describe("explicit all-test runtime trials", () => {
     },
   );
 
-  it.each(["node", "bun-compatible", "dual", "bun-all", "dual-all"] as const)(
+  it.each([
+    ["full-agentic", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
+    ["gateway-core", []],
+    ["gateway-methods", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
+    ["gateway-client", []],
+  ] as const)("preserves Gateway Node contracts for the %s inventory", async (name, files) => {
+    for (const policy of ["bun-all", "dual-all"] as const) {
+      const calls: Array<{ runtime: string | undefined; args: string[] }> = [];
+      await runShardPlans(
+        [{ kind: "group", name, plan: { configs: [`test/vitest/vitest.${name}.config.ts`] } }],
+        {
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+          scratchDir: tempDirs.make("all-gateway-"),
+          runChild: async (args, env) => {
+            calls.push({ runtime: env.OPENCLAW_VITEST_RUNTIME, args });
+            return 0;
+          },
+        },
+      );
+      const expected = files.map((file) => path.resolve(file)).toSorted();
+      const gatewayRoot = `${path.resolve("src/gateway")}${path.sep}`;
+      const nodeCall = calls.find(({ runtime }) => runtime === "node");
+      if (policy === "bun-all") {
+        expect(
+          nodeCall?.args.filter((arg) => arg.startsWith(gatewayRoot)).toSorted() ?? [],
+        ).toEqual(expected);
+      } else {
+        expect(nodeCall).toBeDefined();
+      }
+      expect(
+        calls
+          .find(({ runtime }) => runtime === "bun")!
+          .args.filter((arg) => arg.startsWith(`--exclude=${gatewayRoot}`))
+          .map((arg) => arg.slice("--exclude=".length))
+          .toSorted(),
+      ).toEqual(expected);
+    }
+  });
+
+  it.each(["node", "bun-all", "dual-all"] as const)(
     "accepts %s without changing the default",
     (policy) => {
       expect(resolveCiTestRuntimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: policy })).toBe(policy);
@@ -80,9 +119,6 @@ describe("explicit all-test runtime trials", () => {
         { runtime: "bun" },
       ]);
       expect(ciTestShardRequiresBun(selection, policy)).toBe(true);
-      expect(resolveCiTestRuntimeSelections(selection, "bun-compatible")).toEqual([
-        { runtime: "node" },
-      ]);
     },
   );
 

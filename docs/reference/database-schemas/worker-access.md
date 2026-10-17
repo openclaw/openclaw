@@ -171,11 +171,13 @@ it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
 scope. The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
-An unset role still refuses main-thread access. Gateway-capable interactive
-onboarding, `setup` (including `crestodian`), and bare-root launch use the Gateway
-role; non-interactive onboarding uses the one-shot role. The embedded Gateway
-entry also requires the Gateway role and refuses a process already classified
-as a one-shot.
+An unset role still refuses main-thread access. Interactive onboarding and
+`setup` (including `crestodian`) keep the CLI role through their prompts and
+local setup console. Any Gateway they start runs in a separate process with
+the Gateway role. The setup console supplies its own in-memory TUI backend;
+rendering an interactive console does not turn the CLI into a Gateway.
+Bare-root launch retains its conservative Gateway role. The embedded Gateway
+entry requires that role and refuses a process already classified as a one-shot.
 Each `openEngineStore` caller supplies `inspectSqlite()` with explicit
 `hasExistingData` and `hasEngineAnchor` facts; table-name prefixes cannot decide
 whether an engine switch is safe. See
@@ -2130,13 +2132,13 @@ Both stages still read the exact stored payload bytes, and the conditional updat
 rejects concurrent edits. Missing residency uses the existing worker readers.
 Admission- and projection-preserving rewrites publish through the same actor owner;
 resets, cold archives, and incompatible writes invalidate its retained facts.
-SQLite turn preparation in the serialized execution worker reuses the actor's
+SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
 committed exact entry, window, pending-input rows, and transcript version. Existing
 write receipts keep these facts current; missing residency, moved keys, cold
 archives, and turn mutations retain canonical readers. Idempotency still reads
 the canonical identity because a bounded transcript window cannot prove absence.
 Source validation, pending-input custody, and final write authority remain with
-their existing owners. PostgreSQL retains canonical preparation.
+their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents
 from its active positions and identities and reuse its projection, reset, and
 prefix facts; standalone reads retain their SQL lookups. Hydration does not
