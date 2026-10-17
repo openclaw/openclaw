@@ -16,7 +16,6 @@ import { TranscriptsStore } from "../transcripts/store.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
-  createTestRealtimeEngine,
   createTestRuntime,
   type TestSession,
   type TestJoinContext,
@@ -68,13 +67,34 @@ const testBrowser = (
 
 function createNotesRuntime(overrides: Partial<Parameters<typeof createTestRuntime>[0]>) {
   return createTestRuntime({
-    joinTransport: async ({ session }) => {
-      session.browser = testBrowser("notes-tab");
-      return {};
-    },
+    joinTransport: joinBrowser("notes-tab"),
     releaseBrowserTab: async () => true,
     ...overrides,
   });
+}
+
+function joinBrowser(
+  target: string | ((session: TestSession) => string),
+  stop?: () => Promise<void>,
+  failure?: Error,
+) {
+  return vi.fn(async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
+    session.browser = testBrowser(typeof target === "string" ? target : target(session));
+    if (stop) {
+      context.attachRuntimeHandles(session, { stop });
+    }
+    if (failure) {
+      throw failure;
+    }
+    return {};
+  });
+}
+
+function releaseTab(session: TestSession) {
+  if (session.browser) {
+    session.browser.tab = undefined;
+  }
+  return true;
 }
 
 function transcriptSource(
@@ -350,9 +370,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     const store = transcriptStore(stateDir);
     const stored = await store.readSession(session.id);
     expect(await store.readUtterancesForSession(stored!)).toHaveLength(1);
-    expect(await store.readSummary(stored!)).toMatchObject({
-      summary: { utteranceCount: 1 },
-    });
+    expect(await store.readSummary(stored!)).toMatchObject({ summary: { utteranceCount: 1 } });
     expect(onUtterance).toHaveBeenCalledOnce();
   });
 });
@@ -416,13 +434,7 @@ describe("MeetingSessionRuntime failed joins", () => {
   it("cleans an externally ended reusable session before replacing it", async () => {
     const stop = vi.fn(async () => {});
     const releaseBrowserTab = vi.fn(async () => true);
-    const joinTransport = vi.fn(
-      async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
-        session.browser = testBrowser(session.id);
-        context.attachRuntimeHandles(session, { stop });
-        return {};
-      },
-    );
+    const joinTransport = joinBrowser((session) => session.id, stop);
     const { runtime } = createTestRuntime({
       joinTransport,
       refreshReusableSession: async (session) => {
@@ -440,101 +452,72 @@ describe("MeetingSessionRuntime failed joins", () => {
     expect(joinTransport).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["browser", "transport"])(
-    "retains partial %s cleanup after a failed join for an explicit leave retry",
+  it.each(["browser", "transport", "blocked transport"] as const)(
+    "retains failed-join %s cleanup for an explicit retry",
     async (failure) => {
+      const blocked = failure === "blocked transport";
       const joinError = new Error("transport setup failed");
-      const stop = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const cleanupError = new Error("transport cleanup still pending");
+      let releaseStop = !blocked;
+      let resourceLive = true;
+      const stop = vi.fn(async () => {
+        if (!releaseStop) {
+          throw cleanupError;
+        }
+        resourceLive = false;
+      });
       if (failure === "transport") {
         stop.mockRejectedValueOnce(new Error("transport stop failed"));
       }
       let releaseAttempts = 0;
       const releaseBrowserTab = vi.fn(async (session: TestSession) => {
-        if (failure === "browser" && releaseAttempts++ === 0) {
+        if (
+          (blocked && !session.browser?.tab) ||
+          (failure === "browser" && releaseAttempts++ === 0)
+        ) {
           return false;
         }
-        if (session.browser) {
-          session.browser.tab = undefined;
-        }
-        return true;
+        return releaseTab(session);
       });
       const { createdSessions, runtime } = createTestRuntime({
         releaseBrowserTab,
-        joinTransport: async ({ session, context }) => {
-          session.browser = testBrowser("partial-tab");
-          context.attachRuntimeHandles(session, { stop });
-          throw joinError;
-        },
+        joinTransport: joinBrowser("partial-tab", stop, joinError),
       });
-      await expect(runtime.join(room)).rejects.toBe(joinError);
-      const pending = runtime.list();
-      expect(pending).toEqual(createdSessions);
-      expect(pending).toHaveLength(1);
-      expect(stop).toHaveBeenCalledOnce();
-      expect(releaseBrowserTab).toHaveBeenCalledOnce();
-      for (const session of pending) {
-        await runtime.leave(session.id);
+      try {
+        await expect(runtime.join(room)).rejects.toBe(joinError);
+        expect(runtime.list()).toEqual(createdSessions);
+        expect(createdSessions).toHaveLength(1);
+        expect(stop).toHaveBeenCalledOnce();
+        expect(releaseBrowserTab).toHaveBeenCalledOnce();
+        const original = createdSessions[0]!;
+        if (blocked) {
+          expect(resourceLive).toBe(true);
+          await expect(runtime.status(original.id)).resolves.toMatchObject({ found: true });
+          await expect(runtime.join(room)).rejects.toBe(cleanupError);
+          expect(createdSessions).toHaveLength(1);
+          expect(resourceLive).toBe(true);
+          expect(stop).toHaveBeenCalledTimes(2);
+          releaseStop = true;
+        }
+        await runtime.leave(original.id);
+        expect(stop).toHaveBeenCalledTimes(blocked ? 3 : failure === "transport" ? 2 : 1);
+        if (!blocked) {
+          expect(releaseBrowserTab).toHaveBeenCalledTimes(failure === "browser" ? 2 : 1);
+        }
+        expect(original).toMatchObject({ state: "ended", browser: { tab: undefined } });
+        expect(runtime.list()).toEqual([]);
+        if (blocked) {
+          expect(resourceLive).toBe(false);
+          await expect(runtime.status(original.id)).resolves.toMatchObject({ found: false });
+        }
+      } finally {
+        if (blocked && resourceLive) {
+          releaseStop = true;
+          await stop();
+        }
       }
-      expect(stop).toHaveBeenCalledTimes(failure === "transport" ? 2 : 1);
-      expect(releaseBrowserTab).toHaveBeenCalledTimes(failure === "browser" ? 2 : 1);
-      expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
-      expect(runtime.list()).toEqual([]);
     },
   );
-
-  it("retains a failed join with live cleanup for a later leave retry", async () => {
-    const joinError = new Error("transport setup failed");
-    const cleanupError = new Error("transport cleanup still pending");
-    let resourceLive = true;
-    let releaseStop = false;
-    const stop = vi.fn(async () => {
-      if (!releaseStop) {
-        throw cleanupError;
-      }
-      resourceLive = false;
-    });
-    const { createdSessions, runtime } = createTestRuntime({
-      releaseBrowserTab: async (session) => {
-        if (!session.browser?.tab) {
-          return false;
-        }
-        session.browser.tab = undefined;
-        return true;
-      },
-      joinTransport: async ({ session, context }) => {
-        session.browser = testBrowser("partial-tab");
-        context.attachRuntimeHandles(session, { stop });
-        throw joinError;
-      },
-    });
-    try {
-      await expect(
-        runtime.join({ url: "https://meeting.example/failed", agentId: "main" }),
-      ).rejects.toBe(joinError);
-      expect(resourceLive).toBe(true);
-      expect(stop).toHaveBeenCalledOnce();
-      const original = createdSessions[0];
-      expect(original).toBeDefined();
-      if (!original) {
-        throw new Error("Expected the original meeting session");
-      }
-      await expect(runtime.status(original.id)).resolves.toMatchObject({ found: true });
-      await expect(runtime.join({ url: original.url, agentId: "main" })).rejects.toBe(cleanupError);
-      expect(createdSessions).toHaveLength(1);
-      expect(resourceLive).toBe(true);
-      expect(stop).toHaveBeenCalledTimes(2);
-      releaseStop = true;
-      await runtime.leave(original.id);
-      expect(resourceLive).toBe(false);
-      expect(stop).toHaveBeenCalledTimes(3);
-      await expect(runtime.status(original.id)).resolves.toMatchObject({ found: false });
-    } finally {
-      releaseStop = true;
-      if (resourceLive) {
-        await stop();
-      }
-    }
-  });
 
   it.each([false, true])(
     "retries retained settlement after replacement fails (prior stop rejects: %s)",
@@ -554,10 +537,7 @@ describe("MeetingSessionRuntime failed joins", () => {
         if (session.id === "session-1" && oldReleaseAttempts++ === 0) {
           throw settlementError;
         }
-        if (session.browser) {
-          session.browser.tab = undefined;
-        }
-        return true;
+        return releaseTab(session);
       });
       const joinTransport = vi.fn(
         async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
@@ -596,11 +576,7 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     const releaseBrowserTab = vi.fn(async () => true);
     const { runtime } = createTestRuntime({
       releaseBrowserTab,
-      joinTransport: async ({ session, context }) => {
-        session.browser = testBrowser("leave-tab");
-        context.attachRuntimeHandles(session, { stop });
-        return {};
-      },
+      joinTransport: joinBrowser("leave-tab", stop),
     });
     const { session } = await runtime.join(room);
     const first = runtime.leave(session.id);
@@ -705,11 +681,7 @@ describe("MeetingSessionRuntime speech readiness", () => {
       talkBack: true,
       releaseBrowserTab: async () => true,
       joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
-          hasAudioBridge: true,
-          health: { inCall: true },
-        };
+        session.browser = { launched: true, hasAudioBridge: true, health: { inCall: true } };
         return {};
       },
     });
@@ -772,7 +744,13 @@ describe.each([
       engineMocks.startAgent
         .mockReset()
         .mockImplementation(async ({ transport }: { transport: { stop(): Promise<void> } }) => {
-          const engine = createTestRealtimeEngine(transport, engineMocks.speak);
+          const health = { bridgeClosed: false };
+          const engine = {
+            getHealth: () => health,
+            providerId: "test",
+            speak: engineMocks.speak,
+            stop: () => transport.stop(),
+          };
           engines.push(engine);
           return engine;
         });

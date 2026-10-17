@@ -112,48 +112,36 @@ describe("local meeting realtime audio transport", () => {
     await transport.stop();
   });
 
-  it("waits for output drain after the child stream backpressures", async () => {
-    const outputStdin = createStdin(false);
-    const { transport } = createTransport(outputStdin);
-    let settled = false;
-
-    const writing = transport.writeOutput(Buffer.from([1, 2, 3])).then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-
-    expect(settled).toBe(false);
-    outputStdin.emit("drain");
-    await writing;
-    expect(settled).toBe(true);
-
-    await transport.stop();
-  });
-
-  it("releases a backpressured write when clear replaces its output process", async () => {
-    const outputStdin = createStdin(false);
-    const { replacementOutput, transport } = createTransport(outputStdin);
-    const fatal = vi.fn();
-    transport.onFatal?.(fatal);
-    let settled = false;
-
-    const writing = transport.writeOutput(Buffer.from([4, 5, 6])).then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    await transport.clearOutput();
-    await writing;
-
-    expect(settled).toBe(true);
-    expect(replacementOutput.stdin?.write).not.toHaveBeenCalled();
-    outputStdin.accept(new Error("retired output write failed"));
-    await transport.writeOutput(Buffer.from([7, 8, 9]));
-    expect(replacementOutput.stdin?.write).toHaveBeenCalledOnce();
-    expect(fatal).not.toHaveBeenCalled();
-    await transport.stop();
-  });
+  it.each(["drain", "clear"] as const)(
+    "releases a backpressured write after %s",
+    async (release) => {
+      const outputStdin = createStdin(false);
+      const { replacementOutput, transport } = createTransport(outputStdin);
+      const fatal = vi.fn();
+      transport.onFatal(fatal);
+      let settled = false;
+      const writing = transport.writeOutput(Buffer.from([1, 2, 3])).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      if (release === "drain") {
+        outputStdin.emit("drain");
+      } else {
+        await transport.clearOutput();
+      }
+      await writing;
+      expect(settled).toBe(true);
+      if (release === "clear") {
+        expect(replacementOutput.stdin?.write).not.toHaveBeenCalled();
+        outputStdin.accept(new Error("retired output write failed"));
+        await transport.writeOutput(Buffer.from([7, 8, 9]));
+        expect(replacementOutput.stdin?.write).toHaveBeenCalledOnce();
+        expect(fatal).not.toHaveBeenCalled();
+      }
+      await transport.stop();
+    },
+  );
 
   it("signals fatal and stops when the current output write throws", async () => {
     const outputStdin = createStdin(true);

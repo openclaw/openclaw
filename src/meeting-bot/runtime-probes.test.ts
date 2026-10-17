@@ -7,7 +7,6 @@ type Session = {
   id: string;
   chrome?: {
     launched: boolean;
-    browserTab?: { targetId?: string };
     health?: MeetingPluginProbeHealth;
   };
 };
@@ -17,11 +16,7 @@ type CreateProbeOptions = {
 };
 
 const URL = "https://example.test/meeting";
-const config = {
-  defaultMode: "agent" as const,
-  chrome: { joinTimeoutMs: 30_000 },
-  chromeNode: {},
-};
+const config = { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 30_000 }, chromeNode: {} };
 const listenRequest = { url: URL, mode: "transcribe" as const, timeoutMs: 100 };
 const speechRequest = { url: URL, mode: "agent" as const };
 
@@ -51,7 +46,6 @@ type ProbeContext = Parameters<ReturnType<typeof createProbes>["testSpeech"]>[0]
 function createContext(params: {
   session: Session;
   spoken?: boolean;
-  existing?: Session[];
   hasHealthHandle?: boolean;
   refreshHealth?: () => void;
   refreshCaptionHealth?: (session: Session, timeoutMs?: number) => Promise<void>;
@@ -59,7 +53,7 @@ function createContext(params: {
   return {
     config,
     resolveAgentId: () => "main",
-    list: () => params.existing ?? [],
+    list: () => [],
     join: vi.fn(async () => ({ session: params.session, spoken: params.spoken })),
     isReusable: () => false,
     hasHealthHandle: () => params.hasHealthHandle ?? false,
@@ -83,21 +77,6 @@ describe("meeting runtime probes", () => {
       name: "ProbeInvalidRequest",
       message: "test_speech requires mode: agent or bidi",
     });
-  });
-
-  it("honors shouldWaitForListening when it returns true", async () => {
-    const session = createSession("listen-policy");
-    const refreshCaptionHealth = vi.fn(async () => {
-      session.chrome!.health = {
-        ...session.chrome!.health,
-        manualAction: { reason: "admission-required", message: "Waiting" },
-      };
-    });
-    const probes = createProbes({ shouldWaitForListening: () => true });
-
-    await probes.testListening(createContext({ session, refreshCaptionHealth }), listenRequest);
-
-    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
   });
 
   it("uses the per-request speech verification timeout", async () => {
@@ -139,32 +118,29 @@ describe("meeting runtime probes", () => {
     }
   });
 
-  it("returns caption progress and manual action before the deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const session = createSession("listen-progress");
-    const refreshCaptionHealth = vi.fn(async () => {
-      session.chrome!.health = {
-        ...session.chrome!.health,
-        lastCaptionText: "Caption already waiting",
-        manualAction: { reason: "admission-required", message: "Waiting" },
-        transcriptLines: 1,
-      };
-    });
-    const probes = createProbes();
-
-    const result = await probes.testListening(
-      createContext({ session, refreshCaptionHealth }),
-      listenRequest,
-    );
-
-    expect(result).toMatchObject({
-      listenVerified: true,
-      manualAction: { reason: "admission-required", message: "Waiting" },
-    });
-    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([false, true])(
+    "returns manual action with caption progress=%s before the deadline",
+    async (captions) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const session = createSession("listen-progress");
+      const manualAction = { reason: "admission-required", message: "Waiting" };
+      const refreshCaptionHealth = vi.fn(async () => {
+        session.chrome!.health = {
+          manualAction,
+          ...(captions ? { lastCaptionText: "Caption already waiting", transcriptLines: 1 } : {}),
+        };
+      });
+      const probes = createProbes({ shouldWaitForListening: () => true });
+      const result = await probes.testListening(
+        createContext({ session, refreshCaptionHealth }),
+        listenRequest,
+      );
+      expect(result).toMatchObject({ listenVerified: captions, manualAction });
+      expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("rejects caption progress that arrives after the deadline", async () => {
     vi.useFakeTimers();
@@ -175,11 +151,7 @@ describe("meeting runtime probes", () => {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, (timeoutMs ?? 0) + 50);
       });
-      session.chrome!.health = {
-        ...session.chrome!.health,
-        lastCaptionText: "Too late",
-        transcriptLines: 1,
-      };
+      session.chrome!.health = { lastCaptionText: "Too late", transcriptLines: 1 };
     };
 
     const pending = probes.testListening(createContext({ session, refreshCaptionHealth }), {
@@ -188,9 +160,6 @@ describe("meeting runtime probes", () => {
     });
     await vi.advanceTimersByTimeAsync(400);
 
-    await expect(pending).resolves.toMatchObject({
-      listenTimedOut: true,
-      listenVerified: false,
-    });
+    await expect(pending).resolves.toMatchObject({ listenTimedOut: true, listenVerified: false });
   });
 });

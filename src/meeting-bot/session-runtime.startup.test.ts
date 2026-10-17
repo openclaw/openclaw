@@ -6,7 +6,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
+import { makeBridge } from "../talk/session-runtime.test-support.js";
 import {
   TEST_CAPTION_SOURCE,
   TEST_MEETING_URL,
@@ -21,6 +21,13 @@ import {
 import type { MeetingTranscriptSnapshot } from "./session-types.js";
 
 const participant = { url: "https://meeting.example/room", agentId: "operator" };
+
+function captionSnapshot(
+  lines: MeetingTranscriptSnapshot["lines"],
+  options: Pick<MeetingTranscriptSnapshot, "epoch" | "pendingLines"> = {},
+): MeetingTranscriptSnapshot {
+  return { droppedLines: 0, epoch: "page-1", ...options, lines };
+}
 
 async function captionFixture(
   captureTranscript: NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>,
@@ -69,8 +76,8 @@ describe("MeetingSessionRuntime startup custody", () => {
         if (session.browser?.hasAudioBridge) {
           return undefined;
         }
-        const bridge: RealtimeVoiceBridge = {
-          acknowledgeMark: () => {},
+        const bridge = makeBridge({
+          triggerGreeting: undefined,
           close: () => {
             closedProviders.push(session.id);
             liveProviders.delete(session.id);
@@ -89,13 +96,10 @@ describe("MeetingSessionRuntime startup custody", () => {
           },
           handleBargeIn: () => {},
           isConnected: () => liveProviders.has(session.id),
-          sendAudio: () => {},
           sendUserMessage: () => {
             spoken.push(session.id);
           },
-          setMediaTimestamp: () => {},
-          submitToolResult: () => {},
-        };
+        });
         const provider: RealtimeVoiceProviderPlugin = {
           id: "startup-custody-test",
           label: "Startup custody test",
@@ -109,11 +113,7 @@ describe("MeetingSessionRuntime startup custody", () => {
         const handle = await startMeetingRealtimeEngine({
           config: {
             chrome: { audioFormat: "pcm16-24khz" },
-            realtime: {
-              strategy: "bidi",
-              provider: provider.id,
-              providers: { [provider.id]: {} },
-            },
+            realtime: { strategy: "bidi", provider: provider.id, providers: { [provider.id]: {} } },
           },
           fullConfig: {},
           runtime: {} as PluginRuntime,
@@ -163,6 +163,11 @@ describe("MeetingSessionRuntime startup custody", () => {
       closedProviders,
       createdProviders,
       spoken,
+      finish: async (pending: Array<Promise<unknown> | undefined>) => {
+        connectAllowed.resolve();
+        await Promise.all(pending);
+        await runtime.leave(session.id);
+      },
     };
   }
 
@@ -197,9 +202,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       await Promise.all([replacing, speaking]);
       expect(priorLiveAtReplacement).toBe(false);
     } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([speaking, replacing]);
-      await f.runtime.leave(f.session.id);
+      await f.finish([speaking, replacing]);
       if (replacement) {
         await f.runtime.leave(replacement.id);
       }
@@ -219,9 +222,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       expect(f.liveProviders.has(f.session.id)).toBe(true);
       expect(f.liveProviders.has(other.id)).toBe(false);
     } finally {
-      f.connectAllowed.resolve();
-      await speaking;
-      await f.runtime.leave(f.session.id);
+      await f.finish([speaking]);
       if (other) {
         await f.runtime.leave(other.id);
       }
@@ -261,9 +262,7 @@ describe("MeetingSessionRuntime startup custody", () => {
         await f.runtime.leave(f.session.id);
         expect(f.closedProviders).toEqual([f.session.id]);
       } finally {
-        f.connectAllowed.resolve();
-        await Promise.all([settled, leaving]);
-        await f.runtime.leave(f.session.id);
+        await f.finish([settled, leaving]);
       }
     },
   );
@@ -279,9 +278,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       await Promise.all([first, second]);
       expect(f.createdProviders).toEqual([f.session.id]);
     } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([first, second]);
-      await f.runtime.leave(f.session.id);
+      await f.finish([first, second]);
     }
   });
 });
@@ -382,26 +379,14 @@ describe("MeetingSessionRuntime participation ownership", () => {
       session.state = change === "state" ? "ended" : session.state;
       session.transport = change === "transport" ? "chrome-node" : session.transport;
       session.browser!.nodeId = change === "node" ? "another-node" : undefined;
-      pending.resolve({
-        droppedLines: 0,
-        epoch: "old-page",
-        lines: [
-          {
-            text: "Recovered caption",
-            ...(participation
-              ? {
-                  source: {
-                    id: "old-caption",
-                    epoch: "old-page",
-                    revision: "2",
-                    finalized: true,
-                    ownEcho: false,
-                  },
-                }
-              : {}),
-          },
-        ],
-      });
+      const source = participation
+        ? { id: "old-caption", epoch: "old-page", revision: "2", finalized: true, ownEcho: false }
+        : undefined;
+      pending.resolve(
+        captionSnapshot([{ text: "Recovered caption", ...(source ? { source } : {}) }], {
+          epoch: "old-page",
+        }),
+      );
       if (!participation && change === "tab") {
         await expect(reading).resolves.toMatchObject({ lines: [{ text: "Recovered caption" }] });
       } else {
@@ -431,19 +416,11 @@ describe("MeetingSessionRuntime participation ownership", () => {
       source: { ...source, revision: "2", finalized: true },
     };
     const snapshots: MeetingTranscriptSnapshot[] = [
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [],
-        pendingLines: [{ text: "Please share", source }],
-      },
-      { droppedLines: 0, epoch: "page-1", lines: [completed], pendingLines: [] },
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [completed],
+      captionSnapshot([], { pendingLines: [{ text: "Please share", source }] }),
+      captionSnapshot([completed], { pendingLines: [] }),
+      captionSnapshot([completed], {
         pendingLines: [{ text: "Please wait", source: { ...source, revision: "3" } }],
-      },
+      }),
     ];
     const { runtime, session } = await captionFixture(async () => snapshots.shift());
     await runtime.transcript(session.id);
@@ -463,10 +440,8 @@ describe("MeetingSessionRuntime participation ownership", () => {
   });
 
   it("invalidates caption authority on an empty new epoch without minting a source event", async () => {
-    const oldSnapshot: MeetingTranscriptSnapshot = {
-      droppedLines: 0,
-      epoch: "old-page",
-      lines: [
+    const oldSnapshot = captionSnapshot(
+      [
         {
           text: "Please share the recap",
           source: {
@@ -478,10 +453,11 @@ describe("MeetingSessionRuntime participation ownership", () => {
           },
         },
       ],
-    };
+      { epoch: "old-page" },
+    );
     const snapshots: MeetingTranscriptSnapshot[] = [
       oldSnapshot,
-      { droppedLines: 0, epoch: "new-page", lines: [], pendingLines: [] },
+      captionSnapshot([], { epoch: "new-page", pendingLines: [] }),
       oldSnapshot,
     ];
     const { runtime, session } = await captionFixture(async () => snapshots.shift());
@@ -504,14 +480,13 @@ describe("MeetingSessionRuntime observation provenance", () => {
     vi.setSystemTime(firstObservedAt);
     const provenance = testMeetingObservation();
     const expected = { ...provenance };
-    let snapshot: MeetingTranscriptSnapshot = {
-      droppedLines: 0,
-      epoch: "epoch-1",
-      lines: [
+    let snapshot = captionSnapshot(
+      [
         { text: "An invitation", source: { ...TEST_CAPTION_SOURCE }, provenance },
         { text: "Another retained row", provenance },
       ],
-    };
+      { epoch: "epoch-1" },
+    );
     const { runtime } = createParticipationTestRuntime({
       transcribe: true,
       captureTranscript: async () => snapshot,

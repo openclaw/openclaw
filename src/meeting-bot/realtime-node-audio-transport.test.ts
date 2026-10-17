@@ -156,56 +156,45 @@ describe("node meeting realtime audio transport", () => {
     expect(invoke).toHaveBeenCalledTimes(invokeCountAfterStop);
   });
 
-  it("serializes output commands for legacy node hosts", async () => {
-    const { invoke, started, released } = blockedOutput();
-    const transport = createTransport(invoke);
-
+  it.each([
+    ["serializes legacy clear", false, "clear"],
+    ["clears generation-aware output immediately", true, "clear"],
+    ["stops legacy output without waiting", false, "stop"],
+  ] as const)("%s", async (_label, generations, action) => {
+    const { invoke, started, released } = blockedOutput(action === "stop");
+    const transport = createTransport(invoke, { outputGenerationSupported: generations });
     const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
-    const clearing = transport.clearOutput();
-    await withTestTimeout(started.promise, 1_000, "legacy output push did not start");
-    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
-    await setImmediate();
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expectCommand(invoke, 1, {
-      action: "pushAudio",
-      bridgeId: "bridge-1",
-      base64: Buffer.from([1, 2, 3]).toString("base64"),
-    });
-
+    const clearing = generations ? undefined : transport.clearOutput();
+    await withTestTimeout(started.promise, 1_000, "output push did not start");
+    if (generations) {
+      await transport.clearOutput();
+      expectCommand(invoke, 2, { action: "clearAudio", bridgeId: "bridge-1", outputGeneration: 1 });
+    } else {
+      // A queued legacy clear must remain blocked until the push settles.
+      await setImmediate();
+      expect(invoke).toHaveBeenCalledTimes(1);
+      if (action === "clear") {
+        expectCommand(invoke, 1, {
+          action: "pushAudio",
+          bridgeId: "bridge-1",
+          base64: Buffer.from([1, 2, 3]).toString("base64"),
+        });
+      } else {
+        await transport.stop();
+      }
+    }
     released.resolve();
     await Promise.all([pushing, clearing]);
-    expectCommand(invoke, 2, { action: "clearAudio", bridgeId: "bridge-1" });
-
+    if (!generations) {
+      if (action === "clear") {
+        expectCommand(invoke, 2, { action: "clearAudio", bridgeId: "bridge-1" });
+      } else {
+        expect(invoke.mock.calls.map(([call]) => call.params.action)).toEqual([
+          "pushAudio",
+          "stop",
+        ]);
+      }
+    }
     await transport.stop();
-  });
-
-  it("clears immediately when the node host supports output generations", async () => {
-    const { invoke, released } = blockedOutput();
-    const transport = createTransport(invoke, { outputGenerationSupported: true });
-
-    const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-    await transport.clearOutput();
-    expectCommand(invoke, 2, { action: "clearAudio", bridgeId: "bridge-1", outputGeneration: 1 });
-
-    released.resolve();
-    await pushing;
-    await transport.stop();
-  });
-
-  it("stops a legacy node host without waiting for blocked output", async () => {
-    const { invoke, started } = blockedOutput(true);
-    const transport = createTransport(invoke);
-
-    const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
-    const clearing = transport.clearOutput();
-    await withTestTimeout(started.promise, 1_000, "legacy output push did not start");
-    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
-    await setImmediate();
-    expect(invoke).toHaveBeenCalledTimes(1);
-    await transport.stop();
-    await Promise.all([pushing, clearing]);
-
-    expect(invoke.mock.calls.map(([call]) => call.params.action)).toEqual(["pushAudio", "stop"]);
   });
 });

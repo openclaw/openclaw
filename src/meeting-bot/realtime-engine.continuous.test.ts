@@ -23,20 +23,18 @@ async function createLiveFixture(
   const continuous = options.continuous ?? true;
   let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
   let input: ((audio: Buffer) => void) | undefined;
-  const sendAudio = vi.fn();
-  const handleBargeIn = vi.fn();
-  const bridge: RealtimeVoiceBridge = {
+  const bridge = {
     connect: options.connect ?? (async () => {}),
     close: vi.fn(),
     isConnected: () => true,
     outputAudioMode: continuous ? "continuous" : "response",
     handlesInputAudioBargeIn: continuous,
-    sendAudio,
-    handleBargeIn,
+    sendAudio: vi.fn(),
+    handleBargeIn: vi.fn(),
     setMediaTimestamp: vi.fn(),
     acknowledgeMark: vi.fn(),
     submitToolResult: vi.fn(),
-  };
+  } satisfies RealtimeVoiceBridge;
   const provider: RealtimeVoiceProviderPlugin = {
     id: "test-native",
     label: "Test native voice",
@@ -59,12 +57,9 @@ async function createLiveFixture(
       }),
     },
   });
-  const writeOutput = vi.fn(async (_audio: Buffer) => {});
-  const clearOutput = vi.fn(async () => {});
-  const startBargeInMonitor = vi.fn();
   const consultAgent = vi.fn(options.consultAgent ?? (async () => ({ text: "The answer." })));
   const handleToolCall = vi.fn(async () => {});
-  const transport: MeetingRealtimeAudioTransport = {
+  const transport = {
     inputAudioIsolated: options.isolated ?? true,
     startInput: (handler) => {
       input = handler;
@@ -72,10 +67,10 @@ async function createLiveFixture(
     onFatal: vi.fn(),
     stop: async () => {},
     dispose: async () => {},
-    writeOutput,
-    clearOutput,
-    startBargeInMonitor,
-  };
+    writeOutput: vi.fn(async (_audio: Buffer) => {}),
+    clearOutput: vi.fn(async () => {}),
+    startBargeInMonitor: vi.fn(),
+  } satisfies MeetingRealtimeAudioTransport;
   const handle = await startMeetingRealtimeEngine({
     config: {
       chrome: { audioFormat: "pcm16-24khz" },
@@ -101,18 +96,7 @@ async function createLiveFixture(
   if (!callbacks || !input) {
     throw new Error("Expected connected meeting provider and input");
   }
-  return {
-    callbacks,
-    input,
-    handle,
-    sendAudio,
-    handleBargeIn,
-    writeOutput,
-    clearOutput,
-    startBargeInMonitor,
-    consultAgent,
-    handleToolCall,
-  };
+  return { callbacks, input, handle, bridge, transport, consultAgent, handleToolCall };
 }
 
 afterEach(() => vi.useRealTimers());
@@ -129,14 +113,14 @@ describe("meeting native continuous voice", () => {
       fixture.callbacks.onAudio(speech);
       await vi.advanceTimersByTimeAsync(0);
       fixture.input(speech);
-      expect(fixture.sendAudio).toHaveBeenCalledWith(speech);
+      expect(fixture.bridge.sendAudio).toHaveBeenCalledWith(speech);
       expect(fixture.handle.getHealth().suppressedInputBytes).toBe(0);
       await vi.advanceTimersByTimeAsync(21);
       fixture.callbacks.onAudio(silence);
-      expect(fixture.writeOutput).toHaveBeenCalledExactlyOnceWith(speech);
+      expect(fixture.transport.writeOutput).toHaveBeenCalledExactlyOnceWith(speech);
       expect(fixture.handle.getHealth().audioOutputActive).toBe(false);
-      expect(fixture.startBargeInMonitor).not.toHaveBeenCalled();
-      expect(fixture.handleBargeIn).not.toHaveBeenCalled();
+      expect(fixture.transport.startBargeInMonitor).not.toHaveBeenCalled();
+      expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
     } finally {
       await fixture.handle.stop();
     }
@@ -154,9 +138,9 @@ describe("meeting native continuous voice", () => {
       fixture.callbacks.onAudio(pause);
       fixture.callbacks.onAudio(second);
       await vi.advanceTimersByTimeAsync(0);
-      expect(Buffer.concat(fixture.writeOutput.mock.calls.map(([audio]) => audio))).toEqual(
-        Buffer.concat([first, pause, second]),
-      );
+      expect(
+        Buffer.concat(fixture.transport.writeOutput.mock.calls.map(([audio]) => audio)),
+      ).toEqual(Buffer.concat([first, pause, second]));
     } finally {
       await fixture.handle.stop();
     }
@@ -166,21 +150,21 @@ describe("meeting native continuous voice", () => {
     vi.useFakeTimers();
     const fixture = await createLiveFixture();
     const pending = createDeferredCore();
-    fixture.writeOutput.mockImplementationOnce(() => pending.promise);
+    fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
     try {
       fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
       await vi.advanceTimersByTimeAsync(0);
       fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
       fixture.callbacks.onAudio(Buffer.alloc(960, 3));
       await vi.advanceTimersByTimeAsync(0);
-      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
       const fresh = Buffer.alloc(960, 4);
       fixture.callbacks.onAudio(fresh);
       pending.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
-      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
-      expect(fixture.handleBargeIn).not.toHaveBeenCalled();
+      expect(fixture.transport.writeOutput).toHaveBeenCalledTimes(2);
+      expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
+      expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
     } finally {
       pending.resolve();
       await fixture.handle.stop();
@@ -201,17 +185,17 @@ describe("meeting native continuous voice", () => {
       const speech = Buffer.alloc(960, 1);
       fixture.callbacks.onAudio(speech);
       fixture.input(speech);
-      expect(fixture.sendAudio).not.toHaveBeenCalled();
+      expect(fixture.bridge.sendAudio).not.toHaveBeenCalled();
       expect(fixture.handle.getHealth().suppressedInputBytes).toBe(speech.byteLength);
-      expect(fixture.startBargeInMonitor).toHaveBeenCalledOnce();
+      expect(fixture.transport.startBargeInMonitor).toHaveBeenCalledOnce();
       expect(fixture.callbacks.runAgentConsult).toBeTypeOf("function");
     } finally {
       await fixture.handle.stop();
     }
   });
 
-  it.each(["none"] as const)("enforces the %s policy for native delegation", async (toolPolicy) => {
-    const fixture = await createLiveFixture({ toolPolicy });
+  it("enforces the none policy for native delegation", async () => {
+    const fixture = await createLiveFixture({ toolPolicy: "none" });
     try {
       const consult = fixture.callbacks.runAgentConsult;
       expect(consult).toBeTypeOf("function");
