@@ -80,129 +80,96 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
       dmScope: gateway.cfg.session?.dmScope,
       identityLinks: gateway.cfg.session?.identityLinks,
     });
-    try {
-      await transport.waitReady({ gateway });
-      await transport.sendInbound({
+    const readEntry = async () => (await readRawQaSessionStore({ gateway }))[sessionKey];
+    const readTranscript = (options?: Parameters<typeof readSessionTranscriptSummary>[2]) =>
+      readSessionTranscriptSummary({ gateway }, sessionKey, options);
+    const poll = <T>(check: () => Promise<T | undefined>, timeoutMs = 120_000) =>
+      transport.waitForCondition(check, timeoutMs, 25);
+    const send = (text: string) =>
+      transport.sendInbound({
         accountId: transport.accountId,
         conversation,
         senderId: conversation.id,
-        text: "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.",
+        text,
       });
-      const pending = await transport.waitForCondition(
-        async () => {
-          const listed = await gateway.call("sessions.list", { agentId: "qa", activeOnly: true });
-          if (!isRecord(listed) || !Array.isArray(listed.sessions)) {
-            throw new Error("sessions.list omitted its session rows");
-          }
-          if (
-            !listed.sessions.some(
-              (row) =>
-                isRecord(row) &&
-                row.key === sessionKey &&
-                row.hasActiveRun === true &&
-                row.status === "running",
-            )
-          ) {
-            return undefined;
-          }
-          const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
-          if (!entry) {
-            return undefined;
-          }
-          const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey, {
-            allowEmpty: true,
-            includeCodeModeControl: true,
-          });
-          return (transcript.assistantToolCallCounts.wait ?? 0) >
-            (transcript.completedToolCallCounts.wait ?? 0)
-            ? { entry, transcript }
-            : undefined;
-        },
-        120_000,
-        25,
-      );
-      expect(pending.entry.status).toBeUndefined();
-      expect(pending.entry.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
-      const pid = gateway.pid;
-      expect(pid).not.toBeNull();
-      // Kill the owned process group so no gateway or descendant can drain.
-      expect(signalQaPosixProcessGroup(pid!, "SIGKILL")).toBeUndefined();
-      await waitForQaTransportCondition(
-        () =>
-          !isQaPosixProcessGroupAlive(pid!) &&
-          gateway
-            .logs()
-            .includes("gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)")
-            ? true
-            : undefined,
-        30_000,
-        25,
-      );
-      await gateway.restartAfterStateMutation(async () => {
-        expect(gateway.logs()).toContain(
-          "gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)",
-        );
-        const orphan = (await readRawQaSessionStore({ gateway }))[sessionKey];
-        expect(orphan).toMatchObject({
-          sessionId: pending.entry.sessionId,
-          restartRecoveryDeliveryRunId: pending.entry.restartRecoveryDeliveryRunId,
-        });
-        expect(orphan?.status).toBeUndefined();
-        expect(orphan?.abortedLastRun).not.toBe(true);
+    const killedLog = "gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)";
+    await transport.waitReady({ gateway });
+    await send("Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.");
+    const pending = await poll(async () => {
+      const listed = await gateway.call("sessions.list", { agentId: "qa", activeOnly: true });
+      if (!isRecord(listed) || !Array.isArray(listed.sessions)) {
+        throw new Error("sessions.list omitted its session rows");
+      }
+      const activeSession = expect.objectContaining({
+        key: sessionKey,
+        hasActiveRun: true,
+        status: "running",
       });
-      expect(gateway.pid).not.toBe(pid);
-      await transport.waitReady({ gateway });
-      await transport.waitForCondition(
-        async () => {
-          if (!gateway.logs().includes("dispatching restart-safe recovery")) {
-            return undefined;
-          }
-          const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey);
-          return transcript.eventCursor > pending.transcript.eventCursor ? true : undefined;
-        },
-        120_000,
-        25,
-      );
-      expect(gateway.logs()).toContain("marked 1 startup-orphaned main session(s)");
+      if (!listed.sessions.some((row) => activeSession.asymmetricMatch(row))) {
+        return undefined;
+      }
+      const entry = await readEntry();
+      if (!entry) {
+        return undefined;
+      }
+      const transcript = await readTranscript({
+        allowEmpty: true,
+        includeCodeModeControl: true,
+      });
+      return (transcript.assistantToolCallCounts.wait ?? 0) >
+        (transcript.completedToolCallCounts.wait ?? 0)
+        ? { entry, transcript }
+        : undefined;
+    });
+    expect(pending.entry.status).toBeUndefined();
+    expect(pending.entry.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
+    const pid = gateway.pid;
+    expect(pid).not.toBeNull();
+    // Kill the owned process group so no gateway or descendant can drain.
+    expect(signalQaPosixProcessGroup(pid!, "SIGKILL")).toBeUndefined();
+    await waitForQaTransportCondition(
+      () =>
+        !isQaPosixProcessGroupAlive(pid!) && gateway.logs().includes(killedLog) ? true : undefined,
+      30_000,
+      25,
+    );
+    await gateway.restartAfterStateMutation(async () => {
+      expect(gateway.logs()).toContain(killedLog);
+      const orphan = await readEntry();
+      expect(orphan).toMatchObject({
+        sessionId: pending.entry.sessionId,
+        restartRecoveryDeliveryRunId: pending.entry.restartRecoveryDeliveryRunId,
+      });
+      expect(orphan?.status).toBeUndefined();
+      expect(orphan?.abortedLastRun).not.toBe(true);
+    });
+    expect(gateway.pid).not.toBe(pid);
+    await transport.waitReady({ gateway });
+    await poll(async () => {
+      if (!gateway.logs().includes("dispatching restart-safe recovery")) {
+        return undefined;
+      }
+      const transcript = await readTranscript();
+      return transcript.eventCursor > pending.transcript.eventCursor ? true : undefined;
+    });
+    expect(gateway.logs()).toContain("marked 1 startup-orphaned main session(s)");
 
-      const sinceIndex = state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound").length;
-      const second = await transport.sendInbound({
-        accountId: transport.accountId,
-        conversation,
-        senderId: conversation.id,
-        // This current-turn fixture takes precedence over the restart prompt in history.
-        text: "repeated request queued reply gateway qa check",
-      });
-      const reply = await transport.waitForOutbound({
-        conversation,
-        sinceIndex,
-        textIncludes: QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
-        timeoutMs: 180_000,
-      });
-      expect(reply.replyToId).toBe(second.id);
-      expect(reply.accountId).toBe(transport.accountId);
-      const settled = await transport.waitForCondition(
-        async () => {
-          const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
-          return entry?.status === "done" ? entry : undefined;
-        },
-        30_000,
-        25,
-      );
-      expect(settled.sessionId).toBe(pending.entry.sessionId);
-    } catch (error) {
-      const diagnostics = await Promise.allSettled([
-        readRawQaSessionStore({ gateway }),
-        readSessionTranscriptSummary({ gateway }, sessionKey, { allowEmpty: true }),
-      ]);
-      throw new Error(
-        `${String(error)}\nsessions=${JSON.stringify(diagnostics)}\nbus=${JSON.stringify(state.getSnapshot())}\ngateway=${gateway.logs()}`,
-        { cause: error },
-      );
-    }
-    // Heavily loaded hosts stretch child boots and the pending checkpoint wait,
-    // so the budget leaves real headroom before flaking.
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+    // The current-turn fixture takes precedence over the restart prompt in history.
+    const second = await send("repeated request queued reply gateway qa check");
+    const reply = await transport.waitForOutbound({
+      conversation,
+      sinceIndex,
+      textIncludes: QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+      timeoutMs: 180_000,
+    });
+    expect(reply).toMatchObject({ replyToId: second.id, accountId: transport.accountId });
+    const settled = await poll(async () => {
+      const entry = await readEntry();
+      return entry?.status === "done" ? entry : undefined;
+    }, 30_000);
+    expect(settled.sessionId).toBe(pending.entry.sessionId);
   }, 600_000);
 });

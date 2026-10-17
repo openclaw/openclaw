@@ -5,9 +5,10 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import { releaseQaCredentialLease } from "./live-transports/shared/credential-lease-cleanup.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
@@ -69,6 +70,10 @@ if (command === "descendant") {
 
 type Identity = { leaderPid: number; pgid: number; descendantPid?: number };
 type Event = { at: number; kind: string; [key: string]: unknown };
+const validPid = (pid: number) => Number.isSafeInteger(pid) && pid > 1;
+// Finally preserves ordering and runs every cleanup, with the last failure winning.
+const cleanupInOrder = (...steps: Array<() => unknown>) =>
+  steps.reduce((previous, cleanup) => previous.finally(cleanup), Promise.resolve());
 
 function readIdentity(root: string): Identity | undefined {
   const identityPath = path.join(root, "identity.json");
@@ -77,11 +82,9 @@ function readIdentity(root: string): Identity | undefined {
   }
   const identity = JSON.parse(readFileSync(identityPath, "utf8")) as Identity;
   if (
-    !Number.isSafeInteger(identity.leaderPid) ||
-    identity.leaderPid <= 1 ||
+    !validPid(identity.leaderPid) ||
     identity.leaderPid !== identity.pgid ||
-    (identity.descendantPid !== undefined &&
-      (!Number.isSafeInteger(identity.descendantPid) || identity.descendantPid <= 1))
+    (identity.descendantPid !== undefined && !validPid(identity.descendantPid))
   ) {
     throw new Error("invalid owned fixture identity; refusing to signal");
   }
@@ -151,34 +154,33 @@ async function reproduce(
   const server = createServer((request, response) => {
     request.resume();
     response.setHeader("content-type", "application/json");
+    let payload: unknown = { status: "ok" };
     if (request.url === "/readyz") {
       record("lab-ready-request");
-      response.end('{"ok":true}');
+      payload = { ok: true };
     } else if (request.url === "/qa-credentials/v1/acquire") {
       record("lease-acquire");
-      response.end(
-        JSON.stringify({
-          status: "ok",
-          credentialId: "synthetic-only",
-          leaseToken: "synthetic-only",
-          payload: { synthetic: true },
-          heartbeatIntervalMs: 250,
-          leaseTtlMs: 60_000,
-        }),
-      );
+      payload = {
+        status: "ok",
+        credentialId: "synthetic-only",
+        leaseToken: "synthetic-only",
+        payload: { synthetic: true },
+        heartbeatIntervalMs: 250,
+        leaseTtlMs: 60_000,
+      };
     } else if (request.url === "/qa-credentials/v1/heartbeat") {
       record("lease-heartbeat");
       onHeartbeat?.();
-      response.end('{"status":"ok"}');
     } else if (request.url === "/qa-credentials/v1/release") {
       const observation = snapshot();
       releases.push(observation);
       record("lease-release", observation);
-      response.end('{"status":"ok"}');
     } else {
       record("unexpected-http-request");
       response.writeHead(404).end();
+      return;
     }
+    response.end(JSON.stringify(payload));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -209,7 +211,7 @@ async function reproduce(
   const factory: QaTransportAdapterFactory = {
     id: "startup-lease-fixture",
     matches: ({ channelId, driver }) => channelId === "startup-lease-fixture" && driver === "live",
-    async create({ credentials, messages }) {
+    async create({ credentials }) {
       const lease = await credentials.acquire({
         kind: "synthetic-startup-lease",
         source: "convex",
@@ -232,15 +234,10 @@ async function reproduce(
         accountId: "sut",
         requiredPluginIds: [],
         supportedActions: [],
-        sendInbound: async (input) => messages.addInboundMessage(input),
+        sendInbound: unexpected,
         createGatewayConfig: () => ({}),
         waitReady: async () => unexpected(),
-        buildAgentDelivery: ({ target }) => ({
-          channel: "startup-lease-fixture",
-          to: target,
-          replyChannel: "startup-lease-fixture",
-          replyTo: target,
-        }),
+        buildAgentDelivery: unexpected,
         handleAction: async () => unexpected(),
         createReportNotes: () => [],
         cleanup: async () => {
@@ -248,11 +245,7 @@ async function reproduce(
         },
         cleanupAfterGatewayStop: async () => {
           record("transport-after-gateway-stop");
-          try {
-            await heartbeat.stop();
-          } finally {
-            await lease.release();
-          }
+          await releaseQaCredentialLease(lease, heartbeat);
         },
       };
     },
@@ -345,47 +338,27 @@ async function reproduce(
       }
       record("process-cleanup-verified", cleaned);
     } finally {
-      try {
-        await stopHeartbeat?.();
-      } finally {
-        try {
-          await new Promise<void>((resolve, reject) => {
+      await cleanupInOrder(
+        () => stopHeartbeat?.(),
+        () =>
+          new Promise<void>((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
             server.closeAllConnections();
-          });
-        } finally {
+          }),
+        () => {
           vi.unstubAllEnvs();
           state.reset(true);
-        }
-      }
+        },
+      );
     }
-    const retainedGatewayRoots = await fs.readdir(tempParentDir);
     if (!cleaned.groupAlive && !cleaned.descendantAlive && !cleaned.leaderAlive) {
       await fs.rm(tempParentDir, { recursive: true, force: true });
     }
     record("cleanup-complete", {
       ...cleaned,
       brokerListening: server.listening,
-      retainedGatewayRoots,
       tempParentRemoved: !existsSync(tempParentDir),
     });
-    await fs.writeFile(
-      path.join(root, "verdict.json"),
-      `${JSON.stringify(
-        {
-          denyGroupSignals,
-          releases,
-          scenarioCalls,
-          groupProbeCount,
-          error: serializeError(suiteError),
-          cleanup: cleaned,
-          retainedGatewayRoots,
-          invariantViolated: releases.some((release) => release.descendantAlive),
-        },
-        null,
-        2,
-      )}\n`,
-    );
     console.log(`startup lease evidence: ${path.relative(repoRoot, root)}`);
     expect(cleaned).toMatchObject({
       leaderAlive: false,
@@ -400,70 +373,65 @@ async function reproduce(
   return { events, releases, suiteError, groupProbeCount, scenarioCalls };
 }
 
-describe.skipIf(process.platform === "win32")(
-  "gateway startup lease lifetime (real process group)",
-  () => {
-    it.for([
-      { surface: "gateway", denyGroupSignals: false },
-      { surface: "gateway", denyGroupSignals: true },
-      { surface: "bootstrap", denyGroupSignals: false },
-      { surface: "bootstrap", denyGroupSignals: true },
-    ] as const)(
-      "$surface startup releases only after descendant exit (denied=$denyGroupSignals)",
-      { timeout: 45_000 },
-      async ({ denyGroupSignals, surface }, { signal }) => {
-        const { events, releases, suiteError, groupProbeCount, scenarioCalls } = await reproduce(
-          denyGroupSignals,
-          surface,
-          signal,
-        );
-        const eventsOf = (kind: string) => events.filter((event) => event.kind === kind);
-        const first = (kind: string) => events.findIndex((event) => event.kind === kind);
-        const last = (kind: string) => events.findLastIndex((event) => event.kind === kind);
-        const errorText = JSON.stringify(serializeError(suiteError));
-        expect(scenarioCalls).toBe(0);
-        const repaired = first("plugin-repair-completed");
-        if (surface === "gateway") {
-          expect(repaired).toBeGreaterThan(-1);
-          expect(first("gateway-start")).toBeGreaterThan(repaired);
-        } else {
-          expect(repaired).toBe(-1);
-        }
-        expect(eventsOf("gateway-start")).toHaveLength(surface === "gateway" ? 1 : 0);
-        expect(eventsOf(`${surface}-start`)).toHaveLength(1);
-        expect(eventsOf("leader-exit")[0]).toMatchObject({ exitCode: 17 });
-        expect(eventsOf("descendant-failsafe-exit")).toHaveLength(0);
-        expect(groupProbeCount).toBeGreaterThan(0);
-        const signals = eventsOf("group-signal");
-        expect(signals.length).toBeGreaterThan(0);
-        expect(
-          signals.every((event) => event.leaderAlive === false && event.descendantAlive === true),
-        ).toBe(true);
-        const afterCleanup = first("transport-after-gateway-stop");
-        const rejected = first("suite-rejected");
-        expect(rejected).toBeGreaterThan(-1);
-        if (denyGroupSignals) {
-          expect(afterCleanup).toBe(-1);
-          expect(releases).toEqual([]);
-          expect(last("lease-heartbeat")).toBeGreaterThan(rejected);
-          expect(suiteError).toBeInstanceOf(AggregateError);
-          expect(errorText).toContain("process tree remained alive");
-        } else {
-          expect(releases.length).toBeGreaterThan(0);
-          expect(releases.every((release) => !release.groupAlive)).toBe(true);
-          expect(afterCleanup).toBeGreaterThan(last("group-signal"));
-          expect(suiteError).toBeInstanceOf(Error);
-        }
-        expect(errorText).toContain(
-          surface === "gateway"
-            ? "gateway exited before listening (exitCode=17"
-            : "OpenClaw CLI exited 17",
-        );
-        expect(
-          releases.every((release) => !release.descendantAlive),
-          "credential lease released while the failed-start gateway descendant was still alive",
-        ).toBe(true);
-      },
+it.skipIf(process.platform === "win32").for([
+  { surface: "gateway", denyGroupSignals: false },
+  { surface: "gateway", denyGroupSignals: true },
+  { surface: "bootstrap", denyGroupSignals: false },
+  { surface: "bootstrap", denyGroupSignals: true },
+] as const)(
+  "$surface startup lease releases only after descendant exit (denied=$denyGroupSignals)",
+  { timeout: 45_000 },
+  async ({ denyGroupSignals, surface }, { signal }) => {
+    const { events, releases, suiteError, groupProbeCount, scenarioCalls } = await reproduce(
+      denyGroupSignals,
+      surface,
+      signal,
     );
+    const eventsOf = (kind: string) => events.filter((event) => event.kind === kind);
+    const first = (kind: string) => events.findIndex((event) => event.kind === kind);
+    const last = (kind: string) => events.findLastIndex((event) => event.kind === kind);
+    const errorText = JSON.stringify(serializeError(suiteError));
+    expect(scenarioCalls).toBe(0);
+    const repaired = first("plugin-repair-completed");
+    if (surface === "gateway") {
+      expect(repaired).toBeGreaterThan(-1);
+      expect(first("gateway-start")).toBeGreaterThan(repaired);
+    } else {
+      expect(repaired).toBe(-1);
+    }
+    expect(eventsOf("gateway-start")).toHaveLength(surface === "gateway" ? 1 : 0);
+    expect(eventsOf(`${surface}-start`)).toHaveLength(1);
+    expect(eventsOf("leader-exit")[0]).toMatchObject({ exitCode: 17 });
+    expect(eventsOf("descendant-failsafe-exit")).toHaveLength(0);
+    expect(groupProbeCount).toBeGreaterThan(0);
+    const signals = eventsOf("group-signal");
+    expect(signals.length).toBeGreaterThan(0);
+    expect(
+      signals.every((event) => event.leaderAlive === false && event.descendantAlive === true),
+    ).toBe(true);
+    const afterCleanup = first("transport-after-gateway-stop");
+    const rejected = first("suite-rejected");
+    expect(rejected).toBeGreaterThan(-1);
+    if (denyGroupSignals) {
+      expect(afterCleanup).toBe(-1);
+      expect(releases).toEqual([]);
+      expect(last("lease-heartbeat")).toBeGreaterThan(rejected);
+      expect(suiteError).toBeInstanceOf(AggregateError);
+      expect(errorText).toContain("process tree remained alive");
+    } else {
+      expect(releases.length).toBeGreaterThan(0);
+      expect(releases.every((release) => !release.groupAlive)).toBe(true);
+      expect(afterCleanup).toBeGreaterThan(last("group-signal"));
+      expect(suiteError).toBeInstanceOf(Error);
+    }
+    expect(errorText).toContain(
+      surface === "gateway"
+        ? "gateway exited before listening (exitCode=17"
+        : "OpenClaw CLI exited 17",
+    );
+    expect(
+      releases.every((release) => !release.descendantAlive),
+      "credential lease released while the failed-start gateway descendant was still alive",
+    ).toBe(true);
   },
 );

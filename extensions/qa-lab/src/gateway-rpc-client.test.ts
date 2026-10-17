@@ -1,36 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type GatewayRequestOptions = {
-  expectFinal?: boolean;
-  timeoutMs?: number;
-};
+type GatewayRequestOptions = { expectFinal?: boolean; timeoutMs?: number };
 
 const gatewayRpcMock = vi.hoisted(() => {
+  const hello = { protocol: 3, server: { version: "fixture-version" } };
   const request = vi.fn(
     async (_method: string, _params: unknown, _options: GatewayRequestOptions) => ({ ok: true }),
   );
   const stopAndWait = vi.fn(async () => {});
   const clients: Array<{ options: Record<string, unknown> }> = [];
   class GatewayClient {
-    options: Record<string, unknown>;
     request = request;
     stopAndWait = stopAndWait;
-
-    constructor(options: Record<string, unknown>) {
-      this.options = options;
+    constructor(public options: Record<string, unknown>) {
       clients.push(this);
     }
   }
   const connectImmediately = async (client: GatewayClient) => {
-    (client.options.onHelloOk as (hello: unknown) => void)({
-      protocol: 3,
-      server: { version: "fixture-version" },
-    });
+    (client.options.onHelloOk as (hello: unknown) => void)(hello);
     return { ready: true, aborted: false };
   };
   const startGatewayClientWhenEventLoopReady = vi.fn(connectImmediately);
   return {
     GatewayClient,
+    hello,
     clients,
     request,
     startGatewayClientWhenEventLoopReady,
@@ -65,8 +58,7 @@ function gatewayClientCallback(name: "onClose" | "onHelloOk" | "onReconnectPause
   if (typeof callback !== "function") {
     throw new Error(`expected Gateway client ${name} callback`);
   }
-  return (info: unknown = { protocol: 3, server: { version: "fixture-version" } }) =>
-    callback(info);
+  return (info: unknown = gatewayRpcMock.hello) => callback(info);
 }
 
 describe("startQaGatewayRpcClient", () => {
@@ -91,29 +83,21 @@ describe("startQaGatewayRpcClient", () => {
     expect(client.evidenceIdentity).toBeNull();
   });
 
-  it.each([{ scopes: [] }])(
-    "forwards ephemeral device identity and explicit scopes $scopes without shared-state writes",
-    async ({ scopes }) => {
-      const deviceIdentity = {
-        deviceId: "qa-observer-device",
-        publicKeyPem: "fixture-public-key",
-        privateKeyPem: "fixture-private-key",
-      };
-      const client = await startClient({
-        wsUrl: "ws://proof-candidate:19879",
-        logs: () => "",
-        deviceIdentity,
-        scopes,
-      });
-
-      expect(gatewayRpcMock.clients[0]?.options).toMatchObject({
-        deviceIdentity,
-        scopes,
-        sharedStateMode: "read-only",
-      });
-      await client.stop();
-    },
-  );
+  it("forwards ephemeral device identity and empty scopes without shared-state writes", async () => {
+    const scopes: string[] = [];
+    const deviceIdentity = {
+      deviceId: "qa-observer-device",
+      publicKeyPem: "fixture-public-key",
+      privateKeyPem: "fixture-private-key",
+    };
+    const client = await startClient({ deviceIdentity, scopes });
+    expect(gatewayRpcMock.clients[0]?.options).toMatchObject({
+      deviceIdentity,
+      scopes,
+      sharedStateMode: "read-only",
+    });
+    await client.stop();
+  });
 
   it("dispatches concurrent requests over the same client", async () => {
     const held = Promise.withResolvers<{ ok: boolean }>();
@@ -121,12 +105,10 @@ describe("startQaGatewayRpcClient", () => {
       .mockImplementationOnce(() => held.promise)
       .mockResolvedValueOnce({ ok: true });
     const client = await startClient();
-
     const firstRequest = client.request("health");
     await Promise.resolve();
     const secondRequest = client.request("status");
     await Promise.resolve();
-
     await vi.waitFor(() => expect(gatewayRpcMock.request).toHaveBeenCalledTimes(2));
     await expect(secondRequest).resolves.toEqual({ ok: true });
     held.resolve({ ok: true });
@@ -140,12 +122,10 @@ describe("startQaGatewayRpcClient", () => {
       aborted: false,
     });
 
-    const startup = startClient();
-    const rejection = expect(startup).rejects.toThrow(
+    const rejection = expect(startClient()).rejects.toThrow(
       "gateway request deadline exceeded\nGateway logs:\nqa logs",
     );
     await vi.advanceTimersByTimeAsync(20_000);
-
     await rejection;
     expect(gatewayRpcMock.stopAndWait).toHaveBeenCalledOnce();
   });
@@ -169,10 +149,10 @@ describe("startQaGatewayRpcClient", () => {
     const client = await startClient();
     gatewayClientCallback("onClose")();
 
-    const request = client.request("status", {}, { deadlineMs: 1_250, timeoutMs: 5_000 });
-    const rejection = expect(request).rejects.toThrow("gateway request deadline exceeded");
+    const rejection = expect(
+      client.request("status", {}, { deadlineMs: 1_250, timeoutMs: 5_000 }),
+    ).rejects.toThrow("gateway request deadline exceeded");
     await vi.advanceTimersByTimeAsync(250);
-
     await rejection;
     expect(gatewayRpcMock.request).not.toHaveBeenCalled();
   });
@@ -204,9 +184,7 @@ describe("startQaGatewayRpcClient", () => {
 
   it("wraps normalized request failures with redacted gateway logs", async () => {
     gatewayRpcMock.request.mockRejectedValueOnce("gateway rejected request");
-    const client = await startClient({
-      logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token",
-    });
+    const client = await startClient({ logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token" });
 
     await expect(client.request("health")).rejects.toMatchObject({
       cause: expect.objectContaining({ message: "gateway rejected request" }),
@@ -220,7 +198,6 @@ describe("startQaGatewayRpcClient", () => {
     const request = client.request("health");
 
     await client.stop();
-
     await expect(request).rejects.toThrow("gateway rpc client stopped\nGateway logs:\nqa logs");
   });
 });

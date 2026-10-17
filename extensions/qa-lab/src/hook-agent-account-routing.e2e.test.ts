@@ -1,8 +1,7 @@
-// QA Lab product proof exercises hook delivery through a real Gateway child and qa-channel bus.
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -12,33 +11,11 @@ const MARKER = "QA_HOOK_ACCOUNT_ROUTING_OK";
 const DEFAULT_MARKER = "QA_HOOK_DEFAULT_ACCOUNT_ROUTING_OK";
 const MODEL = "mock-openai/gpt-5.6-luna";
 
-async function postJson(url: string, body: unknown, headers: Record<string, string>) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  return {
-    status: response.status,
-    json: (await response.json()) as unknown,
-  };
-}
-
 async function startHookAccountFixture() {
   const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-  const lab = await startQaLabServer({
-    repoRoot,
-    embeddedGateway: "disabled",
-  });
-  const mock = await startQaProviderServer("mock-openai", {
-    modelRefs: [MODEL],
-  });
+  const lab = await startQaLabServer({ repoRoot, embeddedGateway: "disabled" });
+  const mock = await startQaProviderServer("mock-openai", { modelRefs: [MODEL] });
   const gatewayOwner = createQaGatewayChild();
-  let gateway: QaGatewayChild | undefined;
   const stop = async () => {
     await gatewayOwner.stop().catch(() => undefined);
     await mock?.stop().catch(() => undefined);
@@ -50,7 +27,7 @@ async function startHookAccountFixture() {
       throw new Error("mock-openai provider server did not start");
     }
     const transport = createQaChannelTransport(lab.state);
-    gateway = await gatewayOwner.start({
+    const gateway = await gatewayOwner.start({
       repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -67,11 +44,7 @@ async function startHookAccountFixture() {
         }
         return {
           ...config,
-          hooks: {
-            enabled: true,
-            token: HOOK_TOKEN,
-            path: "/hooks",
-          },
+          hooks: { enabled: true, token: HOOK_TOKEN, path: "/hooks" },
           channels: {
             ...config.channels,
             "qa-channel": {
@@ -87,34 +60,31 @@ async function startHookAccountFixture() {
         };
       },
     });
+    return {
+      lab,
+      stop,
+      outbound: () =>
+        lab.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
+      post: async (overrides: { accountId?: string; message?: string; to?: string } = {}) => {
+        const response = await fetch(`${gateway.baseUrl}/hooks/agent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${HOOK_TOKEN}` },
+          signal: AbortSignal.timeout(30_000),
+          body: JSON.stringify({
+            message: `Reply exactly: ${MARKER}`,
+            deliver: true,
+            channel: "qa-channel",
+            to: "dm:hook-recipient",
+            ...overrides,
+          }),
+        });
+        return { status: response.status, json: (await response.json()) as unknown };
+      },
+    };
   } catch (error) {
     await stop();
     throw error;
   }
-  if (!gateway || !mock) {
-    throw new Error("hook account fixture did not start");
-  }
-  const baseUrl = gateway.baseUrl;
-
-  return {
-    gateway,
-    lab,
-    stop,
-    outbound: () =>
-      lab.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
-    post: (overrides: { accountId?: string; message?: string; to?: string } = {}) =>
-      postJson(
-        `${baseUrl}/hooks/agent`,
-        {
-          message: `Reply exactly: ${MARKER}`,
-          deliver: true,
-          channel: "qa-channel",
-          to: "dm:hook-recipient",
-          ...overrides,
-        },
-        { Authorization: `Bearer ${HOOK_TOKEN}` },
-      ),
-  };
 }
 
 describe("hook agent account routing product proof", () => {
@@ -137,9 +107,7 @@ describe("hook agent account routing product proof", () => {
     fixture = await startHookAccountFixture();
   }, 180_000);
 
-  afterAll(async () => {
-    await fixture?.stop();
-  });
+  afterAll(() => fixture?.stop());
 
   it(
     "rejects invalid explicit accounts before running the agent",
