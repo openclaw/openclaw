@@ -500,4 +500,28 @@ describe("openclaw attach (action)", () => {
     await runAttach("--print-config");
     expect(exitCode).toBe(1);
   });
+
+  it.each([
+    ["just past the Date range", 8_640_000_000_000_001],
+    ["far past the Date range", 1e16],
+    ["far before the Date range", -1e16],
+  ])(
+    "rejects a grant whose expiresAtMs is %s without throwing from toISOString",
+    async (_label, expiresAtMs) => {
+      vi.mocked(callGateway).mockResolvedValueOnce({
+        sessionKey: "agent:main:x",
+        token: "tok-123",
+        expiresAtMs,
+        mcpConfig: { mcpServers: { openclaw: {} } },
+        env: {},
+      } as never);
+
+      await runAttach("--print-config");
+
+      expect(exitCode).toBe(1);
+      expect(logs.join("\n")).toContain("attach.grant returned an unexpected response");
+      // The minted grant is still ours, so it must be revoked on the way out.
+      expect(gatewayCalls.findLast((call) => call.method === "attach.revoke")).toBeDefined();
+    },
+  );
 });

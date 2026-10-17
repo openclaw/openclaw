@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { defaultRuntime } from "../runtime.js";
@@ -31,6 +34,23 @@ export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]) {
     throw error;
   }
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** Internal signal: the grant was rejected. The action already reported and set the exit code. */
+class AttachGrantRejectedError extends Error {}
+
+/**
+ * Formats the grant expiry for display, or reports and rejects the grant when the
+ * gateway sent a timestamp outside the Date range (which `toISOString` cannot
+ * represent). The caller keeps the grant so its revocation still runs.
+ */
+function formatGrantExpiry(grant: AttachGrant): string | undefined {
+  const expiresAtMs = asDateTimestampMs(grant.expiresAtMs);
+  if (expiresAtMs === undefined) {
+    defaultRuntime.error("attach.grant returned an unexpected response from the gateway.");
+    return undefined;
+  }
+  return new Date(expiresAtMs).toISOString();
 }
 
 export async function registerAttachCli(program: Command) {
@@ -136,7 +156,12 @@ export async function registerAttachCli(program: Command) {
           // A grant response can arrive after CLI cancellation. Its custody is
           // already ours, so unwind through revocation before creating anything.
           signal?.throwIfAborted();
-          expiresAt = new Date(grant.expiresAtMs).toISOString();
+          const formattedExpiry = formatGrantExpiry(grant);
+          if (formattedExpiry === undefined) {
+            exitCode = 1;
+            throw new AttachGrantRejectedError();
+          }
+          expiresAt = formattedExpiry;
           const config = writeClaudeMcpConfig(grant.mcpConfig);
           cleanupConfig = config.cleanup;
           const claudeArgs = ["--strict-mcp-config", "--mcp-config", config.path];
@@ -207,6 +232,10 @@ export async function registerAttachCli(program: Command) {
             exitCode = outcome.signal
               ? 128 + ((osConstants.signals as Record<string, number>)[outcome.signal] ?? 0)
               : (outcome.code ?? 0);
+          }
+        } catch (error) {
+          if (!(error instanceof AttachGrantRejectedError)) {
+            throw error;
           }
         } finally {
           try {
