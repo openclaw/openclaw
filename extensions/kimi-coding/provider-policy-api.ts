@@ -46,9 +46,7 @@ export function isKimiK3ModelId(modelId: string): boolean {
 /** Kimi Code K2 models whose backend cannot honor disabled thinking without leaking reasoning. */
 export function isKimiCodeEnabledOnlyModelId(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
-  return KIMI_CODE_ENABLED_ONLY_MODEL_IDS.includes(
-    normalized as (typeof KIMI_CODE_ENABLED_ONLY_MODEL_IDS)[number],
-  );
+  return KIMI_CODE_ENABLED_ONLY_MODEL_IDS.some((id) => id === normalized);
 }
 
 export function resolveThinkingProfile({
