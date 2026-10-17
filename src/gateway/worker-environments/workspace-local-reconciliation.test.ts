@@ -5,11 +5,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit } from "../../agents/worktrees/git.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
+import { emptyJournal } from "./workspace-manifest-fixtures.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspaceResult,
@@ -20,12 +20,6 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const inactiveQuiescence = { assertActive: async () => {}, resume: async () => {} };
-const emptyJournal = (): WorkerWorkspaceReconciliationJournalAdapter => ({
-  load: async () => undefined,
-  begin: async () => {},
-  commit: async () => {},
-  abort: async () => {},
-});
 async function commitFixture(root: string) {
   await requireGit(root, ["add", "."]);
   await requireGit(root, [
@@ -63,9 +57,7 @@ async function prepareUnchangedWorkspace(options?: {
   };
   const record = vi.fn();
   const publishAcceptedManifest = vi.fn();
-  const verifyStable = vi.fn(async () => {
-    await options?.beforeRemoteFence?.();
-  });
+  const verifyStable = vi.fn(async () => options?.beforeRemoteFence?.());
   const reconcile = await prepareLocalWorkspaceReconciliation({
     request: {
       localPath: root,
@@ -90,9 +82,7 @@ async function prepareUnchangedWorkspace(options?: {
     verifyStable,
   });
   const quiescence = {
-    assertActive: vi.fn(async () => {
-      await options?.onRenew?.(root);
-    }),
+    assertActive: vi.fn(async () => options?.onRenew?.(root)),
     resume: vi.fn(async () => {}),
   };
   return {

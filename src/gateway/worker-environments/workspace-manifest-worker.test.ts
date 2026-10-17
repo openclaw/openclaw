@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
   captureWorkspaceSnapshot,
@@ -23,16 +23,12 @@ const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manif
 const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
 afterEach(() => vi.restoreAllMocks());
 
-const digest = (content: string | Buffer) => createHash("sha256").update(content).digest("hex");
-const fileEntry = (content: string | Buffer) => ({
-  path: "input.txt",
-  type: "file",
-  mode: 0o644,
-  size: Buffer.byteLength(content),
-  sha256: digest(content),
-});
-const encode = (entries: unknown[], baseCommit: string | null = null) => {
-  const raw = JSON.stringify({ version: 1, baseCommit, entries });
+const encode = (entries: { path: string }[], baseCommit: string | null = null) => {
+  const raw = JSON.stringify({
+    version: 1,
+    baseCommit,
+    entries: entries.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+  });
   return { raw, ref: `sha256:${digest(raw)}` };
 };
 const pair = (base: ReturnType<typeof encode>, current: ReturnType<typeof encode>) => ({
@@ -66,7 +62,7 @@ it("settles private Git-input staging before a cancelled tree read returns", asy
     JSON.stringify({
       inputPath: path.join(root, "input"),
       ref: "refs/heads/snapshot",
-      entries: [{ ...fileEntry(content), path: "file.txt" }],
+      entries: [workspaceFile("file.txt", content)],
       source: { root, tree: "a".repeat(40) },
     }),
   );
@@ -159,7 +155,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   const capture = () =>
     withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
   const first = await capture();
-  expect(first.manifest.entries).toEqual([fileEntry(content)]);
+  expect(first.manifest.entries).toEqual([workspaceFile("input.txt", content)]);
   expect(first.manifest.directories).toEqual(["preserved"]);
   expect(Object.hasOwn(first, "rawManifest")).toBe(false);
   const snapshot = await withWorkspaceHashMemo(
@@ -199,20 +195,15 @@ it("admits a large rebase against its original synchronization manifest", async 
       size: 16 * 1024,
       sha256: hash.repeat(64),
     }));
-  const encodeSorted = (values: ReturnType<typeof entries>) =>
-    encode(
-      values.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
-      "a".repeat(40),
-    );
   // A rebase can leave Git clean while changing the full dispatched workspace.
-  const base = encodeSorted([
-    ...entries("modified", 18_407, "a"),
-    ...entries("deleted", 3_103, "a"),
-  ]);
-  const current = encodeSorted([
-    ...entries("modified", 18_407, "b"),
-    ...entries("added", 17_395, "b"),
-  ]);
+  const base = encode(
+    [...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")],
+    "a".repeat(40),
+  );
+  const current = encode(
+    [...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")],
+    "a".repeat(40),
+  );
   const result = await parseWorkspaceManifestPair(pair(base, current));
   expect(result.changed).toBe(true);
   expect(result.paths).toHaveLength(35_802);

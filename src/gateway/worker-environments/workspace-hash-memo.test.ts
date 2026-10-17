@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { importToolingTypeScript } from "../../../scripts/lib/import-tooling-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -13,7 +12,9 @@ import {
   withWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
+  type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -28,7 +29,6 @@ if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
 
 const hashMetrics = () => ({ contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 });
 function manifest(
@@ -40,28 +40,17 @@ function manifest(
     version: 1,
     baseCommit: null,
     directories,
-    entries: paths.map((entryPath) => ({
-      path: entryPath,
-      type: "file",
-      mode: 0o644,
-      size: Buffer.byteLength(content),
-      sha256: createHash("sha256").update(content).digest("hex"),
-    })),
+    entries: paths.map((entryPath) => workspaceFile(entryPath, content)),
   };
 }
 function remoteCapture(workspace: string, home: string, script = REMOTE_WORKSPACE_MANIFEST_JS) {
-  type MemoResponse = {
-    manifestRef: string;
-    memo: [string, string][];
-    metrics: { contentHashCount: number; memoHitCount: number; memoTruncatedCount: number };
-  };
-  return async (memo: [string, string][]): Promise<MemoResponse> => {
+  return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", script, workspace, "", "memo-v1"],
       { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
     );
     expect(result).toMatchObject({ code: 0, stderr: "" });
-    return JSON.parse(result.stdout) as MemoResponse;
+    return JSON.parse(result.stdout) as RemoteWorkspaceManifestEnvelope;
   };
 }
 
@@ -72,28 +61,26 @@ describe("workspace hash memo", () => {
     await fs.writeFile(target, "alpha");
     const memo = new Map<string, string>();
     const metrics = hashMetrics();
+    const capture = () => captureWorkspaceManifest({ root, baseCommit: null });
     let replacedManifestRef = "";
     await withWorkspaceHashMemo(
       memo,
       async () => {
-        const first = await captureWorkspaceManifest({ root, baseCommit: null });
-        const unchanged = await withWorkspaceHashMemo(
-          memo,
-          async () => await captureWorkspaceManifest({ root, baseCommit: null }),
-        );
+        const first = await capture();
+        const unchanged = await withWorkspaceHashMemo(memo, capture);
         expect(unchanged.manifestRef).toBe(first.manifestRef);
         expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
 
         await fs.writeFile(target, "bravo");
         await fs.utimes(target, new Date(), new Date(Date.now() + 1_000));
-        const changed = await captureWorkspaceManifest({ root, baseCommit: null });
+        const changed = await capture();
         expect(changed.manifestRef).not.toBe(first.manifestRef);
         expect(metrics.contentHashCount).toBe(2);
 
         const replacement = path.join(root, "replacement.txt");
         await fs.writeFile(replacement, "cider");
         await fs.rename(replacement, target);
-        const replaced = await captureWorkspaceManifest({ root, baseCommit: null });
+        const replaced = await capture();
         expect(replaced.manifestRef).not.toBe(changed.manifestRef);
         expect(metrics.contentHashCount).toBe(3);
         replacedManifestRef = replaced.manifestRef;
@@ -102,11 +89,7 @@ describe("workspace hash memo", () => {
     );
 
     const nextReconcileMetrics = hashMetrics();
-    const nextReconcile = await withWorkspaceHashMemo(
-      new Map(),
-      async () => await captureWorkspaceManifest({ root, baseCommit: null }),
-      nextReconcileMetrics,
-    );
+    const nextReconcile = await withWorkspaceHashMemo(new Map(), capture, nextReconcileMetrics);
     expect(nextReconcile.manifestRef).toBe(replacedManifestRef);
     expect(nextReconcileMetrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
   });
@@ -117,12 +100,8 @@ describe("workspace hash memo", () => {
     const base = manifest(["parent"], "base", []);
     const current = manifest(["parent/child.txt", "parent/sibling.txt"], "worker", ["parent"]);
     const metrics = hashMetrics();
-
-    const first = await withWorkspaceHashMemo(
-      new Map(),
-      async () => await preflightWorkspaceApply({ root, base, current }),
-      metrics,
-    );
+    const preflight = () => preflightWorkspaceApply({ root, base, current });
+    const first = await withWorkspaceHashMemo(new Map(), preflight, metrics);
     expect([...first.applyPaths].toSorted()).toEqual([
       "parent",
       "parent/child.txt",
@@ -130,11 +109,7 @@ describe("workspace hash memo", () => {
     ]);
     expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
 
-    await withWorkspaceHashMemo(
-      new Map(),
-      async () => await preflightWorkspaceApply({ root, base, current }),
-      metrics,
-    );
+    await withWorkspaceHashMemo(new Map(), preflight, metrics);
     expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
   });
 
@@ -265,24 +240,22 @@ describe("workspace hash memo", () => {
   });
 });
 
-describe("placement hash memo pruning", () => {
-  it("keeps a memo under the byte cap and clears one that exceeds it", () => {
-    const retained: WorkspaceHashMemo = new Map([
-      ["worker:1:2:3:4:5", "a".repeat(64)],
-      ["gateway:1:2:3:4:5", "b".repeat(64)],
-    ]);
-    pruneWorkspaceHashMemo(retained);
-    expect(retained.size).toBe(2);
+it("keeps a placement memo under the byte cap and clears one that exceeds it", () => {
+  const retained: WorkspaceHashMemo = new Map([
+    ["worker:1:2:3:4:5", "a".repeat(64)],
+    ["gateway:1:2:3:4:5", "b".repeat(64)],
+  ]);
+  pruneWorkspaceHashMemo(retained);
+  expect(retained.size).toBe(2);
 
-    const digest = "c".repeat(64);
-    const oversized: WorkspaceHashMemo = new Map();
-    let bytes = 0;
-    for (let index = 0; bytes <= MAX_WORKSPACE_HASH_MEMO_BYTES; index += 1) {
-      const identity = `gateway:${index}:0:0:0:0`;
-      oversized.set(identity, digest);
-      bytes += identity.length + digest.length;
-    }
-    pruneWorkspaceHashMemo(oversized);
-    expect(oversized.size).toBe(0);
-  });
+  const digest = "c".repeat(64);
+  const oversized: WorkspaceHashMemo = new Map();
+  let bytes = 0;
+  for (let index = 0; bytes <= MAX_WORKSPACE_HASH_MEMO_BYTES; index += 1) {
+    const identity = `gateway:${index}:0:0:0:0`;
+    oversized.set(identity, digest);
+    bytes += identity.length + digest.length;
+  }
+  pruneWorkspaceHashMemo(oversized);
+  expect(oversized.size).toBe(0);
 });

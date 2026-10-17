@@ -7,12 +7,15 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
+  emptyJournal,
+  workspaceManifest as makeManifest,
+} from "./workspace-manifest-fixtures.test-support.js";
+import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest,
   serializeWorkerWorkspaceReconciliationPlan,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceReconciliationJournal,
-  type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
@@ -23,52 +26,24 @@ import {
 } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  await drainGlobalSingletonLifecycleState();
-});
+afterEach(() => drainGlobalSingletonLifecycleState());
 
-async function temporaryDirectory(name: string): Promise<string> {
-  return tempDirs.make(`openclaw-${name}-`);
-}
+const temporaryDirectory = (name: string) => tempDirs.make(`openclaw-${name}-`);
+const numberedPaths = (prefix: string, count: number, width = 5) =>
+  Array.from({ length: count }, (_, index) => `${prefix}-${index.toString().padStart(width, "0")}`);
 
 function encodeManifest(value: WorkerWorkspaceManifest) {
   const raw = serializeWorkerWorkspaceManifest(value);
-  return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+  return { manifest: value, raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
 }
 
-function makeManifest(
-  contents: Record<string, string>,
-  baseCommit: string | null = null,
-): WorkerWorkspaceManifest {
-  return {
-    version: 1,
-    baseCommit,
-    entries: Object.entries(contents).map(([entryPath, content]) => ({
-      path: entryPath,
-      type: "file",
-      mode: 0o644,
-      size: Buffer.byteLength(content),
-      sha256: createHash("sha256").update(content).digest("hex"),
-    })),
-  };
-}
 function fileManifest(paths: readonly string[], content: string): WorkerWorkspaceManifest {
-  const template = makeManifest({ "template.txt": content }).entries[0]!;
+  const value = makeManifest({ "template.txt": content });
   return {
-    version: 1,
-    baseCommit: null,
-    entries: paths.map((entryPath) => ({ ...template, path: entryPath })),
+    ...value,
+    entries: paths.map((entryPath) => ({ ...value.entries[0]!, path: entryPath })),
   };
 }
-const emptyJournal = (
-  overrides: Partial<WorkerWorkspaceReconciliationJournalAdapter> = {},
-): WorkerWorkspaceReconciliationJournalAdapter => ({
-  load: async () => undefined,
-  begin: async () => {},
-  commit: async () => {},
-  abort: async () => {},
-  ...overrides,
-});
 async function git(root: string, ...args: string[]) {
   const result = await runCommandWithTimeout(["git", "-C", root, ...args], { timeoutMs: 10_000 });
   expect(result.code, result.stderr).toBe(0);
@@ -105,29 +80,29 @@ function apply(
   });
 }
 
-async function stageHistoricalV1Result(params: {
-  root: string;
-  resultRoot: string;
-  ref: string;
-  base: ReturnType<typeof encodeManifest>;
-  current: ReturnType<typeof encodeManifest>;
-  manifest: WorkerWorkspaceManifest;
-}): Promise<void> {
+type EncodedManifest = ReturnType<typeof encodeManifest>;
+async function stageHistoricalV1Result(
+  root: string,
+  resultRoot: string,
+  ref: string,
+  base: EncodedManifest,
+  current: EncodedManifest,
+): Promise<void> {
   const blobs = await Promise.all(
-    params.manifest.entries.map(async (entry, index) => ({
+    current.manifest.entries.map(async (entry, index) => ({
       entry,
       mark: index + 1,
-      content: await fs.readFile(path.join(params.resultRoot, entry.path)),
+      content: await fs.readFile(path.join(resultRoot, entry.path)),
     })),
   );
-  const base = Buffer.from(params.base.raw);
-  const current = Buffer.from(params.current.raw);
+  const baseBytes = Buffer.from(base.raw);
+  const currentBytes = Buffer.from(current.raw);
   const message = Buffer.concat([
     Buffer.from(
-      `OpenClaw worker workspace result\nversion 1\nbase-ref ${params.base.ref}\ncurrent-ref ${params.current.ref}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
+      `OpenClaw worker workspace result\nversion 1\nbase-ref ${base.ref}\ncurrent-ref ${current.ref}\nbase-bytes ${baseBytes.byteLength}\ncurrent-bytes ${currentBytes.byteLength}\n\n`,
     ),
-    base,
-    current,
+    baseBytes,
+    currentBytes,
   ]);
   const chunks: Uint8Array[] = blobs.flatMap((blob) => [
     Buffer.from(`blob\nmark :${blob.mark}\ndata ${blob.content.byteLength}\n`),
@@ -136,14 +111,14 @@ async function stageHistoricalV1Result(params: {
   ]);
   chunks.push(
     Buffer.from(
-      `commit ${params.ref}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${message.byteLength}\n`,
+      `commit ${ref}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${message.byteLength}\n`,
     ),
     message,
     Buffer.from("\ndeleteall\n"),
     ...blobs.map((blob) => Buffer.from(`M 100644 :${blob.mark} ${blob.entry.path}\n`)),
     Buffer.from("done\n"),
   );
-  const result = await runCommandWithTimeout(["git", "-C", params.root, "fast-import", "--quiet"], {
+  const result = await runCommandWithTimeout(["git", "-C", root, "fast-import", "--quiet"], {
     timeoutMs: 10_000,
     input: Buffer.concat(chunks),
   });
@@ -162,18 +137,10 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
     await fs.writeFile(path.join(complete, name), contents);
   }
   const base = encodeManifest(makeManifest(baseContents));
-  const currentManifest = makeManifest(currentContents);
-  const current = encodeManifest(currentManifest);
+  const current = encodeManifest(makeManifest(currentContents));
   const ref = workerWorkspaceResultRef("claim-historical-v1");
   await git(local, "init", "--quiet");
-  await stageHistoricalV1Result({
-    root: local,
-    resultRoot: complete,
-    ref,
-    base,
-    current,
-    manifest: currentManifest,
-  });
+  await stageHistoricalV1Result(local, complete, ref, base, current);
   await fs.writeFile(path.join(local, "keep.txt"), "local edit\n");
 
   const artifacts = await runGitWorkerOperation({
@@ -186,7 +153,6 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
   expect(Buffer.from(artifacts.preview!).toString()).toBe("worker\n");
 
   const result = await apply(local, ref, base.ref);
-
   expect(result.changed).toBe(true);
   await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("worker\n");
   await expect(fs.readFile(path.join(local, "keep.txt"), "utf8")).resolves.toBe("local edit\n");
@@ -194,40 +160,19 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
 
 it("recovers a converged shipped v1 deletion above the historical 25,000-record limit", async () => {
   const local = await temporaryDirectory("workspace-staged-v1-converged-local");
-  const baseManifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit: null,
-    entries: Array.from({ length: 25_001 }, (_, index) => ({
-      path: `deleted-${index.toString().padStart(5, "0")}.txt`,
-      type: "file" as const,
-      mode: 0o644,
-      size: 1,
-      sha256: "a".repeat(64),
-    })),
-  };
-  const currentManifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit: null,
-    entries: [],
-  };
+  const baseManifest = fileManifest(
+    numberedPaths("deleted", 25_001).map((name) => `${name}.txt`),
+    "a",
+  );
   const base = encodeManifest(baseManifest);
-  const current = encodeManifest(currentManifest);
+  const current = encodeManifest(makeManifest({}));
   const ref = workerWorkspaceResultRef("claim-historical-v1-converged");
   await git(local, "init", "--quiet");
-  await stageHistoricalV1Result({
-    root: local,
-    resultRoot: local,
-    ref,
-    base,
-    current,
-    manifest: currentManifest,
-  });
+  await stageHistoricalV1Result(local, local, ref, base, current);
   const begin = vi.fn(async () => {});
 
   const result = await apply(local, ref, base.ref, emptyJournal({ begin }));
-
-  expect(result.changed).toBe(true);
-  expect(result.manifest.entries).toEqual([]);
+  expect(result).toMatchObject({ changed: true, manifest: { entries: [] } });
   expect(begin).toHaveBeenCalledWith(
     expect.objectContaining({
       baseEntries: [],
@@ -244,13 +189,8 @@ it("stages a directory-only v2 result above 25,000 reconciliation records", asyn
   const directoryCount = 13_000;
   const manifest = (prefix: string) =>
     encodeManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
-      directories: Array.from(
-        { length: directoryCount },
-        (_, index) => `${prefix}-${index.toString().padStart(5, "0")}`,
-      ),
+      ...makeManifest({}),
+      directories: numberedPaths(prefix, directoryCount),
     });
   const base = manifest("base");
   const current = manifest("current");
@@ -258,20 +198,16 @@ it("stages a directory-only v2 result above 25,000 reconciliation records", asyn
   const stagedResultRef = workerWorkspaceResultRef("claim-directory-entry-limit");
   await stage(local, payload, stagedResultRef, base, current);
   const staged = await readStagedWorkerWorkspaceResult(local, stagedResultRef);
-  expect(staged.changed).toBe(true);
+  expect(staged).toMatchObject({ changed: true, changedEntries: [] });
   expect(staged.base.directories).toHaveLength(directoryCount);
   expect(staged.current.directories).toHaveLength(directoryCount);
-  expect(staged.changedEntries).toEqual([]);
 });
 
 it("stages, applies, and recovers modified files across Git tree batches", async () => {
   const local = await temporaryDirectory("workspace-modification-local");
   const payload = await temporaryDirectory("workspace-modification-payload");
   // Cross writeRawWorkspaceTree's 256-entry batches with the smallest physical fixture.
-  const paths = Array.from(
-    { length: 257 },
-    (_, index) => `changed-${index.toString().padStart(3, "0")}.txt`,
-  );
+  const paths = numberedPaths("changed", 257, 3).map((name) => `${name}.txt`);
   await Promise.all(
     paths.flatMap((entryPath) => [
       fs.writeFile(path.join(local, entryPath), "base\n"),
@@ -330,7 +266,7 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
     fs.writeFile(path.join(payload, "changed.txt"), currentContent),
   ]);
   const unchangedEntries = fileManifest(
-    Array.from({ length: 31_273 }, (_, index) => `file-${index.toString().padStart(5, "0")}.txt`),
+    numberedPaths("file", 31_273).map((name) => `${name}.txt`),
     "unchanged",
   ).entries;
   const baseManifest = makeManifest({ "changed.txt": "base\n" }, "a".repeat(40));
