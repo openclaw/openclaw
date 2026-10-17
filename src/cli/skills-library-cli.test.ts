@@ -26,8 +26,6 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 const skillId = "11111111-1111-4111-8111-111111111111";
 const revision = "a".repeat(64);
-const revisionArgs = ["--expected-revision", revision];
-const sharedSession = "agent:main:shared";
 const read: SkillsLibraryReadResult = {
   entry: {
     skillId,
@@ -68,14 +66,6 @@ function cli() {
 async function parse(args: string[]) {
   await cli().parseAsync(["skills", "library", ...args], { from: "user" });
 }
-function expectRpc(method: string, params: unknown) {
-  expect(mocks.call).toHaveBeenLastCalledWith(
-    `skills.library.${method}`,
-    expect.anything(),
-    params,
-    undefined,
-  );
-}
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -99,7 +89,7 @@ beforeEach(async () => {
       };
     }
     if (method === "skills.library.activate") {
-      return { sessionKey: sharedSession, selections: [], sessionActivation: "next-turn" };
+      return { sessionKey: "agent:main:shared", selections: [], sessionActivation: "next-turn" };
     }
     return receipt;
   });
@@ -118,9 +108,22 @@ describe("skills library CLI", () => {
           : name === "create" || name === "import"
             ? [directory, "--slug", "checklist"]
             : name === "refresh"
-              ? ["--session", sharedSession]
-              : [skillId, ...revisionArgs, "--revision", "b".repeat(64)];
-      const flags = "--url ws://127.0.0.1:12345 --port 12345 --timeout 14000 --json".split(" ");
+              ? ["--session", "agent:main:shared"]
+              : [
+                  skillId,
+                  "--expected-revision",
+                  revision,
+                  ...(name === "rollback" ? ["--revision", "b".repeat(64)] : []),
+                ];
+      const flags = [
+        "--url",
+        "ws://127.0.0.1:12345",
+        "--port",
+        "12345",
+        "--timeout",
+        "14000",
+        "--json",
+      ];
       for (const command of [
         [...flags, name, ...args],
         [name, ...args, ...flags],
@@ -144,7 +147,7 @@ describe("skills library CLI", () => {
   it("replaces complete directory bundles and explicitly deletes requested support files", async () => {
     await fs.mkdir(path.join(directory, "assets"));
     await fs.writeFile(path.join(directory, "assets", "new.bin"), Buffer.from([0, 255, 13, 10]));
-    await parse(["update", skillId, directory, ...revisionArgs, "--json"]);
+    await parse(["update", skillId, directory, "--expected-revision", revision, "--json"]);
     expect(mocks.call.mock.calls.at(-1)?.[2]).toMatchObject({
       files: [{ path: "assets/new.bin", content: "AP8NCg==", encoding: "base64" }],
     });
@@ -157,7 +160,8 @@ describe("skills library CLI", () => {
       "update",
       skillId,
       path.join(directory, "SKILL.md"),
-      ...revisionArgs,
+      "--expected-revision",
+      revision,
       "--delete-file",
       "notes.txt",
       "--json",
@@ -181,7 +185,7 @@ describe("skills library CLI", () => {
     const nextAction =
       "Existing sessions retain their pinned revision. Create a new skill to add it to future sessions.";
     mocks.call.mockResolvedValue({ ...receipt, state: "removed", nextAction });
-    await parse(["remove", skillId, ...revisionArgs]);
+    await parse(["remove", skillId, "--expected-revision", revision]);
     const output = mocks.writeStdout.mock.calls[0]?.[0];
     expect(output).toContain("removed: checklist (personal, owner Alice)");
     expect(output).toContain(nextAction);
@@ -192,9 +196,19 @@ describe("skills library CLI", () => {
   it("lists a session projection and reads only its exact pin", async () => {
     const sessionKey = "agent:main:alice-session";
     await parse(["list", "--session", sessionKey, "--json"]);
-    expectRpc("list", { scope: "all", sessionKey });
+    expect(mocks.call).toHaveBeenLastCalledWith(
+      "skills.library.list",
+      expect.anything(),
+      { scope: "all", sessionKey },
+      undefined,
+    );
     await parse(["read", skillId, "--session", sessionKey, "--revision", revision, "--json"]);
-    expectRpc("read", { skillId, sessionKey, revision });
+    expect(mocks.call).toHaveBeenLastCalledWith(
+      "skills.library.read",
+      expect.anything(),
+      { skillId, sessionKey, revision },
+      undefined,
+    );
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
     mocks.call.mockClear();
     await parse(["read", skillId, "--session", sessionKey]);
@@ -211,9 +225,9 @@ describe("skills library CLI", () => {
     await fs.writeFile(path.join(bundle, "SKILL.md"), content);
     await fs.writeFile(path.join(bundle, "notes.txt"), "Keep these notes.\r\n");
     await parse(["import", bundle, "--slug", "checklist", "--json"]);
-    expect(mocks.call).toHaveBeenCalledOnce();
-    expectRpc(
-      "save",
+    expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
+      "skills.library.save",
+      expect.anything(),
       expect.objectContaining({
         content,
         files: [
@@ -225,6 +239,7 @@ describe("skills library CLI", () => {
           },
         ],
       }),
+      undefined,
     );
   });
 
@@ -266,13 +281,18 @@ describe("skills library CLI", () => {
     await parse([
       "attach",
       "--session",
-      sharedSession,
+      "agent:main:shared",
       "--skill-id",
       skillId,
       "--revision",
       revision,
       "--json",
     ]);
-    expectRpc("activate", { action: "attach", sessionKey: sharedSession, skillId, revision });
+    expect(mocks.call).toHaveBeenCalledWith(
+      "skills.library.activate",
+      expect.anything(),
+      { action: "attach", sessionKey: "agent:main:shared", skillId, revision },
+      undefined,
+    );
   });
 });

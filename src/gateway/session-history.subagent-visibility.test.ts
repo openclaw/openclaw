@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -23,6 +22,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { readChatHistoryDelta } from "./server-methods/chat-history-delta.js";
+import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createPreparedSessionHistorySubagentProjection } from "./session-history-delta-visibility.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
@@ -36,10 +36,6 @@ import { collectSessionTranscriptMessages } from "./session-transcript-source-pa
 
 const childKey = "agent:main:dashboard:spawned-worker";
 const peerKey = "agent:main:dashboard:independent-peer";
-const forwarded = (runId: string, sourceSessionKey: string, sourceTool = "sessions_send") => ({
-  ...childInput(runId),
-  provenance: { kind: "inter_session", sourceTool, sourceSessionKey },
-});
 const childInput = (runId: string, extra: Record<string, unknown> = {}) => ({
   role: "user",
   content: "Worker integration checkpoint",
@@ -47,43 +43,20 @@ const childInput = (runId: string, extra: Record<string, unknown> = {}) => ({
   provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceSessionKey: childKey },
   ...extra,
 });
-const response = (runId: string, text = "Acknowledged") => ({
+const response = (runId: string, text: string) => ({
   role: "assistant",
   content: text,
   stopReason: "stop",
   __openclaw: { runId },
 });
-const explicitChildInput = (runId: string) =>
-  childInput(runId, {
-    provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceRole: "subagent" },
-  });
-const inline = async (
-  history: SessionHistorySseState,
-  params: Parameters<SessionHistorySseState["prepareInlineMessage"]>[0],
-) => (await history.prepareInlineMessage(params))();
-type HistoryScope = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
-const historyDelta = (scope: HistoryScope, cursor: string) =>
-  readChatHistoryDelta({
-    agentId: scope.agentId,
-    scope,
-    sessionKey: scope.sessionKey,
-    sessionSnapshot: {},
-    cursor,
-  });
-const historyReader = (scope: HistoryScope) =>
-  createReadonlySessionHistoryReader({
-    transcript: { ...scope, sessionFile: scope.sessionKey },
-    database: { agentId: scope.agentId, path: scope.storePath },
-    entryValidationKey: scope.sessionKey,
-  });
 
 async function withHistory(
   messages: Array<[string, Record<string, unknown>]>,
   run: (fixture: {
-    scope: HistoryScope;
+    scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+    entry: { sessionId: string; updatedAt: number };
     readers: ReturnType<typeof createReadonlySessionHistoryReader>;
     state: OpenClawTestState;
-    target: HistoryScope & { sessionEntry: { sessionId: string; updatedAt: number } };
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -97,15 +70,19 @@ async function withHistory(
     };
     const entry = { sessionId: scope.sessionId, updatedAt: 1 };
     await replaceSessionEntry(scope, entry);
-    for (const [sessionKey, sessionId, lineage, spawnDepth] of [
-      [childKey, "spawned-worker", { spawnedBy: scope.sessionKey }, 1],
-      [peerKey, "independent-peer", { parentSessionKey: scope.sessionKey }, 0],
-    ] as const) {
-      await replaceSessionEntry(
-        { ...scope, sessionKey },
-        { sessionId, updatedAt: 1, ...lineage, spawnDepth },
-      );
-    }
+    await replaceSessionEntry(
+      { ...scope, sessionKey: childKey },
+      { sessionId: "spawned-worker", updatedAt: 1, spawnedBy: scope.sessionKey, spawnDepth: 1 },
+    );
+    await replaceSessionEntry(
+      { ...scope, sessionKey: peerKey },
+      {
+        sessionId: "independent-peer",
+        updatedAt: 1,
+        parentSessionKey: scope.sessionKey,
+        spawnDepth: 0,
+      },
+    );
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
       ...messages.map(([id, message], index) => ({
@@ -118,9 +95,13 @@ async function withHistory(
     await waitForSessionTranscriptProjection(scope);
     await run({
       scope,
+      entry,
       state,
-      target: { ...scope, sessionEntry: entry },
-      readers: historyReader(scope),
+      readers: createReadonlySessionHistoryReader({
+        transcript: { ...scope, sessionFile: scope.sessionKey },
+        database: { agentId: database.agentId, path: database.path },
+        entryValidationKey: scope.sessionKey,
+      }),
     });
   });
 }
@@ -129,10 +110,10 @@ describe("subagent coordination history", () => {
   it("prepares inline source and run visibility without calling native readers on the host", async () => {
     await withHistory(
       [["human-input", { role: "user", content: "Question", idempotencyKey: "human-run:user" }]],
-      async ({ target, readers }) => {
+      async ({ scope, entry, readers }) => {
         setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
         const snapshot = await readSessionHistorySnapshotKernel(
-          { target },
+          { target: { ...scope, sessionEntry: entry } },
           { readers, readOnly: true },
         );
         const inputRead = vi
@@ -148,11 +129,18 @@ describe("subagent coordination history", () => {
         try {
           for (const message of [
             { role: "user", content: "Next question" },
-            response("human-run"),
-            explicitChildInput("explicit-child"),
+            response("human-run", "Visible answer"),
+            {
+              ...childInput("explicit-child"),
+              provenance: {
+                kind: "inter_session",
+                sourceTool: "sessions_send",
+                sourceRole: "subagent",
+              },
+            },
           ]) {
             const history = SessionHistorySseState.fromSnapshot({
-              target,
+              target: { ...scope, sessionEntry: entry },
               snapshot,
             });
             const result = (await history.prepareInlineMessage({ message, messageSeq: 2 }))();
@@ -177,13 +165,17 @@ describe("subagent coordination history", () => {
   it("hides cross-agent dashboard coordination through worker history pages and deltas", async () => {
     const sourceChild = "agent:worker:dashboard:child";
     const sourcePeer = "agent:worker:dashboard:peer";
+    const forwarded = (runId: string, sourceSessionKey: string) => ({
+      ...childInput(runId),
+      provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceSessionKey },
+    });
     const messages: Array<[string, Record<string, unknown>]> = [
       ["cross-child", forwarded("cross-run", sourceChild)],
-      ["cross-answer", response("cross-run")],
+      ["cross-answer", response("cross-run", "Cross-agent internal acknowledgement")],
       ["cross-peer", forwarded("peer-run", sourcePeer)],
-      ["peer-answer", response("peer-run")],
+      ["peer-answer", response("peer-run", "Independent peer decision")],
     ];
-    await withHistory(messages, async ({ scope, target, readers, state }) => {
+    await withHistory(messages, async ({ scope, entry, readers, state }) => {
       const sourceDatabase = openOpenClawAgentDatabase({ agentId: "worker", env: state.env });
       expect(sourceDatabase.path).not.toBe(scope.storePath);
       for (const key of [sourceChild, sourcePeer]) {
@@ -197,16 +189,21 @@ describe("subagent coordination history", () => {
           },
         );
       }
-      const page = await readSessionHistorySnapshotAsync({ target, limit: 10 });
+      const page = await readSessionHistorySnapshotAsync({
+        target: { ...scope, sessionEntry: entry },
+        limit: 10,
+      });
       expect
         .soft(page.history.messages.map(readChatHistoryMessageId))
         .toEqual(["cross-peer", "peer-answer"]);
       const sse = SessionHistorySseState.fromSnapshot({
-        target,
+        target: { ...scope, sessionEntry: entry },
         snapshot: page,
       });
       const initial = readTranscriptDisplayDelta(scope);
-      assert(initial.kind === "page", "Expected a current history cursor");
+      if (initial.kind !== "page") {
+        throw new Error("Expected a current history cursor");
+      }
       await appendTranscriptMessage(scope, {
         eventId: "cross-late",
         now: 2,
@@ -215,22 +212,32 @@ describe("subagent coordination history", () => {
       await appendTranscriptMessage(scope, {
         eventId: "cross-late-answer",
         now: 3,
-        message: response("cross-late-run"),
+        message: response("cross-late-run", "Later cross-agent acknowledgement"),
       });
       expect(
-        await inline(sse, {
-          message: forwarded("cross-late-run", sourceChild),
-          messageSeq: 5,
-        }),
+        (
+          await sse.prepareInlineMessage({
+            message: forwarded("cross-late-run", sourceChild),
+            messageSeq: 5,
+          })
+        )(),
       ).toBeNull();
       expect(
-        await inline(sse, {
-          message: response("cross-late-run"),
-          messageSeq: 6,
-        }),
+        (
+          await sse.prepareInlineMessage({
+            message: response("cross-late-run", "Later cross-agent acknowledgement"),
+            messageSeq: 6,
+          })
+        )(),
       ).toBeNull();
       expect(sse.snapshot().messages).toEqual(page.history.messages);
-      const delta = await historyDelta(scope, initial.cursor);
+      const delta = await readChatHistoryDelta({
+        agentId: scope.agentId,
+        scope,
+        sessionKey: scope.sessionKey,
+        sessionSnapshot: {},
+        cursor: initial.cursor,
+      });
       expect.soft(delta).toMatchObject({ kind: "delta", messages: [] });
       const raw = await collectSessionTranscriptMessages(
         readers.readSessionMessagesWithSourceAsync,
@@ -249,11 +256,16 @@ describe("subagent coordination history", () => {
   });
 
   it("rejects prepared inline visibility when shared-state custody retires before publication", async () => {
-    await withHistory([["worker-input", childInput("worker-run")]], async ({ target }) => {
-      const snapshot = await readSessionHistorySnapshotAsync({ target });
-      const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
+    await withHistory([["worker-input", childInput("worker-run")]], async ({ scope, entry }) => {
+      const snapshot = await readSessionHistorySnapshotAsync({
+        target: { ...scope, sessionEntry: entry },
+      });
+      const history = SessionHistorySseState.fromSnapshot({
+        target: { ...scope, sessionEntry: entry },
+        snapshot,
+      });
       const append = await history.prepareInlineMessage({
-        message: response("worker-run"),
+        message: response("worker-run", "Internal acknowledgement"),
         messageSeq: 2,
       });
       const database = openOpenClawStateDatabase();
@@ -264,37 +276,60 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it("rejects prepared history and the display fast path after source authority changes", async () => {
-    await withHistory(
-      [
-        ["worker-input", childInput("worker-run")],
-        ["worker-answer", response("worker-run")],
-      ],
-      async ({ scope }) => {
-        const database = openOpenClawStateDatabase();
-        const prepared = await readSessionHistoryPageInWorker({
-          kind: "inline-visibility",
-          params: {
-            target: scope,
-            lookup: { kind: "session", sessionKey: childKey },
-          },
-        });
-        const subagentCoordination = createPreparedSessionHistorySubagentProjection(
-          prepared.subagentCoordination,
-          prepared.assertCurrent,
-        );
-        expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
-        await closeOpenClawStateDatabaseByPathAsync(database.path);
-        openOpenClawStateDatabase({ path: database.path });
-        expect(() => subagentCoordination.isSubagentSession(childKey)).toThrow(
-          /state database read admission changed/u,
-        );
-        expect(() =>
-          projectChatDisplayMessages([explicitChildInput("worker-run")], { subagentCoordination }),
-        ).toThrow(/state database read admission changed/u);
-      },
-    );
-  });
+  it.each(["uncached-source", "cached-source", "cached-run", "projected-fast-path"])(
+    "rejects prepared history after source authority changes (%s)",
+    async (readKind) => {
+      await withHistory(
+        [
+          ["worker-input", childInput("worker-run")],
+          ["worker-answer", response("worker-run", "Internal acknowledgement")],
+        ],
+        async ({ scope }) => {
+          const database = openOpenClawStateDatabase();
+          const prepared = await readSessionHistoryPageInWorker({
+            kind: "inline-visibility",
+            params: {
+              target: scope,
+              lookup:
+                readKind === "cached-run"
+                  ? { kind: "run", runId: "worker-run", messageSeq: 2 }
+                  : { kind: "session", sessionKey: childKey },
+            },
+          });
+          const subagentCoordination = createPreparedSessionHistorySubagentProjection(
+            prepared.subagentCoordination,
+            prepared.assertCurrent,
+          );
+          if (readKind === "cached-source") {
+            expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
+          } else if (readKind === "cached-run") {
+            expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
+          }
+          await closeOpenClawStateDatabaseByPathAsync(database.path);
+          openOpenClawStateDatabase({ path: database.path });
+          const read = () =>
+            readKind === "cached-run"
+              ? subagentCoordination.isSubagentRunMessage("worker-run", 2)
+              : readKind === "projected-fast-path"
+                ? projectChatDisplayMessages(
+                    [
+                      {
+                        ...childInput("worker-run"),
+                        provenance: {
+                          kind: "inter_session",
+                          sourceTool: "sessions_send",
+                          sourceRole: "subagent",
+                        },
+                      },
+                    ],
+                    { subagentCoordination },
+                  )
+                : subagentCoordination.isSubagentSession(childKey);
+          expect(read).toThrow(/state database read admission changed/u);
+        },
+      );
+    },
+  );
 
   it.each(["parentSessionKey", "spawnedBy"] as const)(
     "reads ACP %s lineage from bound shared state and rejects stale bindings",
@@ -304,10 +339,20 @@ describe("subagent coordination history", () => {
       const interactivePeer = "agent:main:acp:interactive-peer";
       const keys = [acpChild, staleChild, interactivePeer];
       const messages = keys.flatMap<[string, Record<string, unknown>]>((key, index) => [
-        [`acp-input-${index}`, forwarded(`acp-run-${index}`, key)],
-        [`acp-answer-${index}`, response(`acp-run-${index}`)],
+        [
+          `acp-input-${index}`,
+          {
+            ...childInput(`acp-run-${index}`),
+            provenance: {
+              kind: "inter_session",
+              sourceTool: "sessions_send",
+              sourceSessionKey: key,
+            },
+          },
+        ],
+        [`acp-answer-${index}`, response(`acp-run-${index}`, "ACP coordination response")],
       ]);
-      await withHistory(messages, async ({ scope, target }) => {
+      await withHistory(messages, async ({ scope, entry }) => {
         const stateDatabasePath = path.join(
           path.dirname(scope.storePath),
           "history-acp-state.sqlite",
@@ -338,7 +383,9 @@ describe("subagent coordination history", () => {
             now: () => 2,
           });
           const persisted = loadSessionEntryReadOnly(source);
-          assert(persisted, "Expected persisted ACP source session");
+          if (!persisted) {
+            throw new Error("Expected persisted ACP source session");
+          }
           expect(persisted).not.toHaveProperty("acp");
           if (key === staleChild) {
             await replaceSessionEntry(source, {
@@ -359,7 +406,7 @@ describe("subagent coordination history", () => {
           },
         });
         const snapshot = await readSessionHistorySnapshotKernel(
-          { target },
+          { target: { ...scope, sessionEntry: entry } },
           { readers, readOnly: true },
         );
         expect(snapshot.history.messages.map(readChatHistoryMessageId)).toEqual([
@@ -376,7 +423,7 @@ describe("subagent coordination history", () => {
     const messages: Array<[string, Record<string, unknown>]> = [
       ["question", { role: "user", content: "How is the release?" }],
       ["worker-input", childInput("worker-run")],
-      ["worker-ack", response("worker-run")],
+      ["worker-ack", response("worker-run", "Root accepted the unchanged checkpoint.")],
       [
         "worker-tool",
         {
@@ -385,13 +432,46 @@ describe("subagent coordination history", () => {
           __openclaw: { runId: "worker-run" },
         },
       ],
-      ["worker-later", response("worker-run")],
-      ["removed-child-input", forwarded("removed-child-run", "agent:main:subagent:removed-child")],
-      ["removed-child-answer", response("removed-child-run")],
-      ["peer-input", forwarded("peer-run", peerKey)],
-      ["peer-answer", response("peer-run")],
-      ["announce", forwarded("announce-run", childKey, "subagent_announce")],
-      ["completion", response("announce-run")],
+      ["worker-later", response("worker-run", "Nothing changed; no publication action was taken.")],
+      [
+        "removed-child-input",
+        {
+          ...childInput("removed-child-run"),
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:main:subagent:removed-child",
+          },
+        },
+      ],
+      ["removed-child-answer", response("removed-child-run", "Removed child acknowledgement")],
+      [
+        "peer-input",
+        {
+          ...childInput("peer-run"),
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: peerKey,
+          },
+        },
+      ],
+      ["peer-answer", response("peer-run", "Independent peer decision")],
+      [
+        "announce",
+        {
+          ...childInput("announce-run"),
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+            sourceSessionKey: childKey,
+          },
+        },
+      ],
+      [
+        "completion",
+        response("announce-run", "The regression is fixed and the focused proof passes."),
+      ],
       [
         "unattributed-cli",
         {
@@ -400,10 +480,20 @@ describe("subagent coordination history", () => {
             "[Inter-session message] sourceTool=sessions_send\nCLI message without provenance",
         },
       ],
-      ["human-answer", response("human-run")],
-      ["missing-source", forwarded("missing-run", "agent:main:dashboard:missing")],
+      ["human-answer", response("human-run", "Here are the remaining release blockers.")],
+      [
+        "missing-source",
+        {
+          ...childInput("missing-run"),
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:main:dashboard:missing",
+          },
+        },
+      ],
     ];
-    await withHistory(messages, async ({ scope, target, readers }) => {
+    await withHistory(messages, async ({ scope, entry, readers }) => {
       const expected = [
         "question",
         "peer-input",
@@ -414,9 +504,31 @@ describe("subagent coordination history", () => {
         "missing-source",
       ];
       const options = { readers, readOnly: true };
-      const page = await readSessionHistorySnapshotKernel({ target }, options);
-      expect(page.history.messages.map(readChatHistoryMessageId)).toEqual(expected);
-      expect(page.rawTranscriptSeq).toBe(messages.length);
+      for (const limit of [undefined, 20]) {
+        const page = await readSessionHistorySnapshotKernel(
+          { target: { ...scope, sessionEntry: entry }, limit },
+          options,
+        );
+        expect(page.history.messages.map(readChatHistoryMessageId)).toEqual(expected);
+        expect(page.rawTranscriptSeq).toBe(messages.length);
+      }
+      const page = await readChatHistoryPageKernel(
+        {
+          entry,
+          sessionId: scope.sessionId,
+          storePath: scope.storePath,
+          sessionAgentId: scope.agentId,
+          canonicalKey: scope.sessionKey,
+          max: 20,
+          maxHistoryBytes: 100_000,
+          effectiveMaxChars: 8000,
+          provider: undefined,
+          offset: 0,
+          messageId: undefined,
+        },
+        options,
+      );
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(expected);
       const raw = await collectSessionTranscriptMessages(
         readers.readSessionMessagesWithSourceAsync,
         scope,
@@ -429,19 +541,26 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it("keeps inline SSE coordination hidden until a human steer", async () => {
+  it("resolves a hidden run across a delta cursor and reveals only the answer after a human steer", async () => {
     await withHistory(
       [
         ["question", { role: "user", content: "How is the release?" }],
         ["worker-input", childInput("worker-run")],
-        ["worker-ack", response("worker-run")],
+        ["worker-ack", response("worker-run", "Accepted checkpoint")],
       ],
-      async ({ scope, target, readers }) => {
+      async ({ scope, entry, readers }) => {
         const snapshot = await readSessionHistorySnapshotKernel(
-          { target },
+          { target: { ...scope, sessionEntry: entry } },
           { readers, readOnly: true },
         );
-        const state = SessionHistorySseState.fromSnapshot({ target, snapshot });
+        const state = SessionHistorySseState.fromSnapshot({
+          target: { ...scope, sessionEntry: entry },
+          snapshot,
+        });
+        const initial = readTranscriptDisplayDelta(scope);
+        if (initial.kind !== "page") {
+          throw new Error("Expected initial transcript cursor");
+        }
         const later = {
           ...response("worker-run", "Another internal acknowledgement"),
           stopReason: "error",
@@ -449,39 +568,83 @@ describe("subagent coordination history", () => {
         };
         await appendTranscriptMessage(scope, { eventId: "later", now: 2, message: later });
         expect(
-          await inline(state, { message: later, messageId: "later", messageSeq: 4 }),
+          (
+            await state.prepareInlineMessage({ message: later, messageId: "later", messageSeq: 4 })
+          )(),
         ).toBeNull();
-        const steer = {
-          role: "user",
-          content: "Give me the remaining blockers.",
-          __openclaw: { steerTargetRunId: "worker-run" },
-        };
-        const answer = response("worker-run", "The release still needs final validation.");
+        const delta = await readChatHistoryDelta({
+          agentId: scope.agentId,
+          scope,
+          sessionKey: scope.sessionKey,
+          sessionSnapshot: {},
+          cursor: initial.cursor,
+        });
+        expect(delta).toMatchObject({ kind: "delta", messages: [] });
+        if (delta.kind !== "delta") {
+          throw new Error("Expected hidden delta to advance its cursor");
+        }
         await appendTranscriptMessage(scope, {
           eventId: "human-steer",
           now: 3,
-          message: { ...steer, idempotencyKey: "human-steer:user" },
+          message: {
+            role: "user",
+            content: "Give me the remaining blockers.",
+            idempotencyKey: "human-steer:user",
+            __openclaw: { steerTargetRunId: "worker-run" },
+          },
         });
         await appendTranscriptMessage(scope, {
           eventId: "human-answer",
           now: 4,
-          message: answer,
+          message: response("worker-run", "The release still needs final validation."),
         });
-        const humanSteer = await inline(state, {
-          message: steer,
-          messageId: "human-steer",
-          messageSeq: 5,
-        });
-        const humanAnswer = await inline(state, {
-          message: answer,
-          messageId: "human-answer",
-          messageSeq: 6,
-        });
+        const humanSteer = (
+          await state.prepareInlineMessage({
+            message: {
+              role: "user",
+              content: "Give me the remaining blockers.",
+              __openclaw: { steerTargetRunId: "worker-run" },
+            },
+            messageId: "human-steer",
+            messageSeq: 5,
+          })
+        )();
+        const humanAnswer = (
+          await state.prepareInlineMessage({
+            message: response("worker-run", "The release still needs final validation."),
+            messageId: "human-answer",
+            messageSeq: 6,
+          })
+        )();
         expect(humanSteer?.messageSeq).toBe(5);
         expect(humanAnswer?.message).toMatchObject({
           content: "The release still needs final validation.",
           __openclaw: { seq: 6 },
         });
+        const resumed = await readChatHistoryDelta({
+          agentId: scope.agentId,
+          scope,
+          sessionKey: scope.sessionKey,
+          sessionSnapshot: {},
+          cursor: delta.deltaCursor,
+        });
+        expect(resumed).toMatchObject({
+          kind: "delta",
+          messages: [{ messageId: "human-steer" }, { messageId: "human-answer" }],
+        });
+        const freshReaders = createReadonlySessionHistoryReader({
+          transcript: { ...scope, sessionFile: scope.sessionKey },
+          database: { agentId: scope.agentId, path: scope.storePath },
+          entryValidationKey: scope.sessionKey,
+        });
+        const page = await readSessionHistorySnapshotKernel(
+          { target: { ...scope, sessionEntry: entry }, limit: 2 },
+          { readers: freshReaders, readOnly: true },
+        );
+        expect(page.history.messages.map(readChatHistoryMessageId)).toEqual([
+          "human-steer",
+          "human-answer",
+        ]);
       },
     );
   });
