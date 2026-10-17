@@ -562,6 +562,38 @@ it.each([
   expect((await readConfig()).models).toEqual(config.models);
 });
 
+it.each([false, true])(
+  "preserves a shared key when an agent override wins the write wait (existing database=%s)",
+  async (existingDatabase) => {
+    const profileId = "sample:shared";
+    await seedKey(profileId, "synthetic-before");
+    if (existingDatabase) {
+      await seedKey("sample:other", "synthetic-other", "reader");
+    }
+    writeConfig({
+      agents: { ownership: "explicit", entries: { writer: {}, reader: {} } },
+      models: { providers: { sample: { ...connection, apiKey: profileId } } },
+    });
+    const beforeConfig = fs.readFileSync(configPath(), "utf8");
+    const update = authStoreRuntime.updateAuthProfileStoreWithLock;
+    vi.spyOn(authStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementationOnce(
+      async (params) => {
+        await seedKey(profileId, "synthetic-override", "reader");
+        return update(params);
+      },
+    );
+
+    await expect(save()).rejects.toThrow("An agent already overrides this shared key");
+    expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toMatchObject({
+      key: "synthetic-before",
+    });
+    expect(loadPersistedAuthProfileStore(agentDir("reader"))?.profiles[profileId]).toMatchObject({
+      key: "synthetic-override",
+    });
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(beforeConfig);
+  },
+);
+
 it("reports saved key material separately from failed config application and redacts it", async () => {
   vi.spyOn(configWriter, "updateConfig").mockRejectedValueOnce(new Error("config write failed"));
   await expect(save("ordinary-fixture\r\n-key-8304")).rejects.toThrow(

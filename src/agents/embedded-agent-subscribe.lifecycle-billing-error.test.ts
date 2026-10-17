@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -14,8 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderFailoverErrorContext } from "../plugins/types.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
-import { createAttemptNestedToolActivityState } from "./embedded-agent-runner/run/attempt-nested-tool-activity.js";
-import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
+import { prepareCatalogExecutor } from "./embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import {
   createSubscribedSessionHarness,
@@ -30,205 +29,167 @@ import {
   testModel,
 } from "./sessions/agent-session-loop-correctness.test-support.js";
 
-describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
-  registerAgentSessionLoopTestLifecycle();
+registerAgentSessionLoopTestLifecycle();
 
-  function lifecycleData(observer: ReturnType<typeof vi.fn>, phase?: string) {
-    return observer.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "lifecycle" && (!phase || event.data.phase === phase))
-      .map((event) => event.data);
-  }
+function lifecycleData(observer: ReturnType<typeof vi.fn>, phase?: string) {
+  return observer.mock.calls
+    .map(([event]) => event)
+    .filter((event) => event.stream === "lifecycle" && (!phase || event.data.phase === phase))
+    .map((event) => event.data);
+}
 
-  it("refines the requested model once when the provider reports the executing model", () => {
-    const runId = "run-response-model";
-    const emitted = vi.fn();
-    const unlisten = onAgentEventForRun(runId, emitted);
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionKey: "agent:main:response-model",
-      sessionId: "session-response-model",
-      projectSessionActive: true,
-    });
-    const { emit } = createSubscribedSessionHarness({
-      runId,
-      sessionKey: "agent:main:response-model",
-    });
-    const requested = createAssistant(testModel, []);
-    const rerouted = { ...requested, responseModel: "provider-executing-model" };
-    try {
-      emit({ type: "message_start", message: requested });
-      emit({
-        type: "message_update",
-        message: rerouted,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" },
-      });
-      emit({ type: "message_end", message: rerouted });
+it("refines the requested model once when the provider reports the executing model", () => {
+  const runId = "run-response-model";
+  const emitted = vi.fn();
+  const unlisten = onAgentEventForRun(runId, emitted);
+  onTestFinished(() => {
+    unlisten();
+    clearAgentRunContext(runId);
+  });
+  registerAgentRunContext(runId, {
+    agentId: "main",
+    sessionKey: "agent:main:response-model",
+    sessionId: "session-response-model",
+    projectSessionActive: true,
+  });
+  const { emit } = createSubscribedSessionHarness({
+    runId,
+    sessionKey: "agent:main:response-model",
+  });
+  const requested = createAssistant(testModel, []);
+  const rerouted = { ...requested, responseModel: "provider-executing-model" };
+  emit({ type: "message_start", message: requested });
+  emit({
+    type: "message_update",
+    message: rerouted,
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" },
+  });
+  emit({ type: "message_end", message: rerouted });
 
-      expect(lifecycleData(emitted, "model")).toEqual([
-        { phase: "model", provider: testModel.provider, model: testModel.id },
-        { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
-      ]);
-    } finally {
-      unlisten();
-      clearAgentRunContext(runId);
-    }
+  expect(lifecycleData(emitted, "model")).toEqual([
+    { phase: "model", provider: testModel.provider, model: testModel.id },
+    { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
+  ]);
+});
+
+it("defers error terminal ownership while preserving diagnostics", () => {
+  const onAgentEvent = vi.fn();
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run-deferred-error",
+    onAgentEvent,
+    terminalLifecyclePhase: "finishing",
   });
 
-  it("defers error terminal ownership while preserving diagnostics", () => {
-    const onAgentEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-deferred-error",
-      onAgentEvent,
-      terminalLifecyclePhase: "finishing",
-    });
-
-    emitAssistantLifecycleErrorAndEnd({
-      emit,
-      errorMessage: "insufficient credits",
-      provider: "Anthropic",
-      model: "claude-3-5-sonnet",
-    });
-
-    expect(lifecycleData(onAgentEvent)).toEqual([
-      expect.objectContaining({
-        phase: "finishing",
-        error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
-      }),
-    ]);
+  emitAssistantLifecycleErrorAndEnd({
+    emit,
+    errorMessage: "insufficient credits",
+    provider: "Anthropic",
+    model: "claude-3-5-sonnet",
   });
 
-  it("preserves the prepared custom-route owner through real terminal dispatch", async () => {
-    const config = {};
-    const metadataSnapshot = createPluginMetadataSnapshot({
+  expect(lifecycleData(onAgentEvent)).toMatchObject([
+    {
+      phase: "finishing",
+      error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
+    },
+  ]);
+});
+
+it("preserves the prepared custom-route owner through real terminal dispatch", async () => {
+  const config = {};
+  const metadataSnapshot = createPluginMetadataSnapshot({
+    config,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  });
+  const pluginRegistry = createEmptyPluginRegistry();
+  const ownerId = "prepared-lifecycle-owner";
+  const classifyFailoverReason = vi.fn((context: ProviderFailoverErrorContext) =>
+    context.provider === ownerId ? ("overloaded" as const) : undefined,
+  );
+  pluginRegistry.providers.push({
+    pluginId: ownerId,
+    source: "test",
+    provider: {
+      id: ownerId,
+      label: "Prepared lifecycle owner",
+      auth: [],
+      classifyFailoverReason,
+    },
+  });
+  const onAgentEvent = vi.fn();
+  const emitted = vi.fn();
+  const runId = "run-prepared-lifecycle-owner";
+  const sessionId = "session-prepared-lifecycle-owner";
+  const sessionKey = "agent:main:prepared-lifecycle-owner";
+  const unlisten = onAgentEventForRun(runId, emitted);
+  const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ runId, sessionId, sessionKey });
+  onTestFinished(() => {
+    unlisten();
+    closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+  });
+  await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
+    // Runtime preparation can select an endpoint owner that differs from the route label.
+    const runtimeHandle = resolveProviderRuntimePluginHandle({
+      provider: "custom-lifecycle-route",
+      providerOwner: ownerId,
+      modelId: testModel.id,
       config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
     });
-    const pluginRegistry = createEmptyPluginRegistry();
-    const ownerId = "prepared-lifecycle-owner";
-    const hookContexts: ProviderFailoverErrorContext[] = [];
-    pluginRegistry.providers.push({
-      pluginId: ownerId,
-      source: "test",
-      provider: {
-        id: ownerId,
-        label: "Prepared lifecycle owner",
-        auth: [],
-        classifyFailoverReason: (context) => {
-          hookContexts.push(context);
-          return context.provider === ownerId ? "overloaded" : undefined;
-        },
+    expect(runtimeHandle.plugin?.id).toBe(ownerId);
+    const model = attachModelProviderRuntimePluginHandle(
+      { ...testModel, provider: "custom-lifecycle-route" },
+      runtimeHandle,
+    );
+    streamMocks.streamSimple.mockImplementation((activeModel) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error"),
+        errorMessage: "403 fixture refusal",
+        errorCode: "FIXTURE_REFUSAL",
+      }),
+    );
+    const { session } = await createTestSession({ model });
+    const stream = prepareCatalogExecutor({
+      activeSession: session,
+      diagnosticOwner,
+      streamReplies: false,
+      abortRun: () => {
+        void session.abort();
+      },
+      attempt: {
+        runId,
+        sessionId,
+        sessionKey,
+        sessionFile: sessionKey,
+        config,
+        model,
+        provider: model.provider,
+        modelId: model.id,
+        thinkLevel: "off",
+        admittedRunContext: createTestAdmittedRunContext(runId),
+        onAgentEvent,
       },
     });
-    const onAgentEvent = vi.fn();
-    const emitted = vi.fn();
-    const runId = "run-prepared-lifecycle-owner";
-    const sessionId = "session-prepared-lifecycle-owner";
-    const sessionKey = "agent:main:prepared-lifecycle-owner";
-    const unlisten = onAgentEventForRun(runId, emitted);
-    const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ runId, sessionId, sessionKey });
     try {
-      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
-        // Runtime preparation can select an endpoint owner that differs from the route label.
-        const runtimeHandle = resolveProviderRuntimePluginHandle({
-          provider: "custom-lifecycle-route",
-          providerOwner: ownerId,
-          modelId: testModel.id,
-          config,
-        });
-        expect(runtimeHandle.plugin?.id).toBe(ownerId);
-        const model = attachModelProviderRuntimePluginHandle(
-          { ...testModel, provider: "custom-lifecycle-route" },
-          runtimeHandle,
-        );
-        streamMocks.streamSimple.mockImplementation((activeModel) =>
-          createAssistantResultStream({
-            ...createAssistant(activeModel, [], "error"),
-            errorMessage: "403 fixture refusal",
-            errorCode: "FIXTURE_REFUSAL",
-          }),
-        );
-        const { session, modelRegistry } = await createTestSession({ model });
-        const stream = prepareEmbeddedAttemptStream({
-          attempt: {
-            runId,
-            sessionId,
-            sessionKey,
-            sessionFile: sessionKey,
-            config,
-            model,
-            provider: model.provider,
-            modelId: model.id,
-            workspaceDir: process.cwd(),
-            prompt: "exercise terminal provider failure",
-            timeoutMs: 30_000,
-            thinkLevel: "off",
-            admittedRunContext: createTestAdmittedRunContext(runId),
-            authStorage: modelRegistry.authStorage,
-            modelRegistry,
-            authProfileStore: { version: 1, profiles: {} },
-            onAgentEvent,
+      await session.prompt("exercise terminal provider failure");
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
+      for (const observer of [emitted, onAgentEvent]) {
+        expect.soft(lifecycleData(observer, "error")).toMatchObject([
+          {
+            phase: "error",
+            error: "The AI service is temporarily overloaded. Please try again in a moment.",
           },
-          agentSession: {
-            activeSession: session,
-            hookRunner: null,
-            clientToolCallSlots: [],
-            hasDeliveredSourceReply: () => false,
-            markSourceReplyDelivered: () => {},
-            trustedLocalMediaToolNames: new Set(),
-            builtinToolNames: new Set(),
-            coreBuiltinToolNames: new Set(),
-            replaySafeToolNames: new Set(),
-            codeModeExecToolNames: new Set(),
-            sourceReplyCapableToolNames: new Set(),
-            sideEffectToolOwners: new Map(),
-          },
-          hookAgentId: "main",
-          diagnosticTrace: { traceId: "11111111111111111111111111111111" },
-          diagnosticOwner,
-          nestedToolActivityState: createAttemptNestedToolActivityState(),
-          isReplaySafeTool: () => false,
-          runAbortController: new AbortController(),
-          abortRun: () => {
-            void session.abort();
-          },
-          markExternalAbort: () => {},
-          getRunState: () => ({
-            aborted: false,
-            promptError: undefined,
-            timedOut: false,
-            yieldDetected: false,
-          }),
-          onBlockReply: undefined,
-          onBlockReplyFlush: undefined,
-        });
-        try {
-          await session.prompt("exercise terminal provider failure");
-          expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
-          for (const observer of [emitted, onAgentEvent]) {
-            const terminals = lifecycleData(observer, "error");
-            expect.soft(terminals).toEqual([
-              expect.objectContaining({
-                phase: "error",
-                error: "The AI service is temporarily overloaded. Please try again in a moment.",
-              }),
-            ]);
-          }
-          expect(hookContexts).toContainEqual(
-            expect.objectContaining({
-              provider: ownerId,
-              status: 403,
-              code: "FIXTURE_REFUSAL",
-            }),
-          );
-        } finally {
-          stream.subscription.unsubscribe();
-          clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
-        }
-      });
+        ]);
+      }
+      expect(classifyFailoverReason).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: ownerId,
+          status: 403,
+          code: "FIXTURE_REFUSAL",
+        }),
+      );
     } finally {
-      unlisten();
-      closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+      stream.subscription.unsubscribe();
+      clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
     }
   });
 });

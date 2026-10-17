@@ -77,7 +77,8 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
-import { imessageRpcSupportsMethod, probeIMessage, probeIMessagePrivateApi } from "../probe.js";
+import { imessageRpcSupportsMethod } from "../private-api-status.js";
+import { probeIMessage, probeIMessagePrivateApi } from "../probe.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";

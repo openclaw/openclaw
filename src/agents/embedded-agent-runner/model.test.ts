@@ -58,9 +58,11 @@ const preparedSnapshotState = vi.hoisted(() => ({
   inlineProviderModels: [] as PreparedModelRuntimeSnapshot["inlineProviderModels"],
 }));
 
+// mock-isolation: Model-resolution fixtures own prepared auth snapshots; provider discovery must not add host credentials or registries.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 

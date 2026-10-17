@@ -7,6 +7,7 @@ import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import * as sourceSnapshots from "../sqlite-snapshot-source.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import {
   canonical,
@@ -28,6 +29,16 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       async ({ state, source, client }) => {
         assert(client);
         const before = canonical(source);
+        const privateSources = new Set<string>();
+        const isolatedReads = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocationSync");
+        const isolatedCopies = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocation");
+        const run = tasks.runDatabasePortTask;
+        vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
+          if (args[0].operation === "migrate" || args[0].operation === "stage") {
+            privateSources.add(args[0].sourcePath);
+          }
+          return run(...args);
+        });
         const include = fs.readFileSync(state.statePath("plugins.json"), "utf8");
         const forward = await doctorDatabasePort({ to: "postgres" });
         const sharedPath = state.statePath("state", "openclaw.sqlite");
@@ -62,6 +73,12 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           ).toEqual({ value_json: expect.any(String) });
         }
         expect(canonical(source)).toEqual(before);
+        expect(privateSources.size).toBeGreaterThan(0);
+        expect(
+          [...isolatedReads.mock.calls, ...isolatedCopies.mock.calls].filter(([file]) =>
+            privateSources.has(file),
+          ),
+        ).toEqual([]);
         expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
         const authored = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
         expect(authored).toMatchObject({

@@ -5,9 +5,11 @@ import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createGitHubIdentityForTest,
   type TestGitHubIdentity,
@@ -161,6 +163,7 @@ function sync(
   controller.sync({
     client,
     connected: true,
+    permissionsReady: overrides.connected ?? true,
     target: {
       kind: "shared",
       agentId: overrides.agentId ?? "main",
@@ -476,6 +479,70 @@ describe("TestGitHubIdentity", () => {
     expect(controller.read().status).toEqual(availableStatus("system"));
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["unused", "pending", "loaded", "failed"])(
+    "refreshes only previously requested GitHub status after reconnect (%s)",
+    async (initialState) => {
+      const first = createDeferredCore<ReturnType<typeof availableStatus>>();
+      const currentStatus = availableStatus("system");
+      const request = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(currentStatus);
+      const client = createTestGatewayClient(request);
+      const controller = createStatusOnlyController();
+      sync(controller, client);
+      let initial: Promise<void> | undefined;
+      if (initialState !== "unused") {
+        initial = controller.verify();
+        if (initialState === "loaded") {
+          first.resolve(currentStatus);
+          await initial;
+        } else if (initialState === "failed") {
+          first.reject(new Error("Status unavailable"));
+          await initial;
+        }
+      }
+      controller.setDraft("name", "Unsaved author");
+      const previousStatus = controller.read().status;
+      sync(
+        controller,
+        client,
+        {},
+        {
+          connected: false,
+          clientRevision: 2,
+          statusReadable: false,
+          configurable: false,
+          authorizable: false,
+        },
+      );
+      expect(controller.read().status).toBe(previousStatus);
+      expect(controller.read().draft.name).toBe("Unsaved author");
+      sync(controller, client, {}, { clientRevision: 3 });
+      await Promise.resolve();
+      if (initialState !== "unused") {
+        await waitForFast(() => {
+          expect(controller.read().loading).toBe(false);
+          expect(controller.read().status).toEqual(currentStatus);
+        });
+      }
+
+      const statusCall = ["tools.github.status", { agentId: "main", selectedScope: "system" }];
+      expect(request.mock.calls).toEqual(initialState === "unused" ? [] : [statusCall, statusCall]);
+      expect(controller.read().draft.name).toBe("Unsaved author");
+      expect(controller.read().status).toEqual(initialState === "unused" ? null : currentStatus);
+      first.resolve(availableStatus("agent"));
+      await initial;
+      expect(controller.read().error).toBeNull();
+
+      const replacement = createTestGatewayClient(request);
+      sync(controller, replacement, {}, { clientRevision: 4 });
+      expect(controller.read().draft.name).toBe("");
+      expect(controller.read().status).toBeNull();
+      sync(controller, replacement, {}, { connected: false, clientRevision: 5 });
+      sync(controller, replacement, {}, { clientRevision: 6 });
+      await Promise.resolve();
+      expect(request.mock.calls).toEqual(initialState === "unused" ? [] : [statusCall, statusCall]);
+    },
+  );
 
   it("rejects status returned for a different agent", async () => {
     const client = {

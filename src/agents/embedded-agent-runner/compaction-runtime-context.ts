@@ -18,7 +18,6 @@ import {
   listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { readModelServingContextWindow } from "../model-serving-context.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
@@ -102,8 +101,6 @@ export function resolveEmbeddedCompactionTarget(params: {
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): {
   provider: string | undefined;
-  runtimeProvider?: string;
-  contextProvider?: string;
   nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
@@ -184,13 +181,7 @@ export function resolveCompactionTargetRuntime(
   // Provider defaults choose new runs; they cannot move an existing transcript.
   const useNativeHarnessRuntime =
     selectedHarnessRuntime !== "openclaw" && !isDefaultAgentRuntimeId(selectedHarnessRuntime);
-  const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({ provider });
-  const routedRuntimeProvider = runtimeProvider === provider ? undefined : runtimeProvider;
-  return {
-    runtimeProvider: routedRuntimeProvider,
-    contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
-    ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
-  };
+  return useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {};
 }
 
 function hasBareConfiguredModelForProvider(params: {
@@ -341,7 +332,6 @@ export function buildEmbeddedCompactionRuntimeContext(
     senderIsOwner: profile === "full" ? params.senderIsOwner : undefined,
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
-    runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
     modelCallUrgency: params.modelCallUrgency,
     modelFallbacksOverride: afterTurn ? undefined : params.modelFallbacksOverride,

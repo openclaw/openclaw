@@ -81,6 +81,39 @@ function button(page: HTMLElement, label: string) {
 afterEach(() => document.body.replaceChildren());
 
 describe("Skill Workshop page", () => {
+  it("keeps the selected agent loading when the former agent's list fails", async () => {
+    const previousList = createDeferredCore<SkillsWorkshopListResult>();
+    const selectedList = createDeferredCore<SkillsWorkshopListResult>();
+    const request = vi.fn((method: string, params: { agentId: string }) => {
+      if (method === "skills.workshop.list") {
+        return params.agentId === "research" ? previousList.promise : selectedList.promise;
+      }
+      if (method === "skills.workshop.changes") {
+        return Promise.resolve({ changes: [] });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const context = createContext(request);
+    const page = await mount(context);
+    expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+
+    context.agentSelection.set("scout");
+    flush();
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.list", { agentId: "scout" }),
+    );
+    previousList.reject(new Error("Former agent list failed"));
+    await previousList.promise.catch(() => undefined);
+    await waitForSolid(() => {
+      expect(page.textContent).not.toContain("Former agent list failed");
+      expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+    });
+
+    selectedList.resolve({ ...list, agentId: "scout", skills: [], archived: [] });
+    await waitForSolid(() => expect(page.querySelector(".settings-loading-skeleton")).toBeNull());
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("shows a failed configuration read and retries only when requested", async () => {
     const firstRead = createDeferredCore<unknown>();
     const configRead = vi.fn().mockReturnValueOnce(firstRead.promise).mockResolvedValue({

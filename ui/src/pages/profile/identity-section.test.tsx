@@ -25,6 +25,7 @@ const PROFILE: UserProfile = {
 function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySectionProps {
   return {
     profile: PROFILE,
+    connected: true,
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
     gitCoauthorEnabled: false,

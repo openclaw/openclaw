@@ -53,6 +53,9 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
+  // The Gateway profiler tests launch these subprocess fixtures through a computed path.
+  "test/scripts/fixtures/gateway-bench-cpu-usage.mjs!",
+  "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
   // The state-reader build test launches this native dependency fixture by path.

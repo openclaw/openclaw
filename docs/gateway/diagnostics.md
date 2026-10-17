@@ -844,6 +844,14 @@ OpenTelemetry exports the corresponding
 `openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
 `openclaw.gateway.ws.operator_connections` metrics.
 
+`openclaw_gateway_ws_presence_frames_total{mode}` and
+`openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic into
+`delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
+without delta negotiation). OpenTelemetry exports
+`openclaw.gateway.ws.presence_frames` and `openclaw.gateway.ws.presence_bytes`
+with the `openclaw.gateway.ws.mode` attribute. Counts and bytes use the same
+per-socket send acceptance and batching as the aggregate counters.
+
 `openclaw_gateway_ws_session_event_frames_total{event,reason,delivery}` and
 `openclaw_gateway_ws_session_event_bytes_total{event,reason,delivery}` add session
 traffic attribution. OpenTelemetry exports
@@ -919,6 +927,23 @@ shared responses, without adding wire fields or inspecting rows again. Both
 counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
 names are `openclaw.sessions.list.baseline_retirements` and
 `openclaw.sessions.list.base_misses`, with the same labels.
+
+`openclaw_session_event_rows_retained_entries` and
+`openclaw_session_event_rows_retained_bytes` report aggregate count and estimated
+memory for the field-hash vectors retained by session-event connections. Both
+gauges have no labels and return to zero when the last retained connection state
+is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entries`
+and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
+identities; they do not retain or charge copies of the presented session rows.
+
+`openclaw_session_event_rows_reset_total{cause}` counts retained wire baselines
+retired, including each baseline in a connection-wide reset. Its bounded causes
+are `close`, `delivery-lost`, `generation`, `evicted`, and `projection`. Empty
+resets do not increment it. Ordinary session-fact changes and list reads invalidate
+ancestor certification without retiring wire baselines, so they do not increment
+this counter. The OpenTelemetry name is `openclaw.session_event_rows_reset`, with
+the same `cause` label. Like the retention gauges, it uses the existing bounded
+asynchronous diagnostics path and records no session or connection identifiers.
 
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`

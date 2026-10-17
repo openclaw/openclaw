@@ -7,10 +7,16 @@
       "sqlite",
       "postgres"
     ],
-    "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
+    "postgresFamilies": [
+      "state",
+      "agent",
+      "workboard",
+      "logbook",
+      "team-reports"
+    ],
     "schemaVersions": {
       "state": 27,
-      "agent": 29
+      "agent": 31
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -473,7 +479,9 @@
     "!dist/plugin-sdk/meeting-config.d.ts",
     "!dist/plugin-sdk/collection-input-runtime.d.ts",
     "!dist/plugin-sdk/http-response-runtime.d.ts",
-    "!dist/plugin-sdk/node-crypto-runtime.d.ts"
+    "!dist/plugin-sdk/node-crypto-runtime.d.ts",
+    "!dist/plugin-sdk/path-existence-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-markers.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -722,6 +730,9 @@
     },
     "./plugin-sdk/file-access-runtime": {
       "default": "./dist/plugin-sdk/file-access-runtime.js"
+    },
+    "./plugin-sdk/path-existence-runtime": {
+      "default": "./dist/plugin-sdk/path-existence-runtime.js"
     },
     "./plugin-sdk/node-crypto-runtime": {
       "default": "./dist/plugin-sdk/node-crypto-runtime.js"
@@ -1265,6 +1276,10 @@
     "./plugin-sdk/session-transcript-runtime": {
       "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
+    "./plugin-sdk/context-engine-transcript-runtime": {
+      "types": "./dist/plugin-sdk/context-engine-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/context-engine-transcript-runtime.js"
+    },
     "./plugin-sdk/sqlite-runtime": {
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
@@ -1481,6 +1496,9 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-markers": {
+      "default": "./dist/plugin-sdk/provider-auth-markers.js"
     },
     "./plugin-sdk/provider-auth-aliases": {
       "default": "./dist/plugin-sdk/provider-auth-aliases.js"

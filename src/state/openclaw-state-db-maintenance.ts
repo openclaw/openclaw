@@ -77,19 +77,26 @@ import {
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
-import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
+import {
+  resolveSchemaMigrationIntegrityTables,
+  SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES,
+} from "./schema-migration-integrity-tables.js";
 
 export function assertMigratedStateTableIntegrity(
   db: DatabaseSync,
   pathname: string,
   previousVersion: number,
+  historicalRepair = false,
 ): void {
-  const tables = resolveSchemaMigrationBackupTables({
+  const tables = resolveSchemaMigrationIntegrityTables({
     kind: "state",
     foundVersion: previousVersion,
     supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
   });
-  for (const table of tables ?? []) {
+  const affected = historicalRepair
+    ? new Set([...tables, ...SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES.state])
+    : tables;
+  for (const table of affected) {
     if (tableExists(db, table)) {
       assertSqliteTableIntegrity(db, pathname, table);
     }

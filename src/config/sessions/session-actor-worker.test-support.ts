@@ -224,6 +224,7 @@ function createFixture() {
       return receipts.shift();
     },
     prepare: (command: Command) => actor.prepare(command),
+    prepareTurn: (input: Parameters<typeof actor.prepareTurn>[0]) => actor.prepareTurn(input),
     writeEntry(entry: Parameters<typeof writeSessionEntry>[2], sessionKey = target.sessionKey) {
       return runSqliteImmediateTransactionSync(database.db, () =>
         writeSessionEntry(database, sessionKey, entry),

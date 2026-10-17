@@ -1,4 +1,3 @@
-/** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import {
   asOptionalObjectRecord,

@@ -41,10 +41,22 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+If the retained verifier cannot authenticate to the restarted Gateway, it stops
+retrying that rejection. Local HTTP readiness and runtime version/build identity
+can verify activation instead, with an RPC authentication warning recorded in
+the update result. This does not change Gateway authentication or pairing.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
 again and refuses a version newer than the running updater supports.
+
+After Doctor backs up and admits shared-state maintenance reads, native Codex
+assignment detection reads one database transaction snapshot. Lease renewals and
+other maintenance writes can continue without requiring the database files to
+stop changing for a private copy. Inspection without that admission still uses
+an artifact-preserving copy and refuses an inconsistent source. This is
+candidate-side behavior; the installed updater runs first with its shipped checks.
 
 ### Migration integrity checks
 
@@ -54,8 +66,11 @@ existing foreign-key checks. This avoids checking every unrelated index against
 its table during a routine upgrade. Structural corruption anywhere in the
 database and corruption in the migration's affected tables still refuse the
 migration; quarantine and rollback behavior are unchanged.
-Historical migrations without a declared table scope, same-version Doctor
-repairs, and legacy transformed recovery archives retain full integrity checks.
+Historical upgrades use the same default even when recovery requires a full-file
+backup. Automatic original-state captures and disposable update rehearsals also
+honor the requested check, including same-version Doctor repairs. Automatic rollback
+images, restore validation, explicit Doctor recovery, and legacy transformed recovery
+archives retain full integrity checks.
 
 To request full integrity checking across every table and index during migration:
 
@@ -601,8 +616,12 @@ its `--timeout` option cannot increase this cap.
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
 If a copy fails, active copies finish before cleanup; link publication and
-verification run only after all file copies succeed. Stored state and recovery backups
-retain their existing durability guarantees. An older installed updater keeps
+verification run only after all file copies succeed. Each private copy or inspection
+uses one generous absolute allowance derived from its inventoried size, with the
+caller's larger allowance preserved. Progress remains diagnostic and does not renew
+the allowance. Exceptionally slow storage may require another update attempt after
+a visible timeout. Stored state and recovery backups retain their existing
+durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Runtime retention looks for hoisted dependencies within the package manager's

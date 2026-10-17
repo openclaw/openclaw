@@ -68,7 +68,14 @@ cached facts in place. Cached progress does not authorize offline actions. The
 first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
-retain their own identity checks. Agent pickers and the agent directory wait for a live roster;
+retain their own identity checks. When the cached conversation also has the exact
+pending-input page and session metadata, the Gateway confirms unchanged fields
+with receipts instead of sending them again. Changed or consumed inputs still
+refresh their display, and a missing cache or expired transcript cursor fetches
+complete state. These receipts do not grant access; the Gateway checks the current
+session and account before confirming any retained data.
+
+Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
@@ -88,6 +95,9 @@ inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 up to 80 recent rows (plus rows from the same history entry) for a warm reload.
+The snapshot also retains the slash-command catalog and its revision. Warm
+startup reuses that list when the Gateway confirms it is unchanged; config,
+plugin, and skill changes refresh it through the existing metadata owner.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
@@ -213,6 +223,40 @@ resources are not made available offline by retaining the iframe, and a full
 page reload does not persist a widget’s unsaved local interaction state.
 
 ## Connection loss and reconnect
+
+An open Control UI keeps its last accepted Gateway capabilities through a temporary
+disconnect. Navigation, plugin tabs, attachment limits, and the displayed Gateway
+version do not disappear simply because the socket closes. Pages remain interactive
+for reading, copying, filtering, and local drafting; actions that require a live
+Gateway remain unavailable. Some pages still reload their own data on reconnect,
+and unvisited views or external resources may need a connection.
+
+Retained capabilities describe the current client identity; they do not authorize
+requests. A new handshake replaces them. Replacing the client or credentials,
+stopping the connection, authentication or pairing rejection, and protocol/build
+rejection clear that presentation. Canvas capability URLs retain their separate
+live-connection lease and are not kept by this policy.
+
+Model Providers, Plugins, Devices, Skills, Profile, Channels, Cloud Workers,
+GitHub connection editors, and Session Storage keep loaded data
+and unsaved in-memory drafts through a temporary loss of the same Gateway
+connection. Editors stay open; actions that require the Gateway remain unavailable
+until it is connected. Reconnect refreshes the loaded data without
+discarding your edits. Switching identities or losing access still clears the
+affected settings. These drafts are not persisted by this behavior: reloading
+or closing the tab can discard them, including entered credentials.
+
+Rejected model-default saves return the pickers to the saved configuration.
+**Retry** keeps the rejected change with the configuration write owner. Model
+edits that have not been sent still survive a temporary disconnect. After
+reconnecting, defaults remain unavailable until the current configuration loads;
+a failed read does not present the previous connection's defaults as current.
+
+Unsent configuration form edits resume autosave after reconnect only when a
+fresh read confirms that their base revision is unchanged. If a submission was
+in flight or the revision changed, autosave stays paused for explicit recovery.
+Raw configuration edits remain manual-save-only. Reconnect does not replay
+plugin installations, setup answers, or other arbitrary actions.
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
 stays visible. The sidebar avatar has a green connection dot when healthy, amber during recovery

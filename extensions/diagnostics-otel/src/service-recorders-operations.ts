@@ -62,6 +62,11 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       const attrs = { "openclaw.gateway.ws.event": evt.event };
       runtime.gatewayWsEventsCounter.add(evt.count, attrs);
       runtime.gatewayWsEventBytesCounter.add(evt.bytes, attrs);
+      if (evt.presenceMode) {
+        const presenceAttrs = { "openclaw.gateway.ws.mode": evt.presenceMode };
+        runtime.gatewayWsPresenceFramesCounter.add(evt.count, presenceAttrs);
+        runtime.gatewayWsPresenceBytesCounter.add(evt.bytes, presenceAttrs);
+      }
       if (evt.sessionEvent) {
         const sessionAttrs = {
           ...attrs,
@@ -88,6 +93,23 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.sessionsListRetainedViewsGauge.record(evt.views);
         runtime.sessionsListRetainedRefsGauge.record(evt.refs);
         runtime.sessionsListRetainedBytesGauge.record(evt.estimatedBytes);
+      }
+    },
+    recordSessionEventRetention(
+      evt: Extract<DiagnosticEventPayload, { type: "sessions.event.retention" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (metadata.trusted) {
+        runtime.sessionEventRowsRetainedEntriesGauge.record(evt.entries);
+        runtime.sessionEventRowsRetainedBytesGauge.record(evt.estimatedBytes);
+      }
+    },
+    recordSessionEventRowsReset(
+      evt: Extract<DiagnosticEventPayload, { type: "sessions.event.rows.reset" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (metadata.trusted) {
+        runtime.sessionEventRowsResetCounter.add(evt.count, { cause: evt.cause });
       }
     },
     recordGatewayRpc(

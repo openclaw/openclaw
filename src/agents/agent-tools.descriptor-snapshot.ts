@@ -1,7 +1,6 @@
 import {
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
-  prepareOpenAIFunctionTool,
   prepareAnthropicInputSchema,
   publishRuntimeToolInputSchema,
 } from "@openclaw/ai/internal/tool-schema";
@@ -57,7 +56,7 @@ function publishParameters(parameters: AnyAgentTool["parameters"], name: string)
     : undefined;
 }
 
-function prewarmOpenAIDescriptor(
+function prewarmOpenAISchema(
   descriptor: Readonly<ToolDescriptor & { parameters: Record<string, unknown> }>,
   compat?: ModelCompatConfig,
 ) {
@@ -65,11 +64,7 @@ function prewarmOpenAIDescriptor(
     if (strict && !isStrictOpenAIJsonSchemaCompatible(descriptor.parameters)) {
       continue;
     }
-    const parameters = normalizeOpenAIStrictToolParameters(descriptor.parameters, strict, compat);
-    prepareOpenAIFunctionTool(descriptor.name, descriptor.description, parameters, strict);
-    if (!strict) {
-      prepareOpenAIFunctionTool(descriptor.name, descriptor.description, parameters, undefined);
-    }
+    normalizeOpenAIStrictToolParameters(descriptor.parameters, strict, compat);
   }
 }
 
@@ -193,7 +188,7 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
             inputs.modelApi === "openai-responses" ||
             inputs.modelApi === "openai-completions"
           ) {
-            prewarmOpenAIDescriptor(descriptor, inputs.modelCompat);
+            prewarmOpenAISchema(descriptor, inputs.modelCompat);
           } else if (inputs.modelApi === "anthropic-messages") {
             prepareAnthropicInputSchema(parameters);
           }

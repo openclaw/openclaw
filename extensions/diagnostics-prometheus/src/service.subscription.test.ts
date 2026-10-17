@@ -78,18 +78,58 @@ it("exports session traffic attribution while keeping aggregate event labels unc
   }
 });
 
-it("exports trusted session-list retention gauges and clears them on retirement", () => {
+it("exports presence frame counts and bytes by delivery mode", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const presenceMode of ["delta", "reset", "legacy"] as const) {
+      const observation = {
+        type: "gateway.ws.event",
+        event: "presence",
+        count: 2,
+        bytes: 256,
+        presenceMode,
+      } as const;
+      metrics.record(observation);
+      metrics.record({ ...observation, count: 1, bytes: 128 });
+      metrics.record(observation, untrusted);
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="presence"} 9');
+    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="presence"} 1152');
+    for (const mode of ["delta", "reset", "legacy"]) {
+      expect(rendered).toContain(`openclaw_gateway_ws_presence_frames_total{mode="${mode}"} 3`);
+      expect(rendered).toContain(`openclaw_gateway_ws_presence_bytes_total{mode="${mode}"} 384`);
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("exports trusted session retention gauges and clears them on retirement", () => {
   const metrics = createMetricsHarness();
   const retentionLines = () =>
     metrics
       .render()
       .split("\n")
-      .filter((line) => line.startsWith("openclaw_sessions_list_retained_"));
+      .filter(
+        (line) =>
+          line.startsWith("openclaw_sessions_list_retained_") ||
+          line.startsWith("openclaw_session_event_rows_retained_"),
+      );
   try {
     metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    metrics.record({
+      type: "sessions.event.retention",
+      entries: 25_600,
+      estimatedBytes: 24_985_600,
+    });
     for (const metadata of [untrusted, { trusted: false, internal: true }]) {
       metrics.record(
         { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
+        metadata,
+      );
+      metrics.record(
+        { type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 },
         metadata,
       );
     }
@@ -98,16 +138,58 @@ it("exports trusted session-list retention gauges and clears them on retirement"
         `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
       );
     }
+    for (const suffix of ["entries", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_session_event_rows_retained_${suffix} gauge\n`,
+      );
+    }
     expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 24985600",
+      "openclaw_session_event_rows_retained_entries 25600",
       "openclaw_sessions_list_retained_bytes 3504",
       "openclaw_sessions_list_retained_refs 17",
       "openclaw_sessions_list_retained_views 3",
     ]);
     metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
+    metrics.record({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
     expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 0",
+      "openclaw_session_event_rows_retained_entries 0",
       "openclaw_sessions_list_retained_bytes 0",
       "openclaw_sessions_list_retained_refs 0",
       "openclaw_sessions_list_retained_views 0",
+    ]);
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("counts retired wire baselines by cause without accepting untrusted resets", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const cause of [
+      "close",
+      "delivery-lost",
+      "generation",
+      "evicted",
+      "projection",
+    ] as const) {
+      metrics.record({ type: "sessions.event.rows.reset", cause, count: 3 });
+      metrics.record({ type: "sessions.event.rows.reset", cause, count: 2 });
+      for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+        metrics.record({ type: "sessions.event.rows.reset", cause, count: 99 }, metadata);
+      }
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_session_event_rows_reset_total counter\n");
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("openclaw_session_event_rows_reset_")),
+    ).toEqual([
+      'openclaw_session_event_rows_reset_total{cause="close"} 5',
+      'openclaw_session_event_rows_reset_total{cause="delivery-lost"} 5',
+      'openclaw_session_event_rows_reset_total{cause="evicted"} 5',
+      'openclaw_session_event_rows_reset_total{cause="generation"} 5',
+      'openclaw_session_event_rows_reset_total{cause="projection"} 5',
     ]);
   } finally {
     metrics.stop();

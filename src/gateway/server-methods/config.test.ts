@@ -107,6 +107,7 @@ vi.mock("./open-path.js", async () => {
 
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({ schema: { type: "object" }, uiHints: undefined }),
 }));
 

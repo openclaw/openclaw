@@ -146,7 +146,6 @@ export function createChatViewFrame(props: ChatProps) {
   const displayedPendingInputs = pendingInputs
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
   // Focus crosses the transcript boundary into either the native or plugin-owned composer.
   const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
     props.transcript.scrollElement
@@ -258,7 +257,6 @@ export function createChatViewFrame(props: ChatProps) {
     questionPrompts: props.gatewayQuestionPrompts,
     agents: props.agentsList?.agents,
     onOpenImage: openImage,
-    onRequestUpdate: requestUpdate,
     queuedMessageAction: props.placementStartup?.initialTurn
       ? {
           id: props.placementStartup.initialTurn.id,
@@ -299,7 +297,6 @@ export function createChatViewFrame(props: ChatProps) {
                   ...(props.getAttachments?.() ?? props.attachments ?? []),
                   attachment,
                 ]);
-                requestUpdate();
                 focusComposer();
                 return true;
               },
@@ -341,7 +338,6 @@ export function createChatViewFrame(props: ChatProps) {
   return {
     approvalSourceSession,
     pendingInputs,
-    requestUpdate,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,

@@ -484,6 +484,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     meta: { migrations: { webhookListeners: true } },
                   };
                   await state.writeConfig(gatewayConfig);
+                  resetDatabaseEngineSelectionForTest();
                   setRuntimeConfigSnapshot(gatewayConfig);
                   installDatabaseEngineSelection(
                     await resolveDatabaseEngineSelection(gatewayConfig),

@@ -120,8 +120,7 @@ export class AcpSessionManager extends managerModule.AcpSessionManager {
     }
   }
 }
-export const resetAcpSessionManagerForTests = () =>
-  managerModule.testing.resetAcpSessionManagerForTests();
+const resetAcpSessionManagerForTests = () => managerModule.testing.resetAcpSessionManagerForTests();
 const managerLifecycleModule = await import("./manager.lifecycle.js");
 export const disposeAcpSessionManagerInstance =
   managerLifecycleModule.disposeAcpSessionManagerInstance;

@@ -4,18 +4,6 @@ import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
-private struct ChatScrollEdgeTreatment: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
-            content.scrollEdgeEffectStyle(.soft, for: .vertical)
-        } else {
-            content
-        }
-    }
-}
-
 struct ChatProTab: View {
     enum GatewayStatusTone: Equatable {
         case success
@@ -83,60 +71,50 @@ struct ChatProTab: View {
 
     private var content: some View {
         self.chatSurface
-            .modifier(ChatScrollEdgeTreatment())
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if let headerSidebarAction {
-                    OpenClawSidebarToolbarItem(
-                        action: headerSidebarAction,
-                        placement: .topBarLeading)
-                }
-                if #available(iOS 26.0, *) {
+            // The shared canvas supplies color for the native blur. Automatic
+            // edge effects harden to black when the host inserts an opaque fill.
+                .scrollEdgeEffectStyle(.soft, for: .vertical)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    if let headerSidebarAction {
+                        OpenClawSidebarToolbarItem(
+                            action: headerSidebarAction,
+                            placement: .topBarLeading)
+                    }
                     ToolbarItem(placement: .topBarLeading) {
                         self.headerAgentIdentity
                     }
                     .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarLeading) {
-                        self.headerAgentIdentity
-                    }
-                }
-                if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .topBarTrailing) {
                         self.chatActionsMenu
                     }
                     .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.chatActionsMenu
+                }
+                .sheet(item: self.$transcriptShareItem) { item in
+                    OpenClawChatFileShareSheet(fileURL: item.fileURL)
+                }
+                .sheet(isPresented: self.$showsNewSessionOptions) {
+                    if let viewModel {
+                        ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                            self.showsNewSessionOptions = false
+                        }
+                        .presentationDetents([.medium])
+                        .presentationDragIndicator(.visible)
                     }
                 }
-            }
-            .sheet(item: self.$transcriptShareItem) { item in
-                OpenClawChatFileShareSheet(fileURL: item.fileURL)
-            }
-            .sheet(isPresented: self.$showsNewSessionOptions) {
-                if let viewModel {
-                    ChatNewSessionOptionsPopover(viewModel: viewModel) {
-                        self.showsNewSessionOptions = false
+                .alert(
+                    String(localized: "Unable to Export Transcript"),
+                    isPresented: self.$showsTranscriptExportError)
+                {
+                    Button(role: .cancel) {} label: {
+                        Text("OK")
+                            .font(OpenClawType.body)
                     }
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
-                }
-            }
-            .alert(
-                String(localized: "Unable to Export Transcript"),
-                isPresented: self.$showsTranscriptExportError)
-            {
-                Button(role: .cancel) {} label: {
-                    Text("OK")
+                } message: {
+                    Text("OpenClaw could not prepare the Markdown file.")
                         .font(OpenClawType.body)
                 }
-            } message: {
-                Text("OpenClaw could not prepare the Markdown file.")
-                    .font(OpenClawType.body)
-            }
     }
 
     @ViewBuilder

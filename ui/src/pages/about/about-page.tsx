@@ -66,7 +66,7 @@ export function AboutPage() {
 
   function gatewayVersion() {
     const snapshot = gateway().read().snapshot;
-    return snapshot.phase === "connected" ? snapshot.hello?.server?.version?.trim() || null : null;
+    return snapshot.hello?.server?.version?.trim() || null;
   }
 
   return (

@@ -642,6 +642,7 @@ export function runAuthProfileWriteTransaction<T>(
           ...(existing
             ? {
                 repairAdmission: {
+                  integrityTables: ["auth_profile_store", "auth_profile_state"],
                   expectedIdentity: existing.identity,
                   assertCurrent: existing.assertCurrent,
                 },

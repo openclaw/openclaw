@@ -77,23 +77,21 @@ export function prepareSessionRowPublicationView(
       });
     } else {
       // Exact row publications cannot mask a preceding profile/configuration invalidation.
-      if (
-        (publication.revision !== undefined && publication.revision !== revision) ||
-        publication.cfg !== cfg ||
-        publication.identityRevision !== identityRevision
-      ) {
+      if (publication.cfg !== cfg || publication.identityRevision !== identityRevision) {
         if (publication.lists.hasSidebarBaselines()) {
           emitTrustedDiagnosticEvent({
             type: "sessions.list.baseline.retired",
-            cause:
-              publication.cfg !== cfg
-                ? "config"
-                : publication.identityRevision !== identityRevision
-                  ? "identity"
-                  : "projection-revision",
+            cause: publication.cfg !== cfg ? "config" : "identity",
           });
         }
         publication.lists.clear();
+      } else if (publication.revision !== undefined && publication.revision !== revision) {
+        // A new selection cannot make frozen, previously served rows unsafe to compare.
+        for (const list of publication.lists.values()) {
+          list.selection = undefined;
+          list.partitions = undefined;
+          publication.lists.update(list);
+        }
       }
       publication.revision = revision;
       publication.cfg = cfg;

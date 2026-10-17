@@ -16,6 +16,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -78,7 +79,6 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
     lastActiveSessionKey: "notes",
     chatShowTaskProgress: true,
   };
-  state.requestUpdate = () => pane.invalidate();
   connectPaneTestView(pane);
   flush();
   onTestFinished(() => {
@@ -116,7 +116,6 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     });
     const { pane, state, progress, emit } = createHistoryProgressPane(request);
     state.chatMessage = "Retained draft";
-    pane.invalidate();
     await pane.updateComplete;
     expect(request).not.toHaveBeenCalled();
 
@@ -125,6 +124,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       "chat.history",
       {
         sessionKey: "notes",
+        knownState: {},
         limit: 80,
         maxBytes: 256 * 1024,
         toolResultMaxChars: 2_000,
@@ -165,8 +165,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       method === "chat.history" ? history : { card },
     );
     const { pane, state, emit } = createHistoryProgressPane(request);
-    state.settings.chatShowTaskProgress = false;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: false };
     await pane.updateComplete;
     expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
     await loadChatHistory(state, { deferBranches: true });
@@ -174,12 +173,10 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
     expect(pane.chatProps?.progressCard).toBeNull();
 
-    state.settings.chatShowTaskProgress = true;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: true };
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
-    state.settings.chatShowTaskProgress = false;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: false };
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toBeNull();
     expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
@@ -190,8 +187,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       "progressCard.get",
     ]);
 
-    state.settings.chatShowTaskProgress = true;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: true };
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "chat.history",
@@ -274,9 +270,9 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     // SAFETY: This fixture exercises the runtime's existing protected swarm boundary.
     const swarmPane = pane as unknown as {
       refreshSwarmRoster: () => void;
-      swarmHydrator?: { dispose: () => void; rows: GatewaySessionRow[] };
+      swarm: ChatPaneRuntime["swarm"];
     };
-    onTestFinished(() => swarmPane.swarmHydrator?.dispose());
+    onTestFinished(() => swarmPane.swarm.hydrator?.dispose());
     swarmPane.refreshSwarmRoster();
     expect(request).not.toHaveBeenCalled();
     await loadChatHistory(state, { deferBranches: true });
@@ -284,7 +280,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.describe", target.request),
     );
-    await vi.waitFor(() => expect(swarmPane.swarmHydrator?.rows).toContainEqual(session));
+    await vi.waitFor(() => expect(swarmPane.swarm.hydrator?.rows).toContainEqual(session));
     expect(state.sessionKey).toBe(target.raw);
   });
 
@@ -324,7 +320,6 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     } else {
       resetChatHistoryProjection(state);
     }
-    pane.invalidate();
     await pane.updateComplete;
     expect(pane.readProgressCardScope().target).toBeUndefined();
     expect(pane.chatProps?.progressCard).toEqual(
@@ -341,7 +336,6 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     state.sessionKey = "scratch";
     old.resolve(history);
     expect(await load).toBeUndefined();
-    pane.invalidate();
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toBeNull();
     expect(request).toHaveBeenCalledOnce();

@@ -23,7 +23,12 @@ export type SessionTranscriptProjectionFacts = {
   generation: string | undefined;
   updatedAt: number | null;
   hasUnclassified: boolean;
-  latestIndexedReset: { active_position: number; event_type: "reset"; seq: number } | null;
+  latestIndexedReset: {
+    active_position: number;
+    event_id: string;
+    event_type: "reset";
+    seq: number;
+  } | null;
   hasUnindexedPrefix: boolean;
   latestSeq: number | null;
   state?: SessionTranscriptProjectionState;

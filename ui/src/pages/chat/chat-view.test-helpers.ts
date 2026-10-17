@@ -69,10 +69,7 @@ let nextTestTranscriptId = 0;
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
 ): ChatTranscript {
-  return createChatTranscript(
-    () => undefined,
-    () => paneId,
-  );
+  return createChatTranscript(() => paneId);
 }
 
 export function createPasteEvent(
@@ -216,7 +213,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
     onDraftChange: () => undefined,
-    onRequestUpdate: () => undefined,
     onSend: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
@@ -452,7 +448,6 @@ export function createReactiveDraftHarness({
       draft,
       getDraft: () => draft,
       onDraftChange,
-      onRequestUpdate: renderCurrent,
       ...currentOverrides,
       draftSource: currentOverrides.draftSource ?? draftSource,
       onGoalDraftModeChange: (mode) => {
@@ -493,12 +488,11 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
   const onDraftChange = vi.fn((next: string) => {
     host.draft = next;
   });
-  const onRequestUpdate = vi.fn(() => redraw());
   const onClearReply = vi.fn(() => {
     host.replyTarget = null;
     redraw();
   });
-  function redraw() {
+  const redraw = vi.fn(() => {
     renderChatInto(container, {
       paneId,
       sessionKey: `agent:main:${paneId}`,
@@ -508,18 +502,16 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       canAbort: true,
       runActive: true,
       onDraftChange,
-      onRequestUpdate,
       onClearReply,
       onSend,
       onAbort,
     });
-  }
+  });
   return {
     container,
     host,
     redraw,
     onDraftChange,
-    onRequestUpdate,
     onClearReply,
     onSend,
     onAbort,

@@ -25,7 +25,7 @@ import {
 } from "../chat-thread.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import * as groups from "./chat-message-group-view.tsx";
-import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
@@ -65,7 +65,6 @@ export function projectChatTranscript(
 ) {
   const state = getTranscriptState(props.paneId);
   const { asyncQuestions, selectedSession: activeSession } = props;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const isGlobalAliasKey = isTranscriptGlobalAlias(props);
@@ -179,7 +178,6 @@ export function projectChatTranscript(
       toolCardId,
       !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
     );
-    state.transcriptRenderContext.onRequestUpdate?.();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const key = recoveryKey(messageId);
@@ -191,7 +189,6 @@ export function projectChatTranscript(
     const revision = (current?.revision ?? 0) + 1;
     const pending = { status: "loading", revision } as const;
     setExpansionState(expandedAssistantMessages, key, pending);
-    requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
       // A reset or source replacement can reuse both message id and revision.
       // Only the exact pending entry may publish into this presentation.
@@ -209,7 +206,6 @@ export function projectChatTranscript(
           ? { status: "error", revision: revision + 1 }
           : { status: "loaded", markdown, message: result?.message, revision: revision + 1 },
       );
-      requestUpdate();
     };
     void loader({
       sessionKey: props.sessionKey,
@@ -303,7 +299,7 @@ export function projectChatTranscript(
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
-    onRequestUpdate: requestUpdate,
+    mediaOwner: props.mediaOwner,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
@@ -365,7 +361,6 @@ export function projectChatTranscript(
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
       onToggleUserMessageExpanded: (messageId: string) => {
         setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
-        requestUpdate();
       },
       loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
       getAssistantMessageExpansion: (messageId: string) =>
@@ -573,7 +568,6 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
     getExpansionStateVersion(expandedAssistantMessages),
-    getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     latestBrowserTabsKey,
@@ -626,6 +620,7 @@ export function projectChatTranscript(
     props.sessionPublicOrigin,
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
+    props.mediaOwner,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
@@ -650,8 +645,6 @@ export function projectChatTranscript(
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
-  // Rebind disclosures to the current pane without repainting unchanged rows.
-  state.transcriptRenderContext.onRequestUpdate = props.onRequestUpdate;
   const unfilteredItems = () =>
     buildCachedChatItems(
       { ...chatItemsInput, searchOpen: false, searchQuery: "", messageRecovery: undefined },

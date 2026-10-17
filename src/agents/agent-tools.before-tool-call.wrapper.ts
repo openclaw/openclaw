@@ -1,5 +1,4 @@
 /**
- * Wrapped before_tool_call execution boundary.
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
  */

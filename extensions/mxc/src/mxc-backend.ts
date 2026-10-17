@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
+import { isNotFoundPathError as isMissingPathError } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -96,14 +96,6 @@ function realpathForExistingPath(value: string, label: string): string {
     }
     throw err;
   }
-}
-
-// ENOTDIR means a parent component is a file, so the path can never resolve to a
-// directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
-// for unusable workdirs" contract intact instead of leaking a raw filesystem error.
-function isMissingPathError(err: unknown): boolean {
-  const code = extractErrorCode(err);
-  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 function createMxcLauncherPayload(

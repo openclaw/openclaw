@@ -267,7 +267,7 @@ async function recoverSubagentRunGatewayOwner(
           "Subagent Gateway recovery row disappeared",
         );
       }
-      return { value: true, postimages: new Map([[current.runId, structuredClone(current)]]) };
+      return { value: true, postimages: new Map([[current.runId, { ...current }]]) };
     },
     {
       gatewayRecovery: { expected, previousResolver, resolver, gateway },

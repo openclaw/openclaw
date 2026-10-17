@@ -37,7 +37,6 @@ export async function evictManagedWorktree(params: {
   reason: WorktreeEvictionReason;
   guard: WorktreeAllocationGuard;
   getConfig: () => OpenClawConfig;
-  now: () => number;
 }): Promise<WorktreeEvictionReason | "dirty-purged"> {
   return withWorktreeRunEnd(params.env, async () => {
     const { env, record, guard } = params;
@@ -229,7 +228,7 @@ export async function evictManagedWorktree(params: {
             ),
           );
           settleGuard();
-          const removedAt = params.now();
+          const removedAt = Date.now();
           await updateRegistryWorktree(
             env,
             record.id,

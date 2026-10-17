@@ -295,7 +295,6 @@ it.each([
       chatRunId: null,
       chatMessage: "Keep this draft",
       chatError: "No route-compatible authentication source is configured",
-      requestUpdate: vi.fn(),
     } as unknown as ChatPageHost;
     const invalidateSessions = vi.spyOn(state.sessions, "invalidate").mockImplementation(() => {});
     const messages = state.chatMessages;
@@ -441,7 +440,10 @@ it.each([
       type: "event",
       event: "presence",
       payload: {
-        presence: [{ instanceId: current().instanceId, user: { id: "replacement" } }],
+        reset: true,
+        version: 1,
+        keys: ["self"],
+        presence: [{ ts: 1, instanceId: current().instanceId, user: { id: "replacement" } }],
       },
     });
   } else {

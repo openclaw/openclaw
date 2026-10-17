@@ -57,7 +57,8 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync: async (agentDir?: string) =>
+    mocks.loadAuthProfileStoreWithoutExternalProfiles(agentDir),
 }));
 
 vi.mock("../../plugins/provider-auth-persistence.js", () => ({

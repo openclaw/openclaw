@@ -1477,8 +1477,9 @@ describe("agent event handler", () => {
       "terminal persistence",
     );
     expect(persistParams.sessionKey).toBe(sessionKey);
+    expect(persistParams.clientRunId).toBe(clientRunId);
     const event = requireRecord(persistParams.event, "persisted event");
-    expectRecordFields(event, { runId, clientRunId });
+    expectRecordFields(event, { runId });
     expect(requireRecord(event.data, "lifecycle data").phase).toBe("end");
     expect(h.clearTrackedActiveRun).toHaveBeenCalledWith({ runId, clientRunId, sessionKey });
     const terminalCallIndex = h.broadcastToConnIds.mock.calls.indexOf(

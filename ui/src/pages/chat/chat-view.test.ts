@@ -304,10 +304,7 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
   };
 }
 
-function createSettingsLaneHost(
-  patch: SessionPatchRoute,
-  refresh: () => Promise<void> = async () => {},
-) {
+function createSettingsLaneHost(patch: SessionPatchRoute) {
   const host = makeChatHost({
     requestHandlers: {},
     sessionKey: "main",
@@ -329,7 +326,6 @@ function createSettingsLaneHost(
     ]),
   });
   vi.spyOn(host.sessions, "patch").mockImplementation(patch);
-  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
   onTestFinished(() => host.sessions.dispose());
   return host;
 }
@@ -1645,9 +1641,8 @@ describe("per-pane chat presentation state", () => {
       const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
       const container = createComposerContainer();
       document.body.append(container);
-      const onRequestUpdate = vi.fn();
       try {
-        renderChatInto(container, { onRequestUpdate });
+        renderChatInto(container);
         const composer = getComposerTextarea(container);
         composer.focus();
         for (const key of ["f", "а"]) {
@@ -1662,7 +1657,6 @@ describe("per-pane chat presentation state", () => {
           expect(navigationEvent.defaultPrevented).toBe(false);
           expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
           expect(document.activeElement).toBe(composer);
-          onRequestUpdate.mockClear();
           const event = new KeyboardEvent("keydown", {
             key,
             code: "KeyF",
@@ -1694,7 +1688,7 @@ describe("per-pane chat presentation state", () => {
             expect(document.activeElement).toBe(composer);
             expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
           });
-          expect(onRequestUpdate).not.toHaveBeenCalled();
+          expect(getComposerTextarea(container)).toBe(composer);
         }
       } finally {
         container.remove();
@@ -1705,9 +1699,8 @@ describe("per-pane chat presentation state", () => {
   it("returns focus to the composer when the original target disappears", async () => {
     const container = createComposerContainer();
     document.body.append(container);
-    const onRequestUpdate = vi.fn();
     try {
-      renderChatInto(container, { onRequestUpdate });
+      renderChatInto(container);
       const composer = getComposerTextarea(container);
       const transientTarget = document.createElement("button");
       const chat = container.querySelector<HTMLElement>(".chat");
@@ -1744,7 +1737,7 @@ describe("per-pane chat presentation state", () => {
       );
       await waitForSolid(() => expect(document.activeElement).toBe(composer));
       expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
-      expect(onRequestUpdate).not.toHaveBeenCalled();
+      expect(getComposerTextarea(container)).toBe(composer);
     } finally {
       container.remove();
     }
@@ -2266,20 +2259,14 @@ describe("chat composer render invalidation", () => {
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
     });
-    let props = createChatProps({
+    const props = createChatProps({
       draft,
       getDraft: () => draft,
       onDraftChange,
     });
-    const onRequestUpdate = vi.fn(() => {
-      props = { ...props, draft, getDraft: () => draft };
-      renderChatPropsInto(container, props);
-    });
-    props = { ...props, onRequestUpdate };
     renderChatPropsInto(container, props);
 
     const textarea = getComposerTextarea(container);
-    onRequestUpdate.mockClear();
     vi.mocked(chatThread.buildCachedChatItems).mockClear();
 
     textarea.value = "ab";
@@ -2288,13 +2275,13 @@ describe("chat composer render invalidation", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
     expect(draft).toBe("abc");
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(getComposerTextarea(container)).toBe(textarea);
     expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
 
     textarea.value = "مرحبا";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(getComposerTextarea(container)).toBe(textarea);
     expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
     expect(textarea.dir).toBe("rtl");
 
@@ -3614,46 +3601,42 @@ describe("chat model controls", () => {
         label: "Workspace",
         authProfileId: profiles[0]!.profileId,
       };
-      const draw = () =>
-        renderModelControls(
-          state,
-          {
-            modelAuthStatusResult: status,
-            renderAccountSection: (model) =>
-              renderChatModelAccountControl({
-                owner: state,
-                client,
-                selection,
-                model,
-                modelAuthStatusResult: status,
-                disabled: false,
-                ownsSelection: () => true,
-                onSelect: vi.fn(),
-                onRequestUpdate: draw,
-              }),
-          },
-          container,
-        );
-      draw();
+      renderModelControls(
+        state,
+        {
+          modelAuthStatusResult: status,
+          renderAccountSection: (model) =>
+            renderChatModelAccountControl({
+              owner: state,
+              client,
+              selection,
+              model,
+              modelAuthStatusResult: status,
+              disabled: false,
+              ownsSelection: () => true,
+              onSelect: vi.fn(),
+            }),
+        },
+        container,
+      );
       expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
         "work@example.com · Sign in with ChatGPT",
       );
       container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      await vi.waitFor(() =>
-        expect(container.querySelectorAll("[data-chat-account-option]")).toHaveLength(count),
-      );
-      for (const [index, row] of [
-        ...container.querySelectorAll("[data-chat-account-option]"),
-      ].entries()) {
-        expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
-          profiles[index]!.displayName,
-        );
-        expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
-          profiles[index]!.email,
-        );
-        expect(row.textContent).not.toContain(profiles[index]!.profileId);
-      }
+      await vi.waitFor(() => {
+        const rows = [...container.querySelectorAll("[data-chat-account-option]")];
+        expect(rows).toHaveLength(count);
+        for (const [index, row] of rows.entries()) {
+          expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
+            profiles[index]!.displayName,
+          );
+          expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+            profiles[index]!.email,
+          );
+          expect(row.textContent).not.toContain(profiles[index]!.profileId);
+        }
+      });
     },
   );
 
@@ -4452,11 +4435,9 @@ describe("chat model controls", () => {
           await options.waitFor;
         }
         patches.push(patch);
-        return patchResult;
-      },
-      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
+        return patchResult;
       },
     );
 
@@ -5033,10 +5014,10 @@ describe("right-click Reply", () => {
         expect(document.activeElement).toBe(textarea);
         expect(textarea.value).toBe(draft);
         expect(pane.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(quote);
-        const updatesBeforeComposition = pane.onRequestUpdate.mock.calls.length;
+        const updatesBeforeComposition = pane.redraw.mock.calls.length;
         if (mode === "rerendered-live") {
           textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-          expect(pane.onRequestUpdate).toHaveBeenCalledTimes(updatesBeforeComposition);
+          expect(pane.redraw).toHaveBeenCalledTimes(updatesBeforeComposition);
         }
         const visibleDraft = mode === "rerendered-live" ? `${draft} composing` : draft;
         if (mode === "rerendered-live") {

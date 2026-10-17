@@ -1755,10 +1755,14 @@ describe("loadChatHistory retry handling", () => {
   it("refreshes history for a new pending source and coalesces unchanged receipt queries", async () => {
     const staleHistory = createDeferred<HistoryResult>();
     const currentHistory = createDeferred<HistoryResult>();
+    const currentHistoryStarted = createDeferred();
     const request = vi
       .fn()
       .mockImplementationOnce(() => staleHistory.promise)
-      .mockImplementationOnce(() => currentHistory.promise);
+      .mockImplementationOnce(() => {
+        currentHistoryStarted.resolve();
+        return currentHistory.promise;
+      });
     const state = createHistoryState(request);
 
     const firstLoad = loadChatHistory(state);
@@ -1774,19 +1778,20 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
     ]);
     expect(state.chatMessages).toEqual([pending]);
 
     staleHistory.resolve(createAssistantHistory("stale history"));
-    await firstLoad;
+    await currentHistoryStarted.promise;
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
       [
         "chat.history",
         {
           sessionKey: "main",
           ...historyBudget,
+          knownState: {},
           inputRunIds: ["same-session-pending-run"],
         },
       ],
@@ -1799,7 +1804,7 @@ describe("loadChatHistory retry handling", () => {
       seq: 1,
     });
     currentHistory.resolve({ messages: [persisted] });
-    await Promise.all([secondLoad, thirdLoad]);
+    await Promise.all([firstLoad, secondLoad, thirdLoad]);
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([persisted, pending]);

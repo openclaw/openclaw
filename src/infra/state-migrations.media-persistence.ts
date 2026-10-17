@@ -12,6 +12,7 @@ import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
+  AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
   MEDIA_ROWS_MIGRATION_META_KEY,
 } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
@@ -57,7 +58,6 @@ import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
@@ -81,6 +81,10 @@ import {
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
+import {
+  hasMediaRowsMigrationReceipt,
+  inspectPostgresMediaPersistence,
+} from "./state-migrations.media-persistence-inspection.js";
 import {
   listTranscriptArchives,
   prepareAgentDatabaseMigrationDiscovery,
@@ -112,7 +116,11 @@ async function migrateAgentDatabase(params: {
   maintenance: OpenClawStateLeaseContext;
   preparedArchives?: ReadonlySet<string>;
   migratedFromVersion?: number;
+  integrityCheck?: "quick" | "full";
 }) {
+  if (agentEngineInput()) {
+    return inspectPostgresMediaPersistence(params);
+  }
   const database = openNodeSqliteDatabase(params.pathname);
   const nativeVersionMigration = params.migratedFromVersion !== undefined && !agentEngineInput();
   const schemaWarnings: string[] = [];
@@ -120,6 +128,7 @@ async function migrateAgentDatabase(params: {
     agentId: params.agentId,
     path: params.pathname,
     env: params.env,
+    integrityCheck: params.integrityCheck,
     // Register with the admitted handle; registering after close revokes its proof.
     register: true,
     onMigrationWarning: (warning: string) => schemaWarnings.push(warning),
@@ -287,9 +296,9 @@ async function migrateAgentDatabase(params: {
     assertMediaSchemaMigration();
     const schemaMode = userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current";
     const schemaSql = getOpenClawAgentMigrationSchema(userVersion);
-    // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {
+        integrity: { check: params.integrityCheck ?? "quick" },
         validateAfterRepair: () =>
           assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode),
       });
@@ -297,15 +306,7 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-    const needsRepair =
-      mediaSchemaUpgrade ||
-      !executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("schema_meta")
-          .select("schema_version")
-          .where("meta_key", "=", MEDIA_ROWS_MIGRATION_META_KEY),
-      );
+    const needsRepair = mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
     let preserved = false;
     const beforeRewrite = () => {
@@ -338,6 +339,7 @@ async function migrateAgentDatabase(params: {
           const rewrittenTrajectoryRows = scanTrajectoryRows({
             database,
             pathname: params.pathname,
+            legacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
             beforeRewrite,
           });
           if (mediaSchemaUpgrade) {
@@ -459,11 +461,8 @@ function migrateTranscriptArchive(
   if (!transformed.changed) {
     return false;
   }
-  const encoded = encodeArchiveContent(
-    transformed.content,
-    compressed ? "zstd" : "identity",
-    filePath,
-  );
+  const codec = compressed ? "zstd" : "identity";
+  const encoded = encodeArchiveContent(transformed.content, codec, filePath);
   options.beforeReplace?.();
   replaceFileAtomicSync({
     filePath,
@@ -493,6 +492,7 @@ export async function migrateLegacyMediaPersistence(
   params: {
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+    integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     hooks?: {
       beforeArchiveReplace?: (archivePath: string) => void;
@@ -594,6 +594,7 @@ export async function migrateLegacyMediaPersistence(
               canonicalArchivePaths,
               pathname,
               maintenance,
+              integrityCheck: params.integrityCheck,
               preparedArchives: preparedDiscovery.preparedTranscriptArchives,
               migratedFromVersion: preparedDiscovery.versionMigrations?.find(
                 (migration) => migration.path === pathname,

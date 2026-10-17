@@ -178,15 +178,16 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     assert(connection);
     const proxy = await loseOneCommittedReply(connection);
     try {
-      await fixture(async ({ state, source }) => {
+      await fixture(async ({ state, source, client }) => {
+        assert(client);
         state.envVars.OPENCLAW_P36_TEST_DATABASE_URL = proxy.connection;
         state.applyEnv();
         const before = canonical(source);
         await doctorDatabasePort({ to: "postgres" });
         expect(proxy.dropped()).toBe(1);
-        expect(readBackupEngine(source).engine).toBe("postgres");
-        await doctorDatabasePort({ to: "sqlite" });
-        expect(canonical(source)).toEqual(before);
+        const anchor = readBackupEngine(source);
+        assert(anchor.engine === "postgres");
+        expect(await canonicalPostgres(client, anchor.namespace)).toEqual(before);
       }, true);
     } finally {
       await proxy.close();
