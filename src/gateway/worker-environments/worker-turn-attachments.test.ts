@@ -169,4 +169,37 @@ describe("cloud attachment transfer confinement", () => {
     expect(note).toContain(directory);
     expect(await readFile(path.join(remote, directory!, "1-original.pdf"))).toEqual(bytes);
   });
+
+  it("keeps the transfer deadline monotonic and integral when the wall clock rewinds", async () => {
+    const { remote, execute, input } = await fixture();
+    let perfReads = 0;
+    const performanceNowSpy = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => (perfReads++ === 0 ? 500 : 500.25));
+    let wallClockReads = 0;
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (wallClockReads++ === 0 ? 500 : 500 - 90_000));
+    const capturedTimeoutMs: number[] = [];
+    const runWorkspaceCommand = vi.fn(async (command: WorkerWorkspaceCommand) => {
+      capturedTimeoutMs.push(command.timeoutMs ?? -1);
+      return execute(command);
+    });
+    try {
+      await prepareWorkerTurnAttachments({
+        turn: input,
+        remoteWorkspaceDir: remote,
+        tunnel: { runWorkspaceCommand },
+        assertCurrent: () => {},
+      });
+      expect(capturedTimeoutMs.length).toBeGreaterThan(0);
+      for (const timeoutMs of capturedTimeoutMs) {
+        expect(Number.isSafeInteger(timeoutMs)).toBe(true);
+        expect(timeoutMs).toBe(4999);
+      }
+    } finally {
+      performanceNowSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+  });
 });
