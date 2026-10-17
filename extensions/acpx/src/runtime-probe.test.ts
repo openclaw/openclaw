@@ -8,10 +8,12 @@ import {
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
 import type { AcpxProcessSystemFixture } from "./process-reaper.test-support.js";
+import { createTestGate } from "./runtime-process.test-support.js";
 import {
   CODEX_ACP_WRAPPER_COMMAND,
   makeEmptySessionStore,
   makeLeaseStore,
+  makeLeasedRuntime,
   makeRuntime,
   makeTurn,
   observeLaunch,
@@ -22,22 +24,10 @@ import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 function makeProbeRuntime(
   leases: ReturnType<typeof makeLeaseStore>,
   cleanup?: AcpxProcessSystemFixture,
-  command: AcpxAgentCommand = CODEX_ACP_WRAPPER_COMMAND,
-  wrapperRoot = "/tmp/openclaw/acpx",
+  command?: AcpxAgentCommand,
+  wrapperRoot?: string,
 ) {
-  return makeRuntime(
-    makeEmptySessionStore(),
-    {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leases.store,
-      openclawWrapperRoot: wrapperRoot,
-      agentRegistry: {
-        resolve: (agent) => (agent === "codex" ? command : agent),
-        list: () => ["codex"],
-      },
-    },
-    { openclawProcessCleanup: cleanup },
-  );
+  return makeLeasedRuntime(makeEmptySessionStore(), leases, cleanup, command, wrapperRoot);
 }
 
 function observeProbe(
@@ -51,9 +41,10 @@ function observeProbe(
   });
 }
 
-it.each([false, true])(
-  "leases before spawn and cleans up a wrapper probe (live root: %s)",
-  async (liveRoot) => {
+it.each(["portable", "live-root", "uncertain"])(
+  "leases before spawn and preserves cleanup evidence (%s)",
+  async (scenario) => {
+    const liveRoot = scenario === "live-root";
     const events: string[] = [];
     const leaseStore = makeLeaseStore();
     leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
@@ -79,41 +70,54 @@ it.each([false, true])(
         },
         sleep: async () => {},
       },
-      liveRoot
-        ? CODEX_ACP_WRAPPER_COMMAND
-        : [
+      scenario === "portable"
+        ? [
             String.raw`C:\Program Files\node.exe`,
             String.raw`C:\OpenClaw State\acpx\codex-acp-wrapper.mjs`,
-          ],
-      liveRoot ? "/tmp/openclaw/acpx" : String.raw`C:\OpenClaw State\acpx`,
+          ]
+        : CODEX_ACP_WRAPPER_COMMAND,
+      scenario === "portable" ? String.raw`C:\OpenClaw State\acpx` : "/tmp/openclaw/acpx",
     );
     observeProbe(fixture, (command) => {
       events.push("probe-entered");
       launchedCommand = renderAgentCommand(command);
+      if (scenario === "uncertain") {
+        throw new Error("probe launch state unknown");
+      }
     });
 
-    await fixture.runtime.doctor();
+    if (scenario === "uncertain") {
+      await expect(fixture.runtime.doctor()).rejects.toThrow("probe launch state unknown");
+    } else {
+      await fixture.runtime.doctor();
+    }
 
     if (liveRoot) {
       expect(killed.slice(0, 2)).toEqual([
         { pid: 711, signal: "SIGTERM" },
         { pid: 710, signal: "SIGTERM" },
       ]);
-    } else {
+    } else if (scenario === "portable") {
       expect(events).toEqual(["lease-saved", "probe-entered", "process-inspected"]);
+    }
+    if (!liveRoot) {
       expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
     }
     expect(launchedCommand).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
     expect(launchedCommand).toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`);
     expect(Array.from(leaseStore.leases.values())).toEqual([
-      expect.objectContaining({ rootPid: 0, state: "open" }),
+      expect.objectContaining({
+        rootPid: 0,
+        state: "open",
+        gatewayInstanceId: "gateway-test",
+        sessionKey: "openclaw:acpx:probe",
+      }),
     ]);
   },
 );
 
 it("settles each diagnostic probe cleanup before starting the next probe", async () => {
-  const firstEntered = createDeferred<void>();
-  const releaseFirst = createDeferred<void>();
+  const firstProbe = createTestGate();
   const events: string[] = [];
   const { runtime, probe } = makeProbeRuntime(makeLeaseStore(), {
     listProcesses: vi.fn(async () => {
@@ -123,8 +127,7 @@ it("settles each diagnostic probe cleanup before starting the next probe", async
   });
   probe.mockImplementationOnce(async () => {
     events.push("first-started");
-    firstEntered.resolve();
-    await releaseFirst.promise;
+    await firstProbe.hold();
     return { ok: true, message: "ready" };
   });
   probe.mockImplementation(async () => {
@@ -132,9 +135,9 @@ it("settles each diagnostic probe cleanup before starting the next probe", async
     return { ok: true, message: "ready" };
   });
   const first = runtime.doctor();
-  await firstEntered.promise;
+  await firstProbe.entered;
   const second = runtime.doctor();
-  releaseFirst.resolve();
+  firstProbe.release();
   await Promise.all([first, second]);
   expect(events).toEqual(["first-started", "cleanup", "second-started", "cleanup"]);
 });
@@ -223,25 +226,4 @@ it("coalesces repeated probe uncertainty before it can evict a live lease", asyn
   expect(leaseStore.leases.has("lease-live")).toBe(true);
   expect(leaseStore.leases.size).toBe(2);
   expect(probeLeaseIds.size).toBe(1);
-});
-
-it("leases generated-wrapper doctor probes and keeps uncertain failures open", async () => {
-  const leaseStore = makeLeaseStore();
-  const fixture = makeProbeRuntime(leaseStore);
-  observeProbe(fixture, (command) => {
-    expect(command).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
-    throw new Error("probe launch state unknown");
-  });
-
-  await expect(fixture.runtime.doctor()).rejects.toThrow("probe launch state unknown");
-
-  expect(Array.from(leaseStore.leases.values())).toEqual([
-    expect.objectContaining({
-      gatewayInstanceId: "gateway-test",
-      rootPid: 0,
-      sessionKey: "openclaw:acpx:probe",
-      state: "open",
-    }),
-  ]);
-  expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
 });

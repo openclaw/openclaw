@@ -119,13 +119,15 @@ export function ownerRuntimeOptions(
   };
 }
 
-export async function copyNodeExecutable(destination: string) {
+export async function copyNodeExecutable(root: string, name: string) {
+  const destination = path.join(root, process.platform === "win32" ? `${name}.exe` : name);
   // Symlinks preserve executable-relative libraries (including Homebrew's libnode).
   if (process.platform === "win32") {
     await fs.copyFile(process.execPath, destination);
   } else {
     await fs.symlink(process.execPath, destination);
   }
+  return destination;
 }
 
 export async function promptJson(

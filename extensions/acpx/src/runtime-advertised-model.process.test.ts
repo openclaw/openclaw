@@ -1,4 +1,3 @@
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore, type AcpProcessStarted } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -14,27 +13,23 @@ import { AcpxRuntime } from "./runtime.js";
 
 const script = fileURLToPath(new URL("../test/fixtures/model-catalog-agent.mjs", import.meta.url));
 
-function modelRequest(name: string, model: string) {
+function modelRequest(name: string, model?: string) {
   return {
-    sessionKey: `agent:main:acp:${name}`,
+    sessionKey: `agent:main:acp:catalog-${name}`,
     agent: "catalog",
     mode: "persistent" as const,
-    model,
-    modelExplicit: true,
+    ...(model ? { model, modelExplicit: true } : {}),
   };
 }
 
 const select = (runtime: AcpxRuntime, handle: RuntimeHandle, value: string) =>
   runtime.setConfigOption({ handle, key: "model", value });
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const expectModel = async (
+  runtime: AcpxRuntime,
+  handle: RuntimeHandle,
+  text: string,
+  model: string,
+) => expect(await prompt(runtime, handle, text)).toMatchObject({ model });
 
 async function withRuntime(
   run: (
@@ -55,11 +50,7 @@ async function withRuntime(
     async (state) => {
       let executable = process.execPath;
       if (cursor) {
-        executable = path.join(
-          state.root,
-          process.platform === "win32" ? "cursor-agent.exe" : "cursor-agent",
-        );
-        await copyNodeExecutable(executable);
+        executable = await copyNodeExecutable(state.root, "cursor-agent");
       }
       return {
         agentRegistry: createAgentRegistry({ overrides: { catalog: [executable, script] } }),
@@ -81,49 +72,37 @@ async function withRuntime(
   );
 }
 
-it("selects the unique advertised id for an explicit model ref", async () => {
+it("selects advertised ids for explicit refs and model changes", async () => {
   await withRuntime(async (runtime) => {
-    const handle = await runtime.ensureSession(
-      modelRequest("catalog-explicit", "cursor/composer-2.5"),
-    );
+    const handle = await runtime.ensureSession(modelRequest("explicit", "cursor/composer-2.5"));
     expect(handle.appliedModel).toBeUndefined();
     expect(await runtime.getStatus({ handle })).toMatchObject({
       models: { currentModelId: "composer-2.5[fast=true]" },
     });
     await select(runtime, handle, "cursor/composer-2.5");
-    expect(await prompt(runtime, handle, "first")).toMatchObject({
-      model: "composer-2.5[fast=true]",
-    });
+    await expectModel(runtime, handle, "first", "composer-2.5[fast=true]");
     const accepted = await select(runtime, handle, "xai/grok-4.5");
-    expect(accepted).toMatchObject({
-      configOptions: expect.arrayContaining([
-        expect.objectContaining({
-          id: "model",
-          currentValue: "grok-4.5[effort=high,fast=true]",
-        }),
-      ]),
-    });
-    expect(await prompt(runtime, handle, "changed")).toMatchObject({
-      model: "grok-4.5[effort=high,fast=true]",
-    });
+    expect(accepted?.configOptions).toContainEqual(
+      expect.objectContaining({
+        id: "model",
+        currentValue: "grok-4.5[effort=high,fast=true]",
+      }),
+    );
+    await expectModel(runtime, handle, "changed", "grok-4.5[effort=high,fast=true]");
   });
 });
 
-it("rejects an ambiguous model before trying a provider-stripped reference", async () => {
+it("rejects ambiguity before stripping the provider", async () => {
   await withRuntime(async (runtime) => {
     await expect(
-      runtime.ensureSession(modelRequest("catalog-missing", "vendor/ambiguous")),
+      runtime.ensureSession(modelRequest("missing", "vendor/ambiguous")),
     ).rejects.toMatchObject({ code: "ACP_MODEL_UNSUPPORTED" });
   });
 });
 
-it("rejects a model that becomes ambiguous on reconnect and preserves the conversation", async () => {
+it("preserves history when reconnect makes a model ambiguous", async () => {
   await withRuntime(async (runtime, _spawned, restart) => {
-    const input = {
-      sessionKey: "agent:main:acp:catalog-reconnect",
-      agent: "catalog",
-      mode: "persistent" as const,
-    };
+    const input = modelRequest("reconnect");
     const original = await runtime.ensureSession(input);
     expect(await prompt(runtime, original, "before")).toMatchObject({ history: ["before"] });
     await runtime.shutdown();
@@ -143,38 +122,32 @@ it("rejects a model that becomes ambiguous on reconnect and preserves the conver
   });
 });
 
-it("cleans up failed selections and keeps rejecting same-key retries after restart", async ({
-  signal,
-}) => {
+it("cleans failed selections across same-key retries and restart", async ({ signal }) => {
   await withRuntime(async (runtime, spawned, restart) => {
-    const input = modelRequest("catalog-retry", "provider/locked-1");
+    const input = modelRequest("retry", "provider/locked-1");
     await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
     expect(spawned).toHaveLength(2);
     await withinTest(Promise.all(spawned.map(({ exited }) => exited)), signal);
-    expect(spawned.filter(({ pid }) => isAlive(pid))).toEqual([]);
+    for (const { pid } of spawned) {
+      expect(() => process.kill(pid, 0)).toThrow();
+    }
     await expect(runtime.ensureSession(input)).rejects.toThrow(/not available on this plan/);
     await runtime.shutdown();
     await expect(restart().ensureSession(input)).rejects.toThrow(/not available on this plan/);
   });
 });
 
-it("preserves an advertised slash id before considering a provider-stripped reference", async () => {
+it("prefers advertised slash ids to provider-stripped refs", async () => {
   await withRuntime(async (runtime) => {
-    const handle = await runtime.ensureSession(
-      modelRequest("catalog-native-id", "vendor/native-model"),
-    );
-    expect(await prompt(runtime, handle, "startup")).toMatchObject({
-      model: "vendor/native-model",
-    });
+    const handle = await runtime.ensureSession(modelRequest("native-id", "vendor/native-model"));
+    await expectModel(runtime, handle, "startup", "vendor/native-model");
     await select(runtime, handle, "native-model");
     await select(runtime, handle, "vendor/native-model");
-    expect(await prompt(runtime, handle, "control")).toMatchObject({
-      model: "vendor/native-model",
-    });
+    await expectModel(runtime, handle, "control", "vendor/native-model");
   });
 });
 
-it("does not interpret another harness's opaque ids as Cursor aliases", async () => {
+it("keeps non-Cursor harness ids opaque", async () => {
   await withRuntime(async (runtime) => {
     await expect(
       runtime.ensureSession(modelRequest("generic-alias", "composer-2.5")),
@@ -185,8 +158,6 @@ it("does not interpret another harness's opaque ids as Cursor aliases", async ()
     await expect(select(runtime, handle, "grok-4.5")).rejects.toMatchObject({
       reason: "unadvertised-model",
     });
-    expect(await prompt(runtime, handle, "exact")).toMatchObject({
-      model: "composer-2.5[fast=true]",
-    });
+    await expectModel(runtime, handle, "exact", "composer-2.5[fast=true]");
   }, false);
 });

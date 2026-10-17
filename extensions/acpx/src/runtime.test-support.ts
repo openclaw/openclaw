@@ -191,14 +191,21 @@ export function makeLeaseStore() {
 export function makeLeasedRuntime(
   baseStore: TestSessionStore,
   leases: ReturnType<typeof makeLeaseStore>,
+  cleanup?: AcpxProcessSystemFixture,
+  command: AcpxAgentCommand = CODEX_ACP_WRAPPER_COMMAND,
+  wrapperRoot = "/tmp/openclaw/acpx",
 ) {
-  return makeRuntime(baseStore, {
-    openclawGatewayInstanceId: "gateway-test",
-    openclawProcessLeaseStore: leases.store,
-    openclawWrapperRoot: "/tmp/openclaw/acpx",
-    agentRegistry: {
-      resolve: (agent) => (agent === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agent),
-      list: () => ["codex"],
+  return makeRuntime(
+    baseStore,
+    {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leases.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agent) => (agent === "codex" ? command : agent),
+        list: () => ["codex"],
+      },
     },
-  });
+    { openclawProcessCleanup: cleanup },
+  );
 }

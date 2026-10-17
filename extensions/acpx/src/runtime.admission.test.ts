@@ -1,11 +1,8 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { promisify } from "node:util";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   RequestedModelUnsupportedError,
-  createFileSessionStore,
   type AcpSessionStore,
 } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -13,12 +10,13 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   createHeldCall,
   createTestGate,
   ownerRuntimeOptions,
+  promptJson,
+  withProcessRuntime,
 } from "./runtime-process.test-support.js";
 import { acpxOperationScope } from "./runtime-session-store.js";
 import { admissionRetentionEntrypoint } from "./runtime.admission-retention-entrypoint.test-support.js";
@@ -30,33 +28,20 @@ import {
   makeEmptySessionStore,
 } from "./runtime.test-support.js";
 
-type RuntimeOptions = ConstructorParameters<typeof AcpxRuntime>[0];
 type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
 const admissionTarget = { sessionKey: "admission-project", agentId: "main" };
 const admissionInput = { ...admissionTarget, agent: "fixture", mode: "persistent" as const };
 
 afterEach(() => vi.restoreAllMocks());
 
-async function withFixture(
-  run: (options: RuntimeOptions, store: AcpSessionStore) => Promise<void>,
-) {
-  await withOpenClawTestState({ label: "acpx-admission" }, async (state) => {
-    const directory = path.join(state.root, "peer");
-    await fs.mkdir(directory);
-    const store = createFileSessionStore({ stateDir: state.root });
-    await run(
-      ownerRuntimeOptions(state.root, {
-        sessionStore: store,
-        openclawToolsMcpBridgeEnabled: true,
-        mcpServers: [{ name: "openclaw-tools", command: process.execPath, args: [], env: [] }],
-      }),
-      store,
-    );
+function withFixture(run: Parameters<typeof withProcessRuntime>[1]) {
+  return withProcessRuntime("acpx-admission", run, {
+    openclawToolsMcpBridgeEnabled: true,
+    mcpServers: [{ name: "openclaw-tools", command: process.execPath, args: [], env: [] }],
   });
 }
 
-async function persistedHandle(options: RuntimeOptions) {
-  const runtime = new AcpxRuntime(options);
+async function persistedHandle(runtime: AcpxRuntime) {
   try {
     return await runtime.ensureSession(admissionInput);
   } finally {
@@ -64,33 +49,14 @@ async function persistedHandle(options: RuntimeOptions) {
   }
 }
 
-async function readContext(runtime: AcpxRuntime, handle: RuntimeHandle): Promise<unknown> {
-  const turn = runtime.startTurn({
-    handle,
-    text: "show context",
-    mode: "prompt",
-    requestId: "admission-proof",
-  });
-  const events = (async () => {
-    let text = "";
-    for await (const event of turn.events) {
-      if (event.type === "text_delta") {
-        text += event.text;
-      }
-    }
-    return text;
-  })();
-  const [result, text] = await Promise.all([turn.result, events]);
-  expect(result).toMatchObject({ status: "completed" });
-  return JSON.parse(text);
-}
+const readContext = (runtime: AcpxRuntime, handle: RuntimeHandle): Promise<unknown> =>
+  promptJson(runtime, handle, "show context", "admission-proof");
 
 it("preserves a queued same-key admission when its predecessor fails", async () => {
-  await withFixture(async (options) => {
+  await withFixture(async ({ create }) => {
     const launch = createTestGate();
     const generationIds: number[] = [];
-    const runtime = new AcpxRuntime({
-      ...options,
+    const runtime = create({
       processLifecycle: {
         onBeforeSpawn: async () => {
           const generation = acpxOperationScope.getStore()?.generation;
@@ -128,18 +94,16 @@ it("preserves a queued same-key admission when its predecessor fails", async () 
       });
     } finally {
       await launch.settle(first, second);
-      await runtime.shutdown();
     }
   });
 }, 25_000);
 
 it("retains captured stored-record custody when admission later fails", async () => {
-  await withFixture(async (options, store) => {
-    const existing = await persistedHandle(options);
+  await withFixture(async ({ runtime: initial, create, store }) => {
+    const existing = await persistedHandle(initial);
     const generationIds: number[] = [];
     let loads = 0;
-    const runtime = new AcpxRuntime({
-      ...options,
+    const runtime = create({
       sessionStore: {
         load: async (key) => {
           const generation = acpxOperationScope.getStore()?.generation;
@@ -154,31 +118,24 @@ it("retains captured stored-record custody when admission later fails", async ()
         save: (record) => store.save(record),
       },
     });
-    try {
-      await expect(runtime.ensureSession(admissionInput)).rejects.toThrow(
-        "SDK record lookup failed",
-      );
-      const handle = await runtime.ensureSession(admissionInput);
-      expect(generationIds.length).toBeGreaterThanOrEqual(4);
-      expect(new Set(generationIds).size).toBe(1);
-      expect(handle.backendSessionId).toBe(existing.backendSessionId);
-      expect(await readContext(runtime, handle)).toMatchObject({
-        sessionId: existing.backendSessionId,
-      });
-    } finally {
-      await runtime.shutdown();
-    }
+    await expect(runtime.ensureSession(admissionInput)).rejects.toThrow("SDK record lookup failed");
+    const handle = await runtime.ensureSession(admissionInput);
+    expect(generationIds.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(generationIds).size).toBe(1);
+    expect(handle.backendSessionId).toBe(existing.backendSessionId);
+    expect(await readContext(runtime, handle)).toMatchObject({
+      sessionId: existing.backendSessionId,
+    });
   });
 }, 25_000);
 
 it("retains failed private-runtime cleanup for service shutdown", async () => {
-  await withFixture(async (options) => {
+  await withFixture(async ({ create }) => {
     const cleanupAttempted = createDeferred<void>();
     const cleanupError = new Error("private runtime cleanup uncertain");
     let shutdown: MockInstance<() => Promise<void>> | undefined;
     let firstCleanup: Promise<void> | undefined;
-    const runtime = new AcpxRuntime({
-      ...options,
+    const runtime = create({
       processLifecycle: {
         onBeforeSpawn: async () => {
           const generation = acpxOperationScope.getStore()?.generation;
@@ -195,39 +152,35 @@ it("retains failed private-runtime cleanup for service shutdown", async () => {
         },
       },
     });
-    try {
-      await runtime.prepareFreshSession(admissionTarget);
-      await expect(runtime.ensureSession(admissionInput)).rejects.toThrow(
-        "launch failed before admission",
-      );
-      await cleanupAttempted.promise;
-      await expect(firstCleanup).rejects.toBe(cleanupError);
-      expect(shutdown).toHaveBeenCalledOnce();
-      await runtime.shutdown();
-      expect(shutdown).toHaveBeenCalledTimes(2);
-    } finally {
-      await runtime.shutdown();
-    }
+    await runtime.prepareFreshSession(admissionTarget);
+    await expect(runtime.ensureSession(admissionInput)).rejects.toThrow(
+      "launch failed before admission",
+    );
+    await cleanupAttempted.promise;
+    await expect(firstCleanup).rejects.toBe(cleanupError);
+    expect(shutdown).toHaveBeenCalledOnce();
+    await runtime.shutdown();
+    expect(shutdown).toHaveBeenCalledTimes(2);
   });
 }, 25_000);
 
 it("keeps a pending persisted-handle config snapshot through a failed ensure", async () => {
-  await withFixture(async (options, store) => {
-    const handle = await persistedHandle(options);
+  await withFixture(async ({ runtime: initial, create, store, state }) => {
+    const handle = await persistedHandle(initial);
+    const registry = ownerRuntimeOptions(state.root).agentRegistry;
     const snapshot = createHeldCall(store.load.bind(store));
     let holdFirstRead = true;
     let failAdmission = false;
-    const runtime = new AcpxRuntime({
-      ...options,
+    const runtime = create({
       agentRegistry: {
         resolve: (agent) => {
           if (failAdmission && agent === admissionInput.agent) {
             failAdmission = false;
             throw new Error("concurrent admission preparation failed");
           }
-          return options.agentRegistry.resolve(agent);
+          return registry.resolve(agent);
         },
-        list: () => options.agentRegistry.list(),
+        list: () => registry.list(),
       },
       sessionStore: {
         load: async (key) => {
@@ -256,7 +209,6 @@ it("keeps a pending persisted-handle config snapshot through a failed ensure", a
       });
     } finally {
       await snapshot.settle(operation);
-      await runtime.shutdown();
     }
   });
 }, 25_000);
@@ -312,6 +264,14 @@ async function ensureFresh(
   } finally {
     create.mockRestore();
   }
+}
+
+async function resetRuntime(id: string) {
+  const fixture = makeManagedRuntime();
+  const previous = await fixture.ensure();
+  const original = Reflect.get(fixture.runtime, "delegate") as BaseAcpxRuntime;
+  await fixture.runtime.prepareFreshSession(fixture.target);
+  return { ...fixture, original, ...(await ensureFresh(fixture, previous, id)) };
 }
 
 describe("AcpxRuntime reset generation custody", () => {
@@ -424,11 +384,8 @@ describe("AcpxRuntime reset generation custody", () => {
   });
 
   it("keeps successor persistence when overlapping post-reset closes settle", async () => {
-    const fixture = makeManagedRuntime();
-    const { runtime, target, baseStore, ensure } = fixture;
-    let handle = await ensure();
-    await runtime.prepareFreshSession(target);
-    handle = (await ensureFresh(fixture, handle, "prior-reset-session")).handle;
+    const fixture = await resetRuntime("prior-reset-session");
+    const { runtime, target, baseStore, handle } = fixture;
     const save = createHeldCall(baseStore.save.getMockImplementation()!);
     baseStore.save.mockImplementationOnce(save.call);
     const firstClose = runtime.close({ handle, reason: "older close" });
@@ -455,16 +412,13 @@ describe("AcpxRuntime reset generation custody", () => {
     }
   });
   it("keeps ordinary close and reopen off the blocked pre-reset runtime", async () => {
-    const fixture = makeManagedRuntime();
-    const { runtime, target, ensure } = fixture;
-    const handle = await ensure();
-    const original = Reflect.get(runtime, "delegate") as BaseAcpxRuntime;
-    await runtime.prepareFreshSession(target);
-    const { handle: successor, delegate: successorRuntime } = await ensureFresh(
-      fixture,
-      handle,
-      "isolated-successor",
-    );
+    const {
+      runtime,
+      ensure,
+      original,
+      handle: successor,
+      delegate: successorRuntime,
+    } = await resetRuntime("isolated-successor");
     const shutdown = vi.spyOn(successorRuntime, "shutdown");
     const blocked = vi
       .spyOn(original, "ensureSession")
@@ -512,11 +466,11 @@ describe("AcpxRuntime reset generation custody", () => {
   });
 
   it("waits for every post-reset runtime during service shutdown and rejects new work", async () => {
-    const fixture = makeManagedRuntime();
-    const { runtime, target, ensure } = fixture;
-    const handle = await ensure();
-    await runtime.prepareFreshSession(target);
-    const { delegate: successorRuntime } = await ensureFresh(fixture, handle, "shutdown-successor");
+    const {
+      runtime,
+      ensure,
+      delegate: successorRuntime,
+    } = await resetRuntime("shutdown-successor");
     const successorShutdown = createTestGate();
     const shutdown = vi
       .spyOn(BaseAcpxRuntime.prototype, "shutdown")
