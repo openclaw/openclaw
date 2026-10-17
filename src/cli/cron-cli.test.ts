@@ -103,6 +103,9 @@ async function add(...args: string[]): Promise<CronJobCreate> {
 async function namedAdd(...args: string[]): Promise<CronJobCreate> {
   return add(...ADD.slice(2), ...args);
 }
+const addOptions = (options: Record<string, string | true>, ...positionals: string[]) =>
+  add(...positionals, ...flags(options));
+const editOptions = (options: Record<string, string | true>) => edit(...flags(options));
 
 async function edit(...args: string[]): Promise<CronJobPatch> {
   await runCronCommand([...EDIT, ...args]);
@@ -473,10 +476,8 @@ describe("cron cli", () => {
   });
 
   it("creates a configured agent job from a positional cron schedule and prompt", async () => {
-    const params = await add(
-      "0 2 * * *",
-      "hello",
-      ...flags({
+    const params = await addOptions(
+      {
         "--name": "job",
         "--agent": " Ops ",
         "--session": "SESSION:agent:ops:telegram:group:-100123:topic:42",
@@ -492,7 +493,9 @@ describe("cron cli", () => {
         "--to": "-100123",
         "--thread-id": " 42 ",
         "--account": "  coordinator  ",
-      }),
+      },
+      "0 2 * * *",
+      "hello",
     );
     expect(params).toMatchObject({
       name: "job",
@@ -539,15 +542,14 @@ describe("cron cli", () => {
   it("creates a one-shot webhook system event with an explicit keep policy", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
-    const params = await add(
+    const params = await addOptions(
+      {
+        "--at": "+30m",
+        "--system-event": "hi",
+        "--webhook": " https://example.invalid/openclaw ",
+        "--keep-after-run": true,
+      },
       "Reminder",
-      "--at",
-      "+30m",
-      "--system-event",
-      "hi",
-      "--webhook",
-      " https://example.invalid/openclaw ",
-      "--keep-after-run",
     );
     expect(params).toMatchObject({
       name: "Reminder",
@@ -581,13 +583,12 @@ describe("cron cli", () => {
     const argv = process.argv;
     const args = [
       ...CREATE,
-      "--at",
-      "+3m",
-      "--session",
-      "current",
-      "--system-event",
-      "resume",
-      "--json",
+      ...flags({
+        "--at": "+3m",
+        "--session": "current",
+        "--system-event": "resume",
+        "--json": true,
+      }),
     ];
     process.argv = [...argv.slice(0, 2), ...args];
     try {
@@ -616,20 +617,18 @@ describe("cron cli", () => {
   });
 
   it("creates a shell command with limits and environment overrides", async () => {
-    const params = await add(
-      ...flags({
-        "--name": "job",
-        "--every": "10m",
-        "--command": "echo ok",
-        "--command-cwd": "/srv/app",
-        "--command-env": "FOO=bar",
-        "--timeout-seconds": "0",
-        "--no-output-timeout-seconds": "5",
-        "--output-max-bytes": "4096",
-        "--tools": "read write",
-        "--no-deliver": true,
-      }),
-    );
+    const params = await addOptions({
+      "--name": "job",
+      "--every": "10m",
+      "--command": "echo ok",
+      "--command-cwd": "/srv/app",
+      "--command-env": "FOO=bar",
+      "--timeout-seconds": "0",
+      "--no-output-timeout-seconds": "5",
+      "--output-max-bytes": "4096",
+      "--tools": "read write",
+      "--no-deliver": true,
+    });
     expect(params).toMatchObject({
       sessionTarget: "isolated",
       delivery: { mode: "none" },
@@ -649,19 +648,17 @@ describe("cron cli", () => {
 
   it("creates stream schedules from exact argv flags", async () => {
     expect(
-      await add(
-        ...flags({
-          "--name": "events",
-          "--stream-command": '["node","events.mjs"]',
-          "--stream-cwd": "/srv/app",
-          "--stream-mode": "match",
-          "--stream-match": "^ready:",
-          "--stream-batch-ms": "100",
-          "--stream-max-batch-bytes": "2048",
-          "--message": "handle events",
-          "--session": "isolated",
-        }),
-      ),
+      await addOptions({
+        "--name": "events",
+        "--stream-command": '["node","events.mjs"]',
+        "--stream-cwd": "/srv/app",
+        "--stream-mode": "match",
+        "--stream-match": "^ready:",
+        "--stream-batch-ms": "100",
+        "--stream-max-batch-bytes": "2048",
+        "--message": "handle events",
+        "--session": "isolated",
+      }),
     ).toHaveProperty("schedule", {
       kind: "stream",
       command: ["node", "events.mjs"],
@@ -674,17 +671,15 @@ describe("cron cli", () => {
   });
 
   it("updates configured agent payload fields", async () => {
-    const patch = await edit(
-      ...flags({
-        "--message": "hello",
-        "--model": "  opus  ",
-        "--thinking": "  high  ",
-        "--fallbacks": "openrouter/gpt-4.1-mini,openai/gpt-5",
-        "--tools": "exec read write",
-        "--light-context": true,
-        "--timeout-seconds": "0",
-      }),
-    );
+    const patch = await editOptions({
+      "--message": "hello",
+      "--model": "  opus  ",
+      "--thinking": "  high  ",
+      "--fallbacks": "openrouter/gpt-4.1-mini,openai/gpt-5",
+      "--tools": "exec read write",
+      "--light-context": true,
+      "--timeout-seconds": "0",
+    });
     expect(patch.payload).toEqual({
       kind: "agentTurn",
       message: "hello",
@@ -698,107 +693,87 @@ describe("cron cli", () => {
     expect(patch).not.toHaveProperty("delivery");
   });
 
-  it("sets and clears agent routing", async () => {
-    expect(await edit("--agent", " Ops ", "--session", "SESSION:Project-Alpha")).toEqual({
-      agentId: "ops",
-      sessionTarget: "session:Project-Alpha",
-    });
-    expect(await edit("--clear-agent")).toEqual({ agentId: null });
-  });
-
-  it("retargets Telegram delivery without replacing the payload", async () => {
-    expect(
-      await edit(
-        ...flags({
-          "--deliver": true,
-          "--channel": "telegram",
-          "--to": "-100123",
-          "--thread-id": "42",
-          "--account": "  coordinator  ",
-        }),
-      ),
-    ).toEqual({
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "-100123",
-        threadId: 42,
-        accountId: "coordinator",
-      },
-    });
-  });
-
   it.each([
-    { args: ["--no-deliver"], delivery: { mode: "none" } },
-    {
-      args: ["--webhook", " https://example.invalid/cron ", "--best-effort-deliver"],
-      delivery: { mode: "webhook", to: "https://example.invalid/cron", bestEffort: true },
-    },
-  ])("edits only requested delivery fields for $args", async ({ args, delivery }) => {
-    expect(await edit(...args)).toEqual({ delivery });
-  });
-
-  it("implies announcement when enabling best-effort on a message edit", async () => {
-    expect(await edit("--message", "hello", "--best-effort-deliver")).toEqual({
-      payload: { kind: "agentTurn", message: "hello" },
-      delivery: { mode: "announce", bestEffort: true },
-    });
-  });
-
-  it("patches failure-alert settings", async () => {
-    expect(
-      await edit(
-        ...flags({
-          "--failure-alert-after": "3",
-          "--failure-alert-cooldown": "1h",
-          "--failure-alert-channel": "telegram",
-          "--failure-alert-to": "19098680",
-          "--failure-alert-mode": "webhook",
-          "--failure-alert-account-id": "bot-a",
-          "--failure-alert-include-skipped": true,
-        }),
-      ),
-    ).toEqual({
-      failureAlert: {
-        after: 3,
-        cooldownMs: 3_600_000,
-        channel: "telegram",
-        to: "19098680",
-        mode: "webhook",
-        accountId: "bot-a",
-        includeSkipped: true,
+    [
+      "sets agent routing",
+      ["--agent", " Ops ", "--session", "SESSION:Project-Alpha"],
+      { agentId: "ops", sessionTarget: "session:Project-Alpha" },
+    ],
+    ["clears agent routing", ["--clear-agent"], { agentId: null }],
+    [
+      "retargets Telegram delivery without replacing the payload",
+      flags({
+        "--deliver": true,
+        "--channel": "telegram",
+        "--to": "-100123",
+        "--thread-id": "42",
+        "--account": "  coordinator  ",
+      }),
+      {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-100123",
+          threadId: 42,
+          accountId: "coordinator",
+        },
       },
-    });
-  });
-
-  it("disables failure alerts", async () => {
-    expect(await edit("--no-failure-alert")).toEqual({ failureAlert: false });
+    ],
+    ["disables delivery", ["--no-deliver"], { delivery: { mode: "none" } }],
+    [
+      "sets webhook delivery",
+      ["--webhook", " https://example.invalid/cron ", "--best-effort-deliver"],
+      { delivery: { mode: "webhook", to: "https://example.invalid/cron", bestEffort: true } },
+    ],
+    [
+      "implies announcement when enabling best-effort on a message edit",
+      ["--message", "hello", "--best-effort-deliver"],
+      {
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "announce", bestEffort: true },
+      },
+    ],
+    [
+      "patches failure-alert settings",
+      flags({
+        "--failure-alert-after": "3",
+        "--failure-alert-cooldown": "1h",
+        "--failure-alert-channel": "telegram",
+        "--failure-alert-to": "19098680",
+        "--failure-alert-mode": "webhook",
+        "--failure-alert-account-id": "bot-a",
+        "--failure-alert-include-skipped": true,
+      }),
+      {
+        failureAlert: {
+          after: 3,
+          cooldownMs: 3_600_000,
+          channel: "telegram",
+          to: "19098680",
+          mode: "webhook",
+          accountId: "bot-a",
+          includeSkipped: true,
+        },
+      },
+    ],
+    ["disables failure alerts", ["--no-failure-alert"], { failureAlert: false }],
+    [
+      "converts to a zoned one-shot with keep-after-run",
+      ["--at", "+002027-01-15T12:00:00", "--tz", "America/New_York", "--keep-after-run"],
+      { schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" }, deleteAfterRun: false },
+    ],
+  ] satisfies Array<[string, string[], CronJobPatch]>)("%s", async (_name, args, expected) => {
+    expect(await edit(...args)).toEqual(expected);
   });
 
   it("normalizes offset one-shot creation independently of timezone", async () => {
-    const params = await add(
-      ...flags({
-        "--name": "job",
-        "--at": "+002027-01-15T12:00:00+02:00",
-        "--message": "hello",
-        "--tz": "America/New_York",
-      }),
-    );
-    expect(params.schedule).toEqual({ kind: "at", at: "2027-01-15T10:00:00.000Z" });
-  });
-
-  it("converts to a zoned one-shot with keep-after-run", async () => {
-    const patch = await edit(
-      ...flags({
-        "--at": "+002027-01-15T12:00:00",
-        "--tz": "America/New_York",
-        "--keep-after-run": true,
-      }),
-    );
-    expect(patch).toEqual({
-      schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" },
-      deleteAfterRun: false,
+    const params = await addOptions({
+      "--name": "job",
+      "--at": "+002027-01-15T12:00:00+02:00",
+      "--message": "hello",
+      "--tz": "America/New_York",
     });
+    expect(params.schedule).toEqual({ kind: "at", at: "2027-01-15T10:00:00.000Z" });
   });
 
   it("replaces a cron expression and stagger while retaining its timezone", async () => {
