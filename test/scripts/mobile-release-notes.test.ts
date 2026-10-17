@@ -160,8 +160,9 @@ describe("generated mobile store notes", () => {
       expect(request.input.length).toBeLessThan(60_000);
       const inventory: { files: Array<{ id: string; file: string; summary?: unknown }> } =
         JSON.parse(request.input);
-      expect(inventory.files).not.toContainEqual(expect.objectContaining({ file: generatedFile }));
-      expect(inventory.files).not.toContainEqual(expect.objectContaining({ file: uiTestFile }));
+      for (const file of [generatedFile, uiTestFile]) {
+        expect(inventory.files).not.toContainEqual(expect.objectContaining({ file }));
+      }
       const localization = inventory.files.find((entry) => entry.file === localizationFile);
       expect(localization?.summary).toBeDefined();
       expect(JSON.stringify(localization)).toContain("es");
@@ -196,11 +197,10 @@ describe("generated mobile store notes", () => {
       (entry: { kind?: string }) => entry.kind !== "context",
     );
     expect(evidence).toMatchObject([labelEvidence(f.file), { file: watchFile }]);
-    expect(saved.entries[0]).toMatchObject({
-      text: `- ${claim.text}`,
-      baseline: { sourceSha: f.base },
+    expect(saved).toMatchObject({
+      entries: [{ text: `- ${claim.text}`, baseline: { sourceSha: f.base } }],
+      promptVersion: 3,
     });
-    expect(saved.promptVersion).toBe(3);
     const historical = { ...saved, promptVersion: 2 };
     saveNotes(f, historical);
     const historicalBytes = readNotes(f);

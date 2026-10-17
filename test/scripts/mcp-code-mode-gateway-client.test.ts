@@ -442,7 +442,10 @@ describe("MCP code-mode current-attempt completion proof", () => {
             },
           },
     );
-  const rawResult = (flags: Record<string, boolean | undefined>[], snapshotError: boolean) => ({
+  const rawResult = (
+    flags: readonly Record<string, boolean | undefined>[],
+    snapshotError: boolean,
+  ) => ({
     ...requests([result])[0],
     toolOutputStructuredError: snapshotError,
     body: {
@@ -677,19 +680,13 @@ describe("MCP code-mode current-attempt completion proof", () => {
   });
 
   it.each([
-    { name: "snake-case error", flags: [{ is_error: true }], expected: "no matched successful" },
-    { name: "camel-case error", flags: [{ isError: true }], expected: "no matched successful" },
-    {
-      name: "error then success",
-      flags: [{ is_error: true }, { is_error: false }],
-      expected: "conflicting code-mode call evidence",
-    },
-    {
-      name: "success then error",
-      flags: [{ is_error: false }, { is_error: true }],
-      expected: "conflicting code-mode call evidence",
-    },
-  ])("retains each raw provider output's $name", ({ flags, expected }) => {
+    ["snake-case error", [{ is_error: true }]],
+    ["camel-case error", [{ isError: true }]],
+    ["error then success", [{ is_error: true }, { is_error: false }]],
+    ["success then error", [{ is_error: false }, { is_error: true }]],
+  ] as const)("retains each raw provider output's %s", (_name, flags) => {
+    const expected =
+      flags.length === 1 ? "no matched successful" : "conflicting code-mode call evidence";
     rejectProvider([...requests([exec]), rawResult(flags, false)], expected);
   });
 

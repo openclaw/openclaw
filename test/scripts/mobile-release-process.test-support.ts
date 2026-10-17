@@ -45,18 +45,22 @@ async function withNativeBoundedFixture(
   let restoreSignalObserver: (() => void) | undefined;
   let pendingStop: Promise<void> | undefined;
 
-  const inspectGroup = () => {
-    if (groupRetired || !child?.pid) {
-      return;
-    }
+  const groupAbsent = (pid: number, toleratePermission = false) => {
     try {
-      originalKill(-child.pid, 0);
+      originalKill(-pid, 0);
     } catch (error) {
       if (hasErrnoCode(error, "ESRCH")) {
         groupRetired = true;
-      } else if (!hasErrnoCode(error, "EPERM")) {
+        return true;
+      } else if (!toleratePermission || !hasErrnoCode(error, "EPERM")) {
         throw error;
       }
+    }
+    return false;
+  };
+  const inspectGroup = () => {
+    if (!groupRetired && child?.pid) {
+      groupAbsent(child.pid, true);
     }
   };
 
@@ -210,24 +214,15 @@ async function withNativeBoundedFixture(
           fs.writeFileSync(gate, "exit\n");
         },
         assertGroupAbsent: () => {
-          try {
-            originalKill(-pid, 0);
-          } catch (error) {
-            if (hasErrnoCode(error, "ESRCH")) {
-              groupRetired = true;
-              return;
-            }
-            throw error;
+          if (!groupAbsent(pid)) {
+            throw new Error("Native fixture group still exists");
           }
-          throw new Error("Native fixture group still exists");
         },
       };
-      verification = lifetime.track(
-        Promise.resolve().then(() => {
-          signal.throwIfAborted();
-          return verify(fixture);
-        }),
-      );
+      verification = lifetime.run(async () => {
+        signal.throwIfAborted();
+        await verify(fixture);
+      });
       await verification;
     } finally {
       await stop();
