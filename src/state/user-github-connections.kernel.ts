@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   PersonalGitHubStateError,
@@ -10,7 +8,6 @@ import {
   writePersonalGitHubSecret,
 } from "../secrets/store/secret-store-hidden-github.kernel.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type { DB } from "./openclaw-state-db.generated.js";
 import { stageUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
   userGitHubConnectionSchema,
@@ -19,8 +16,6 @@ import {
   type UserGitHubTokenPair,
 } from "./user-github-connections.types.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
-import type { UserProfilesDatabase } from "./user-profiles.types.js";
-import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 function publishAfterCommit(
   db: EngineConnection,
@@ -104,55 +99,6 @@ export function readCanonicalUserGitHubConnectionInDatabase(
   const owner = resolvePersonalGitHubOwnerInDatabase(profile, db);
   return owner ? { owner, connection: readConnection(db, owner) } : undefined;
 }
-
-function listUserGitHubConnections(db: EngineConnection): Array<{
-  owner: string;
-  connection: UserGitHubConnection;
-}> {
-  if (!tableExists(db, "secret_store_entries") || !tableExists(db, "user_profiles")) {
-    return [];
-  }
-  const query = getNodeSqliteKysely<
-    Pick<DB, "secret_store_entries"> & Pick<UserProfilesDatabase, "user_profiles">
-  >(db);
-  return executeSqliteQuerySync(
-    db,
-    query
-      .selectFrom("secret_store_entries")
-      .innerJoin("user_profiles", "user_profiles.id", "secret_store_entries.scope_id")
-      .select(["scope_id", "value"])
-      .where("scope_kind", "=", "identity")
-      .where("name", "=", "github-connection")
-      .where("kind", "=", "secret")
-      .where("allowed_hosts", "is", null)
-      .where("deleted_at_ms", "is", null)
-      .where("merged_into", "is", null)
-      .orderBy("scope_id"),
-  ).rows.flatMap((row) => {
-    try {
-      return [{ owner: row.scope_id, connection: parseUserGitHubConnection(row.value) }];
-    } catch {
-      return [];
-    }
-  });
-}
-
-export const userGitHubConnectionReadOperations = {
-  "userGitHubConnections.read": ({ owner }: { owner: string }, db) => ({
-    type: "userGitHubConnections.read" as const,
-    connection: runSqliteReadSnapshotSync(db, () => readUserGitHubConnectionInDatabase(db, owner)),
-  }),
-  "userGitHubConnections.readCanonical": ({ profile }: { profile: string }, db) => ({
-    type: "userGitHubConnections.readCanonical" as const,
-    canonical: runSqliteReadSnapshotSync(db, () =>
-      readCanonicalUserGitHubConnectionInDatabase(db, profile),
-    ),
-  }),
-  "userGitHubConnections.list": (_input: undefined, db) => ({
-    type: "userGitHubConnections.list" as const,
-    connections: listUserGitHubConnections(db),
-  }),
-} satisfies WorkerOperationHandlers<EngineConnection>;
 
 export function writeUserGitHubConnectionInDatabase(
   db: EngineConnection,
