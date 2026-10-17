@@ -48,8 +48,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   }),
   runCommandWithTimeout: transport.command,
 }));
-// Native Doctor delegation has real-child coverage. Keep this suite focused on
-// the real in-process plugin/config owners, with both Doctor transports inert.
+// Doctor transports are inert; plugin/config persistence and executor custody are real.
 vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
   inspectUpdateDoctorChildSupport: async () => true,
@@ -134,7 +133,6 @@ it.each([
       let runAtPublication: ReturnType<typeof getUpdateRun>;
       const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {
         // The CLI terminal owner publishes only after the real executor closes.
-        expect(assertOriginalCurrent).toBeDefined();
         expect(assertOriginalCurrent).toThrow();
         runAtPublication = getUpdateRun(created.runId, { env: state.env });
       });
@@ -151,15 +149,15 @@ it.each([
         throw new Error("Unexpected external command");
       });
 
-      // Restore an authored setting dropped during core update. Both snapshots are real;
-      // this forces the plugin commit without a package fetch or fake convergence result.
+      // Real snapshots restore a dropped channel, forcing a plugin commit without a fetch.
       const authoredChannels = { telegram: { enabled: false } };
       await state.writeConfig({ plugins: { enabled: false }, channels: authoredChannels });
       let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
       const currentConfig = { plugins: { enabled: false } };
       await state.writeConfig(currentConfig);
       await seedInstalledPluginIndex({}, { config: currentConfig, env: state.env });
-      const originalConfig = await fs.readFile(state.configPath, "utf8");
+      const readConfig = () => fs.readFile(state.configPath, "utf8");
+      const originalConfig = await readConfig();
       const diagnosticPath = await state.writeText(
         "retained-diagnostic.json",
         "retained diagnostic\n",
@@ -174,6 +172,7 @@ it.each([
         [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
       };
       let created = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const readRun = (runId = created.runId) => getUpdateRun(runId, { env: state.env });
       let preUpdatePluginInstallRecords = {};
       const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
       let indexAtConvergence: ReturnType<typeof readIndex>;
@@ -186,7 +185,6 @@ it.each([
       const npmUpdates = vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins");
       const phase = vi.spyOn(postCoreResume, "convergePostCoreUpdatePlugins");
       const delegate = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
-      let convergenceReached = false;
       let recovering = false;
       let configAtRegistryRead: string | undefined;
       let registryRefusal: unknown;
@@ -200,8 +198,7 @@ it.each([
       };
       const execution = () =>
         withUpdateCommandExecutor(created.runId, async (executor) => {
-          // Revocation uses the real direct-owner release API. No synthetic assertCurrent
-          // or plugin lease substitutes for the native executor's ownership check.
+          // Revoke the real executor, never a synthetic plugin lease.
           const fence = await executor.enter(state.root, { preflight: true });
           run.executorFence = fence;
           assertOriginalCurrent = fence.assertCurrent;
@@ -235,7 +232,7 @@ it.each([
                     unlink(file);
                     if (file === peerLink) {
                       indexAtConvergence = readIndex();
-                      runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+                      runAtConvergence = readRun();
                       releaseUpdateCommandPreflightForHandoff(fence);
                     }
                   })
@@ -245,7 +242,7 @@ it.each([
               fence.assertCurrent();
               otherFence.assertCurrent();
               indexAtConvergence = readIndex();
-              runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+              runAtConvergence = readRun();
               if (scenario === "index-revoked" || scenario === "cohort-revoked") {
                 releaseUpdateCommandPreflightForHandoff(fence);
               }
@@ -264,9 +261,9 @@ it.each([
                       ...io,
                       readConfigFileSnapshot: async () => {
                         const snapshot = await io.readConfigFileSnapshot();
-                        configAtRegistryRead = await fs.readFile(state.configPath, "utf8");
+                        configAtRegistryRead = await readConfig();
                         indexAtConvergence = readIndex();
-                        runAtConvergence = getUpdateRun(created.runId, { env: state.env });
+                        runAtConvergence = readRun();
                         releaseUpdateCommandPreflightForHandoff(fence);
                         return snapshot;
                       },
@@ -294,7 +291,6 @@ it.each([
             }
             vi.spyOn(convergence, "runPostCorePluginConvergence").mockImplementationOnce(
               async (input) => {
-                convergenceReached = true;
                 const result = await converge(input);
                 if (!cohortScenario) {
                   revokeAtBoundary();
@@ -323,9 +319,8 @@ it.each([
               completed = await finishUpdate(params, { candidateRuntime });
             } catch (cause) {
               refused = cause;
-              // Refusal cannot rewrite history before terminal settlement. The later
-              // terminal row is diagnostic publication, not renewed mutation authority.
-              expect(getUpdateRun(created.runId, { env: state.env })).toEqual(runAtConvergence);
+              // Terminal publication grants no new mutation authority or earlier history writes.
+              expect(readRun()).toEqual(runAtConvergence);
               expect(json).not.toHaveBeenCalled();
               throw cause;
             } finally {
@@ -353,9 +348,7 @@ it.each([
           status: "ok",
           postUpdate: { plugins: { changed: true, status: "ok", warnings: [] } },
         });
-        expect(JSON.parse(await fs.readFile(state.configPath, "utf8")).channels).toEqual(
-          authoredChannels,
-        );
+        expect(JSON.parse(await readConfig()).channels).toEqual(authoredChannels);
         expect(readIndex()).not.toEqual(indexAtConvergence);
         expect(runAtPublication?.status).toBe("succeeded");
         expect(configBoundaryReached).toBe(true);
@@ -366,11 +359,10 @@ it.each([
         expect(refused).toMatchObject({
           result: { status: "error" },
         });
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(
+        expect(await readConfig()).toBe(
           scenario === "registry-revoked" ? configAtRegistryRead : originalConfig,
         );
-        // A tentative commit is not permission to compensate after its caller is revoked.
-        // Both refusal paths preserve the exact row, including its revision.
+        // A revoked caller cannot compensate even a tentative commit; preserve its exact row.
         if (scenario === "config-revoked") {
           expect(indexAtRevocation).toBeDefined();
           expect(readIndex()).toEqual(indexAtRevocation);
@@ -383,8 +375,7 @@ it.each([
           expect(configAtRegistryRead).toBeDefined();
           expect(refused).toBe(registryRefusal);
         }
-        const reported = json.mock.calls[0]?.[0];
-        expect(reported).toMatchObject({
+        expect(json.mock.calls[0]?.[0]).toMatchObject({
           status: "error",
           reason: "update-executor-settlement-failed",
           steps: [
@@ -410,11 +401,10 @@ it.each([
       }
       if (cohortScenario) {
         expect(npmUpdates).not.toHaveBeenCalled();
-        expect(convergenceReached).toBe(false);
+        expect(convergence.runPostCorePluginConvergence).not.toHaveBeenCalled();
       }
       expect(indexAtConvergence).toBeDefined();
-      expect(runAtPublication).toBeDefined();
-      expect(getUpdateRun(created.runId, { env: state.env })).toEqual(runAtPublication);
+      expect(readRun()).toEqual(runAtPublication);
       expect(await fs.readFile(diagnosticPath, "utf8")).toBe("retained diagnostic\n");
       expect(transport.command).not.toHaveBeenCalled();
       expect(json.mock.calls).toHaveLength(1);
@@ -433,7 +423,7 @@ it.each([
         refused = undefined;
         await finishWithTerminal();
         expect(firstAssertCurrent).toThrow();
-        expect(getUpdateRun(firstRunId, { env: state.env })?.status).toBe("failed");
+        expect(readRun(firstRunId)?.status).toBe("failed");
         expect(created.runId).not.toBe(firstRunId);
         expect(refused).toBeUndefined();
         expect(completed).toMatchObject({ status: "ok" });

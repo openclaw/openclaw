@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
@@ -54,12 +54,27 @@ import { updateCommand } from "./update-command.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
 const dirs = new Set<string>();
+function quietRuntime() {
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+}
 afterEach(() => cleanupTempDirs(dirs));
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+function expectNoCalls(...mocks: Mock[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+const pendingRecovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+function expectPendingReport(fields: Record<string, unknown>) {
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({ ...fields, recovery: pendingRecovery }),
+  );
+}
 
 function materialSnapshot(root: string) {
   return fs
@@ -89,7 +104,6 @@ function pendingPackageInvocation(
     alias?: boolean;
     existingRun?: boolean;
     profile?: string;
-    readOnlyConfig?: boolean;
   } = {},
 ) {
   if (params.serviceDrift) {
@@ -128,7 +142,7 @@ function pendingPackageInvocation(
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_PROFILE", params.profile);
-  vi.stubEnv("OPENCLAW_CONFIG_READONLY", params.readOnlyConfig ? "1" : undefined);
+  vi.stubEnv("OPENCLAW_CONFIG_READONLY", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
   vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metaPath);
   if (params.existingRun) {
@@ -146,38 +160,21 @@ function pendingPackageInvocation(
   const service = createMockGatewayService({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
+    readCommand: async () =>
+      params.serviceDrift
+        ? {
+            programArguments: [
+              process.execPath,
+              path.join(serviceRoot, "dist", "entry.js"),
+              "gateway",
+            ],
+          }
+        : null,
   });
-  const readCommand = vi.fn(async () =>
-    params.serviceDrift
-      ? {
-          programArguments: [
-            process.execPath,
-            path.join(serviceRoot, "dist", "entry.js"),
-            "gateway",
-          ],
-        }
-      : null,
-  );
-  vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({ ...service, readCommand });
+  vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
   vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  const stateWrite = vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath");
-  const configWrite = vi.spyOn(config, "assertConfigWriteAllowedInCurrentMode");
-  const createRun = vi.spyOn(ledger, "createUpdateRun");
-  const adoptRun = vi.spyOn(ledger, "adoptUpdateRun");
-  const finishRun = vi.spyOn(ledger, "finishUpdateRun");
-  const disableAutoStart = vi
-    .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
-    .mockResolvedValue(false);
+  quietRuntime();
   const runTriage = vi.fn(async () => ({ status: "cancelled" as const }));
-  const prepareTriage = vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage);
-  const writeTriage = vi.spyOn(failureArtifacts, "writeTriageUpdateFailure");
-  const cleanupHandoffs = vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs");
-  const loadPlugins = vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords");
-  const resumePostCore = vi
-    .spyOn(updateResume, "resumePostCoreUpdate")
-    .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence"));
-  vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   const addPending = (root = params.serviceDrift ? serviceRoot : source) => {
     const anchor = resolvePackageActivationAnchor(root);
     fs.mkdirSync(anchor, { mode: 0o700 });
@@ -192,25 +189,28 @@ function pendingPackageInvocation(
     state,
     source,
     serviceRoot,
-    runId: process.env.OPENCLAW_UPDATE_RUN_ID,
     restore() {
       vi.unstubAllEnvs();
       identity.restore();
     },
     addPending,
     writers: {
-      stateWrite,
-      configWrite,
-      createRun,
-      adoptRun,
-      finishRun,
-      disableAutoStart,
-      prepareTriage,
-      writeTriage,
+      stateWrite: vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath"),
+      configWrite: vi.spyOn(config, "assertConfigWriteAllowedInCurrentMode"),
+      createRun: vi.spyOn(ledger, "createUpdateRun"),
+      adoptRun: vi.spyOn(ledger, "adoptUpdateRun"),
+      finishRun: vi.spyOn(ledger, "finishUpdateRun"),
+      disableAutoStart: vi
+        .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
+        .mockResolvedValue(false),
+      prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
+      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
       runTriage,
-      cleanupHandoffs,
-      loadPlugins,
-      resumePostCore,
+      cleanupHandoffs: vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs"),
+      loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
+      resumePostCore: vi
+        .spyOn(updateResume, "resumePostCoreUpdate")
+        .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence")),
       manager,
     },
   };
@@ -235,20 +235,15 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       f.addPending();
       const before = materialSnapshot(f.home);
       await expect(updateCommand(opts)).rejects.toMatchObject({ code: 1 });
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "error",
-          reason: "update-recovery-pending",
-          ...(params.serviceDrift ? { root: f.serviceRoot } : {}),
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        }),
-      );
+      expectPendingReport({
+        status: "error",
+        reason: "update-recovery-pending",
+        ...(params.serviceDrift ? { root: f.serviceRoot } : {}),
+      });
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringMatching(/recovery artifacts|publication recovery/i),
       );
-      for (const writer of Object.values(f.writers)) {
-        expect(writer).not.toHaveBeenCalled();
-      }
+      expectNoCalls(...Object.values(f.writers));
       expect(materialSnapshot(f.home)).toEqual(before);
     } finally {
       f.restore();
@@ -318,20 +313,21 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           expect(f.writers.createRun).not.toHaveBeenCalled();
           expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
         }
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({
-            status: "error",
-            reason: "update-recovery-pending",
-            root: serviceDrift ? f.serviceRoot : f.source,
-            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          }),
+        expectPendingReport({
+          status: "error",
+          reason: "update-recovery-pending",
+          root: serviceDrift ? f.serviceRoot : f.source,
+        });
+        const { disableAutoStart, cleanupHandoffs, loadPlugins, writeTriage, runTriage } =
+          f.writers;
+        expectNoCalls(
+          metadata,
+          disableAutoStart,
+          cleanupHandoffs,
+          loadPlugins,
+          writeTriage,
+          runTriage,
         );
-        expect(metadata).not.toHaveBeenCalled();
-        expect(f.writers.disableAutoStart).not.toHaveBeenCalled();
-        expect(f.writers.cleanupHandoffs).not.toHaveBeenCalled();
-        expect(f.writers.loadPlugins).not.toHaveBeenCalled();
-        expect(f.writers.writeTriage).not.toHaveBeenCalled();
-        expect(f.writers.runTriage).not.toHaveBeenCalled();
         expect(retainedMaterial()).toEqual(before);
         if (record) {
           // Pending reporting must retain an already-admitted attempt.
@@ -417,8 +413,7 @@ describe("pending recovery finalizer", () => {
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
       .mockRejectedValue(new Error("ordinary maintenance reached root discovery"));
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    quietRuntime();
     await expect(
       withOwnedManagedUpdateEnv(
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
@@ -449,10 +444,7 @@ describe("pending recovery finalizer", () => {
     });
     expect(fs.existsSync(f.file)).toBe(false);
     expect(fs.readFileSync(f.displaced)).toEqual(before);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.complete).not.toHaveBeenCalled();
-    expect(f.windows.restore).not.toHaveBeenCalled();
-    expect(f.windows.complete).not.toHaveBeenCalled();
+    expectNoCalls(f.rollback, f.complete, f.windows.restore, f.windows.complete);
   });
   it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
@@ -485,8 +477,7 @@ describe("pending recovery finalizer", () => {
         },
         failureResult: primary,
       };
-      vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+      quietRuntime();
       const result = withUpdateFailureTriage({ ...f.opts, json: true }, target, () =>
         withUpdateCommandRecoveryUnwind(
           { ...f.opts, run },
@@ -505,13 +496,10 @@ describe("pending recovery finalizer", () => {
         ),
       );
       await expect(result).rejects.toMatchObject({ code: 1 });
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: "candidate-failed",
-          runId: run.runId,
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        }),
-      );
+      expectPendingReport({
+        reason: "candidate-failed",
+        runId: run.runId,
+      });
       expect(fs.existsSync(f.file)).toBe(false);
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
@@ -521,8 +509,7 @@ describe("pending recovery finalizer", () => {
       } else {
         expect(f.windows.complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
       }
-      expect(f.rollback).not.toHaveBeenCalled();
-      expect(f.complete).not.toHaveBeenCalled();
+      expectNoCalls(f.rollback, f.complete);
     },
   );
 });
@@ -594,87 +581,65 @@ it("settles interrupted Windows suspension without touching pending databases af
   }
 });
 
-describe("migrated-runtime unwind", () => {
-  it("preserves newer canonical state after failed handoff", async () => {
+it.each([
+  { confirmed: true, failed: true },
+  { confirmed: false, failed: false },
+  { confirmed: false, failed: true },
+])(
+  "preserves migrated state on unwind (confirmed=$confirmed, failed=$failed)",
+  async ({ confirmed, failed }) => {
     const root = fs.realpathSync(makeTempDir(dirs, "migrated-unwind-"));
     const env = { HOME: root, OPENCLAW_STATE_DIR: root };
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
     closeOpenClawStateDatabaseForTest();
     const file = path.join(root, "state", "openclaw.sqlite");
-    const db = new DatabaseSync(file);
-    try {
-      const row = db.prepare("PRAGMA user_version").get();
-      db.exec(`PRAGMA user_version=${Number(row?.user_version) + 1}`);
-    } finally {
-      db.close();
+    if (confirmed) {
+      const db = new DatabaseSync(file);
+      try {
+        const row = db.prepare("PRAGMA user_version").get();
+        db.exec(`PRAGMA user_version=${Number(row?.user_version) + 1}`);
+      } finally {
+        db.close();
+      }
     }
     const before = fs.readFileSync(file);
     const windows = taskRecovery();
-    const failure = new UpdateCommandFailure(
-      resultFixture(undefined, {
-        status: "error",
-        runId: run.runId,
-        reason: "new-runtime-failed",
-        durationMs: 1,
-      }),
-    );
+    const primary = resultFixture(undefined, {
+      status: "error",
+      runId: run.runId,
+      reason: confirmed ? "new-runtime-failed" : "candidate-failed",
+      durationMs: 1,
+    });
+    const cause = confirmed
+      ? new UpdateCommandFailure(primary)
+      : new Error("candidate finalizer unavailable");
     const completion = withUpdateCommandRecoveryUnwind(
       { run },
       {
         ledgerHandoffOwned: true,
-        ledgerHandoffCompleted: true,
-        triageTarget: { env },
+        ...(confirmed ? { ledgerHandoffCompleted: true } : {}),
+        triageTarget: { env, ...(confirmed ? {} : { failureResult: primary }) },
         windowsTaskAutoStartRecovery: windows,
       },
       async () => {
-        throw failure;
+        if (failed) {
+          throw cause;
+        }
       },
     );
-    await expect(completion).rejects.toBe(failure);
-    expect(windows.restore).toHaveBeenCalledOnce();
-    expect(windows.complete).toHaveBeenCalledOnce();
-    expect(fs.readFileSync(file)).toEqual(before);
-  });
-});
-
-it.each([false, true])(
-  "leaves an unconfirmed migrated handoff pending (failure=%s)",
-  async (failed) => {
-    const root = fs.realpathSync(makeTempDir(dirs, "unconfirmed-handoff-"));
-    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    closeOpenClawStateDatabaseForTest();
-    const file = path.join(root, "state", "openclaw.sqlite");
-    const before = fs.readFileSync(file);
-    const windows = taskRecovery();
-    const cause = new Error("candidate finalizer unavailable");
-    const primary = resultFixture(undefined, {
-      status: "error",
-      runId: run.runId,
-      reason: "candidate-failed",
-      durationMs: 1,
-    });
-    await expect(
-      withUpdateCommandRecoveryUnwind(
-        { run },
-        {
-          ledgerHandoffOwned: true,
-          triageTarget: { env, failureResult: primary },
-          windowsTaskAutoStartRecovery: windows,
-        },
-        async () => {
-          if (failed) {
-            throw cause;
-          }
-        },
-      ),
-    ).rejects.toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
-      ...(failed ? { cause } : {}),
-    });
-    expect(windows.restore).not.toHaveBeenCalled();
-    expect(windows.complete).toHaveBeenCalledExactlyOnceWith(false);
+    if (confirmed) {
+      await expect(completion).rejects.toBe(cause);
+      expect(windows.restore).toHaveBeenCalledOnce();
+      expect(windows.complete).toHaveBeenCalledOnce();
+    } else {
+      await expect(completion).rejects.toMatchObject({
+        name: "UpdateCommandPendingRecoveryFailure",
+        result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
+        ...(failed ? { cause } : {}),
+      });
+      expect(windows.restore).not.toHaveBeenCalled();
+      expect(windows.complete).toHaveBeenCalledExactlyOnceWith(false);
+    }
     expect(fs.readFileSync(file)).toEqual(before);
   },
 );

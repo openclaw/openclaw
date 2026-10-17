@@ -49,9 +49,9 @@ function revoke() {
     db.close();
   }
 }
-function owned(operation: (fence: UpdateRecoveryFence) => Promise<void>) {
+function owned(operation: (args: ReturnType<typeof serviceArgs>) => Promise<unknown>) {
   return withUpdateCommandExecutor(randomUUID(), async (executor) =>
-    operation(await executor.enter(root)),
+    operation(serviceArgs(await executor.enter(root))),
   );
 }
 function serviceArgs(fence: UpdateRecoveryFence) {
@@ -61,7 +61,7 @@ function serviceArgs(fence: UpdateRecoveryFence) {
     assertCurrent: () => fence.assertCurrent(),
   };
 }
-function expectRevoked(operation: (fence: UpdateRecoveryFence) => Promise<void>) {
+function expectRevoked(operation: Parameters<typeof owned>[0]) {
   return expect(owned(operation)).rejects.toThrow(/executor|ownership/i);
 }
 function mockSystemd(scope: "user" | "system" = "user", inspect = async () => {}) {
@@ -87,38 +87,35 @@ function mockLaunchctl(
   return calls;
 }
 
-it.each(["user", "system"] as const)(
-  "refuses systemd %s start after scope inspection revokes its real executor",
-  async (scope) => {
-    mockSystemd(scope, async () => {
-      await Promise.resolve();
-      revoke();
+it.each(["user", "system", "reset-failed"] as const)(
+  "refuses systemd start after %s revokes its real executor",
+  async (at) => {
+    mockSystemd(at === "system" ? "system" : "user", async () => {
+      if (at !== "reset-failed") {
+        await Promise.resolve();
+        revoke();
+      }
     });
-    vi.spyOn(process, "geteuid").mockReturnValue(0);
+    if (at !== "reset-failed") {
+      vi.spyOn(process, "geteuid").mockReturnValue(0);
+    }
     const native = vi.spyOn(systemdExec, "execSystemctl").mockResolvedValue(success);
-    const user = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
-    await expectRevoked(async (fence) => startSystemdService(serviceArgs(fence)));
+    const calls: string[] = [];
+    vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async (_env, args) => {
+      calls.push(args[0]!);
+      if (args[0] === "reset-failed") {
+        await Promise.resolve();
+        revoke();
+      }
+      return success;
+    });
+    await expectRevoked(startSystemdService);
     expect(native).not.toHaveBeenCalled();
-    expect(user).not.toHaveBeenCalled();
+    expect(calls).toEqual(at === "reset-failed" ? ["reset-failed"] : []);
   },
 );
 
-it("refuses systemd start after reset-failed revokes its real executor", async () => {
-  mockSystemd();
-  const calls: string[] = [];
-  vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async (_env, args) => {
-    calls.push(args[0]!);
-    if (args[0] === "reset-failed") {
-      await Promise.resolve();
-      revoke();
-    }
-    return success;
-  });
-  await expectRevoked(async (fence) => startSystemdService(serviceArgs(fence)));
-  expect(calls).toEqual(["reset-failed"]);
-});
-
-it.each(["inspection", "enable", "not-loaded"])(
+it.each(["inspection", "enable", "not-loaded", "bootstrap"])(
   "refuses launchd start after %s revokes its real executor",
   async (at) => {
     vi.spyOn(launchdSystem, "assertNoSystemLaunchDaemonOwnership").mockImplementation(async () => {
@@ -129,7 +126,7 @@ it.each(["inspection", "enable", "not-loaded"])(
     });
     const calls = mockLaunchctl(async (command) => {
       await Promise.resolve();
-      if (at === "enable" && command === "enable") {
+      if ((at === "enable" || at === "bootstrap") && command === "enable") {
         revoke();
       }
       if (at === "not-loaded" && command === "kickstart") {
@@ -138,30 +135,23 @@ it.each(["inspection", "enable", "not-loaded"])(
       }
       return success;
     });
-    await expectRevoked(async (fence) => startLaunchAgent(serviceArgs(fence)));
+    await expectRevoked(
+      at === "bootstrap"
+        ? ({ assertCurrent }) =>
+            bootstrapLaunchAgentOrThrow({
+              domain: "gui/501",
+              serviceTarget: "gui/501/test",
+              plistPath: path.join(root, "gateway.plist"),
+              actionHint: "test",
+              assertCurrent,
+            })
+        : startLaunchAgent,
+    );
     expect(calls).toEqual(
-      at === "inspection" ? [] : at === "enable" ? ["enable"] : ["enable", "kickstart"],
+      at === "inspection" ? [] : at === "not-loaded" ? ["enable", "kickstart"] : ["enable"],
     );
   },
 );
-
-it("refuses bootstrap after enable revokes the real executor", async () => {
-  const calls = mockLaunchctl(async () => {
-    await Promise.resolve();
-    revoke();
-    return success;
-  });
-  await expectRevoked(async (fence) => {
-    await bootstrapLaunchAgentOrThrow({
-      domain: "gui/501",
-      serviceTarget: "gui/501/test",
-      plistPath: path.join(root, "gateway.plist"),
-      actionHint: "test",
-      assertCurrent: () => fence.assertCurrent(),
-    });
-  });
-  expect(calls).toEqual(["enable"]);
-});
 
 it("preserves separately restored launchd enable policy across bootstrap", async () => {
   vi.spyOn(launchdSystem, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue();
@@ -170,9 +160,7 @@ it("preserves separately restored launchd enable policy across bootstrap", async
       ? { ...success, code: 1, stderr: "Could not find service" }
       : success;
   });
-  await owned(async (fence) =>
-    startLaunchAgent({ ...serviceArgs(fence), preserveAutoStart: true }),
-  );
+  await owned((args) => startLaunchAgent({ ...args, preserveAutoStart: true }));
   expect(calls).toEqual(["kickstart", "print-disabled", "bootstrap", "kickstart"]);
 });
 
@@ -185,24 +173,21 @@ it("refuses task start after registration inspection revokes its real executor",
   });
   vi.spyOn(taskRuntime, "readScheduledTaskRuntime").mockResolvedValue({ status: "running" });
   const native = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(success);
-  await expectRevoked(async (fence) => startScheduledTask(serviceArgs(fence)));
+  await expectRevoked(startScheduledTask);
   expect(native).not.toHaveBeenCalled();
 });
 
 it("refuses task enable after preparation revokes its real executor", async () => {
   const native = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(success);
-  await expectRevoked(async (fence) => {
-    await resumeScheduledTaskAutoStartAfterUpdate(
-      { HOME: root },
-      {
-        beforeMutation: async () => {
-          await Promise.resolve();
-          revoke();
-        },
-        assertCurrent: () => fence.assertCurrent(),
+  await expectRevoked(({ env, assertCurrent }) =>
+    resumeScheduledTaskAutoStartAfterUpdate(env, {
+      beforeMutation: async () => {
+        await Promise.resolve();
+        revoke();
       },
-    );
-  });
+      assertCurrent,
+    }),
+  );
   expect(native).not.toHaveBeenCalled();
 });
 
@@ -213,10 +198,8 @@ it("refuses login-item spawn when command inspection revokes the real executor",
     return { programArguments: [process.execPath, "gateway-test.js"] };
   });
 
-  await expectRevoked(async (fence) =>
-    taskRuntime.startStartupEntry({ HOME: root }, new PassThrough(), undefined, () =>
-      fence.assertCurrent(),
-    ),
+  await expectRevoked(({ env, stdout, assertCurrent }) =>
+    taskRuntime.startStartupEntry(env, stdout, undefined, assertCurrent),
   );
   expect(nativeSpawn).not.toHaveBeenCalled();
 });
@@ -227,7 +210,7 @@ it("refuses login-item fallback for the captured registered task", async () => {
   const start = vi.spyOn(taskRuntime, "startStartupEntry").mockResolvedValue();
   const native = vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(success);
   await expect(
-    owned(async (fence) => startScheduledTask({ ...serviceArgs(fence), preserveAutoStart: true })),
+    owned((args) => startScheduledTask({ ...args, preserveAutoStart: true })),
   ).rejects.toThrow("Captured Scheduled Task registration");
   expect(start).not.toHaveBeenCalled();
   expect(native).not.toHaveBeenCalled();

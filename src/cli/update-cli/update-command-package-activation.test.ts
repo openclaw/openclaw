@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import {
-  resolvePackageActivationHelper,
-  resolvePackageActivationJournalPath,
-} from "../../infra/package-update-activation-journal.js";
+import { resolvePackageActivationHelper } from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
 import {
   readPackageActivationReceipt,
@@ -100,24 +97,29 @@ function writeRunnablePackage(root: string, entry = 'import "./dist/index.js";\n
     }),
   );
 }
+async function publication(phase: Parameters<typeof createInterruptedPackagePublication>[1]) {
+  const f = await createInterruptedPackagePublication(fixtureRoot, phase);
+  preparePreview(f);
+  return {
+    ...f,
+    liveFile: path.join(f.packageRoot, "dist/index.js"),
+    previousFile: path.join(f.anchor, "previous/dist/index.js"),
+    retiredFile: path.join(
+      `${f.anchor}.superseded-${f.record.descriptor.operationId}`,
+      "previous/dist/index.js",
+    ),
+  };
+}
 
 describe.skipIf(process.platform === "win32")("package activation admission", () => {
   it.each(["prepared", "publishing", "publication-complete", "damaged candidate"] as const)(
     "admits only a verified completed publication with the original lease (%s)",
     async (phase) => {
-      const f = await createInterruptedPackagePublication(
-        fixtureRoot,
-        phase === "damaged candidate" ? "publication-complete" : phase,
-      );
-      preparePreview(f);
+      const f = await publication(phase === "damaged candidate" ? "publication-complete" : phase);
       if (phase === "damaged candidate") {
-        fs.appendFileSync(path.join(f.packageRoot, "dist/index.js"), "// changed live content\n");
+        fs.appendFileSync(f.liveFile, "// changed live content\n");
       }
-      const retained = () => [
-        snapshot(f.packageRoot),
-        snapshot(f.anchor),
-        fs.readFileSync(resolvePackageActivationJournalPath(f.anchor)),
-      ];
+      const retained = () => [snapshot(f.packageRoot), snapshot(f.anchor)];
       const before = retained();
       if (phase !== "publication-complete") {
         await expect(prepareUpdateCommand({ json: true })).rejects.toThrow(
@@ -128,8 +130,8 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         expect(retained()).toEqual(before);
         return;
       }
-      const previous = fs.readFileSync(path.join(f.anchor, "previous/dist/index.js"));
-      const candidate = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
+      const previous = fs.readFileSync(f.previousFile);
+      const candidate = fs.readFileSync(f.liveFile);
       const previewBefore = snapshot(fixtureRoot);
       await preview();
       expect(snapshot(fixtureRoot)).toEqual(previewBefore);
@@ -141,12 +143,8 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
 
       assertManagedUpdateLeaseDatabaseIdentity(f.record.descriptor.authority);
       expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(candidate);
-      expect(
-        fs.readFileSync(
-          `${f.anchor}.superseded-${f.record.descriptor.operationId}/previous/dist/index.js`,
-        ),
-      ).toEqual(previous);
+      expect(fs.readFileSync(f.liveFile)).toEqual(candidate);
+      expect(fs.readFileSync(f.retiredFile)).toEqual(previous);
     },
   );
   it.each(
@@ -156,17 +154,15 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
   )(
     "dry-run preserves a publication-complete receipt with a $lease lease and $live live",
     async ({ lease, live }) => {
-      const f = await createInterruptedPackagePublication(fixtureRoot, "publication-complete");
-      mocks.root.mockResolvedValue(f.packageRoot);
-      const retainedPrevious = path.join(f.anchor, "previous/dist/index.js");
-      const previousBytes = fs.readFileSync(retainedPrevious);
+      const f = await publication("publication-complete");
+      const previousBytes = fs.readFileSync(f.previousFile);
       if (live === "previous") {
         const previousRoot = path.join(f.anchor, "previous");
         writeRunnablePackage(previousRoot);
         fs.renameSync(f.packageRoot, path.join(f.anchor, "candidate"));
         fs.renameSync(path.join(f.anchor, "previous"), f.packageRoot);
       } else if (live === "damaged candidate") {
-        fs.appendFileSync(path.join(f.packageRoot, "dist/index.js"), "// changed live content\n");
+        fs.appendFileSync(f.liveFile, "// changed live content\n");
       }
       const { databasePath } = f.record.descriptor.authority;
       fs.renameSync(databasePath, `${databasePath}.lost`);
@@ -174,9 +170,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         fs.copyFileSync(`${databasePath}.lost`, databasePath);
         fs.chmodSync(databasePath, 0o600);
       }
-      preparePreview(f);
-      const packageBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
-      const journalBytes = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+      const packageBytes = fs.readFileSync(f.liveFile);
       const before = snapshot(fixtureRoot);
 
       if (live === "damaged candidate") {
@@ -187,10 +181,6 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           expect.stringContaining("inventoried dist files changed"),
         );
-        expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(
-          journalBytes,
-        );
-        expect(fs.readFileSync(retainedPrevious)).toEqual(previousBytes);
         expect(snapshot(fixtureRoot)).toEqual(before);
         return;
       }
@@ -211,13 +201,9 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       expect(snapshot(fixtureRoot)).toEqual(before);
       await prepareUpdateCommand({ json: true });
       expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(packageBytes);
+      expect(fs.readFileSync(f.liveFile)).toEqual(packageBytes);
       if (live === "candidate") {
-        expect(
-          fs.readFileSync(
-            `${f.anchor}.superseded-${f.record.descriptor.operationId}/previous/dist/index.js`,
-          ),
-        ).toEqual(previousBytes);
+        expect(fs.readFileSync(f.retiredFile)).toEqual(previousBytes);
       }
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("Settled previous package update"),
