@@ -175,9 +175,6 @@ export function openClientCredentialCustody(
       timeout: options.timeoutMs ?? 5000,
     });
     const database = db;
-    // Admission retains SQLite exclusion for this bounded handle's lifetime,
-    // including between operation commits.
-    db.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Connection-local exclusive owner custody.
     if (
       // sqlite-allow-raw -- Read native journal policy before admission.
       db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete"
@@ -199,6 +196,8 @@ export function openClientCredentialCustody(
     };
     let initialized = false;
     runSqliteImmediateTransactionSync(database, () => {
+      // Acquire custody before retaining locks so competing openers can release their shared locks.
+      database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
       if (!getSqliteDatabaseAdmission(database, schemaAdmission)) {
         const version = readSqliteUserVersion(database);
         if (

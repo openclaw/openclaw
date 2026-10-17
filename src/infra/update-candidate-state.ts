@@ -14,7 +14,7 @@ import {
   maintenanceOwnerHasSourceCustody,
 } from "../state/openclaw-state-maintenance-context.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
-import type { rebindRehearsalClientCredentials } from "./client-credential-restore.js";
+import type { ClientCredentialRehearsalBinding } from "./client-credential-restore-contract.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveStatePortRoots } from "./database-engine/state-port.js";
 import { resolveUserPath } from "./home-dir.js";
@@ -583,9 +583,7 @@ export async function snapshotUpdateCandidateState(
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
   const localCredentials = resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: sourceRoot });
   const { readClientCredentialFileIdentity } = await import("./client-credential-receipt.js");
-  let copiedShared:
-    | Omit<Parameters<typeof rebindRehearsalClientCredentials>[0], "localPath">
-    | undefined;
+  let copiedShared: Omit<ClientCredentialRehearsalBinding, "localPath"> | undefined;
   let copiedCredentials: string | undefined;
   const { createUpdateCandidateExecApprovalsProjection } =
     await import("./update-candidate-exec-approvals.js");

@@ -655,6 +655,9 @@ describe("post-activation failure settlement without inference", () => {
     "migration-required",
     "migration-incomplete",
     "migration-refused",
+    "migration-local-current",
+    "migration-local-client-newer",
+    "migration-local-daemon-newer",
     "current-core-parked",
     "current-core-rollback-refused",
     "current-core-data-at-risk",
@@ -678,13 +681,15 @@ describe("post-activation failure settlement without inference", () => {
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
       params.root = root;
       const migration = receipt.startsWith("migration-");
+      const localVersionOnly = receipt.startsWith("migration-local-");
       const currentCore = receipt.startsWith("current-core-") || receipt.startsWith("operator-");
       const recovered =
         receipt === "settled" ||
         receipt === "migration-required" ||
+        receipt === "migration-local-current" ||
         receipt === "current-core-parked" ||
         receipt === "current-core-rollback-refused";
-      let agentVersion = 21;
+      let agentVersion = localVersionOnly ? 23 : 21;
       const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
       if (migration) {
         params.candidateSchemaVersions = { state: 18, agent: 23 };
@@ -699,6 +704,14 @@ describe("post-activation failure settlement without inference", () => {
               "agents/main/agent/openclaw-agent.sqlite",
             ),
             userVersion: agentVersion,
+          },
+          {
+            path: path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "client/credentials.sqlite"),
+            userVersion: receipt === "migration-local-client-newer" ? 2 : 1,
+          },
+          {
+            path: path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "control/services.sqlite"),
+            userVersion: receipt === "migration-local-daemon-newer" ? 2 : 1,
           },
         ]);
         doctor.mockImplementation(async () => {
@@ -938,7 +951,7 @@ describe("post-activation failure settlement without inference", () => {
         );
       }
       if (migration) {
-        expect(doctor).toHaveBeenCalledOnce();
+        expect(doctor).toHaveBeenCalledTimes(localVersionOnly ? 0 : 1);
       }
       const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
       expect(report?.verification).toMatchObject({
@@ -951,6 +964,14 @@ describe("post-activation failure settlement without inference", () => {
         expect(
           report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
         ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+      }
+      if (localVersionOnly && !recovered) {
+        expect(rendered).toContain("expected schema 1, found 2");
+        expect(rendered).toContain(
+          receipt === "migration-local-client-newer"
+            ? path.join("client", "credentials.sqlite")
+            : path.join("control", "services.sqlite"),
+        );
       }
       if (migration && !recovered) {
         expect(rendered).toContain("openclaw doctor --fix");

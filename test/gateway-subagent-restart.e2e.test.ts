@@ -288,7 +288,8 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Restart recovery needs a real operator profile; backend clients stay ephemeral.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.statePath(
@@ -499,11 +500,31 @@ it.skipIf(process.platform === "win32").for([
           );
           observations.childKey = child.key;
           observations.beforeShutdown = persistedChild({ runId: childRunId });
+          const parentSession = persisted(PARENT_KEY);
+          const parentSessionId = parentSession?.sessionId;
+          expect(observations.beforeShutdown).toMatchObject({
+            operatorRecoverySource: {
+              version: 1,
+              agentId: "main",
+              sessionKey: PARENT_KEY,
+              sessionId: parentSessionId,
+              lifecycleRevision: parentSession?.lifecycleRevision,
+              sourceRunId: originalRunId,
+              snapshot: {
+                profileId: expect.any(String),
+                scopes: expect.arrayContaining([
+                  "operator.admin",
+                  "operator.read",
+                  "operator.write",
+                ]),
+                localOperator: true,
+              },
+            },
+          });
           expect(
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
-          const parentSessionId = persisted(PARENT_KEY)?.sessionId;
           const recoveryStartedAt = Date.now();
           await restart(replaceChild);
           phase = "waiting-for-continuation";

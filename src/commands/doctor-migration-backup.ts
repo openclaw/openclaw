@@ -16,6 +16,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { MigrationArtifactVerification } from "../infra/session-sqlite-migration-artifact.js";
@@ -80,7 +81,7 @@ export function captureFreshDoctorMigrationTables(
   }
   const assertCurrent = () => {
     maintenance.assertAdmission();
-    maintenance.assertDatabaseAccess(options.path);
+    assertStateDatabaseAccessAllowed(options.path);
     if (!db.isOpen || !db.isTransaction) {
       throw new Error("Fresh migration backup lost its source transaction.");
     }

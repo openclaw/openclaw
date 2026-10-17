@@ -46,6 +46,7 @@ import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
@@ -295,12 +296,13 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           plugins: { slots: { memory: "none" } },
         });
         if (scenario === "legacy-retiring") {
-          await withStateMigrationBackupForTest({ env: state.env }, () =>
-            captureRuntimeConfigAsyncReader()(),
+          // Version-only repair leaves the deletion journal's first-use phase column absent.
+          const migrated = await withStateMigrationBackupForTest({ env: state.env }, () =>
+            repairOpenClawStateDatabaseSchema({ env: state.env, versionMigrationOnly: true }),
           );
-        } else {
-          await captureRuntimeConfigAsyncReader()();
+          expect(migrated.warnings).toEqual([]);
         }
+        await captureRuntimeConfigAsyncReader()();
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
         signal.throwIfAborted();

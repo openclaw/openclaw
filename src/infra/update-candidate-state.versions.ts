@@ -48,6 +48,21 @@ export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion
   return entry.contentVersion ?? entry.userVersion;
 }
 
+/** Shared, agent, and local stores retain their own independently versioned contracts. */
+export function resolveUpdateStateTargetVersion(
+  databasePath: string,
+  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
+): number | undefined {
+  const env = { OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)) };
+  if (databasePath === resolveClientCredentialStorePath(env)) {
+    return CLIENT_CREDENTIAL_SCHEMA_VERSION;
+  }
+  if (databasePath === resolveDaemonRuntimePinStorePath(env)) {
+    return DAEMON_RUNTIME_PIN_SCHEMA_VERSION;
+  }
+  return params.candidateSchemaVersions?.[databasePath === params.sharedPath ? "state" : "agent"];
+}
+
 export function updateStateSchemaVersionsMatch(
   before: readonly UpdateStateSchemaVersion[],
   after: readonly UpdateStateSchemaVersion[],
@@ -87,14 +102,7 @@ export function updateStateSchemaVersionsMatch(
       if (version === null || baseline.get(entry.path) === version) {
         return true;
       }
-      const supported =
-        entry.path === params.sharedPath
-          ? candidate.state
-          : entry.path === clientPath
-            ? CLIENT_CREDENTIAL_SCHEMA_VERSION
-            : entry.path === daemonPath
-              ? DAEMON_RUNTIME_PIN_SCHEMA_VERSION
-              : candidate.agent;
+      const supported = resolveUpdateStateTargetVersion(entry.path, params);
       return baseline.get(entry.path) == null && version === supported;
     })
   );

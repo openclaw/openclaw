@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { formatErrorMessage } from "./errors.js";
+import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import type { PostgresSyncConnection } from "./postgres-sync/connection.js";
 import { parseSqliteFileGeneration, sameSqliteFileGeneration } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
@@ -39,7 +41,9 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 ): T {
   // A standalone Doctor backup must not replace its installed updater's inventory.
   const context = captures.getStore();
-  return context?.capture ? operation() : captures.run({ ...context, capture }, operation);
+  return context?.capture
+    ? operation()
+    : captures.run({ ...context, capture }, () => withArtifactPreservingStateReads(operation));
 }
 
 /** Standalone Doctor supplies its existing artifact owner without a command-layer import. */
@@ -84,7 +88,7 @@ function migrationAuthority(
     if (assertMigrationCurrent) {
       assertMigrationCurrent();
     } else {
-      maintenance.assertDatabaseAccess(pathname);
+      assertStateDatabaseAccessAllowed(pathname);
     }
     capture.assertCurrent();
   };

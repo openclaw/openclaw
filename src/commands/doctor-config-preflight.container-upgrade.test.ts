@@ -256,6 +256,8 @@ describe("container image replacement Doctor repair and startup readiness", () =
         "device_auth_tokens",
         "gateway_origin_device_tokens",
         "exec_approvals_config",
+        "sqlite_stat1",
+        "sqlite_stat4",
       ]);
       const before = new DatabaseSync(path.join(path.dirname(databasePath), fullBackups[0]!), {
         readOnly: true,

@@ -176,8 +176,10 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
             guard try self.scalarText("PRAGMA journal_mode") == "delete" else {
                 throw OpenClawNativeStateError("Local client credentials require DELETE journal mode")
             }
-            try self.execute("PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE")
+            try self.execute("PRAGMA synchronous=FULL")
             try self.transaction {
+                // Retain acquired custody; early exclusive mode lets competing openers retain shared locks.
+                try self.execute("PRAGMA locking_mode=EXCLUSIVE")
                 try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(opened)
                 let version = try self.scalarInteger("PRAGMA user_version")
                 var initialized = false

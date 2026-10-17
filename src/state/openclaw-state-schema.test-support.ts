@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { captureFreshDoctorMigrationTables } from "../commands/doctor-migration-backup.js";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../infra/client-credential-schema.js";
-import { acquireStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
@@ -22,17 +22,16 @@ export async function withStateMigrationBackupForTest<T>(
   operation: () => T,
 ): Promise<Awaited<T>> {
   const pathname = options.path ?? resolveOpenClawStateSqlitePath(options.env);
-  const lease = acquireStateDatabaseSchemaLease(pathname);
+  const lease = acquireGatewayStateOwner({ databasePath: pathname });
   const resources = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent: lease.assertCurrent,
     assertDatabaseAccess: lease.assertDatabaseAccess,
   });
   try {
-    return await lease.run(() =>
-      resources.run(() =>
-        runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, operation),
-      ),
+    // Retain asynchronous work in the resource scope until process custody is released.
+    return await resources.run(() =>
+      runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, operation),
     );
   } finally {
     await resources.close();

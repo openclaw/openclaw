@@ -2604,6 +2604,7 @@ src/infra/client-credential-migration.ts
 src/infra/client-credential-native-bootstrap.ts
 src/infra/client-credential-native-tokens.ts
 src/infra/client-credential-operations.ts
+src/infra/client-credential-paths.ts
 src/infra/client-credential-readiness.ts
 src/infra/client-credential-receipt.ts
 src/infra/client-credential-schema.ts

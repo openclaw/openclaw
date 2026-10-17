@@ -77,7 +77,11 @@ test.each([false, true])(
           browserOrigin: origin,
           skipDefaultAuth: true,
           scopes: ["operator.sessions.write"],
-          deviceIdentityPath: path.join(temps.make("policy-writer-"), "device.sqlite"),
+          deviceIdentityPath: path.join(
+            temps.make("policy-writer-"),
+            "client",
+            "credentials.sqlite",
+          ),
         });
         expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
         expect((connected.payload as HelloOk).auth.scopes).not.toContain("operator.write");
@@ -245,7 +249,11 @@ test("required placement survives disconnect but stops setup when committed call
         browserOrigin: origin,
         skipDefaultAuth: true,
         scopes,
-        deviceIdentityPath: path.join(temps.make("required-placement-"), "device.sqlite"),
+        deviceIdentityPath: path.join(
+          temps.make("required-placement-"),
+          "client",
+          "credentials.sqlite",
+        ),
       });
       expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
       return ws;

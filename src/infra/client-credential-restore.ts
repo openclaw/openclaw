@@ -16,6 +16,7 @@ import {
   readClientCredentialFileIdentity,
   type ClientCredentialFileIdentity,
 } from "./client-credential-receipt.js";
+import type { ClientCredentialRehearsalBinding } from "./client-credential-restore-contract.js";
 import { openClientCredentialCustody } from "./client-credential-store.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -143,13 +144,7 @@ function publishRestoredReceipt(
 }
 
 /** The snapshot owner supplies only the admitted shared/local pair and its source witness. */
-export function rebindRehearsalClientCredentials(options: {
-  sourceSharedFile: ClientCredentialFileIdentity;
-  sharedPath: string;
-  localPath: string;
-  postgresStoreId?: string;
-  postgresExportDirectory?: string;
-}): void {
+export function rebindRehearsalClientCredentials(options: ClientCredentialRehearsalBinding): void {
   const receipt = prepareMatchedReceipt({
     localPath: options.localPath,
     sharedPath: options.postgresExportDirectory

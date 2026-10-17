@@ -1,6 +1,7 @@
 // Suites load this fixture before the CLI so runtime dependencies see the mocks.
 import { Command } from "commander";
 import { vi } from "vitest";
+import type { ClientSocketRecord } from "../infra/client-credential-store.js";
 import { applyExecApprovalsUpdate } from "../infra/exec-approvals-mutation.kernel.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
@@ -80,8 +81,19 @@ export const localSnapshot: ExecApprovalsSnapshot = {
   hash: "hash-local",
   file: { version: 1, agents: {} },
 };
+let localSocket: ClientSocketRecord | null = null;
+
+export function setLocalSocket(path: string, token: string): void {
+  localSocket = {
+    socket_key: "current",
+    socket_path: path,
+    socket_token: token,
+    updated_at_ms: 1,
+  };
+}
 
 function resetLocalSnapshot() {
+  localSocket = null;
   localSnapshot.exists = true;
   localSnapshot.raw = "{}";
   localSnapshot.hash = "hash-local";
@@ -136,11 +148,29 @@ vi.mock("../infra/exec-approvals.js", async () => {
           localSnapshot.raw = JSON.stringify(next);
           localSnapshot.hash = "hash-local-written";
         }
-        return structuredClone(localSnapshot);
+        const snapshot = structuredClone(localSnapshot);
+        if (update.kind === "replace" && update.preserveSocket) {
+          setLocalSocket(
+            update.file.socket?.path?.trim() ||
+              localSocket?.socket_path ||
+              "/tmp/local-exec-approvals.sock",
+            update.file.socket?.token?.trim() || localSocket?.socket_token || "fixture-token",
+          );
+          snapshot.file.socket = {
+            ...snapshot.file.socket,
+            path: localSocket?.socket_path ?? undefined,
+            token: localSocket?.socket_token ?? undefined,
+          };
+        }
+        return snapshot;
       },
     ),
   };
 });
+
+vi.mock("../infra/exec-approvals-socket.js", () => ({
+  readExecApprovalsSocket: async () => structuredClone(localSocket),
+}));
 
 export function loggedOutput(): string {
   return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");

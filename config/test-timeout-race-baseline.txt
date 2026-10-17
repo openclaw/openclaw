@@ -72,9 +72,7 @@ src/gateway/server.spawn-broker.test.ts	1
 src/gateway/server.visible-spawn-fallback.product-proof.test.ts	1
 src/gateway/session-row-placement-projection.lifecycle.test.ts	13
 src/gateway/terminal/node-relay.test.ts	1
-src/gateway/test-helpers.server-rpc.test.ts	3
 src/gateway/test-helpers.server-storage.test.ts	1
-src/gateway/test/server-sessions-resources.test-helpers.ts	1
 src/gateway/worker-environments/node-worker-workspace-publication.test.ts	2
 src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts	3
 src/infra/approval-handler-runtime.test.ts	1

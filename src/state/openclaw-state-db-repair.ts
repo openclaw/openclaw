@@ -326,6 +326,10 @@ function repairOpenedStateSchema(
             "Unrecognized native bootstrap database; preserve it for explicit recovery.",
           );
         }
+        const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
+        if (preAuditSchema) {
+          assertOpenClawStateDatabaseOwner(db, { pathname });
+        }
         prepareClientCredentialMigration(db, { path: pathname, env, fromVersion: previousVersion });
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
         if (!sourceIntegrityVerified) {
@@ -344,10 +348,6 @@ function repairOpenedStateSchema(
         }
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
-        const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
-        if (preAuditSchema) {
-          assertOpenClawStateDatabaseOwner(db, { pathname });
-        }
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           recoverClientCredentialStore(db, { path: pathname, env });
           // Current-schema doctor repair may normalize recognized columns or

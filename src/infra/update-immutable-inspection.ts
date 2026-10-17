@@ -1,13 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  DAEMON_RUNTIME_PIN_SCHEMA_VERSION,
-  resolveDaemonRuntimePinStorePath,
-} from "../daemon/runtime-pin-store.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
-import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
-import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
@@ -129,7 +123,7 @@ export async function inspectImmutableUpdateCoverage(params: {
         const stateDir = descriptor.service.stateDir;
         const config = snapshot.sourceConfig;
         const { readUpdateStateSchemaVersions } = await import("./update-candidate-state.js");
-        const { resolveUpdateStateContentVersion } =
+        const { resolveUpdateStateContentVersion, resolveUpdateStateTargetVersion } =
           await import("./update-candidate-state.versions.js");
         let inventory: ReadonlyMap<string, StateDatabaseDiscovery> = new Map();
         const versions = await readUpdateStateSchemaVersions({
@@ -150,12 +144,10 @@ export async function inspectImmutableUpdateCoverage(params: {
             throw new Error(`Schema inspection omitted ${file}.`);
           }
           const found = resolveUpdateStateContentVersion(version);
-          const target =
-            file === resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: stateDir })
-              ? CLIENT_CREDENTIAL_SCHEMA_VERSION
-              : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateDir })
-                ? DAEMON_RUNTIME_PIN_SCHEMA_VERSION
-                : result.target.schemaVersions?.[file === shared ? "state" : "agent"];
+          const target = resolveUpdateStateTargetVersion(file, {
+            sharedPath: shared,
+            candidateSchemaVersions: result.target.schemaVersions,
+          });
           const coverage: DatabaseCoverage["coverage"] =
             found === null
               ? "absent"

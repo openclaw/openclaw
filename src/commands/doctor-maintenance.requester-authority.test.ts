@@ -118,6 +118,8 @@ it.each(["configured-owner", "profile"] as const)(
         };
         assertCurrent();
         await closeOpenClawStateDatabaseAsync();
+        // Keep the initial liveness control outside the maintenance admission budget.
+        authorityWorkerLaunches.clear();
         const maintenance = await beginDoctorMaintenance({
           root: null,
           options: { repair: true, nonInteractive: true },

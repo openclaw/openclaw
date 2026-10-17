@@ -122,6 +122,10 @@ export function ensureOpenClawStateRuntimeSchema(
             "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",
           );
         }
+        if (previousVersion > 0) {
+          // Doctor-owned legacy repairs must keep their diagnostic before credential extraction.
+          assertCanonicalStateSchemaShape(db, pathname);
+        }
         prepareClientCredentialMigration(db, { path: pathname, env, fromVersion: previousVersion });
         const schema = getAdmittedSqliteSchemaFacts(db);
         if (previousVersion === 0 && schema?.tables.size === 0 && schema.views.size === 0) {

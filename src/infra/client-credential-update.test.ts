@@ -261,12 +261,12 @@ async function fixture(engine: "sqlite" | "postgres", native = false, sourceVers
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
-async function capture(f: Fixture, orphan = false) {
+async function capture(f: Fixture) {
   const run = createUpdateRun({ trigger: "cli" }, { env: f.env });
   expect(run.phase).toBe("requested");
   // An installed driver's ledger admission must not run the candidate migration.
   expect((await f.readShared()).version).toBe(f.native ? 0 : f.sourceVersion);
-  expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(orphan);
+  expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
   await closeOpenClawStateDatabaseAsync();
   const unexpected = () => {
     throw new Error("Database capture attempted unrelated update orchestration");
@@ -426,7 +426,7 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
 }
 
 describe("client credential public update custody", () => {
-  it("captures SQLite before cutover, restores exact shared credentials, and rebuilds an orphan", async () => {
+  it("captures SQLite before cutover, restores exact shared credentials, and rebuilds an orphan through Doctor", async () => {
     const f = await fixture("sqlite");
     const captured = await capture(f);
     await migrate(f, captured);
@@ -457,8 +457,7 @@ describe("client credential public update custody", () => {
       using stale = openNodeSqliteDatabase(localPath);
       stale.prepare("UPDATE device_auth_tokens SET token=?").run("synthetic-orphan-token");
     }
-    const retry = await capture(f, true);
-    await migrate(f, retry);
+    await migrate(f);
     expect(
       runClientCredentialOperation(f.env, {
         kind: "token.read",

@@ -23,6 +23,7 @@ import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js"
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { openClientCredentialCustody } from "./client-credential-store.js";
 import { readEngineAnchor } from "./database-engine/open.js";
+import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
@@ -225,7 +226,7 @@ export function prepareClientCredentialMigration(
       "Client credentials require backed-up migration custody; stop the app and run openclaw doctor --fix.",
     );
   }
-  maintenance.assertDatabaseAccess(options.path);
+  assertStateDatabaseAccessAllowed(options.path);
   maintenance.assertAdmission();
   capture.assertCurrent();
   const rows = sourceRows(
@@ -239,8 +240,10 @@ export function prepareClientCredentialMigration(
   if (!file) {
     throw new Error("Client credential source disappeared before migration.");
   }
+  const sourceHasMetadata = tableExists(source, "schema_meta");
+  const preMetadata = options.fromVersion === 1 && !sourceHasMetadata;
   const metadata =
-    nativeBootstrap && !tableExists(source, "schema_meta")
+    (nativeBootstrap || preMetadata) && !sourceHasMetadata
       ? undefined
       : source.prepare("SELECT created_at FROM schema_meta WHERE meta_key = 'primary'").get();
   const anchor = isPostgresSqlConnection(source)
@@ -400,6 +403,22 @@ export function prepareClientCredentialMigration(
     if (
       !stageSqliteTransactionState(source, {
         stage() {},
+        prepareCommit() {
+          if (!preMetadata) {
+            return;
+          }
+          // Canonical repair creates the source identity; copied recovery must know it before COMMIT.
+          const preparedMetadata = source
+            .prepare("SELECT created_at FROM schema_meta WHERE meta_key = 'primary'")
+            .get();
+          if (!preparedMetadata || !receipt.source) {
+            throw new Error("Historical client credential source identity was not published.");
+          }
+          receipt.source.identity = `${file.path}:${String(preparedMetadata.created_at)}`;
+          runSqliteImmediateTransactionSync(target.database, () =>
+            writeClientCredentialReceipt(target.database, receipt, "copied"),
+          );
+        },
         commit() {
           try {
             // Fresh SQLite bootstrap has its durable identity only after this commit.
