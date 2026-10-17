@@ -415,6 +415,14 @@ publication; PostgreSQL writes still use `runTransaction` for writer custody.
 Keep an explicit snapshot for related reads that must agree. The shared helpers
 live in [`sqlite-transaction.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-transaction.ts).
 
+Unsigned external plugin catalogs use one upsert without rereading the current
+snapshot. Signed catalogs keep their rollback and
+equivocation checks in the writer transaction.
+
+Agent schema refresh reuses the index inspection's catalog for full validation
+inside the same unchanged read snapshot. Index repairs, including skipped
+column migrations, validate against a fresh catalog before publishing readiness.
+
 Do not move size-limiting JSON projections out of SQL: selecting full transcript
 bodies or blobs to discard most fields in TypeScript adds transfer and parsing
 cost. Engine-specific projections belong behind the engine's helper. See

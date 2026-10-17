@@ -218,6 +218,21 @@ describe("canonical proof on physical database validation", () => {
         // Unclassified DDL still invalidates the agent contract.
         database.db.exec("DROP TABLE derived_vectors");
         expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+        const refreshObservation = trackSqliteStatementExecutions(
+          database.db,
+          ["catalog"],
+          (sql) =>
+            sql === "SELECT type, name, tbl_name, sql FROM main.sqlite_schema ORDER BY name"
+              ? "catalog"
+              : null,
+        );
+        try {
+          const refreshed = refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(refreshed.schema?.facts?.tables.has("derived_vectors")).toBe(false);
+          expect(refreshObservation.counts.catalog).toBe(1);
+        } finally {
+          refreshObservation.restore();
+        }
       } finally {
         reader.database.close();
       }
