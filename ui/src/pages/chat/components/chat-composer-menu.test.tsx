@@ -261,7 +261,9 @@ it.each(["item", "external", "closed"] as const)(
   "preserves newer %s focus after changing capability views",
   async (target) => {
     type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
-    const [currentView, setView] = createSignal<Menu["view"]>("tools:docs");
+    const [currentView, setView] = createSignal<Menu["view"]>(
+      target === "closed" ? "connectors" : "tools:docs",
+    );
     const [open, setOpen] = createSignal(true);
     const view = mountSolid(() => (
       <>
@@ -326,13 +328,15 @@ it.each(["item", "external", "closed"] as const)(
         flush();
         expect(document.activeElement).toBe(back);
         focused = view.getByRole("menuitemcheckbox", { name: "docs Enabled", hidden: true });
+      } else if (target === "closed") {
+        setOpen(false);
+        focused = document.body;
       } else {
         focused = view.getByRole("textbox", { name: "Newer focus" });
-        if (target === "closed") {
-          setOpen(false);
-        }
       }
-      focused.focus();
+      if (target !== "closed") {
+        focused.focus();
+      }
       flush();
       for (const callback of frames) {
         callback(0);
