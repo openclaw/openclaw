@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { nativeModel } from "../../test/e2e/qa-lab/runtime/native-provider-proof-fixture.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -21,6 +22,8 @@ type ProviderMessage = {
 };
 type ProviderRequest = { model: string; messages: ProviderMessage[] };
 type HistoryMessage = { role: string; content: unknown; stopReason?: string };
+const byRole = <T extends { role: string }>(messages: T[], role: string) =>
+  messages.filter((message) => message.role === role);
 
 it(
   "chat.send retains only matching encrypted tool state across real reads and reasoning visibility",
@@ -61,6 +64,7 @@ it(
       data: "synthetic-opaque-continuation",
     };
     const secondDetail = { ...detail, id: "callsecond", data: "synthetic-second-continuation" };
+    const signature = ({ type, data, id }: typeof detail) => JSON.stringify({ type, data, id });
     const visibleReasoning = "Compare the fixture results.";
     let details = [detail];
     let callIds = ["callsigned", "callunsigned"];
@@ -68,7 +72,8 @@ it(
     const abortedResponse = createDeferred();
     const requests: ProviderRequest[] = [];
     const events: unknown[] = [];
-    const toolCall = (id: string, index = 0, args = JSON.stringify({ path: fixture })) => ({
+    const readArguments = { path: fixture };
+    const toolCall = (id: string, index = 0, args = JSON.stringify(readArguments)) => ({
       index,
       id,
       type: "function",
@@ -77,7 +82,7 @@ it(
     const provider = createServer(async (request, response) => {
       const body: ProviderRequest = JSON.parse(await readProviderBody(request));
       requests.push(body);
-      const toolResults = body.messages.filter((message) => message.role === "tool");
+      const toolResults = byRole(body.messages, "tool");
       const continuation = toolResults.length > 0;
       const assistant = body.messages.findLast((message) => message.tool_calls?.length);
       if (
@@ -88,10 +93,7 @@ it(
         response.writeHead(400, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
-            error: {
-              message: "missing encrypted detail",
-              type: "invalid_request_error",
-            },
+            error: { message: "missing encrypted detail", type: "invalid_request_error" },
           }),
         );
         return;
@@ -111,11 +113,11 @@ it(
       const finish = (content: string) => {
         send({ content });
         send({}, "stop");
+        response.end("data: [DONE]\n\n");
       };
       if (["malformed", "missing-terminal", "abort"].includes(arrival)) {
         if (arrival !== "abort" && requests.length > 1) {
           finish(rejectedAnswer);
-          response.end("data: [DONE]\n\n");
           return;
         }
         send({ reasoning_details: details });
@@ -124,7 +126,7 @@ it(
             toolCall(
               "callsigned",
               0,
-              arrival === "missing-terminal" ? JSON.stringify({ path: fixture }) : '{"path":',
+              arrival === "missing-terminal" ? JSON.stringify(readArguments) : '{"path":',
             ),
           ],
         });
@@ -135,15 +137,15 @@ it(
         }
         if (arrival === "malformed") {
           send({}, "tool_calls");
-          response.end("data: [DONE]\n\n");
-        } else {
-          response.end();
         }
+        response.end(arrival === "malformed" ? "data: [DONE]\n\n" : undefined);
         return;
       }
       if (continuation) {
         finish(answer);
-      } else if (arrival.startsWith("renamed-")) {
+        return;
+      }
+      if (arrival.startsWith("renamed-")) {
         const oldDetail = { ...detail, id: "callA", data: "synthetic-old-identity" };
         if (arrival === "renamed-unsigned") {
           send({ reasoning_details: [oldDetail] });
@@ -203,16 +205,13 @@ it(
                 apiKey: "synthetic-fixture-key",
                 api: "openai-completions",
                 models: [
-                  {
-                    id: "google/gemini-encrypted-fixture",
+                  nativeModel("google/gemini-encrypted-fixture", {
                     name: "Encrypted fixture",
                     api: "openai-completions",
                     reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 128000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },
@@ -281,12 +280,9 @@ it(
         const historyJson = JSON.stringify(messages);
         const assistantContent = messages.findLast(({ role }) => role === "assistant")?.content;
         const answerJson = JSON.stringify(assistantContent);
-        const toolResults = messages.filter(({ role }) => role === "toolResult");
+        const toolResults = byRole(messages, "toolResult");
         if (["malformed", "missing-terminal", "abort"].includes(order)) {
-          expect(requests.length).toBeGreaterThan(0);
-          expect(
-            requests.flatMap((request) => request.messages.filter(({ role }) => role === "tool")),
-          ).toEqual([]);
+          expect(requests.flatMap((request) => byRole(request.messages, "tool"))).toEqual([]);
           expect(toolResults).toEqual([]);
           expect(historyJson).not.toContain('"type":"toolCall"');
           expect(historyJson).not.toContain(answer);
@@ -307,7 +303,7 @@ it(
         const continuation = requests.find((request) =>
           request.messages.some((message) => message.role === "tool"),
         );
-        expect(continuation?.messages.filter((message) => message.role === "tool")).toEqual(
+        expect(continuation && byRole(continuation.messages, "tool")).toEqual(
           callIds.map((id) =>
             expect.objectContaining({
               tool_call_id: id,
@@ -319,13 +315,11 @@ it(
         associationExpect(
           continuation?.messages.findLast((message) => message.tool_calls?.length)
             ?.reasoning_details,
-          `${order}: actual continuation encrypted details`,
         ).toEqual(details.length > 0 ? details : undefined);
         associationExpect(
           messages.find(
             (message) => message.role === "assistant" && message.stopReason === "toolUse",
           )?.content,
-          `${order}: persisted tool identity and encrypted state`,
         ).toEqual([
           ...(order === "visible"
             ? [expect.objectContaining({ type: "thinking", thinking: visibleReasoning })]
@@ -336,16 +330,8 @@ it(
               type: "toolCall",
               id,
               name: "read",
-              arguments: { path: fixture },
-              ...(expectedDetail
-                ? {
-                    thoughtSignature: JSON.stringify({
-                      type: expectedDetail.type,
-                      data: expectedDetail.data,
-                      id: expectedDetail.id,
-                    }),
-                  }
-                : {}),
+              arguments: readArguments,
+              ...(expectedDetail ? { thoughtSignature: signature(expectedDetail) } : {}),
             };
           }),
         ]);

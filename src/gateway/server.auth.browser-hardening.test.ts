@@ -211,9 +211,10 @@ test("clears scopes for trusted-proxy non-control-ui browser sessions", async ()
       scopes: ["operator.read"],
     });
 
-    const status = await rpcReq(ws, "status");
-    expect(status.ok).toBe(false);
-    expect(status.error?.message ?? "").toContain("missing scope");
+    expect(await rpcReq(ws, "status")).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("missing scope") },
+    });
   });
 });
 
@@ -283,27 +284,24 @@ test("omits sensitive gateway paths from low-privilege hello-ok snapshots", asyn
   });
 });
 
-test("does not silently auto-pair non-control-ui browser clients on loopback", async () => {
-  const { listDevicePairing } = await import("../infra/device-pairing.js");
-
-  await withSignedBrowserConnect(TEST_OPERATOR_CLIENT, "browser", async ({ identity, res }) => {
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("pairing required");
-
-    const pairing = await listDevicePairing();
-    const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
-    expect(pending).toMatchObject({ silent: false });
-  });
-});
-
-test("silently auto-pairs control-ui browser clients on loopback with a valid gateway token", async () => {
-  const { listDevicePairing } = await import("../infra/device-pairing.js");
-
-  await withSignedBrowserConnect(CONTROL_UI_CLIENT, "control-ui", async ({ identity, res }) => {
-    expect(res.ok).toBe(true);
-
-    const pairing = await listDevicePairing();
-    expect(pairing.pending.some((entry) => entry.deviceId === identity.deviceId)).toBe(false);
-    expect(pairing.paired.some((entry) => entry.deviceId === identity.deviceId)).toBe(true);
-  });
-});
+test.each([
+  { name: "non-control-ui", client: TEST_OPERATOR_CLIENT, paired: false },
+  { name: "control-ui", client: CONTROL_UI_CLIENT, paired: true },
+])(
+  "restricts loopback token auto-pairing for $name browser clients",
+  async ({ name, client, paired }) => {
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    await withSignedBrowserConnect(client, name, async ({ identity, res }) => {
+      expect(res.ok).toBe(paired);
+      const pairing = await listDevicePairing();
+      const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
+      if (paired) {
+        expect(pending).toBeUndefined();
+        expect(pairing.paired.some((entry) => entry.deviceId === identity.deviceId)).toBe(true);
+      } else {
+        expect(res.error?.message ?? "").toContain("pairing required");
+        expect(pending).toMatchObject({ silent: false });
+      }
+    });
+  },
+);

@@ -1,12 +1,7 @@
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import type { GatewaySuspendPrepareResult } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -25,7 +20,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { openTrackedWs, pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
-import { createGatewayKernel } from "./server-kernel.js";
+import * as kernelModule from "./server-kernel.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
@@ -39,7 +34,7 @@ import { sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
 import {
-  BUNDLE_HASH,
+  createDispatchEnvironmentFixtures,
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
@@ -84,14 +79,7 @@ test.for(["direct", "restart"] as const)(
     });
     await writeConfigFile({ gateway: { nodes: { commands: { allow: ["camera.list"] } } } });
 
-    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-    const createKernel = createGatewayKernel;
-    const factory = vi
-      .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-      .mockImplementation(async (...args) => {
-        kernel = await createKernel(...args);
-        return kernel;
-      });
+    const factory = vi.spyOn(kernelModule, "createGatewayKernel");
     let started: Awaited<ReturnType<typeof startServer>>;
     try {
       started = await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, () =>
@@ -140,7 +128,11 @@ test.for(["direct", "restart"] as const)(
       await runQaGatewayFixture(
         async () => {
           await server.startupSettled;
-          const runtime = expectDefined(kernel, "real Gateway kernel");
+          const creation = factory.mock.results[0];
+          if (creation?.type !== "return") {
+            throw new Error("expected real Gateway kernel creation");
+          }
+          const runtime = await creation.value;
           const invoke = runtime.nodeRegistry.invoke.bind(runtime.nodeRegistry);
           vi.spyOn(runtime.nodeRegistry, "invoke").mockImplementation(async (params) => {
             const result = await invoke(params);
@@ -225,12 +217,8 @@ test.for(["direct", "restart"] as const)(
               nodeDeviceId: nodeId,
               sharedHost: true,
               bootstrapReceipt: {
-                bundleHash: BUNDLE_HASH,
+                ...createDispatchEnvironmentFixtures().attached.bootstrapReceipt,
                 openclawVersion: "2026.8.19",
-                protocolFeatures: [
-                  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-                  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-                ],
                 installKind: "bundle",
               },
               credential: credential("node-shutdown-ready-fixture", null),
@@ -260,17 +248,14 @@ test.for(["direct", "restart"] as const)(
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             scopes: ["operator.admin", "operator.read", "operator.write"],
           });
+          const ordinaryInvoke = {
+            nodeId,
+            command: "camera.list",
+            timeoutMs: 0,
+            idempotencyKey: "shutdown-unanswered-invoke",
+          };
           ordinaryRequest = operator
-            .request(
-              "node.invoke",
-              {
-                nodeId,
-                command: "camera.list",
-                timeoutMs: 0,
-                idempotencyKey: "shutdown-unanswered-invoke",
-              },
-              { timeoutMs: 10_000 },
-            )
+            .request("node.invoke", ordinaryInvoke, { timeoutMs: 10_000 })
             .catch((error: unknown) => error);
           await waitForShutdown(ordinaryDispatched.promise, "ordinary node invocation");
 

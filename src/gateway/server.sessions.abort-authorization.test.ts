@@ -45,7 +45,6 @@ beforeAll(async () => {
   harness = await createGatewaySuiteHarness({
     serverOptions: { auth: { mode: "token", token: gatewayToken }, bind: "loopback" },
   });
-  // Observe production admission and effects without replacing their implementations.
   registration = vi.spyOn(chatAbort, "registerChatAbortController");
   childCancellation = vi.spyOn(subagentControl, "killAllControlledSubagentRuns");
   queueClearing = vi.spyOn(queueCleanup, "clearSessionLifecycleQueues");
@@ -87,46 +86,42 @@ async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, n
   const runId = `native-abort-${name}`;
   const execution = await observeGatewayRunExecution({ method: "agent", runId });
   const sessionKey = `agent:main:${name}`;
+  const params = (method: string) => ({
+    [method === "chat.abort" ? "sessionKey" : "key"]: sessionKey,
+    runId,
+  });
   const started = createDeferred();
   const finish = createDeferred();
-  const nativeAbort = vi.fn();
+  const runController = new AbortController();
+  const nativeAbort = vi.fn(() => runController.abort());
   agentCommandMock.mockImplementationOnce(async (input) => {
     const command = input as AgentCommandOpts;
     expect(command.abortSignal).toBeInstanceOf(AbortSignal);
-    const runController = new AbortController();
-    const abort = () => {
-      nativeAbort();
-      runController.abort();
-    };
     const handle = {
-      ...createEmbeddedRunHandle({ runId, abort }),
-      cancel: abort,
+      ...createEmbeddedRunHandle({ runId, abort: nativeAbort }),
+      cancel: nativeAbort,
       isAborted: () => runController.signal.aborted,
       isStreaming: () => !runController.signal.aborted,
     };
     // Production relays the admitted controller signal into the native attempt.
-    command.abortSignal!.addEventListener("abort", abort, { once: true });
+    command.abortSignal!.addEventListener("abort", nativeAbort, { once: true });
     setActiveEmbeddedRun(command.sessionId!, handle, sessionKey);
     await command.onExecutionStarted?.();
     started.resolve();
     try {
       await finish.promise;
     } finally {
-      command.abortSignal!.removeEventListener("abort", abort);
+      command.abortSignal!.removeEventListener("abort", nativeAbort);
       clearActiveEmbeddedRun(command.sessionId!, handle, sessionKey);
     }
   });
-  const accepted = onceMessage(owner.ws, (frame) => frame.type === "res" && frame.id === runId);
-  owner.ws.send(
-    JSON.stringify({
-      type: "req",
-      id: runId,
-      method: "agent",
-      params: { message: "Keep this native run active", sessionKey, idempotencyKey: runId },
-    }),
-  );
   try {
-    expect(await accepted).toMatchObject({ ok: true, payload: { runId, status: "accepted" } });
+    const accepted = await rpcReq(owner.ws, "agent", {
+      message: "Keep this native run active",
+      sessionKey,
+      idempotencyKey: runId,
+    });
+    expect(accepted).toMatchObject({ ok: true, payload: { runId, status: "accepted" } });
     await started.promise;
     const admission = registration.mock.calls.find(([input]) => input.runId === runId)?.[0];
     expect(admission).toBeDefined();
@@ -147,23 +142,20 @@ async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, n
       sessionKey,
       entry,
       nativeAbort,
+      params,
       abort: (
         ws: typeof owner.ws,
         method: "sessions.abort" | "chat.abort" = "sessions.abort",
         overrides: { runId?: string; clearQueued?: boolean } = {},
-      ) =>
-        rpcReq(ws, method, {
-          [method === "chat.abort" ? "sessionKey" : "key"]: sessionKey,
-          runId,
-          ...overrides,
-        }),
+      ) => rpcReq(ws, method, { ...params(method), ...overrides }),
       finish: async () => {
-        // The modeled command cannot finish until released. Start its response
-        // deadline here, not while the test deliberately holds execution open.
+        // Start the response deadline only when releasing the held command.
         const terminal = onceMessage(
           owner.ws,
           (frame) =>
-            frame.type === "res" && frame.id === runId && frame.payload?.status !== "accepted",
+            frame.type === "res" &&
+            frame.id === accepted.id &&
+            frame.payload?.status !== "accepted",
         );
         finish.resolve();
         try {
@@ -300,10 +292,7 @@ test.each(["chat.abort", "sessions.abort"])(
       url: `ws://127.0.0.1:${harness.port}`,
       token: gatewayToken,
       method,
-      params:
-        method === "chat.abort"
-          ? { sessionKey: run.sessionKey, runId: run.runId }
-          : { key: run.sessionKey, runId: run.runId },
+      params: run.params(method),
     };
     try {
       // Explicit scope restrictions still reach, and fail, run ownership checks.

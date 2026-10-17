@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type MockResult } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
@@ -26,6 +26,10 @@ type Outcome = "unknown" | "refused" | "accepted" | "reply lost";
 const REFUSAL = "Synthetic refusal before native input commit";
 const LOST_REPLY = "Synthetic input reply lost after native commit";
 
+function returned<T>(results: readonly MockResult<T>[]) {
+  return results.flatMap((result) => (result.type === "return" ? [result.value] : []));
+}
+
 function expectAdmissionError(response: unknown, message: string) {
   expect(response).toMatchObject({
     ok: false,
@@ -44,7 +48,7 @@ function observeInputAdmission(
   const original = workerStore.runSqliteWorkerStoreOperation;
   const counts = { attempts: 0, committed: 0, faults: 0 };
   let capturingInput = false;
-  const restoreEvidence: (() => void)[] = [];
+  const observers: { mockRestore(): unknown }[] = [];
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const refusalObserver = vi
     .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
@@ -86,17 +90,17 @@ function observeInputAdmission(
           (worker) =>
             operation({
               execute: async (command, options) => {
-                staging = actor
-                  ? command.type === "session.actor.acceptInput" &&
-                    isRecord(command.input) &&
-                    (kind === "pending"
-                      ? isRecord(command.input.pending) && command.input.pending.kind === "stage"
-                      : command.input.pending === undefined && isRecord(command.input.turn)) &&
-                    isRecord(command.input.target) &&
-                    command.input.target.sessionKey === sessionKey
-                  : command.type === "session.pendingInputs.mutate" &&
-                    isRecord(command.input) &&
-                    command.input.kind === "stage";
+                const input = command.input;
+                staging =
+                  isRecord(input) &&
+                  (actor
+                    ? command.type === "session.actor.acceptInput" &&
+                      (kind === "pending"
+                        ? isRecord(input.pending) && input.pending.kind === "stage"
+                        : input.pending === undefined && isRecord(input.turn)) &&
+                      isRecord(input.target) &&
+                      input.target.sessionKey === sessionKey
+                    : command.type === "session.pendingInputs.mutate" && input.kind === "stage");
                 if (staging) {
                   counts.attempts++;
                   if (!actor && outcome === "refused") {
@@ -114,18 +118,15 @@ function observeInputAdmission(
                 }
                 counts.committed++;
                 const owned = expectDefined(admission, "real staging admission");
-                const input = expectDefined(
-                  isRecord(command.input) ? command.input : undefined,
-                  "real input admission command",
-                );
+                const committedInput = expectDefined(isRecord(input) ? input : undefined);
                 expect(owned.committed?.facts).toMatchObject(
                   actor
                     ? {
                         kind: "committed",
                         receipt: {
                           phase: "acceptInput",
-                          commandId: input.commandId,
-                          phaseId: input.phaseId,
+                          commandId: committedInput.commandId,
+                          phaseId: committedInput.phaseId,
                           postimage: { target: { sessionKey } },
                         },
                       }
@@ -133,15 +134,14 @@ function observeInputAdmission(
                 );
                 expect(owned.settlement?.kind).toBe("completed");
                 if (outcome === "unknown") {
-                  const settlement = vi
-                    .spyOn(owned, "settlement", "get")
-                    .mockReturnValue({ ...owned.settlement, kind: "unknown" });
-                  restoreEvidence.push(() => settlement.mockRestore());
+                  observers.push(
+                    vi
+                      .spyOn(owned, "settlement", "get")
+                      .mockReturnValue({ ...owned.settlement, kind: "unknown" }),
+                  );
                   if (actor) {
-                    // The actor recovers a lost reply from its native witness.
-                    // Lose that witness too, before its committed observer runs.
-                    const witness = vi.spyOn(owned, "committed", "get").mockReturnValue(undefined);
-                    restoreEvidence.push(() => witness.mockRestore());
+                    // Hide the recovery witness before the committed observer runs.
+                    observers.push(vi.spyOn(owned, "committed", "get").mockReturnValue(undefined));
                   }
                 }
                 if (outcome === "unknown" || outcome === "reply lost") {
@@ -169,14 +169,13 @@ function observeInputAdmission(
         );
       },
     );
+  observers.push(observer, refusalObserver);
   return {
     counts,
     restore: () => {
-      for (const restore of restoreEvidence) {
-        restore();
+      for (const captured of observers) {
+        captured.mockRestore();
       }
-      observer.mockRestore();
-      refusalObserver.mockRestore();
     },
   };
 }
@@ -215,10 +214,7 @@ it.for(
     };
     const saveObserver = vi.spyOn(mediaStore, "saveMediaBuffer");
     const deleteObserver = vi.spyOn(mediaStore, "deleteMediaBuffer");
-    const deletions = () =>
-      deleteObserver.mock.results.flatMap((result) =>
-        result.type === "return" ? [result.value] : [],
-      );
+    const deletions = () => returned(deleteObserver.mock.results);
     const staging = observeInputAdmission(
       outcome,
       f.sessionKey,
@@ -282,12 +278,10 @@ it.for(
       const response = await send();
       if (chat && accepted) {
         expect(response.ok).toBe(true);
-        // Chat dispatch is detached from the request owner. Its exact settled
-        // event follows dispatch finalization, not just the started ACK.
+        // Detached dispatch must settle, not just acknowledge startup.
         await withinTest(chatSettled.promise, signal);
       }
-      // Join the actual handler, including the agent service's outer finally,
-      // then every real file deletion requested by detached chat cleanup.
+      // Join handler finalization before checking detached file cleanup.
       await f.drain();
       const deletionResults = await Promise.allSettled(deletions());
       expect(staging.counts).toEqual({
@@ -295,11 +289,7 @@ it.for(
         committed: outcome === "refused" ? 0 : 1,
         faults: outcome === "accepted" ? 0 : 1,
       });
-      const saved = await Promise.all(
-        saveObserver.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
-        ),
-      );
+      const saved = await Promise.all(returned(saveObserver.mock.results));
       expect(saveObserver).toHaveBeenCalledTimes(1);
       expect(saved).toHaveLength(1);
       const media = expectDefined(saved[0], "real inbound file");
@@ -309,10 +299,22 @@ it.for(
       if (goal && outcome !== "refused") {
         expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
       }
+      if (outcome === "refused" || (!goal && outcome === "unknown")) {
+        expect(transcript).toEqual(f.before);
+      }
+      if (!accepted) {
+        expectAdmissionError(
+          response,
+          outcome === "refused"
+            ? REFUSAL
+            : chat
+              ? LOST_REPLY
+              : "commitment is unknown; do not replay",
+        );
+      }
       if (goal && outcome === "unknown") {
         expect(transcript.slice(0, f.before.length)).toEqual(f.before);
-        // Goal failure can add a lifecycle notice. The committed user input
-        // still occurs exactly once and must keep its referenced attachment.
+        // Allow a goal lifecycle notice, but retain exactly one user input.
         const inputs = transcript
           .slice(f.before.length)
           .filter(
@@ -322,30 +324,20 @@ it.for(
         expect(JSON.stringify(inputs[0])).toContain(media.id);
       }
       if (outcome === "refused") {
-        expectAdmissionError(response, REFUSAL);
-        expect(transcript).toEqual(f.before);
         if (goal) {
           expect(sessionAccessor.loadSessionEntry(f.scope)?.goal).toBeUndefined();
         }
         await expect(fs.stat(media.path)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         expect(await fs.readFile(media.path)).toEqual(bytes);
-        if (outcome === "unknown") {
-          expectAdmissionError(
-            response,
-            chat ? LOST_REPLY : "commitment is unknown; do not replay",
-          );
-          // UNKNOWN never publishes a live input owner. The public history
-          // read reconciles that committed, ownerless row to interrupted.
-          if (!goal) {
-            expect(pending).toMatchObject({
-              total: 1,
-              items: [{ runId: f.runId, state: "interrupted" }],
-            });
-            expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
-            expect(transcript).toEqual(f.before);
-          }
-        } else {
+        if (outcome === "unknown" && !goal) {
+          // History reconciles the committed, ownerless row to interrupted.
+          expect(pending).toMatchObject({
+            total: 1,
+            items: [{ runId: f.runId, state: "interrupted" }],
+          });
+          expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
+        } else if (accepted) {
           expect(response.ok).toBe(true);
           expect(transcript).toHaveLength(f.before.length + 1);
           expect(JSON.stringify(transcript.at(-1))).toContain(media.id);
