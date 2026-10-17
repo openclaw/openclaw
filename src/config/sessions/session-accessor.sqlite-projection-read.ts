@@ -56,12 +56,7 @@ export type CurrentTranscriptProjection = {
   generation: string | undefined;
   version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
-  latestIndexedReset?: {
-    active_position: number;
-    event_id: string;
-    event_type: "reset";
-    seq: number;
-  } | null;
+  latestIndexedReset?: SessionTranscriptProjectionFacts["latestIndexedReset"];
   unindexedHistoryControls?: {
     coveredThrough: number;
     rows: readonly UnindexedHistoryControl[];
