@@ -241,6 +241,7 @@ export async function sendMessageSignal(
     opts.maxBytes ??
     (accountInfo.config.mediaMaxMb ?? cfg.agents?.defaults?.mediaMaxMb ?? 8) * 1024 * 1024;
 
+  opts.assertDirectAdapterHandoff?.();
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
