@@ -3,6 +3,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { renderCurrentWork } from "./current-work-view.tsx";
+import { sessionActivityListing } from "./session-activity-controller.test-support.ts";
 import { mountSolid } from "./session-activity-view.test-harness.ts";
 
 function renderWork(
@@ -21,13 +22,7 @@ function renderWork(
       loading,
       incomplete: false,
       onRetry: vi.fn(),
-      result: {
-        ts: 1,
-        path: "",
-        count: sessions.length,
-        sessions,
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-      },
+      result: sessionActivityListing(sessions),
     },
     container,
   );

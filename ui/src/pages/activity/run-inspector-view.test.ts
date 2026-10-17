@@ -10,6 +10,7 @@ import { renderRunInspector } from "./run-inspector-view.tsx";
 
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 const expired = [{ code: "run_again_after_expiry", text: "Run it again." }];
+const missingEvidence = ["identity.context"];
 function principal(kind: PrincipalRefV1["kind"]): PrincipalRefV1 {
   return { kind, domainRef: hmacRef, principalRef: hmacRef };
 }
@@ -62,32 +63,27 @@ const presentResult: RunInspectorResult = {
   nextDecisionCursor: "1",
 };
 
-function unavailableResult(
+const unavailableResult = (
   state: "unknown" | "unsupported",
   reasonCode: string,
   remediation: Array<{ code: string; text: string }> = [],
-): RunInspectorResult {
-  const missingEvidence = ["identity.context"];
-  return {
-    schemaVersion: 1,
-    run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
-    identity: { state, reasonCode, missingEvidence, remediation },
-    decisionDisplays: [],
-    coverage: { state, missingEvidence },
-  };
-}
+): RunInspectorResult => ({
+  schemaVersion: 1,
+  run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
+  identity: { state, reasonCode, missingEvidence, remediation },
+  decisionDisplays: [],
+  coverage: { state, missingEvidence },
+});
 
-function ready(
+const ready = (
   result: RunInspectorResult,
   executionPageStatus?: "loading" | "error",
-): RunInspectorState {
-  return {
-    status: "ready",
-    result,
-    executionPageStatus,
-    receiptPageCursors: new Map(),
-  };
-}
+): RunInspectorState => ({
+  status: "ready",
+  result,
+  executionPageStatus,
+  receiptPageCursors: new Map(),
+});
 
 function renderState(
   state: RunInspectorState | (() => RunInspectorState),

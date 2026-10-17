@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { sessionActivityListing } from "./session-activity-controller.test-support.ts";
 import { ACTIVITY_SUMMARY_ENSURE_METHOD, createSessionActivity } from "./session-activity-owner.ts";
 
 const filters = { personId: null, time: "all" as const, query: "" };
@@ -24,14 +25,8 @@ const row = (
   activitySummary: { state: "stale", canEnsure: true },
   ...overrides,
 });
-const listing = (sessions: GatewaySessionRow[]): SessionsListResult => ({
-  ts: 1,
-  path: "",
-  count: sessions.length,
-  totalCount: sessions.length,
-  sessions,
-  defaults: { model: null, modelProvider: null, contextTokens: null },
-});
+const listing = (sessions: GatewaySessionRow[]) =>
+  sessionActivityListing(sessions, { totalCount: sessions.length });
 const updating = (...sessions: GatewaySessionRow[]) => ({
   sessions: sessions.map(({ key, agentId, activitySummary }) => ({
     key,

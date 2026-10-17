@@ -1,22 +1,19 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  sessionActivityListing,
+  useSessionActivityControllerFixture,
+} from "./session-activity-controller.test-support.ts";
 import { createSessionActivity } from "./session-activity-owner.ts";
 
-const result = {
-  ts: 1,
-  path: "",
-  count: 0,
-  sessions: [],
-  defaults: { model: null, modelProvider: null, contextTokens: null },
-};
-let client: GatewayBrowserClient;
+const result = sessionActivityListing([]);
+const { setup } = useSessionActivityControllerFixture();
+let client: ReturnType<typeof setup>["client"];
 let controller: ReturnType<typeof createSessionActivity>;
 const dayAt = (month: number, day: number, hour = 0, minute = 0, year = 2026) =>
   new Date(year, month, day, hour, minute);
-const mockRequest = () => vi.spyOn(client, "request").mockResolvedValue(result);
-let request: ReturnType<typeof mockRequest>;
+let request: ReturnType<typeof setup>["request"];
 let held: ReturnType<typeof createDeferred<typeof result>>;
 const pulse = (index: number) =>
   request.mock.calls[index]![1] as { activityPulseBoundaries: number[]; activeMinutes?: number };
@@ -26,17 +23,13 @@ const advance = async (ms: number, calls: number) => {
 };
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.spyOn(Math, "random").mockReturnValue(0);
-  client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  controller = createSessionActivity(() => {});
-  request = mockRequest();
+  ({ client, controller, request } = setup());
+  request.mockResolvedValue(result);
   held = createDeferred<typeof result>();
 });
 afterEach(() => {
   held.resolve(result);
   controller.dispose();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 

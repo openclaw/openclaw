@@ -60,23 +60,19 @@ it("orders refreshed membership by the activity timestamps actually displayed", 
     provenance,
     2,
   );
-  expect(read.result.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
-    [current.key, 30],
-    [other.key, 20],
-  ]);
+  expect(read.result.sessions).toEqual([current, other]);
 });
 
-const people: NonNullable<SessionsListResult["people"]> = [
-  { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },
-  { identity: { type: "profile", id: "bob" }, label: "Bob", sessionCount: 3 },
-];
 function result(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
     ...listing(sessions),
     ts: 1,
     totalCount: 12,
     peopleSessionCount: 15,
-    people,
+    people: [
+      { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },
+      { identity: { type: "profile", id: "bob" }, label: "Bob", sessionCount: 3 },
+    ],
   };
 }
 
@@ -111,16 +107,13 @@ describe("session activity projection", () => {
   it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
     const personId = "12345678-abcd-4123-8123-123456789abc";
     const compactId = personId.replaceAll("-", "");
-    const canonical = (
-      location: Parameters<typeof canonicalSessionActivityLocation>[0],
-      label = "Ada",
-      id = personId,
-    ) => canonicalSessionActivityLocation(location, id, label, "/ui");
     const legacy = {
       pathname: "/ui/activity",
       search: `?person=${personId}&time=30d&q=release`,
       hash: "#sessions",
     };
+    const canonical = (location: typeof legacy, label = "Ada", id = personId) =>
+      canonicalSessionActivityLocation(location, id, label, "/ui");
     expect(canonical(legacy, "Ada Lovelace")).toEqual({
       pathname: "/ui/activity/ada-lovelace-12345678abcd41238123123456789abc",
       search: "?time=30d&q=release",
@@ -150,9 +143,14 @@ describe("session activity projection", () => {
     const rows: GatewaySessionRow[] = ["first", "second", "older"].map((name, index) =>
       Object.assign({ key: `agent:main:${name}`, kind: "direct" as const }, clocks[index]),
     );
-    rows[0]!.participants = [{ identity: { type: "agent", id: "bob" } }];
+    rows[0]!.createdActor = { type: "human", id: "alice" };
+    rows[0]!.participants = [
+      { identity: { type: "agent", id: "bob" } },
+      { identity: { type: "legacy", actorType: "human", source: "channel", id: "bob" } },
+    ];
     Object.freeze(rows);
-    const activity = projectSessionActivity(result(rows));
+    const page = result(rows);
+    const activity = projectSessionActivity(page);
     expect(activity.people.map(({ id, count }) => ({ id, count }))).toEqual([
       { id: "alice", count: 12 },
       { id: "bob", count: 3 },
@@ -165,6 +163,8 @@ describe("session activity projection", () => {
     expect(activity).toMatchObject({ matchedCount: 12, timeCount: 15 });
     expect(activity.sessions).toBe(rows);
     expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([now, now - 60_000, yesterday]);
+    page.people = [];
+    expect(projectSessionActivity(page).people).toEqual([]);
   });
 
   it.each([
@@ -174,19 +174,7 @@ describe("session activity projection", () => {
     expect(sessionActivityTimestamp(clocks)).toBe(120);
   });
 
-  it("does not infer people from unqualified owner or participant IDs", () => {
-    const page = result([
-      {
-        key: "agent:main:channel",
-        kind: "direct",
-        createdActor: { type: "human", id: "alice" },
-        participants: [
-          { identity: { type: "legacy", actorType: "human", source: "channel", id: "bob" } },
-        ],
-      },
-    ]);
-    page.people = [];
-    expect(projectSessionActivity(page).people).toEqual([]);
+  it("projects an empty session list before a result is available", () => {
     expect(projectSessionActivity(undefined).sessions).toEqual([]);
   });
 

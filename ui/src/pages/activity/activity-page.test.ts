@@ -6,13 +6,9 @@ import { createComponent, createEffect, createSignal } from "solid-js";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -22,11 +18,12 @@ import { i18n } from "../../i18n/index.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
+import { sessionActivityListing } from "./session-activity-controller.test-support.ts";
 
 type TestActivityPage = ReturnType<typeof createActivityPage>;
 
@@ -43,7 +40,6 @@ function createActivityPage(context: ApplicationContext, initial?: RouteLocation
   const all = <T extends Element = HTMLElement>(selector: string) =>
     Array.from(mounted.container.querySelectorAll<T>(selector));
   return {
-    context,
     container: mounted.container,
     query,
     all,
@@ -55,19 +51,6 @@ function createActivityPage(context: ApplicationContext, initial?: RouteLocation
       flush();
     },
   };
-}
-
-function inspectorGateway(client: GatewayBrowserClient) {
-  const source = gateway();
-  Object.assign(source.snapshot, {
-    client,
-    phase: "connected",
-    hello: {
-      ...activityHello(),
-      features: { methods: ["audit.run.inspect"], events: [] },
-    },
-  });
-  return source;
 }
 
 function previews(page: TestActivityPage) {
@@ -84,29 +67,6 @@ function expandFirst(page: TestActivityPage) {
   return row;
 }
 
-function gateway(): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  return {
-    snapshot,
-    eventLog: [],
-    eventLogRevision: 0,
-    subscribe: vi.fn(() => () => undefined),
-    subscribeEventLog: vi.fn(() => () => undefined),
-    subscribeEvents: vi.fn(() => () => undefined),
-  } as unknown as ApplicationContext["gateway"];
-}
-
-const activeGateways = new Set<ApplicationContext["gateway"]>();
 const capabilities = new Map<
   ApplicationContext["gateway"],
   Pick<ApplicationContext, "sessions" | "agents">
@@ -215,7 +175,6 @@ function activityGateway() {
       lastActiveSessionKey: "main",
     },
   });
-  activeGateways.add(store.gateway);
   activityContext(store.gateway);
   store.gateway.start();
   store.current().request.mockImplementation(activityResponse);
@@ -246,17 +205,13 @@ function activityRoute(search: string, basePath = ""): RouteLocation {
 }
 
 function unavailableInspection(): AuditRunInspectResult {
+  const missingEvidence = ["run.record"];
   return {
     schemaVersion: 1,
     run: { runId: "run-1", status: "unknown" },
-    identity: {
-      state: "unknown",
-      reasonCode: "run_not_found",
-      missingEvidence: ["run.record"],
-      remediation: [],
-    },
+    identity: { state: "unknown", reasonCode: "run_not_found", missingEvidence, remediation: [] },
     decisionDisplays: [],
-    coverage: { state: "unknown", missingEvidence: ["run.record"] },
+    coverage: { state: "unknown", missingEvidence },
   };
 }
 
@@ -279,14 +234,13 @@ function required<T extends Element>(element: T | null | undefined): T {
   return element;
 }
 
-function inspectPage(
-  request: Parameters<typeof createTestGatewayClient>[0],
-  search = "?view=run&run=run-1",
-) {
-  return createActivityPage(
-    activityContext(inspectorGateway(createTestGatewayClient(request))),
-    activityRoute(search),
-  );
+function inspectPage(request: GatewayRequestHandler, search = "?view=run&run=run-1") {
+  const { gateway: source, current } = activityGateway();
+  Object.assign(source.snapshot, {
+    hello: { ...activityHello(), features: { methods: ["audit.run.inspect"], events: [] } },
+  });
+  current().request.mockImplementation(async (...args) => request(...args));
+  return createActivityPage(activityContext(source), activityRoute(search));
 }
 
 function activityRoster(
@@ -295,13 +249,7 @@ function activityRoster(
     { key: "agent:other:work", kind: "direct", hasActiveRun: true },
   ],
 ): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: sessions.length,
-    sessions,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-  };
+  return sessionActivityListing(sessions);
 }
 
 async function activityResponse(method: string, params: unknown) {
@@ -323,11 +271,18 @@ async function syncActivityRoster(page: TestActivityPage) {
   );
 }
 
-function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
+function toolEvent(
+  id: string,
+  sessionKey = "main",
+  name = "read",
+  runId = `run-${id}`,
+  ts?: number,
+) {
   return createGatewayEvent("session.tool", {
     stream: "tool",
     runId,
     sessionKey,
+    ts,
     data: {
       toolCallId: id,
       name,
@@ -339,18 +294,13 @@ function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-
 
 afterEach(async () => {
   cleanupSolid();
-  for (const { sessions } of capabilities.values()) {
+  for (const [source, { sessions, agents }] of capabilities) {
     sessions.dispose();
-  }
-  for (const { agents } of capabilities.values()) {
     agents.dispose();
-  }
-  for (const source of activeGateways) {
     source.stop();
   }
   // Credential changes start lazy cache cleanup; finish it before clearing the environment.
   await vi.dynamicImportSettled();
-  activeGateways.clear();
   capabilities.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
@@ -359,6 +309,7 @@ afterEach(async () => {
 
 it("renders localized summaries and timestamps across locale changes", async () => {
   const previousLocale = i18n.getLocale();
+  onTestFinished(() => i18n.setLocale(previousLocale));
   const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
   const { page, current } = await livePage();
   const now = vi.spyOn(Date, "now");
@@ -371,20 +322,8 @@ it("renders localized summaries and timestamps across locale changes", async () 
       8_640_000_000_000_001,
     ].entries()) {
       now.mockReturnValue(updatedAt);
-      current().opts.onEvent?.(
-        createGatewayEvent("session.tool", {
-          stream: "tool",
-          runId: `time-${index}`,
-          sessionKey: "main",
-          ts: updatedAt - 119_900,
-          data: {
-            toolCallId: `time-${index}`,
-            name: "exec",
-            phase: "result",
-            result: { text: "ok" },
-          },
-        }),
-      );
+      const id = `time-${index}`;
+      current().opts.onEvent?.(toolEvent(id, "main", "exec", id, updatedAt - 119_900));
     }
   } finally {
     now.mockRestore();
@@ -394,27 +333,23 @@ it("renders localized summaries and timestamps across locale changes", async () 
     minute: "2-digit",
     second: "2-digit",
   };
-  try {
-    for (const [locale, summary] of [
-      ["en", "0 arguments hidden"],
-      ["de", "0 Argumente ausgeblendet"],
-    ] as const) {
-      await i18n.setLocale(locale);
-      flush();
-      expect(page.text(".activity-entry__text")?.trim()).toBe(summary);
-      expect(page.text(".activity-entry__meta")).toContain("2m");
-      expect(
-        page.all(".activity-entry__meta > span:first-child").map((element) => element.textContent),
-      ).toEqual([
-        new Date(0).toLocaleTimeString(locale, options),
-        new Date(timestamp).toLocaleTimeString(locale, options),
-        "",
-        "",
-        "",
-      ]);
-    }
-  } finally {
-    await i18n.setLocale(previousLocale);
+  for (const [locale, summary] of [
+    ["en", "0 arguments hidden"],
+    ["de", "0 Argumente ausgeblendet"],
+  ] as const) {
+    await i18n.setLocale(locale);
+    flush();
+    expect(page.text(".activity-entry__text")?.trim()).toBe(summary);
+    expect(page.text(".activity-entry__meta")).toContain("2m");
+    expect(
+      page.all(".activity-entry__meta > span:first-child").map((element) => element.textContent),
+    ).toEqual([
+      new Date(0).toLocaleTimeString(locale, options),
+      new Date(timestamp).toLocaleTimeString(locale, options),
+      "",
+      "",
+      "",
+    ]);
   }
 });
 
@@ -443,22 +378,20 @@ it("keeps primary live filters visible and moves the tool picker into the filter
   const done = toolbar?.querySelectorAll<HTMLInputElement>(
     '.activity-status-filter input[type="checkbox"]',
   )[1];
-  done?.click();
-  flush();
-  expect(page.all(".activity-entry")).toHaveLength(0);
-  done?.click();
-  flush();
-  expect(page.all(".activity-entry")).toHaveLength(2);
+  for (const count of [0, 2]) {
+    done?.click();
+    flush();
+    expect(page.all(".activity-entry")).toHaveLength(count);
+  }
 
   const follow = toolbar?.querySelector<HTMLInputElement>(
     ".activity-live-autofollow input.settings-toggle__input",
   );
-  follow?.click();
-  flush();
-  expect(follow?.checked).toBe(false);
-  follow?.click();
-  flush();
-  expect(follow?.checked).toBe(true);
+  for (const checked of [false, true]) {
+    follow?.click();
+    flush();
+    expect(follow?.checked).toBe(checked);
+  }
 
   const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
     ".activity-page .settings-section__actions button",
@@ -511,7 +444,7 @@ it("retains the selected tool when Live entries change", async () => {
 
 it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
   const page = createActivityPage(
-    activityContext(gateway()),
+    activityContext(createGatewayStoreTestStore().gateway),
     activityRoute(mode === "run" ? "?view=run" : ""),
   );
   expect(page.query(".activity-page")).toBeNull();
@@ -569,18 +502,33 @@ it("retires the mounted session's activity after an account change", async () =>
   expect(previews(page)).toEqual(["new output"]);
 });
 
-it("keeps streamed previews and expansion across ordinary appends and reconnects", async () => {
+it.each(["reconnect", "chat selection"])("preserves activity across %s changes", async (change) => {
   const { gateway: source, page, current } = await livePage();
   current().opts.onEvent?.(toolEvent("first"));
   const firstRow = expandFirst(page);
-
-  current().opts.onEvent?.(toolEvent("second"));
-  source.connect();
-  current().opts.onHello?.(activityHello());
-
-  expect(previews(page)).toEqual(["first output", "second output"]);
+  if (change === "reconnect") {
+    current().opts.onEvent?.(toolEvent("second"));
+    source.connect();
+    current().opts.onHello?.(activityHello());
+  } else {
+    source.setSessionKey("agent:other:work");
+  }
+  expect(previews(page)).toEqual(
+    change === "reconnect" ? ["first output", "second output"] : ["first output"],
+  );
   expect(firstRow.open).toBe(true);
   expect(page.query(".activity-entry")).toBe(firstRow);
+  if (change === "chat selection") {
+    current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
+    expect(previews(page)).toEqual(["first output", "other output"]);
+    const clear = page.query<HTMLButtonElement>(".activity-page button.danger");
+    expect(clear?.textContent?.trim()).toBe("Clear");
+    clear?.click();
+    source.setSessionKey("main");
+    expect(previews(page)).toEqual([]);
+    current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
+    expect(previews(page)).toEqual(["after-clear output"]);
+  }
 });
 
 it.each(["stop", "event"] as const)(
@@ -615,20 +563,15 @@ it.each(["stop", "event"] as const)(
 
 it("starts each visit empty and ignores events received before opening", async () => {
   const { gateway: source, current } = activityGateway();
-  current().opts.onEvent?.(toolEvent("before-open"));
-  const firstPage = await bindActivity(source);
-  expect(previews(firstPage)).toEqual([]);
-  current().opts.onEvent?.(toolEvent("first-visit"));
-  expect(previews(firstPage)).toEqual(["first-visit output"]);
-  expect(source.eventLog).toEqual([]);
-  firstPage.dispose();
-
-  current().opts.onEvent?.(toolEvent("while-away"));
-  const nextPage = await bindActivity(source);
-  expect(previews(nextPage)).toEqual([]);
-  current().opts.onEvent?.(toolEvent("next-visit"));
-  expect(previews(nextPage)).toEqual(["next-visit output"]);
-  expect(previews(nextPage)).not.toContain("first-visit output");
+  for (const visit of ["first", "next"]) {
+    current().opts.onEvent?.(toolEvent("before-open"));
+    const page = await bindActivity(source);
+    expect(previews(page)).toEqual([]);
+    current().opts.onEvent?.(toolEvent(visit));
+    expect(previews(page)).toEqual([`${visit} output`]);
+    expect(source.eventLog).toEqual([]);
+    page.dispose();
+  }
 });
 
 it("collects delivered answer candidates only from the mounted roster", async () => {
@@ -652,13 +595,10 @@ it("collects delivered answer candidates only from the mounted roster", async ()
     { runId: "unscoped" },
   ];
   const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
+  onTestFinished(() => acquisitions.mockRestore());
   const page = createActivityPage(activityContext(source), activityRoute("?view=live"));
-  try {
-    await syncActivityRoster(page);
-    await Promise.all(acquisitions.mock.results.map((result) => result.value));
-  } finally {
-    acquisitions.mockRestore();
-  }
+  await syncActivityRoster(page);
+  await Promise.all(acquisitions.mock.results.map((result) => result.value));
   for (const origin of origins) {
     current().opts.onEvent?.(
       createGatewayEvent("agent", {
@@ -792,27 +732,6 @@ it("shows a failed subscription and recovers through the rendered Retry action",
   await sessions.unsubscribeMessages(recovered);
 });
 
-it("preserves activity and Clear when the selected chat changes", async () => {
-  const { gateway: source, page, current } = await livePage();
-  current().opts.onEvent?.(toolEvent("original"));
-  const originalRow = expandFirst(page);
-  source.setSessionKey("agent:other:work");
-
-  expect(previews(page)).toEqual(["original output"]);
-  expect(originalRow.open).toBe(true);
-  expect(page.query(".activity-entry")).toBe(originalRow);
-  current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
-  expect(previews(page)).toEqual(["original output", "other output"]);
-
-  const clear = page.query<HTMLButtonElement>(".activity-page button.danger");
-  expect(clear?.textContent?.trim()).toBe("Clear");
-  clear?.click();
-  source.setSessionKey("main");
-  expect(previews(page)).toEqual([]);
-  current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
-  expect(previews(page)).toEqual(["after-clear output"]);
-});
-
 it("renders the safe-only inspection response through its route", async () => {
   const result = unavailableInspection();
   const request = vi.fn(async () => result);
@@ -834,54 +753,47 @@ it("retires a run inspector when route data disappears and excludes its late res
     (_method: string, _params: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
   );
   const page = inspectPage(request);
-  try {
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "audit.run.inspect",
-      { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
-      { signal: expect.any(AbortSignal) },
-    );
-    const signal = request.mock.calls[0]?.[2]?.signal;
-    expect(signal?.aborted).toBe(false);
-    expect(page.query(".run-inspector__panel")).not.toBeNull();
-
-    page.setRouteLocation(undefined);
-
-    expect(signal?.aborted).toBe(true);
-    expect(page.query(".run-inspector")).toBeNull();
+  onTestFinished(async () => {
     pending.resolve(result);
     await pending.promise;
     flush();
-    expect(page.query(".run-inspector")).toBeNull();
-    expect(request).toHaveBeenCalledOnce();
-  } finally {
-    pending.resolve(result);
-    await pending.promise;
-    flush();
-  }
+  });
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "audit.run.inspect",
+    { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
+    { signal: expect.any(AbortSignal) },
+  );
+  const signal = request.mock.calls[0]?.[2]?.signal;
+  expect(signal?.aborted).toBe(false);
+  expect(page.query(".run-inspector__panel")).not.toBeNull();
+
+  page.setRouteLocation(undefined);
+
+  expect(signal?.aborted).toBe(true);
+  expect(page.query(".run-inspector")).toBeNull();
+  pending.resolve(result);
+  await pending.promise;
+  flush();
+  expect(page.query(".run-inspector")).toBeNull();
+  expect(request).toHaveBeenCalledOnce();
 });
 
 it.each([
   [
-    "UI Gateway request",
     new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "decision cursor is no longer retained",
     }),
-    "restart",
+    "Restart inspection",
   ],
   [
-    "non-invalid request",
     new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "gateway unavailable" }),
-    "retry",
+    "Retry inspection",
   ],
-] as const)("classifies a %s cursor failure", async (_label, error, recovery) => {
+] as const)("classifies a %s cursor failure", async (error, recovery) => {
   const page = inspectPage(
     vi.fn(() => Promise.reject(error)),
     "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
   );
-  await waitForSolid(() =>
-    expect(page.text('[role="alert"] button')).toBe(
-      recovery === "restart" ? "Restart inspection" : "Retry inspection",
-    ),
-  );
+  await waitForSolid(() => expect(page.text('[role="alert"] button')).toBe(recovery));
 });
