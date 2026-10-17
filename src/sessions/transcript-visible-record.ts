@@ -93,6 +93,22 @@ export function matchesTranscriptEvent(
     return isVisibleAssistantResultEventForRun(event, match.runId);
   }
   const message = asOptionalRecord(asOptionalRecord(event)?.message);
+  if (match.kind === "canvas-widget") {
+    if (asOptionalRecord(event)?.type !== "message" || message?.role !== "toolResult") {
+      return false;
+    }
+    if (projection === "navigation") {
+      return true;
+    }
+    const details = asOptionalRecord(message.details);
+    return (
+      message.toolName === "show_widget" &&
+      message.isError !== true &&
+      details?.kind === "canvas" &&
+      asOptionalRecord(details.view)?.id === match.docId &&
+      asOptionalRecord(details.presentation)?.target === "assistant_message"
+    );
+  }
   if (match.kind === "idempotency") {
     return (
       message?.idempotencyKey === match.key &&
