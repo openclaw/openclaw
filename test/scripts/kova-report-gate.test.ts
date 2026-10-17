@@ -12,7 +12,6 @@ import {
 
 type JsonObject = Record<string, unknown>;
 type PathPart = number | string;
-type ReportMutation = [string, (report: JsonObject) => void];
 
 const tempRoots: string[] = [];
 const SCRIPT_PATH = "scripts/lib/kova-report-gate.mts";
@@ -70,38 +69,21 @@ function deleteAt(root: unknown, path: PathPart[]): void {
   delete objectAt(parent)[key];
 }
 
-function metric(value: number) {
+function metric(...samples: number[]) {
   return {
     classification: "stable",
-    count: 1,
-    max: value,
-    median: value,
-    min: value,
-    p95: value,
-    samples: [value],
+    count: samples.length,
+    samples,
   };
 }
 
-function commandResult() {
+function commandResult(command = "ocm @env -- openclaw agent --local") {
   return {
-    command: "ocm @env -- openclaw agent --local",
+    command,
     status: 0,
     stderr: "",
     stdout: "",
     timedOut: false,
-  };
-}
-
-function cleanupResult() {
-  return { ...commandResult(), command: "ocm env destroy env --json" };
-}
-
-function targetCleanup() {
-  return {
-    command: "ocm runtime remove runtime --json",
-    result: cleanupResult(),
-    runtimeName: "runtime",
-    status: "removed",
   };
 }
 
@@ -151,7 +133,6 @@ function partialReport(): JsonObject {
       missingRequiredCount: 1,
       ok: false,
       partial: true,
-      required: [],
       schemaVersion: "kova.gate.v1",
       verdict: "PARTIAL",
       warning: [],
@@ -184,7 +165,7 @@ function partialReport(): JsonObject {
     records: [
       {
         cleanup: "destroyed",
-        cleanupResult: cleanupResult(),
+        cleanupResult: commandResult("ocm env destroy env --json"),
         measurements: {
           cpuPercentMax: 80,
           peakRssMb: 650,
@@ -207,7 +188,10 @@ function partialReport(): JsonObject {
     schemaVersion: "kova.report.v1",
     summary: { statuses: { PASS: 1 }, total: 1 },
     target: "local-build:/workspace/openclaw",
-    targetCleanup: targetCleanup(),
+    targetCleanup: {
+      result: commandResult("ocm runtime remove runtime --json"),
+      status: "removed",
+    },
   };
 }
 
@@ -278,31 +262,23 @@ function profiledResourceReport(): JsonObject {
 }
 
 function attachPassingBaseline(report: JsonObject): void {
-  report.baseline = {
-    comparison: {
-      baselineEntryCount: 1,
-      generatedAt: "2026-07-09T00:00:00.000Z",
-      groups: [],
-      instrumentedPerformanceGroupCount: 0,
-      instrumentedPerformanceGroups: [],
-      missing: [],
-      missingBaselineCount: 0,
-      ok: true,
-      regressionCount: 0,
-      regressions: [],
-      schemaVersion: "kova.baselineComparison.v1",
-    },
-    path: "/tmp/baseline.json",
-  };
-  objectAt(report.gate).baseline = {
+  const common = {
     baselineEntryCount: 1,
     missing: [],
     missingBaselineCount: 0,
-    instrumentedPerformanceGroupCount: 0,
-    instrumentedPerformanceGroups: [],
     ok: true,
-    regressedGroups: [],
     regressionCount: 0,
+  };
+  report.baseline = {
+    comparison: {
+      ...common,
+      regressions: [],
+      schemaVersion: "kova.baselineComparison.v1",
+    },
+  };
+  objectAt(report.gate).baseline = {
+    ...common,
+    regressedGroups: [],
     schemaVersion: "kova.gateBaselineSummary.v1",
   };
 }
@@ -357,12 +333,8 @@ function attachInstrumentedPerformanceWarning(
       {
         actual,
         affectsRecordStatus: false,
-        measurementMetric: "peakRssMb",
-        message: `${metricId} was not adjudicated because the run was instrumented`,
         metric: metricId,
-        observedOverThreshold: false,
         reason: "instrumented-performance-measurement",
-        role: "status-cli",
         status: "SKIPPED",
         threshold,
       },
@@ -374,13 +346,7 @@ function attachInstrumentedPerformanceWarning(
     arrayAt(gate.warning).push({ scenario: SCENARIO, state: STATE });
   }
   arrayAt(gate.cards).push({
-    actual: `${metricId} ${actual}`,
-    expected: `${metricId} <= ${threshold}`,
-    failedCommand: null,
-    impact:
-      "This run can reject functional failures, but it cannot approve the release until the scenario is rerun without profiling.",
     kind: "instrumented-performance-thresholds",
-    likelyOwner: "Kova",
     measurements: {
       firstActual: actual,
       firstMetric: metricId,
@@ -392,9 +358,6 @@ function attachInstrumentedPerformanceWarning(
     severity: "warning",
     state: STATE,
     status: "SKIPPED",
-    summary:
-      "1 performance threshold(s) were not adjudicated because profiling can distort CPU, RSS, and latency.",
-    title: "Instrumented Performance Evidence",
     violations: [],
   });
   gate.warningCount = Number(gate.warningCount) + 1;
@@ -481,14 +444,6 @@ function runGate(report: JsonObject, ...args: string[]) {
   });
 }
 
-function expectProfiledRejection(report: JsonObject): void {
-  expect(evaluateToleratedProfiledKovaReport(report).ok).toBe(false);
-}
-
-function expectPartialRejection(report: JsonObject): void {
-  expect(evaluateToleratedPartialKovaReport(report).ok).toBe(false);
-}
-
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -559,14 +514,14 @@ describe("scripts/lib/kova-report-gate.mts", () => {
     const record = objectAt(valueAt(report, ["records", 0]));
     record.cleanup = "already-absent";
     record.cleanupResult = {
-      ...cleanupResult(),
+      ...commandResult(),
       status: 1,
       stderr: "environment not found",
     };
     const cleanup = objectAt(report.targetCleanup);
     cleanup.status = "already-absent";
     cleanup.result = {
-      ...cleanupResult(),
+      ...commandResult(),
       status: 1,
       stderr: "runtime does not exist",
     };
@@ -604,7 +559,7 @@ describe("scripts/lib/kova-report-gate.mts", () => {
     expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });
   });
 
-  const profiledMutations: ReportMutation[] = [
+  const profiledMutations: Array<[string, (report: JsonObject) => void]> = [
     [
       "rejects invalid metric classifications",
       (report) =>
@@ -650,33 +605,22 @@ describe("scripts/lib/kova-report-gate.mts", () => {
     it(name, () => {
       const report = profiledResourceReport();
       mutate(report);
-      expectProfiledRejection(report);
+      expect(evaluateToleratedProfiledKovaReport(report).ok).toBe(false);
     });
   }
 
-  const partialMutations: ReportMutation[] = [
-    [
-      "rejects duplicate repeat cards that mask distinct assessments",
-      (report) => {
-        duplicatePassingRecord(report);
-        attachInstrumentedPerformanceWarning(report, 0);
-        attachInstrumentedPerformanceWarning(report, 1);
-        setAt(
-          report,
-          ["records", 1, "performanceThresholdAssessment", "skipped", 0, "metric"],
-          "cpuPercentMax",
-        );
-      },
-    ],
-  ];
-
-  for (const [name, mutate] of partialMutations) {
-    it(name, () => {
-      const report = partialReport();
-      mutate(report);
-      expectPartialRejection(report);
-    });
-  }
+  it("rejects duplicate repeat cards that mask distinct assessments", () => {
+    const report = partialReport();
+    duplicatePassingRecord(report);
+    attachInstrumentedPerformanceWarning(report, 0);
+    attachInstrumentedPerformanceWarning(report, 1);
+    setAt(
+      report,
+      ["records", 1, "performanceThresholdAssessment", "skipped", 0, "metric"],
+      "cpuPercentMax",
+    );
+    expect(evaluateToleratedPartialKovaReport(report).ok).toBe(false);
+  });
 
   it.each([
     ["reused RSS", "peakRssMb", [640, 650], 650],
@@ -685,21 +629,8 @@ describe("scripts/lib/kova-report-gate.mts", () => {
     const report = partialReport();
     duplicatePassingRecord(report);
     setAt(report, ["records", 1, "measurements", id], second);
-    const [min, max] = samples;
-    setAt(report, ["performance", "groups", 0, "metrics", id], {
-      classification: "stable",
-      count: 2,
-      max,
-      median: (min + max) / 2,
-      min,
-      p95: min + (max - min) * 0.95,
-      samples,
-    });
-    const result = spawnSync(
-      process.execPath,
-      [SCRIPT_PATH, writeReport(report), "--require-instrumented-performance-contract"],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
+    setAt(report, ["performance", "groups", 0, "metrics", id], metric(...samples));
+    const result = runGate(report, "--require-instrumented-performance-contract");
 
     expect(result.error).toBeUndefined();
     expect(result.signal).toBeNull();

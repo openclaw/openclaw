@@ -98,6 +98,70 @@ function completeRelease(version: string): Release {
   });
 }
 
+function publishedRelease(companion?: { name: string; sha256: string }): Release {
+  const source = completeRelease("2026.9.4");
+  const checksumBytes =
+    expectDefined(source.checksums, "checksums") +
+    (companion ? `${companion.sha256}  ./${companion.name}\n` : "");
+  source.checksums = checksumBytes;
+  source.immutable = manifest("2026.9.4", {
+    linuxPublication: {
+      schemaVersion: 1,
+      releaseId: 42,
+      sourceSha,
+      toolingSha,
+      channelSha: sourceSha,
+      publicKeySha256: "d".repeat(64),
+      assets: [
+        ...source.assets.map((name, index) => ({
+          id: index + 1,
+          name,
+          size: 1024,
+          sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
+        })),
+        {
+          id: 3,
+          name: "SHA256SUMS.linux-app.txt",
+          size: Buffer.byteLength(checksumBytes),
+          sha256: createHash("sha256").update(checksumBytes).digest("hex"),
+        },
+        ...(companion
+          ? [{ id: 7, name: companion.name, size: 1024, sha256: companion.sha256 }]
+          : []),
+      ],
+    },
+  });
+  source.manifest = source.immutable;
+  return source;
+}
+
+function publishFixture(state: Remote, source: Release) {
+  state.releases["v2026.9.4"] = source;
+  state.releases["linux-stable"] = {
+    isDraft: false,
+    isPrerelease: true,
+    assets: [],
+    manifest: source.immutable,
+  };
+}
+
+function flags(values: Record<string, string>) {
+  return Object.entries(values).flatMap(([key, value]) => [`--${key}`, value]);
+}
+
+function expectOutcome(
+  remote: ReturnType<typeof fixture>,
+  result: { status: number | null; stderr: string; evidence: { state: string } },
+  state: string,
+  exit = 0,
+  uploads = 0,
+) {
+  expect(
+    { exit: result.status, state: result.evidence.state, uploads: remote.read().uploads },
+    result.stderr,
+  ).toEqual({ exit, state, uploads });
+}
+
 function fixture(initial: Partial<Remote> = {}) {
   const root = tempDirs.make("linux-updater-manifest-");
   const bin = join(root, "bin");
@@ -273,24 +337,17 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
         [
           resolve("scripts/release-tooling-identity.mjs"),
           "verify",
-          "--repository",
-          repository,
-          "--workflow-full-ref",
-          "refs/heads/main",
-          "--workflow-ref",
-          "main",
-          "--workflow-sha",
-          toolingSha,
-          "--release-publish-run-id",
-          "123",
-          "--release-publish-run-attempt",
-          "1",
-          "--release-publish-ref",
-          "main",
-          "--release-publish-full-ref",
-          "refs/heads/main",
-          "--release-publish-parent-state-policy",
-          "active-or-success",
+          ...flags({
+            repository,
+            "workflow-full-ref": "refs/heads/main",
+            "workflow-ref": "main",
+            "workflow-sha": toolingSha,
+            "release-publish-run-id": "123",
+            "release-publish-run-attempt": "1",
+            "release-publish-ref": "main",
+            "release-publish-full-ref": "refs/heads/main",
+            "release-publish-parent-state-policy": "active-or-success",
+          }),
           ...writerArguments,
         ],
         { encoding: "utf8", timeout: 20_000, env },
@@ -323,14 +380,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
         [
           resolve("scripts/linux-updater-manifest.mjs"),
           command,
-          "--tag",
-          tag,
-          "--repository",
-          repository,
-          "--output",
-          output,
-          "--source-sha",
-          sourceSha,
+          ...flags({ tag, repository, output, "source-sha": sourceSha }),
           ...(prepared ? ["--publication-request", requestPath] : []),
         ],
         {
@@ -404,9 +454,7 @@ it.each(["2026.9.3", "2026.9.5"])(
       }
     });
     const result = remote.run("carry");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.evidence.state).toBe("unchanged");
-    expect(remote.read().uploads).toBe(0);
+    expectOutcome(remote, result, "unchanged");
     expect(fixtureRelease(remote.read(), "v2026.9.5").manifest).toBe(manifest(version));
   },
 );
@@ -423,9 +471,7 @@ it.each(["missing-manifest", "missing-release"])(
       }
     });
     const result = remote.run("carry");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.evidence.state).toBe("pending");
-    expect(remote.read().uploads).toBe(0);
+    expectOutcome(remote, result, "pending");
   },
 );
 
@@ -477,9 +523,7 @@ it.each([
           : JSON.stringify(value);
   });
   const result = remote.run("carry");
-  expect(result.status).toBe(1);
-  expect(result.evidence.state).toBe("failed");
-  expect(remote.read().uploads).toBe(0);
+  expectOutcome(remote, result, "failed", 1);
   expect(fixtureRelease(remote.read(), "v2026.9.5").manifest).toBeUndefined();
 });
 
@@ -497,9 +541,7 @@ it.each([
       fixtureRelease(state, "v2026.9.5").manifest = manifest("2026.9.2");
     });
     const result = remote.run("carry");
-    expect(result.status, result.stderr).toBe(exit);
-    expect(result.evidence.state).toBe(outcome);
-    expect(remote.read().uploads).toBe(1);
+    expectOutcome(remote, result, outcome, exit, 1);
     expect(readFileSync(join(result.output, "latest.json"), "utf8")).toBe(manifest("2026.9.3"));
     expect(readFileSync(join(result.output, "previous.json"), "utf8")).toBe(manifest("2026.9.2"));
     expect(fixtureRelease(remote.read(), "v2026.9.5").manifest).toBe(
@@ -513,9 +555,7 @@ it.each([
 it("carries a manifest under the prepared publisher's still-valid authority", () => {
   const remote = fixture();
   const result = remote.run("carry", "v2026.9.5", true);
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.evidence.state).toBe("uploaded");
-  expect(remote.read().uploads).toBe(1);
+  expectOutcome(remote, result, "uploaded", 0, 1);
 });
 
 const writerCliFields = [
@@ -609,10 +649,8 @@ it.each(uploadAuthorityCases)(
   ({ initial, message, prepared }) => {
     const remote = fixture(initial);
     const result = remote.run("carry", "v2026.9.5", prepared);
-    expect(result.status).toBe(1);
     expect(result.stderr).toContain(message);
-    expect(result.evidence.state).toBe("failed");
-    expect(remote.read().uploads).toBe(0);
+    expectOutcome(remote, result, "failed", 1);
   },
 );
 
@@ -621,31 +659,7 @@ it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
   (kind) => {
     const remote = fixture();
     remote.update((state) => {
-      const source = completeRelease("2026.9.4");
-      const checksumBytes = expectDefined(source.checksums, "checksums");
-      const proof = {
-        schemaVersion: 1,
-        releaseId: 42,
-        sourceSha,
-        toolingSha,
-        channelSha: sourceSha,
-        publicKeySha256: "d".repeat(64),
-        assets: [
-          ...source.assets.map((name, index) => ({
-            id: index + 1,
-            name,
-            size: 1024,
-            sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
-          })),
-          {
-            id: 3,
-            name: "SHA256SUMS.linux-app.txt",
-            size: Buffer.byteLength(checksumBytes),
-            sha256: createHash("sha256").update(checksumBytes).digest("hex"),
-          },
-        ],
-      };
-      source.immutable = manifest("2026.9.4", { linuxPublication: proof });
+      const source = publishedRelease();
       source.manifest =
         kind === "missing" ? undefined : kind === "older" ? manifest("2026.9.3") : source.immutable;
       if (kind === "replaced-release") {
@@ -654,18 +668,11 @@ it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
       if (kind === "replaced-asset") {
         source.assetIds = { "OpenClaw-2026.9.4-amd64.AppImage": 99 };
       }
-      state.releases["v2026.9.4"] = source;
-      state.releases["linux-stable"] = {
-        isDraft: false,
-        isPrerelease: true,
-        assets: [],
-        manifest: source.immutable,
-      };
+      publishFixture(state, source);
     });
     const result = remote.run("status", "v2026.9.4");
     if (kind === "replaced-release" || kind === "replaced-asset") {
-      expect(result.status).toBe(1);
-      expect(result.evidence.state).toBe("failed");
+      expectOutcome(remote, result, "failed", 1);
       const dispatch = remote.dispatch();
       expect(dispatch.status).toBe(1);
       expect(remote.read().uploads).toBe(0);
@@ -695,35 +702,8 @@ it.each(["present", "withdrawn", "replaced", "changed-digest", "missing-appimage
     const exeSha256 = "e".repeat(64);
     const remote = fixture();
     remote.update((state) => {
-      const source = completeRelease("2026.9.4");
       // The immutable checksum file keeps the withdrawn companion's row.
-      const checksumBytes = `${expectDefined(source.checksums, "checksums")}${exeSha256}  ./${exe}\n`;
-      source.checksums = checksumBytes;
-      const proof = {
-        schemaVersion: 1,
-        releaseId: 42,
-        sourceSha,
-        toolingSha,
-        channelSha: sourceSha,
-        publicKeySha256: "d".repeat(64),
-        assets: [
-          ...source.assets.map((name, index) => ({
-            id: index + 1,
-            name,
-            size: 1024,
-            sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
-          })),
-          {
-            id: 3,
-            name: "SHA256SUMS.linux-app.txt",
-            size: Buffer.byteLength(checksumBytes),
-            sha256: createHash("sha256").update(checksumBytes).digest("hex"),
-          },
-          { id: 7, name: exe, size: 1024, sha256: exeSha256 },
-        ],
-      };
-      source.immutable = manifest("2026.9.4", { linuxPublication: proof });
-      source.manifest = source.immutable;
+      const source = publishedRelease({ name: exe, sha256: exeSha256 });
       const removed = {
         withdrawn: exe,
         "missing-appimage": "OpenClaw-2026.9.4-amd64.AppImage",
@@ -735,13 +715,7 @@ it.each(["present", "withdrawn", "replaced", "changed-digest", "missing-appimage
         ...source.digests,
         [exe]: `sha256:${kind === "changed-digest" ? "f".repeat(64) : exeSha256}`,
       };
-      state.releases["v2026.9.4"] = source;
-      state.releases["linux-stable"] = {
-        isDraft: false,
-        isPrerelease: true,
-        assets: [],
-        manifest: source.immutable,
-      };
+      publishFixture(state, source);
     });
     const observed = remote.inspect("v2026.9.4");
     const status = remote.run("status", "v2026.9.4");
@@ -752,8 +726,7 @@ it.each(["present", "withdrawn", "replaced", "changed-digest", "missing-appimage
           ? "Linux manifest source v2026.9.4 must have its published AppImage."
           : "Immutable Linux publication differs from its public asset inventory.",
       );
-      expect(status.status).toBe(1);
-      expect(status.evidence.state).toBe("failed");
+      expectOutcome(remote, status, "failed", 1);
       return;
     }
     expect(observed.status, observed.stderr).toBe(0);
@@ -783,10 +756,8 @@ it.each(["same-tag", "missing", "older", "newer"])(
       });
     });
     const result = remote.run("status", "v2026.9.4");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.evidence.state).toBe("published");
+    expectOutcome(remote, result, "published");
     expect(result.evidence.needsUpdaterPublication).toBe(kind === "missing" || kind === "older");
-    expect(remote.read().uploads).toBe(0);
     if (kind === "same-tag") {
       expect(result.evidence).toMatchObject({
         assetsComplete: true,
@@ -840,9 +811,7 @@ it.each([
     state.releases["v2026.9.4"] = source;
   });
   const result = remote.run("status", "v2026.9.4");
-  expect(result.status).toBe(1);
-  expect(result.evidence.state).toBe("failed");
-  expect(remote.read().uploads).toBe(0);
+  expectOutcome(remote, result, "failed", 1);
 });
 
 it.each(["absent", "complete", "partial", "propagation"])(
@@ -947,8 +916,7 @@ it.each([
 ])("does not reuse a Linux request that is $reason", ({ overrides }) => {
   const remote = pendingLinuxFixture({ requestRuns: [linuxRequest(overrides)] });
   const result = remote.dispatch();
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.evidence.state).toBe("request-dispatched");
+  expectOutcome(remote, result, "request-dispatched");
   expect(remote.read().requests).toHaveLength(1);
 });
 
@@ -961,8 +929,7 @@ it.each(["dispatchRejected", "requestReadRejected", "movedTag", "missingDispatch
       missingDispatchId: failure === "missingDispatchId",
     });
     const result = remote.dispatch(failure === "movedTag" ? "c".repeat(40) : sourceSha);
-    expect(result.status).toBe(1);
-    expect(result.evidence.state).toBe("dispatch-unconfirmed");
+    expectOutcome(remote, result, "dispatch-unconfirmed", 1);
     if (failure === "requestReadRejected") {
       expect(result.stderr).toContain("request history unavailable");
     }

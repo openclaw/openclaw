@@ -32,78 +32,54 @@ function collectFileSuppressions(file: string, source: string): SuppressionEntry
 }
 
 function isProductionCodeFile(relativePath: string): boolean {
-  const basename = path.posix.basename(relativePath);
-  if (!CODE_EXTENSIONS.has(path.extname(relativePath))) {
-    return false;
-  }
-  if (basename.startsWith("__rootdir_boundary_canary__.")) {
-    return false;
-  }
-  return !(
-    relativePath.includes("/test/") ||
-    relativePath.endsWith(".test.ts") ||
-    relativePath.endsWith(".test.tsx") ||
-    relativePath.endsWith(".spec.ts") ||
-    relativePath.endsWith(".spec.tsx")
-  );
-}
-
-function listGitCodeFiles(root: string): string[] | null {
   return (
-    listGitTrackedFiles({ repoRoot, pathspecs: root })
-      ?.filter(isProductionCodeFile)
-      .filter((relativePath) => fs.existsSync(path.join(repoRoot, relativePath))) ?? null
+    CODE_EXTENSIONS.has(path.extname(relativePath)) &&
+    !path.posix.basename(relativePath).startsWith("__rootdir_boundary_canary__.") &&
+    !(
+      relativePath.includes("/test/") ||
+      relativePath.endsWith(".test.ts") ||
+      relativePath.endsWith(".test.tsx") ||
+      relativePath.endsWith(".spec.ts") ||
+      relativePath.endsWith(".spec.tsx")
+    )
   );
 }
 
-function walkCodeFiles(dir: string, files: string[] = []): string[] {
+function isPresentProductionFile(file: string): boolean {
+  return isProductionCodeFile(file) && fs.existsSync(path.join(repoRoot, file));
+}
+
+function walkCodeFiles(dir: string): string[] {
   const relativeRoot = toRepoRelativePath(repoRoot, dir);
   if (relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)) {
-    const gitFiles = listGitCodeFiles(relativeRoot);
+    const gitFiles = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
     if (gitFiles) {
-      files.push(...gitFiles);
-      return files;
+      return gitFiles.filter(isPresentProductionFile);
     }
   }
 
   if (!fs.existsSync(dir)) {
-    return files;
+    return [];
   }
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (IGNORED_DIRS.has(entry.name)) {
-        continue;
-      }
-      walkCodeFiles(fullPath, files);
-      continue;
+      return IGNORED_DIRS.has(entry.name) ? [] : walkCodeFiles(fullPath);
     }
     const relativePath = toRepoRelativePath(repoRoot, fullPath);
-    if (!isProductionCodeFile(relativePath)) {
-      continue;
-    }
-    files.push(relativePath);
-  }
-  return files;
+    return isProductionCodeFile(relativePath) ? [relativePath] : [];
+  });
 }
 
 function collectProductionLintSuppressions(): SuppressionEntry[] {
-  if (productionLintSuppressionsCache) {
-    return [...productionLintSuppressionsCache];
-  }
-  const gitEntries = collectProductionLintSuppressionsFromGit();
-  if (gitEntries) {
-    productionLintSuppressionsCache = gitEntries;
-    return [...gitEntries];
-  }
-  const entries: SuppressionEntry[] = [];
-  const files = listProductionCodeFiles();
-  for (const relativePath of files) {
-    const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-    entries.push(...collectFileSuppressions(relativePath, source));
-  }
-  productionLintSuppressionsCache = entries;
-  return [...entries];
+  productionLintSuppressionsCache ??=
+    collectProductionLintSuppressionsFromGit() ??
+    listProductionCodeFiles().flatMap(readSuppressions);
+  return [...productionLintSuppressionsCache];
+}
+
+function readSuppressions(file: string): SuppressionEntry[] {
+  return collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8"));
 }
 
 function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
@@ -123,16 +99,7 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
   if (result.status !== 0) {
     return null;
   }
-  const entries: SuppressionEntry[] = [];
-  for (const file of result.stdout.split("\0").filter(Boolean)) {
-    if (!isProductionCodeFile(file) || !fs.existsSync(path.join(repoRoot, file))) {
-      continue;
-    }
-    entries.push(
-      ...collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8")),
-    );
-  }
-  return entries;
+  return result.stdout.split("\0").filter(isPresentProductionFile).flatMap(readSuppressions);
 }
 
 function listProductionCodeFiles(): string[] {
