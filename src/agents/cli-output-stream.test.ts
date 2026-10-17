@@ -34,6 +34,13 @@ function init(sessionId: string) {
 }
 const messageStart = claudeStreamEvent({ type: "message_start" });
 const messageStop = claudeStreamEvent({ type: "message_stop" });
+function message(text: string) {
+  return [messageStart, claudeTextDelta(text)];
+}
+function reply(text: string) {
+  return [claudeTextDelta(text), result(text)];
+}
+const draftMessage = [...message("Draft."), messageStop];
 function toolStart(id = "tool-1", index?: number) {
   return claudeStreamEvent({
     type: "content_block_start",
@@ -104,34 +111,22 @@ describe("createCliJsonlStreamingParser", () => {
     expect(snapshots).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "exact synthetic empty terminal",
-      frames: [syntheticNoResponse()],
-      expected: {
+  it.each<[name: string, frames: unknown[], expected: Record<string, unknown>]>([
+    [
+      "exact synthetic empty terminal",
+      [syntheticNoResponse()],
+      {
         text: "",
         errorText: "Claude CLI returned a synthetic no-response result.",
         terminalFailure: { reason: "synthetic_no_response" },
       },
-    },
-    {
-      name: "ordinary lookalike",
-      frames: [syntheticNoResponse(undefined, "claude-sonnet-4-6")],
-      expected: { text: "" },
-    },
-    {
-      name: "different synthetic text",
-      frames: [syntheticNoResponse("No reply needed.")],
-      expected: { text: "" },
-    },
-    {
-      name: "real text",
-      frames: [syntheticNoResponse(), claudeTextDelta("real answer")],
-      expected: { text: "real answer" },
-    },
-    {
-      name: "tool activity",
-      frames: [
+    ],
+    ["ordinary lookalike", [syntheticNoResponse(undefined, "claude-sonnet-4-6")], { text: "" }],
+    ["different synthetic text", [syntheticNoResponse("No reply needed.")], { text: "" }],
+    ["real text", [syntheticNoResponse(), claudeTextDelta("real answer")], { text: "real answer" }],
+    [
+      "tool activity",
+      [
         {
           type: "assistant",
           message: {
@@ -142,9 +137,9 @@ describe("createCliJsonlStreamingParser", () => {
         },
         syntheticNoResponse(),
       ],
-      expected: { text: "" },
-    },
-  ])("classifies $name without confusing legitimate empty replies", ({ frames, expected }) => {
+      { text: "" },
+    ],
+  ])("classifies %s without confusing legitimate empty replies", (_name, frames, expected) => {
     const parser = createClaudeParser();
     finishFrames(
       parser,
@@ -158,37 +153,29 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
-  it.each([
-    {
-      name: "empty hook-stopped turn",
-      frames: [],
-      terminalReason: "hook_stopped",
-      expected: { text: "", ...stoppedFailure },
-    },
-    {
-      name: "hook stop after streamed reply",
-      frames: [claudeTextDelta("streamed answer")],
-      terminalReason: "hook_stopped",
-      expected: { text: "streamed answer" },
-    },
-    {
-      name: "backgrounded turn",
-      frames: [],
-      terminalReason: "background_requested",
-      expected: { text: "" },
-    },
-    {
-      name: "hook stop after an interim result",
-      frames: [
+  it.each<
+    [name: string, frames: unknown[], terminalReason: string, expected: Record<string, unknown>]
+  >([
+    ["empty hook-stopped turn", [], "hook_stopped", { text: "", ...stoppedFailure }],
+    [
+      "hook stop after streamed reply",
+      [claudeTextDelta("streamed answer")],
+      "hook_stopped",
+      { text: "streamed answer" },
+    ],
+    ["backgrounded turn", [], "background_requested", { text: "" }],
+    [
+      "hook stop after an interim result",
+      [
         result("Agent is running. I'll let you know when it finishes.", {
           subtype: "success",
           terminal_reason: "completed",
         }),
       ],
-      terminalReason: "hook_stopped",
-      expected: { text: "", ...stoppedFailure },
-    },
-  ])("judges delivery for the current $name", ({ frames, terminalReason, expected }) => {
+      "hook_stopped",
+      { text: "", ...stoppedFailure },
+    ],
+  ])("judges delivery for the current %s", (_name, frames, terminalReason, expected) => {
     const parser = createClaudeParser();
     finishFrames(
       parser,
@@ -210,40 +197,35 @@ describe("createCliJsonlStreamingParser", () => {
   });
 
   it.each([
-    {
-      name: "incomplete tool protocol",
-      text: '<invoke name="Bash">\n<parameter name="command">echo 1',
-      rejected: true,
+    ["incomplete tool protocol", '<invoke name="Bash">\n<parameter name="command">echo 1', true],
+    ["plain prose", "partial answer", false],
+    [
+      "fenced example",
+      'Example:\n```xml\n<invoke name="Bash">\n<parameter name="command">echo 1',
+      false,
+    ],
+    [
+      "first-line indented example",
+      '    <invoke name="Bash">\n    <parameter name="command">echo 1',
+      false,
+    ],
+  ] as const)(
+    "retains only usable interrupted %s without synthetic callbacks",
+    (_name, text, rejected) => {
+      const parseJsonlEvent = vi.fn(() => null);
+      const parser = createClaudeParser({ parseJsonlEvent });
+      const frame = claudeTextDelta(text);
+      finishFrames(parser, frame);
+      expect(parser.hasTerminalResult()).toBe(false);
+      expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
+      expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
+      expect(parseJsonlEvent).toHaveBeenCalledOnce();
+      expect(parseJsonlEvent).toHaveBeenCalledWith(
+        JSON.stringify(frame),
+        expect.objectContaining({ backendId: "claude-cli" }),
+      );
     },
-    {
-      name: "plain prose",
-      text: "partial answer",
-      rejected: false,
-    },
-    {
-      name: "fenced example",
-      text: 'Example:\n```xml\n<invoke name="Bash">\n<parameter name="command">echo 1',
-      rejected: false,
-    },
-    {
-      name: "first-line indented example",
-      text: '    <invoke name="Bash">\n    <parameter name="command">echo 1',
-      rejected: false,
-    },
-  ])("retains only usable interrupted $name without synthetic callbacks", ({ text, rejected }) => {
-    const parseJsonlEvent = vi.fn(() => null);
-    const parser = createClaudeParser({ parseJsonlEvent });
-    const frame = claudeTextDelta(text);
-    finishFrames(parser, frame);
-    expect(parser.hasTerminalResult()).toBe(false);
-    expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
-    expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
-    expect(parseJsonlEvent).toHaveBeenCalledOnce();
-    expect(parseJsonlEvent).toHaveBeenCalledWith(
-      JSON.stringify(frame),
-      expect.objectContaining({ backendId: "claude-cli" }),
-    );
-  });
+  );
 
   it("keeps incomplete tool markup in a completed explanation", () => {
     const text = 'Example:\n<invoke name="Bash">\n<parameter name="command">echo 1';
@@ -262,115 +244,79 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toMatchObject({ text: "", errorText: expect.any(String) });
   });
 
-  it.each([
-    {
-      name: "no result envelope",
-      frames: [claudeTextDelta("hello")],
-      expectedText: "hello",
-      checkDelta: true,
-    },
-    {
-      name: "empty result envelope",
-      frames: [claudeTextDelta("hello"), claudeTextDelta(" world"), result("")],
-      expectedText: "hello world",
-    },
-    {
-      name: "tool split inside one message",
-      frames: [
-        messageStart,
-        claudeTextDelta("Before."),
-        toolStart(),
-        claudeTextDelta("DONE"),
-        result("DONE"),
-      ],
-      expectedText: "Before.\n\nDONE",
-      expectedRawFinalText: "DONE",
-    },
-    {
-      name: "toolless closer after tool-using message",
-      frames: [
-        messageStart,
-        claudeTextDelta("Before."),
+  it.each<
+    [
+      name: string,
+      frames: unknown[],
+      expectedText: string,
+      expectedRawFinalText?: string,
+      checkDelta?: boolean,
+    ]
+  >([
+    ["no result envelope", [claudeTextDelta("hello")], "hello", undefined, true],
+    [
+      "empty result envelope",
+      [claudeTextDelta("hello"), claudeTextDelta(" world"), result("")],
+      "hello world",
+    ],
+    [
+      "tool split inside one message",
+      [...message("Before."), toolStart(), ...reply("DONE")],
+      "Before.\n\nDONE",
+      "DONE",
+    ],
+    [
+      "toolless closer after tool-using message",
+      [
+        ...message("Before."),
         toolStart(),
         claudeTextDelta("After."),
         messageStop,
         messageStart,
-        claudeTextDelta("DONE"),
-        result("DONE"),
+        ...reply("DONE"),
       ],
-      expectedText: "Before.\n\nAfter.\n\nDONE",
-      expectedRawFinalText: "DONE",
-    },
-    {
-      name: "existing newlines at message boundaries",
-      frames: [
-        messageStart,
-        claudeTextDelta("Before.\n\n"),
-        toolStart(),
-        messageStart,
-        claudeTextDelta("DONE"),
-        result("DONE"),
-      ],
-      expectedText: "Before.\n\nDONE",
-      expectedRawFinalText: "DONE",
-    },
-    {
-      name: "tool split after an ordinary boundary",
-      frames: [
-        messageStart,
-        claudeTextDelta("Draft."),
-        messageStop,
-        messageStart,
-        claudeTextDelta("Before."),
-        toolStart(),
-        claudeTextDelta("DONE"),
-        result("DONE"),
-      ],
-      expectedText: "Before.\n\nDONE",
-      expectedRawFinalText: "DONE",
-    },
-    {
-      name: "fresh message starting with a tool call",
-      frames: [
-        messageStart,
-        claudeTextDelta("Draft."),
-        messageStop,
-        messageStart,
-        toolStart(),
-        claudeTextDelta("Fresh answer."),
-        result("Fresh answer."),
-      ],
-      expectedText: "Fresh answer.",
-    },
-    {
-      name: "message boundary without a tool split",
-      frames: [
-        messageStart,
-        claudeTextDelta("Draft."),
-        messageStop,
-        messageStart,
-        claudeTextDelta("Final answer."),
-        result("Final answer."),
-      ],
-      expectedText: "Final answer.",
-    },
-    {
-      name: "suffix match inside one message",
-      frames: [
+      "Before.\n\nAfter.\n\nDONE",
+      "DONE",
+    ],
+    [
+      "existing newlines at message boundaries",
+      [...message("Before.\n\n"), toolStart(), messageStart, ...reply("DONE")],
+      "Before.\n\nDONE",
+      "DONE",
+    ],
+    [
+      "tool split after an ordinary boundary",
+      [...draftMessage, ...message("Before."), toolStart(), ...reply("DONE")],
+      "Before.\n\nDONE",
+      "DONE",
+    ],
+    [
+      "fresh message starting with a tool call",
+      [...draftMessage, messageStart, toolStart(), ...reply("Fresh answer.")],
+      "Fresh answer.",
+    ],
+    [
+      "message boundary without a tool split",
+      [...draftMessage, messageStart, ...reply("Final answer.")],
+      "Final answer.",
+    ],
+    [
+      "suffix match inside one message",
+      [
         messageStart,
         claudeTextDelta("discarded draft authoritative result"),
         result("authoritative result"),
       ],
-      expectedText: "authoritative result",
-    },
-    {
-      name: "divergent streamed text",
-      frames: [claudeTextDelta("draft wording"), result("authoritative result")],
-      expectedText: "authoritative result",
-    },
+      "authoritative result",
+    ],
+    [
+      "divergent streamed text",
+      [claudeTextDelta("draft wording"), result("authoritative result")],
+      "authoritative result",
+    ],
   ])(
-    "resolves streamed/result precedence for $name",
-    ({ frames, expectedText, expectedRawFinalText, checkDelta }) => {
+    "resolves streamed/result precedence for %s",
+    (_name, frames, expectedText, expectedRawFinalText, checkDelta) => {
       const deltas: Parameters<ParserOptions["onAssistantDelta"]>[0][] = [];
       const sessionIds: string[] = [];
       const parser = createParser({
@@ -434,13 +380,11 @@ describe("createCliJsonlStreamingParser", () => {
     finishFrames(
       parser,
       init("session-tool-split"),
-      messageStart,
-      claudeTextDelta("Before."),
+      ...message("Before."),
       toolStart(),
       messageStop,
       messageStart,
-      claudeTextDelta("DONE"),
-      result("DONE"),
+      ...reply("DONE"),
     );
     expect(parser.getOutput()).toEqual({
       text: "Before.\n\nDONE",
@@ -459,13 +403,10 @@ describe("createCliJsonlStreamingParser", () => {
       parser,
       init("session-interim"),
       messageStart,
-      claudeTextDelta("Interim answer."),
-      result("Interim answer."),
-      messageStart,
-      claudeTextDelta("Pre-tool follow-up."),
+      ...reply("Interim answer."),
+      ...message("Pre-tool follow-up."),
       toolStart("tool-2"),
-      claudeTextDelta("DONE"),
-      result("DONE"),
+      ...reply("DONE"),
     );
     expect(parser.getOutput()?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
     expect(deltas.at(-1)?.text).toBe("Interim answer.\n\nPre-tool follow-up.\n\nDONE");
