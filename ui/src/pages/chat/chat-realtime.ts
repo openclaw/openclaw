@@ -30,7 +30,6 @@ export type ChatRealtimeState = {
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalk: ChatRealtimeOwner;
-  requestUpdate?: () => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
   toggleRealtimeTalkCamera: () => Promise<void>;
@@ -223,7 +222,6 @@ export function attachChatRealtimeActions(
     if (!state.client || !state.connected) {
       state.lastError = "Gateway not connected";
       state.chatError = state.lastError;
-      state.requestUpdate?.();
       return undefined;
     }
     // Re-read persisted settings so device choices made elsewhere apply to the

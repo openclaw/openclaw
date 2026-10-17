@@ -354,14 +354,10 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
 }
 
 export function setChatError(
-  state: { lastError?: string | null; chatError?: string | null; requestUpdate?: () => void },
+  state: { lastError?: string | null; chatError?: string | null },
   error: string | null,
-  requestUpdate = false,
 ) {
   const message = error === null ? null : formatUiError(error);
   state.lastError = message;
   state.chatError = message;
-  if (requestUpdate) {
-    state.requestUpdate?.();
-  }
 }

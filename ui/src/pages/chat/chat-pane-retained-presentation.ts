@@ -687,7 +687,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           })
           .catch((error: unknown) => {
             if (isCurrent()) {
-              setChatError(state, formatUiError(error), true);
+              setChatError(state, formatUiError(error));
             }
           });
       });
