@@ -82,7 +82,7 @@ if (role === "server") {
     [
       ...(process.versions.bun
         ? ["--no-install"]
-        : ["--import", fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url))]),
+        : ["--import", new URL("../../scripts/tsx.mjs", import.meta.url).href]),
       fixture,
       "server",
       version,
@@ -235,6 +235,9 @@ if (role === "server") {
     } else {
       console.log(JSON.stringify(result));
     }
+  } catch (error) {
+    process.stderr.write(diagnostics);
+    throw error;
   } finally {
     await releaseWork();
     await client.close();

@@ -7945,7 +7945,6 @@
 ["src/mcp/channel-bridge.startup.test.ts","../gateway/client.js","bb4b8a80ae2e68130829f809d118dd16e2ee9a16016ae528472ab5e4983cd45f",1]
 ["src/mcp/channel-bridge.startup.test.ts","../gateway/method-scopes.js","5ed7689f8601b5da7409ba069bb4730b386223939ffdd48c1434de4a77895bbe",1]
 ["src/mcp/channel-server.shutdown-unhandled-rejection.test.ts","./channel-bridge.js","3486360bb7cef577343286f98544406ccc3961f6b9f6f26d8c88d938dd1ce10f",1]
-["src/mcp/channel-server.shutdown-unhandled-rejection.test.ts","./channel-shared.js","93db4fd5f92b66fbcbe56c9aee0b42b48253950030de71d37320c8c70ef385f7",1]
 ["src/mcp/channel-server.shutdown-unhandled-rejection.test.ts","./channel-tools.js","a0ed59ce1063f79ecda5b462863d88213c763cbca5ea7954d437ac948c7c88c5",1]
 ["src/mcp/plugin-tools-serve.test.ts","../agents/tools/gateway.js","76500e2f6a812f0085e1f507735221b314a1f9b1349b630070db4466d87a9624",1]
 ["src/media-generation/registry.test.ts","../plugins/capability-provider-runtime.js","21bf5be22d522e62b83355626d53c00266707236752cdc430c850b528410d132",1]
