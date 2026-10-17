@@ -133,8 +133,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       callbacks: number;
       controlCollected: boolean;
     };
-    expect(retained.controlCollected).toBe(true);
-    expect(retained.callbacks).toBe(1);
+    expect(retained).toMatchObject({ controlCollected: true, callbacks: 1 });
   } finally {
     await pool.close();
   }
