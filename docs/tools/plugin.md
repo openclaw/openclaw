@@ -386,6 +386,7 @@ If the plugin needs a trust-gated capability, use the applicable remedy below.
 | `install-path-mismatch` | Reinstall the intended package and remove load paths that select another copy.                                                                                                                                       |
 | `owner-ambiguous`       | Refresh the registry and resolve conflicting package ownership before reinstalling.                                                                                                                                  |
 | `provenance-invalid`    | Reinstall from the official source; conflicting or partial provenance is not automatically trusted.                                                                                                                  |
+| `third-party-npm`       | A valid third-party npm install is not official and cannot use trust-gated capabilities such as hook agent turns. Reinstalling the same package will not change that; use an official package if you need it.        |
 
 `bundled` and `trusted-official` identify accepted sources. Legacy npm records
 with a consistent official package spec remain valid without extra resolution

@@ -198,6 +198,21 @@ describe("recorded plugin trust diagnostics", () => {
       repairTrusted: true,
     },
     {
+      name: "consistent third-party npm install",
+      pluginId: "third-party-demo",
+      packageName: "@acme/third-party-demo",
+      version: "1.0.0",
+      reason: "third-party-npm",
+      trusted: false,
+    },
+    {
+      name: "official catalog package recorded under another plugin id",
+      pluginId: "other-plugin",
+      packageName: "@openclaw/acpx",
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
       name: "unendorsed AgentMail npm namesake",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",

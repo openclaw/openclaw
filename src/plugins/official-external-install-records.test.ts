@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
+  isThirdPartyNpmInstallRecord as isThirdParty,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
   isTrustedOfficialPluginInstallRecord as isTrusted,
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveClawHub,
@@ -102,6 +103,89 @@ describe("official plugin install trust", () => {
         record: clawhubInstall("@openclaw/acpx", { resolvedName: "@openclaw/acpx", ...overrides }),
       }),
     ).toBe(trusted);
+  });
+});
+
+describe("third-party npm install records", () => {
+  const pluginId = "third-party-demo";
+  const packageName = "@acme/third-party-demo";
+  const record: PluginInstallRecord = {
+    source: "npm",
+    spec: `${packageName}@1.0.0`,
+    resolvedName: packageName,
+    resolvedSpec: `${packageName}@1.0.0`,
+  };
+
+  it("accepts a consistent non-catalog npm install", () => {
+    expect(isThirdParty({ pluginId, packageName, record })).toBe(true);
+  });
+
+  it("accepts a spec-only consistent record", () => {
+    expect(
+      isThirdParty({
+        pluginId,
+        packageName,
+        record: { source: "npm", spec: `${packageName}@1.0.0` },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts a consistent legacy clawhub package field", () => {
+    expect(
+      isThirdParty({
+        pluginId,
+        packageName,
+        record: { ...record, clawhubPackage: packageName },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { name: "conflicting identity", overrides: { resolvedName: "@vendor/other" } },
+    { name: "malformed spec", overrides: { spec: "file:/tmp/plugin.tgz" } },
+    { name: "local npm archive", overrides: { artifactKind: "npm-pack" } },
+    { name: "source path", overrides: { sourcePath: "/tmp/plugin" } },
+    { name: "conflicting clawhub package", overrides: { clawhubPackage: "@vendor/other" } },
+    { name: "clawhub source", overrides: { source: "clawhub" } },
+    {
+      name: "missing identity",
+      overrides: { spec: undefined, resolvedName: undefined, resolvedSpec: undefined },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "rejects $name",
+    ({ overrides }) => {
+      expect(
+        isThirdParty({
+          pluginId,
+          packageName,
+          record: { ...record, ...overrides },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([undefined, "@acme/other"])("rejects candidate package %s", (candidate) => {
+    expect(isThirdParty({ pluginId, packageName: candidate, record })).toBe(false);
+  });
+
+  it("rejects an official catalog package recorded from npm", () => {
+    expect(
+      isThirdParty({
+        pluginId: "other-plugin",
+        packageName: "@openclaw/acpx",
+        record: { source: "npm", spec: "@openclaw/acpx@2026.7.2" },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an official catalog plugin id with an unendorsed npm namesake", () => {
+    expect(
+      isThirdParty({
+        pluginId: "agentmail",
+        packageName: "@agentmail/agentmail",
+        record: { source: "npm", spec: "@agentmail/agentmail@0.2.1" },
+      }),
+    ).toBe(false);
   });
 });
 

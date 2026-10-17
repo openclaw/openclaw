@@ -7,7 +7,10 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
+import {
+  isTrustedOfficialPluginInstallRecord,
+  isThirdPartyNpmInstallRecord,
+} from "./official-external-install-records.js";
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import type { PluginTrust } from "./plugin-trust.js";
@@ -117,6 +120,14 @@ export function resolvePluginTrust(params: {
       record.clawhubChannel === undefined)
   ) {
     reason = "provenance-missing";
+  } else if (
+    isThirdPartyNpmInstallRecord({
+      pluginId: installOwner,
+      packageName: params.candidate.packageName,
+      record,
+    })
+  ) {
+    reason = "third-party-npm";
   } else {
     reason = "provenance-invalid";
   }

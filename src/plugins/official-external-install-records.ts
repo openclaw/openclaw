@@ -105,6 +105,33 @@ export function resolveTrustedOfficialClawHubPackageName(
   return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
 }
 
+/**
+ * A consistently recorded non-catalog npm install never claims official trust, so it is
+ * expected to stay untrusted. Official plugin ids and catalog packages recorded from npm
+ * are not accepted here and remain invalid claims.
+ */
+export function isThirdPartyNpmInstallRecord(params: {
+  pluginId: string;
+  packageName?: string;
+  record: PluginInstallRecord;
+}): boolean {
+  const packageName = params.packageName?.trim();
+  if (
+    !packageName ||
+    getOfficialExternalPluginCatalogEntryForPackage(packageName) ||
+    getOfficialExternalPluginCatalogEntry(params.pluginId)
+  ) {
+    return false;
+  }
+  const record = params.record;
+  return (
+    hasTrustedOfficialNpmProvenance(record) &&
+    resolveUnanimousRecordedNpmPackageName(record) === packageName &&
+    (record.clawhubPackage === undefined ||
+      resolveExactNpmPackageName(record.clawhubPackage) === packageName)
+  );
+}
+
 /** Binds official trust to the actual package and consistent recorded source identity. */
 export function isTrustedOfficialPluginInstallRecord(params: {
   pluginId: string;
