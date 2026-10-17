@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -44,6 +44,23 @@ const node = {
 function receipt(bundleHash: string, openclawVersion = "2026.8.9") {
   return { bundleHash, openclawVersion, protocolFeatures: [], installKind: "bundle" };
 }
+
+const previousHash = "b".repeat(64);
+const currentHash = "c".repeat(64);
+const baseManifest = `sha256:${"1".repeat(64)}`;
+const manifestRead = (read: () => string[] | null) =>
+  Object.assign(read, { [Symbol.dispose]: () => {} });
+const bundleRetention = (artifact = receipt(currentHash), owned = false) => ({
+  currentBuild: async () => artifact,
+  isEnvironmentOwnedNode: () => owned,
+});
+const turnClaim = {
+  owner: "worker",
+  claimId: "claim-1",
+  runId: "run-1",
+  generation: 3,
+  ownerEpoch: 7,
+};
 
 function environment(overrides: Record<string, unknown> = {}) {
   return {
@@ -236,19 +253,23 @@ function createHarness(
     warn,
   });
   coordinator.bindTransport(transport);
+  onTestFinished(() => coordinator.stop());
   return { coordinator, invoke, warn, acceptBundleStatus, placements };
+}
+
+async function startHarness(params: Parameters<typeof createHarness>[0] = {}) {
+  const harness = createHarness(params);
+  await harness.coordinator.start();
+  return harness;
 }
 
 describe("node workspace retain coordinator", () => {
   it("accepts bundle status when placement metadata changes after node dispatch", async () => {
-    const bundleHash = "c".repeat(64);
+    const bundleHash = currentHash;
     const placements = [placement()];
     const { coordinator } = createHarness({
       placements,
-      bundleRetention: {
-        currentBuild: async () => ({ bundleHash, openclawVersion: "2026.8.10" }),
-        isEnvironmentOwnedNode: () => false,
-      },
+      bundleRetention: bundleRetention(receipt(bundleHash, "2026.8.10")),
     });
     const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
       () => new NodeRegistry(),
@@ -300,7 +321,7 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("publishes the complete durable retain snapshot for a connected device", async () => {
-    const { coordinator, invoke } = createHarness({
+    const { invoke } = await startHarness({
       environments: [
         environment(),
         environment({
@@ -311,8 +332,6 @@ describe("node workspace retain coordinator", () => {
         environment({ environmentId: "environment-terminal", state: "orphaned" }),
       ],
     });
-
-    await coordinator.start();
 
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]?.[0]).toMatchObject({
@@ -327,50 +346,32 @@ describe("node workspace retain coordinator", () => {
         retain: [retainEntry],
       },
     });
-    await coordinator.stop();
   });
 
   it("keeps prior retention nodes compatible without sending a status query", async () => {
-    const { coordinator, invoke, acceptBundleStatus } = createHarness({
+    const { invoke, acceptBundleStatus } = await startHarness({
       node: {
         ...node,
-        workerHost: {
-          enabled: true,
-          capacity: { total: 2, available: 2 },
-          bundleRetention: 1,
-        },
+        workerHost: { ...node.workerHost, bundleStatus: undefined },
       },
-      environments: [
-        environment({
-          bootstrapReceipt: receipt("b".repeat(64)),
-        }),
-      ],
+      environments: [environment({ bootstrapReceipt: receipt(previousHash) })],
     });
-
-    await coordinator.start();
 
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
       bundleHashes: ["b".repeat(64)],
     });
     expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
     expect(acceptBundleStatus).toHaveBeenCalledWith(expect.any(Object), undefined);
-    await coordinator.stop();
   });
 
   it("does not request another bundle inspection after accepting its installed status", async () => {
-    const bundleHash = "b".repeat(64);
-    const { coordinator, invoke, acceptBundleStatus } = createHarness({
-      environments: [
-        environment({
-          bootstrapReceipt: receipt(bundleHash),
-        }),
-      ],
+    const bundleHash = previousHash;
+    const { coordinator, invoke, acceptBundleStatus } = await startHarness({
+      environments: [environment({ bootstrapReceipt: receipt(bundleHash) })],
       results: [
         retainResult({ bundleGeneration: 3, bundleStatus: { bundleHash, status: "installed" } }),
       ],
     });
-
-    await coordinator.start();
 
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
@@ -381,17 +382,12 @@ describe("node workspace retain coordinator", () => {
     expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ bundleHashes: [bundleHash] });
     expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundleStatusHash");
     expect(acceptBundleStatus).toHaveBeenCalledOnce();
-    await coordinator.stop();
   });
 
   it("accepts status only from the final pass for the exact requested hash", async () => {
-    const bundleHash = "b".repeat(64);
-    const { coordinator, invoke, acceptBundleStatus } = createHarness({
-      environments: [
-        environment({
-          bootstrapReceipt: receipt(bundleHash),
-        }),
-      ],
+    const bundleHash = previousHash;
+    const { coordinator, invoke, acceptBundleStatus } = await startHarness({
+      environments: [environment({ bootstrapReceipt: receipt(bundleHash) })],
       results: [
         retainResult({
           deleted: 1,
@@ -402,8 +398,6 @@ describe("node workspace retain coordinator", () => {
         retainResult({ bundleStatus: { bundleHash, status: "installed" } }),
       ],
     });
-
-    await coordinator.start();
 
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls[1]?.[0].params).toEqual(invoke.mock.calls[0]?.[0].params);
@@ -418,57 +412,32 @@ describe("node workspace retain coordinator", () => {
       bundleHash,
       status: { status: "installed", version: "2026.8.9" },
     });
-    await coordinator.stop();
   });
 
-  it("clears the previous hash before a new authoritative inspection can fail", async () => {
-    const previousHash = "b".repeat(64);
-    const currentHash = "c".repeat(64);
-    const { coordinator, acceptBundleStatus, warn } = createHarness({
-      currentBundleStatus: {
-        bundleHash: previousHash,
-        status: { status: "installed", version: "2026.8.8" },
-      },
-      environments: [
-        environment({
-          bootstrapReceipt: receipt(currentHash),
-        }),
-      ],
-      invokeError: "maintenance unavailable",
-    });
-
-    await coordinator.start();
-
-    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("maintenance unavailable"));
-    await coordinator.stop();
-  });
-
-  it("clears status when the node echoes a different bundle hash", async () => {
-    const bundleHash = "b".repeat(64);
-    const { coordinator, acceptBundleStatus } = createHarness({
-      environments: [
-        environment({
-          bootstrapReceipt: receipt(bundleHash),
-        }),
-      ],
-      results: [
-        retainResult({ bundleStatus: { bundleHash: "c".repeat(64), status: "installed" } }),
-      ],
-    });
-
-    await coordinator.start();
-
-    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
-    await coordinator.stop();
-  });
+  it.each(["inspection failure", "different echoed hash"])(
+    "clears stale status after %s",
+    async (failure) => {
+      const inspection = failure === "inspection failure";
+      const { acceptBundleStatus, warn } = await startHarness({
+        currentBundleStatus: inspection
+          ? { bundleHash: previousHash, status: { status: "installed", version: "2026.8.8" } }
+          : undefined,
+        environments: [
+          environment({ bootstrapReceipt: receipt(inspection ? currentHash : previousHash) }),
+        ],
+        invokeError: inspection ? "maintenance unavailable" : undefined,
+        results: [retainResult({ bundleStatus: { bundleHash: currentHash, status: "installed" } })],
+      });
+      expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
+      if (inspection) {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("maintenance unavailable"));
+      }
+    },
+  );
 
   it("keeps workspace retention compatible when bundle cleanup is not advertised", async () => {
-    const currentBuild = vi.fn(async () => ({
-      bundleHash: "c".repeat(64),
-      openclawVersion: "2026.9.3",
-    }));
-    const { coordinator, invoke, warn } = createHarness({
+    const currentBuild = vi.fn(async () => receipt(currentHash, "2026.9.3"));
+    const { invoke, warn } = await startHarness({
       node: {
         ...node,
         workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
@@ -476,27 +445,21 @@ describe("node workspace retain coordinator", () => {
       bundleRetention: { currentBuild, isEnvironmentOwnedNode: () => false },
     });
 
-    try {
-      await coordinator.start();
-
-      expect(currentBuild).not.toHaveBeenCalled();
-      expect(invoke).toHaveBeenCalledOnce();
-      expect(invoke.mock.calls[0]?.[0].params).toEqual({
-        version: 1,
-        gatewayNamespace: "gateway-test",
-        controllerId: expect.any(String),
-        sequence: 1,
-        retain: [retainEntry],
-      });
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      await coordinator.stop();
-    }
+    expect(currentBuild).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls[0]?.[0].params).toEqual({
+      version: 1,
+      gatewayNamespace: "gateway-test",
+      controllerId: expect.any(String),
+      sequence: 1,
+      retain: [retainEntry],
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("keeps cloud workspace retention running when current build preparation rejects", async () => {
-    const currentBuild = vi.fn(async () => receipt("c".repeat(64)));
-    const { coordinator, invoke, warn } = createHarness({
+    const currentBuild = vi.fn(async () => receipt(currentHash));
+    const { coordinator, invoke, warn } = await startHarness({
       environments: [
         environment({ nodeSetupId: "cloud-setup", bootstrapReceipt: receipt("b".repeat(64)) }),
       ],
@@ -504,84 +467,60 @@ describe("node workspace retain coordinator", () => {
       results: [retainResult({ bundleGeneration: 7 })],
     });
 
-    try {
-      await coordinator.start();
-      currentBuild.mockRejectedValue(new Error("build preparation unavailable"));
-      await coordinator.schedule(node.nodeId);
-
-      expect(invoke).toHaveBeenCalledTimes(2);
-      const input = invoke.mock.calls[1]?.[0].params;
-      expect(input).toMatchObject({
-        retain: [retainEntry],
-      });
-      expect(input).not.toHaveProperty("bundleHashes");
-      expect(input).not.toHaveProperty("acknowledgedBundleGeneration");
-      expect(input).not.toHaveProperty("bundleStatusHash");
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "Node bundle retention skipped (node-1): build preparation unavailable",
-      );
-    } finally {
-      await coordinator.stop();
+    currentBuild.mockRejectedValue(new Error("build preparation unavailable"));
+    await coordinator.schedule(node.nodeId);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    const input = invoke.mock.calls[1]?.[0].params;
+    expect(input).toMatchObject({ retain: [retainEntry] });
+    for (const key of ["bundleHashes", "acknowledgedBundleGeneration", "bundleStatusHash"]) {
+      expect(input).not.toHaveProperty(key);
     }
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Node bundle retention skipped (node-1): build preparation unavailable",
+    );
   });
 
-  it("fails safe to workspace-only retention when bundle ownership exceeds the wire bound", async () => {
-    const environments = Array.from(
-      { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES + 1 },
-      (_, index) =>
-        environment({
-          environmentId: `environment-${index}`,
-          attachedSessionIds: [],
-          bootstrapReceipt: receipt(index.toString(16).padStart(64, "0"), "2026.8.1"),
-        }),
-    );
-    const { coordinator, invoke, warn } = createHarness({ environments, placements: [] });
-
-    await coordinator.start();
-
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleHashes");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("exceed the bounded maintenance request"),
-    );
-    await coordinator.stop();
-  });
+  it.each(["hash count", "combined bytes"])(
+    "omits bundle retention when %s exceeds the wire bound",
+    async (limit) => {
+      const inventory =
+        limit === "combined bytes"
+          ? boundedInventory(1_500)
+          : {
+              environments: Array.from(
+                { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES + 1 },
+                (_, index) =>
+                  environment({
+                    environmentId: `environment-${index}`,
+                    attachedSessionIds: [],
+                    bootstrapReceipt: receipt(index.toString(16).padStart(64, "0"), "2026.8.1"),
+                  }),
+              ),
+              placements: [],
+            };
+      const { invoke, warn } = await startHarness(inventory);
+      expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleHashes");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("exceed the bounded maintenance request"),
+      );
+    },
+  );
 
   it("keeps bounded bundle retention when only the status query exceeds one MiB", async () => {
-    const { coordinator, invoke, warn } = createHarness(boundedInventory(1_241, true));
-
-    await coordinator.start();
+    const { invoke, warn } = await startHarness(boundedInventory(1_241, true));
 
     const input = invoke.mock.calls[0]?.[0].params as Record<string, unknown>;
     expect(input.bundleHashes).toHaveLength(NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES);
     expect(input).not.toHaveProperty("bundleStatusHash");
-    expect(Buffer.byteLength(JSON.stringify(input), "utf8")).toBeLessThanOrEqual(
+    const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+    const bundleStatusHash = (NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1)
+      .toString(16)
+      .padStart(64, "0");
+    expect(bytes(input)).toBeLessThanOrEqual(NODE_WORKER_RETAIN_REQUEST_MAX_BYTES);
+    expect(bytes({ ...input, bundleStatusHash })).toBeGreaterThan(
       NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
     );
-    expect(
-      Buffer.byteLength(
-        JSON.stringify({
-          ...input,
-          bundleStatusHash: (NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1)
-            .toString(16)
-            .padStart(64, "0"),
-        }),
-        "utf8",
-      ),
-    ).toBeGreaterThan(NODE_WORKER_RETAIN_REQUEST_MAX_BYTES);
     expect(warn).not.toHaveBeenCalled();
-    await coordinator.stop();
-  });
-
-  it("omits bundle hashes when the combined maintenance request exceeds one MiB", async () => {
-    const { coordinator, invoke, warn } = createHarness(boundedInventory(1_500));
-
-    await coordinator.start();
-
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleHashes");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("exceed the bounded maintenance request"),
-    );
-    await coordinator.stop();
   });
 
   it.each([
@@ -590,38 +529,22 @@ describe("node workspace retain coordinator", () => {
   ])(
     "retains all manifests without preparing a repository owned by another environment: %j",
     async ({ placements }) => {
-      const { coordinator, invoke } = createHarness({
+      const { invoke } = await startHarness({
         placements,
         additionalManifestRefs: async () => {
           throw new Error("Repository does not belong to this environment");
         },
       });
 
-      await coordinator.start();
-
       expectManifests(invoke, null);
-      await coordinator.stop();
     },
   );
 
   it.each(["claimed", "pending", "stale-pending"])(
     "protects unsettled manifests for %s ownership",
     async (state) => {
-      const { coordinator, invoke } = createHarness({
-        placements: [
-          placement({
-            turnClaim:
-              state === "claimed"
-                ? {
-                    owner: "worker",
-                    claimId: "claim-1",
-                    runId: "run-1",
-                    generation: 3,
-                    ownerEpoch: 7,
-                  }
-                : null,
-          }),
-        ],
+      const { invoke } = await startHarness({
+        placements: [placement({ turnClaim: state === "claimed" ? turnClaim : null })],
         pendingResults:
           state === "claimed"
             ? []
@@ -640,43 +563,32 @@ describe("node workspace retain coordinator", () => {
                 },
               ],
       });
-      await coordinator.start();
       expectManifests(invoke, state === "stale-pending" ? [`sha256:${"a".repeat(64)}`] : null);
-      await coordinator.stop();
     },
   );
 
   it("retains the immutable repository base after its accepted manifest advances and the node reconnects", async () => {
-    const baseManifest = `sha256:${"1".repeat(64)}`;
     const firstManifest = `sha256:${"2".repeat(64)}`;
     const latestManifest = `sha256:${"3".repeat(64)}`;
     const placements = [placement({ workspaceBaseManifestRef: firstManifest })];
     const options = {
       placements,
       node: { ...node, connId: "connection-1" },
-      additionalManifestRefs: async () =>
-        Object.assign(() => [baseManifest], { [Symbol.dispose]: () => {} }),
+      additionalManifestRefs: async () => manifestRead(() => [baseManifest]),
     };
-    const { coordinator, invoke } = createHarness(options);
-    try {
-      await coordinator.start();
-      expectManifests(invoke, [baseManifest, firstManifest]);
-
-      placements[0] = placement({ workspaceBaseManifestRef: latestManifest });
-      options.node = { ...node, connId: "connection-2" };
-      await coordinator.schedule("node-1");
-
-      expect(invoke).toHaveBeenCalledTimes(2);
-      expect(invoke.mock.calls[1]?.[0]).toMatchObject({
-        node: { connId: "connection-2" },
-        params: {
-          sequence: 2,
-          retain: [expect.objectContaining({ manifestRefs: [baseManifest, latestManifest] })],
-        },
-      });
-    } finally {
-      await coordinator.stop();
-    }
+    const { coordinator, invoke } = await startHarness(options);
+    expectManifests(invoke, [baseManifest, firstManifest]);
+    placements[0] = placement({ workspaceBaseManifestRef: latestManifest });
+    options.node = { ...node, connId: "connection-2" };
+    await coordinator.schedule("node-1");
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]?.[0]).toMatchObject({
+      node: { connId: "connection-2" },
+      params: {
+        sequence: 2,
+        retain: [expect.objectContaining({ manifestRefs: [baseManifest, latestManifest] })],
+      },
+    });
   });
 
   it.each(["initial placement read", "inventory read"] as const)(
@@ -698,30 +610,21 @@ describe("node workspace retain coordinator", () => {
           return snapshot;
         });
       }
-      try {
-        await coordinator.start();
-        expect(invoke).toHaveBeenCalledOnce();
-        expectManifests(invoke, [rows[0]!.workspaceBaseManifestRef]);
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        await coordinator.stop();
-      }
+      await coordinator.start();
+      expect(invoke).toHaveBeenCalledOnce();
+      expectManifests(invoke, [rows[0]!.workspaceBaseManifestRef]);
+      expect(warn).not.toHaveBeenCalled();
     },
   );
 
   it("does not retry a typed placement failure after invoking retention", async () => {
-    const { coordinator, invoke, warn } = createHarness({
+    const { invoke, warn } = await startHarness({
       onInvoke: () => {
         throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
       },
     });
-    try {
-      await coordinator.start();
-      expect(invoke).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledOnce();
-    } finally {
-      await coordinator.stop();
-    }
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -733,7 +636,6 @@ describe("node workspace retain coordinator", () => {
     "result",
     "late-pending",
   ] as const)("rechecks %s ownership after repository manifest preparation", async (change) => {
-    const baseManifest = `sha256:${"1".repeat(64)}`;
     const placements = [placement()];
     const environments = [environment()];
     const entered = createDeferredCore();
@@ -760,9 +662,7 @@ describe("node workspace retain coordinator", () => {
       additionalManifestRefs: async () => {
         entered.resolve();
         await release.promise;
-        return Object.assign(() => (sessionCurrent ? [baseManifest] : null), {
-          [Symbol.dispose]: () => {},
-        });
+        return manifestRead(() => (sessionCurrent ? [baseManifest] : null));
       },
     });
     const startup = coordinator.start();
@@ -778,15 +678,7 @@ describe("node workspace retain coordinator", () => {
       } else if (change === "result") {
         resultRevision += 1;
       } else if (change === "pending" || change === "late-pending") {
-        placements[0] = placement({
-          turnClaim: {
-            owner: "worker",
-            claimId: "claim",
-            runId: "run",
-            generation: 3,
-            ownerEpoch: 7,
-          },
-        });
+        placements[0] = placement({ turnClaim });
       }
       release.resolve();
       await startup;
@@ -815,26 +707,18 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("retains the current build without installing it or keeping unreferenced older builds", async () => {
-    const artifact = {
-      bundleHash: "c".repeat(64),
-      openclawVersion: "2026.8.10",
-      protocolFeatures: [],
-    };
+    const artifact = receipt(currentHash, "2026.8.10");
     const input = {
       environments: [environment()],
       placements: [placement()],
-      bundleRetention: {
-        currentBuild: async () => artifact,
-        isEnvironmentOwnedNode: () => false,
-      },
+      bundleRetention: bundleRetention(artifact),
       results: [
         retainResult({ bundleGeneration: 1 }),
         retainResult({ bundleGeneration: 1 }),
         retainResult({ deleted: 1, bundleGeneration: 1 }),
       ],
     };
-    const { coordinator, invoke } = createHarness(input);
-    await coordinator.start();
+    const { coordinator, invoke } = await startHarness(input);
     expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("acknowledgedBundleGeneration");
     await coordinator.schedule();
     expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
@@ -855,22 +739,16 @@ describe("node workspace retain coordinator", () => {
       NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
       NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
     ]);
-    await coordinator.stop();
   });
 
   it("retains the current build until live cloud environments record it", async () => {
-    const previousHash = "b".repeat(64);
-    const currentBuild = receipt("c".repeat(64));
+    const currentBuild = receipt(currentHash);
     const environments = [environment({ state: "ready", bootstrapReceipt: receipt(previousHash) })];
-    const { coordinator, invoke } = createHarness({
+    const { coordinator, invoke } = await startHarness({
       environments,
       placements: [],
-      bundleRetention: {
-        currentBuild: async () => currentBuild,
-        isEnvironmentOwnedNode: () => true,
-      },
+      bundleRetention: bundleRetention(currentBuild, true),
     });
-    await coordinator.start();
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
       bundleHashes: [previousHash, currentBuild.bundleHash],
       bundleStatusHash: previousHash,
@@ -885,7 +763,6 @@ describe("node workspace retain coordinator", () => {
     environments[0] = environment({ state: "destroyed", bootstrapReceipt: currentBuild });
     await coordinator.schedule(node.nodeId);
     expect(invoke.mock.calls[2]?.[0].params).toMatchObject({ bundleHashes: [] });
-    await coordinator.stop();
   });
 
   it("maintains a newly connected node while another node's retention is held", async () => {
@@ -908,19 +785,7 @@ describe("node workspace retain coordinator", () => {
       isCurrent: () => true,
       invoke,
     };
-    const coordinator = createNodeWorkspaceRetainCoordinator({
-      gatewayNamespace: "gateway-test",
-      environments: { list: () => [] },
-      placements: {
-        prepareMaintenancePlacements: async () => ({
-          placements: [],
-          assertCurrent: () => {},
-          release: () => {},
-        }),
-        prepareRuntimeRefresh: vi.fn<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>(),
-      },
-      warn: vi.fn(),
-    });
+    const { coordinator } = createHarness({ environments: [], placements: [] });
     coordinator.bindTransport(transport);
     const first = coordinator.start();
     try {
@@ -936,29 +801,24 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("rechecks environment ownership after resolving the current build before retaining it", async () => {
-    const artifact = {
-      bundleHash: "c".repeat(64),
-      openclawVersion: "2026.8.10",
-      protocolFeatures: [],
-    };
+    const artifact = receipt(currentHash, "2026.8.10");
     const held = createDeferredCore<typeof artifact>();
     let environmentOwned = false;
-    const bundleRetention = {
+    const retention = {
       isEnvironmentOwnedNode: () => environmentOwned,
       currentBuild: vi.fn(() => held.promise),
     };
     const { coordinator, invoke } = createHarness({
       environments: [],
       placements: [],
-      bundleRetention,
+      bundleRetention: retention,
     });
     const startup = coordinator.start();
-    await vi.waitFor(() => expect(bundleRetention.currentBuild).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(retention.currentBuild).toHaveBeenCalledOnce());
     environmentOwned = true;
     held.resolve(artifact);
     await startup;
     expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleHashes: [] });
     expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
-    await coordinator.stop();
   });
 });

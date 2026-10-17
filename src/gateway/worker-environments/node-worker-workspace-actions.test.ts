@@ -3,11 +3,12 @@ import path from "node:path";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { environment } from "./node-worker-tunnel.test-support.js";
+import { environment, workspaceCommandResult } from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const identity = { environmentId: "environment-1", ownerEpoch: 2, sessionId: "session-1" };
 
 async function workspaceFixture(beforeDownload?: () => Promise<void>) {
   const root = tempDirs.make("node-workspace-authority-");
@@ -23,10 +24,19 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
     temporaryRoot: path.join(root, "transfer"),
   });
   const owner = new AbortController();
+  const turn = new AbortController();
+  const route = {
+    kind: "manifest" as const,
+    direction: "download" as const,
+    environmentId: identity.environmentId,
+  };
+  const downloadAuthority = (token: string, manifestRef: string) =>
+    transfer.authorize({
+      token,
+      route: { ...route, manifestRef },
+    });
   const actions = createNodeWorkerWorkspaceActions({
-    environmentId: record.environmentId,
-    ownerEpoch: record.ownerEpoch,
-    sessionId: "session-1",
+    ...identity,
     ownerSignal: owner.signal,
     isOwnerCurrent: () => !owner.signal.aborted,
     workspaceTransfer: transfer,
@@ -38,39 +48,27 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
         throw new Error("Expected a workspace download");
       }
       await beforeDownload?.();
-      const authorization = transfer.authorize({
-        token: command.transfer.token,
-        route: {
-          kind: "manifest",
-          direction: "download",
-          environmentId: record.environmentId,
-          manifestRef: command.transfer.manifestRef,
-        },
-      });
+      const authorization = downloadAuthority(command.transfer.token, command.transfer.manifestRef);
       if (!authorization || !transfer.snapshot(authorization)) {
         throw new Error("Workspace download authority closed");
       }
-      return {
-        workspaceDir: "/node/workspace",
-        stdout: command.transfer.manifestRef,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return workspaceCommandResult("/node/workspace", { stdout: command.transfer.manifestRef });
     },
   });
   return {
     actions,
     transfer,
     localPath,
+    downloadAuthority,
+    closeTurn: () => turn.abort(new Error("Initiating dispatch turn closed")),
+    transferRequest: { ...identity, localPath, isAuthorized: () => true },
     request: {
       source: { kind: "local" as const, path: localPath, projectKey: "a".repeat(64) },
       sessionId: "session-1",
       generation: 1,
+      authorize: () => turn.signal.throwIfAborted(),
     },
-    close: async () => {
+    [Symbol.asyncDispose]: async () => {
       owner.abort();
       await transfer.closeAll();
     },
@@ -85,7 +83,7 @@ describe("node workspace operation authority", () => {
   )(
     "rejects a queued $source sync with closed $boundary authority without replacing its predecessor",
     async ({ source, boundary }) => {
-      const fixture = await workspaceFixture();
+      await using fixture = await workspaceFixture();
       const preparing = createDeferred();
       const releasePreparation = createDeferred();
       const originalRealpath = fs.realpath.bind(fs);
@@ -100,13 +98,7 @@ describe("node workspace operation authority", () => {
       });
       let authorized = true;
       const signal = new AbortController();
-      const request = {
-        localPath: fixture.localPath,
-        sessionId: fixture.request.sessionId,
-        environmentId: "environment-1",
-        ownerEpoch: 2,
-        isAuthorized: () => true,
-      };
+      const request = fixture.transferRequest;
       try {
         const first = fixture.transfer.prepareSync(request);
         await preparing.promise;
@@ -114,11 +106,7 @@ describe("node workspace operation authority", () => {
           ...request,
           signal: signal.signal,
           isAuthorized: () => boundary !== "owner" || authorized,
-          authorize: () => {
-            if (boundary === "turn" && !authorized) {
-              throw new Error("Initiating dispatch turn closed");
-            }
-          },
+          authorize: boundary === "turn" ? fixture.request.authorize : undefined,
         };
         const second =
           source === "local"
@@ -130,6 +118,7 @@ describe("node workspace operation authority", () => {
               });
         const rejected = expect(second).rejects.toThrow();
         authorized = false;
+        fixture.closeTurn();
         if (boundary === "signal") {
           signal.abort();
         }
@@ -137,20 +126,11 @@ describe("node workspace operation authority", () => {
         const prepared = await first;
         await rejected;
         expect(
-          fixture.transfer.authorize({
-            token: prepared.token,
-            route: {
-              kind: "manifest",
-              direction: "download",
-              environmentId: "environment-1",
-              manifestRef: prepared.snapshot.manifestRef,
-            },
-          }),
+          fixture.downloadAuthority(prepared.token, prepared.snapshot.manifestRef),
         ).toBeDefined();
       } finally {
         releasePreparation.resolve();
         realpath.mockRestore();
-        await fixture.close();
       }
     },
   );
@@ -158,34 +138,22 @@ describe("node workspace operation authority", () => {
   it.each(["reconciliation", "attachments"] as const)(
     "preserves independent %s after the initiating dispatch turn closes",
     async (operation) => {
-      const fixture = await workspaceFixture();
-      let authorized = true;
-      try {
-        const synced = await fixture.actions.syncWorkspace({
-          ...fixture.request,
-          authorize: () => {
-            if (!authorized) {
-              throw new Error("Initiating dispatch turn closed");
-            }
-          },
-        });
-        authorized = false;
-        if (operation === "reconciliation") {
-          const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
-          expect(token).toBeTruthy();
-          await fixture.transfer.revoke("environment-1", token);
-        } else {
-          assert.isDefined(fixture.actions.stageAttachments);
-          await expect(
-            fixture.actions.stageAttachments({
-              localPath: fixture.localPath,
-              isAuthorized: () => true,
-              signal: new AbortController().signal,
-            }),
-          ).resolves.toBeUndefined();
-        }
-      } finally {
-        await fixture.close();
+      await using fixture = await workspaceFixture();
+      const synced = await fixture.actions.syncWorkspace(fixture.request);
+      fixture.closeTurn();
+      if (operation === "reconciliation") {
+        const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
+        expect(token).toBeTruthy();
+        await fixture.transfer.revoke("environment-1", token);
+      } else {
+        assert.isDefined(fixture.actions.stageAttachments);
+        await expect(
+          fixture.actions.stageAttachments({
+            localPath: fixture.localPath,
+            isAuthorized: () => true,
+            signal: new AbortController().signal,
+          }),
+        ).resolves.toBeUndefined();
       }
     },
   );
@@ -193,23 +161,15 @@ describe("node workspace operation authority", () => {
   it("rejects a download after its initiating turn closes but permits a fresh sync", async () => {
     const downloading = createDeferred();
     const releaseDownload = createDeferred();
-    const fixture = await workspaceFixture(async () => {
+    await using fixture = await workspaceFixture(async () => {
       downloading.resolve();
       await releaseDownload.promise;
     });
-    let authorized = true;
     try {
-      const syncing = fixture.actions.syncWorkspace({
-        ...fixture.request,
-        authorize: () => {
-          if (!authorized) {
-            throw new Error("Initiating dispatch turn closed");
-          }
-        },
-      });
+      const syncing = fixture.actions.syncWorkspace(fixture.request);
       const rejected = expect(syncing).rejects.toThrow(/authority closed|dispatch turn closed/u);
       await downloading.promise;
-      authorized = false;
+      fixture.closeTurn();
       releaseDownload.resolve();
       await rejected;
 
@@ -222,7 +182,6 @@ describe("node workspace operation authority", () => {
       await fixture.transfer.revoke("environment-1", token);
     } finally {
       releaseDownload.resolve();
-      await fixture.close();
     }
   });
 });
