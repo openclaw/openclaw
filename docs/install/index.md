@@ -172,6 +172,11 @@ the JavaScript, plugins, Control UI, and metadata without TypeScript declaration
 Use `pnpm build` for development or packaging that needs declarations and their
 validation; CI typechecks still apply to runtime-only builds.
 
+`pnpm build:runtime` builds artifacts; it does not select the runtime for later
+commands. `pnpm openclaw ...` and `pnpm dev ...` run the CLI with Node, independently
+of `OPENCLAW_VITEST_RUNTIME`. To opt into Bun after building, run
+`bun --no-install openclaw.mjs ...`; see [Bun](/install/bun).
+
 Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
 If Corepack is unavailable, read that version from the checkout and install it explicitly:
 

@@ -111,8 +111,8 @@ describe("run-node script", () => {
     },
   );
 
-  it.for([undefined, "node", "bun"])(
-    "starts the %s CLI only after the Node runtime build completes",
+  it.for([undefined, "node", "bun", "deno"])(
+    "keeps the CLI on its launcher runtime after building with test runtime %s",
     async (runtime, { tmp }) => {
       const bunPath = path.join(tmp, "fixture-bun");
       await fs.writeFile(bunPath, "", { mode: 0o755 });
@@ -149,12 +149,7 @@ describe("run-node script", () => {
       expect(await result).toBe(0);
       expect(spawn.mock.calls.map(([cmd, args]) => [cmd].concat(args))).toEqual([
         expectedBuildSpawn(),
-        [
-          runtime === "node" ? process.execPath : bunPath,
-          "--trace-sync-io",
-          "openclaw.mjs",
-          "status",
-        ],
+        [process.execPath, "--trace-sync-io", "openclaw.mjs", "status"],
       ]);
       // The canonical profile owns metadata and both stamps; the local runner
       // only invokes postbuild directly on its separate metadata-only path.
@@ -372,9 +367,6 @@ describe("run-node script", () => {
         vi.unstubAllEnvs();
       });
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
-      const bunPath = path.join(tmp, "fixture-bun");
-      await fs.writeFile(bunPath, "", { mode: 0o755 });
-
       const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
       const child = Object.assign(new EventEmitter(), {
         pid: 42_420,
@@ -391,8 +383,6 @@ describe("run-node script", () => {
         env: {
           CI: "",
           OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0",
-          OPENCLAW_VITEST_RUNTIME: "bun",
-          OPENCLAW_BUN_PATH: bunPath,
         },
         platform: "darwin",
         process: fakeProcess,
@@ -414,7 +404,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(143);
       const spawnCall = firstMockCall(spawn);
-      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : bunPath);
+      expect(spawnCall?.[0]).toBe(process.execPath);
       expect(spawnCall?.[1]).toEqual(
         rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
       );

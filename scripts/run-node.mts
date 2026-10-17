@@ -28,7 +28,6 @@ import {
 } from "./lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
 import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
-import { pinnedBunEnv, requirePinnedBun } from "./lib/pinned-bun.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
   collectRunNodeBundledPluginBuildEntries,
@@ -45,7 +44,6 @@ import {
   resolveStaticExtensionAssetSource,
   shouldCopyStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
-import { resolveTestRuntime } from "./lib/test-runtime.mts";
 import {
   isBuildRelevantRunNodePath,
   normalizeRunNodePath as normalizePath,
@@ -1168,14 +1166,9 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
   return res.exitCode ?? 1;
 };
 
-const runOpenClaw = (deps: RunNodeDeps) => {
-  const bun = resolveTestRuntime(deps.env) === "bun" ? requirePinnedBun(deps.env) : undefined;
-  return runNodeChild(
-    bun ? { ...deps, env: { ...deps.env, ...pinnedBunEnv(bun, deps.env) } } : deps,
-    [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args],
-    bun ?? deps.execPath,
-  );
-};
+// Test runtime preferences must not switch the source CLI's runtime or stage Bun.
+const runOpenClaw = (deps: RunNodeDeps) =>
+  runNodeChild(deps, [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args]);
 
 const pipeSpawnedOutput = (
   childProcess: ChildProcess,

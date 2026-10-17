@@ -91,7 +91,7 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Local tests and `pnpm dev` default to the pinned OpenClaw Bun fork. Node 24.16+
+Local tests default to the pinned OpenClaw Bun fork. Node 24.16+
 or Node 26.1+ is still required for orchestration and build preparation. Older
 Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
@@ -109,8 +109,7 @@ reuses a verified per-user cache at
 Set `OPENCLAW_BUN_PATH` to override the Bun executable explicitly.
 The runtime selection applies to the
 actual Vitest process and workers while retaining Node for orchestration and
-compiler preparation. Source-runner CLI fixtures also use the selected runtime
-after Node completes build preparation. This does not use Bun's native test runner.
+compiler preparation. This does not use Bun's native test runner.
 Set `OPENCLAW_VITEST_RUNTIME=node` to force Node, or `bun` to require Bun.
 Without an explicit selection, CI retains Node (`CI` is nonempty and not `false`).
 When CI selects Bun, the runner uses the workflow-provisioned `bun` on PATH without
@@ -119,6 +118,11 @@ Windows and platforms without a pinned artifact fall back to Node, as do offline
 machines without a usable cached fork. The runner prints one notice with the
 reason; explicitly selecting Node silences it. An explicit Bun selection fails
 if its executable is unavailable.
+
+`OPENCLAW_VITEST_RUNTIME` only selects the test runtime. `pnpm dev` and
+`pnpm openclaw` use Node and do not stage Bun. To run the built CLI with Bun
+explicitly, use `bun --no-install openclaw.mjs ...`; see [Bun](/install/bun).
+
 On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
 Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
 For an x64 Bun under Rosetta, build the pinned library with
