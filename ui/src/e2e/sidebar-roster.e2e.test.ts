@@ -53,7 +53,7 @@ const sessions: SessionsListResult = {
 };
 
 suite.define(() => {
-  it("shows only agents, preserves shortcuts, and routes through counted View sessions", async () => {
+  it("shows only agents, preserves shortcuts, and routes through Sessions", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
       async ({ page }) => {
@@ -131,12 +131,12 @@ suite.define(() => {
         await menu.getByRole("button", { name: "Options for Forge" }).click();
         expect(await menu.locator('[role^="menuitem"]').allTextContents()).toEqual([
           expect.stringContaining("Pin"),
-          expect.stringContaining("View sessions (2)"),
+          expect.stringContaining("Sessions"),
           expect.stringContaining("Settings"),
           expect.stringContaining("Delete"),
         ]);
         expect(await menu.getByRole("menuitem", { name: "Create new session" }).count()).toBe(0);
-        await menu.getByRole("menuitem", { name: "View sessions (2)" }).click();
+        await menu.getByRole("menuitem", { name: "Sessions" }).click();
         await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
         await expect
           .poll(async () =>

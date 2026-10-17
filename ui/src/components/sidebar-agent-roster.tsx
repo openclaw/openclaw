@@ -224,7 +224,7 @@ export function SidebarAgentRoster(props: RosterProps) {
         },
         {
           id: "sessions",
-          label: t("agentsHome.viewSessions", { count: String(card().sessionCount) }),
+          label: t("agentsHome.viewSessions"),
           class: "sidebar-customize-menu__item",
           icon: <Icon name="listTree" />,
         },

@@ -72,7 +72,7 @@ describe("AppSidebar agent-only roster", () => {
       "delete",
     ]);
     expect(items.find((item) => item.dataset.value === "sessions")?.textContent).toContain(
-      "View sessions (3)",
+      "Sessions",
     );
     items.find((item) => item.dataset.value === "sessions")?.click();
     await settleRoster(sidebar);

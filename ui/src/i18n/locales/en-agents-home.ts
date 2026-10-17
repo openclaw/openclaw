@@ -8,7 +8,7 @@ const enAgentsHome = {
     noAssistantMessage: "No assistant reply yet",
     create: "New agent",
     openChat: "Open chat",
-    viewSessions: "View sessions ({count})",
+    viewSessions: "Sessions",
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
       "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
