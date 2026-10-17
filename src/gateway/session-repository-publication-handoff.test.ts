@@ -127,6 +127,28 @@ it.each([
         assertCurrent: () => {},
       });
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
+      const checkpoint = async (publication: string) => {
+        const current = await captureWorkspaceManifest({ root: cloud, baseCommit });
+        const digest = execFileSync(
+          process.execPath,
+          ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cloud, baseCommit, publication],
+          { env, encoding: "utf8" },
+        ).trim();
+        const staged = await stageSessionRepositoryCheckpoint({
+          workspaceId: repository.workspaceId,
+          expectedRevision: repository.revision,
+          stagingRoot: cloud,
+          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+          baseManifestRef: base.manifestRef,
+          currentManifestRef: current.manifestRef,
+          publicationStagingRoot: publication,
+          publicationDigest: digest,
+          assertCurrent: () => {},
+        });
+        repository = await staged.publish();
+        return { staged, digest };
+      };
       repository = await store.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
@@ -144,52 +166,16 @@ it.each([
       git(cloud, "commit", "-qam", "Cloud\n\nOpenClaw-Publication: prior-cloud-publication");
       const publishedHead = git(cloud, "rev-parse", "HEAD");
       git(cloud, "push", "origin", repository.branch);
-      const priorCurrent = await captureWorkspaceManifest({ root: cloud, baseCommit });
-      const priorPublication = state.path("prior-publication");
-      const priorDigest = execFileSync(
-        process.execPath,
-        ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cloud, baseCommit, priorPublication],
-        { env, encoding: "utf8" },
-      ).trim();
-      const priorCheckpoint = await stageSessionRepositoryCheckpoint({
-        workspaceId: repository.workspaceId,
-        expectedRevision: repository.revision,
-        stagingRoot: cloud,
-        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-        currentManifestRaw: serializeWorkerWorkspaceManifest(priorCurrent.manifest),
-        baseManifestRef: base.manifestRef,
-        currentManifestRef: priorCurrent.manifestRef,
-        publicationStagingRoot: priorPublication,
-        publicationDigest: priorDigest,
-        assertCurrent: () => {},
-      });
-      repository = await priorCheckpoint.publish();
+      const { staged: priorCheckpoint, digest: priorDigest } = await checkpoint(
+        state.path("prior-publication"),
+      );
       if (scenario === "shifted membership") {
         git(cloud, "rm", "--cached", "published-only.ignored");
         await fs.writeFile(path.join(cloud, "restored.ignored"), "original accepted\n");
         git(cloud, "add", "-f", "restored.ignored");
       }
       await fs.writeFile(path.join(cloud, "later.txt"), "accepted after publication\n");
-      const current = await captureWorkspaceManifest({ root: cloud, baseCommit });
-      const publication = state.path("publication");
-      const digest = execFileSync(
-        process.execPath,
-        ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cloud, baseCommit, publication],
-        { env, encoding: "utf8" },
-      ).trim();
-      const staged = await stageSessionRepositoryCheckpoint({
-        workspaceId: repository.workspaceId,
-        expectedRevision: repository.revision,
-        stagingRoot: cloud,
-        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-        currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-        baseManifestRef: base.manifestRef,
-        currentManifestRef: current.manifestRef,
-        publicationStagingRoot: publication,
-        publicationDigest: digest,
-        assertCurrent: () => {},
-      });
-      repository = await staged.publish();
+      await checkpoint(state.path("publication"));
       const sessionId = "handoff-session",
         lifecycleRevision = "handoff-lifecycle";
       await upsertSessionEntryCore(scope, {
@@ -251,8 +237,7 @@ it.each([
         assertCustody: () => {},
         assertCurrent: () => {},
       });
-      prior.recordEffect("push");
-      if (scenario !== "unsettled") {
+      const settlePrior = () => {
         prior.recordEffect("push", { headCommit: publishedHead });
         prior.complete({
           requestId: row.request_id,
@@ -262,11 +247,14 @@ it.each([
           branch: repository.branch,
           headCommit: publishedHead,
         });
+      };
+      prior.recordEffect("push");
+      if (scenario !== "unsettled") {
+        settlePrior();
       }
       if (scenario === "foreign head") {
         git(bare, "update-ref", "refs/heads/" + repository.branch, baseCommit);
       }
-      const pushes: Array<{ code: number | null; stderr: string }> = [];
       let currentOwner = true;
       let createdBase: string | undefined;
       const result = (value: unknown) => ({
@@ -304,11 +292,7 @@ it.each([
             throw new Error("Unexpected synthetic GitHub API request: " + argv.join(" "));
           }
           const mapped = argv.map((x) => (x === url ? bare : x));
-          const answer = await actual.runCommandBuffered(mapped, options);
-          if (argv.includes("push")) {
-            pushes.push({ code: answer.code, stderr: answer.stderr.toString() });
-          }
-          return answer;
+          return actual.runCommandBuffered(mapped, options);
         },
       );
       mocked.timed.mockImplementation(
@@ -338,15 +322,7 @@ it.each([
         if (scenario === "foreign head") {
           return;
         }
-        prior.recordEffect("push", { headCommit: publishedHead });
-        prior.complete({
-          requestId: row.request_id,
-          status: "published",
-          url: "https://github.com/example/handoff-fixture/pull/1",
-          repository: prRepository,
-          branch: repository.branch,
-          headCommit: publishedHead,
-        });
+        settlePrior();
       }
       if (scenario === "revoked") {
         const transport = mocked.run.getMockImplementation()!;
@@ -438,20 +414,6 @@ it.each([
           assertGitHubPublicationWorkflowChangesAllowed(requester),
       }).finally(requester.release);
       const localHead = git(worktree.path, "rev-parse", "HEAD");
-      const receipt = {
-        baseCommit,
-        publishedHead,
-        moveHead,
-        creationBase,
-        branch: worktree.branch,
-        localHead,
-        localParent: git(worktree.path, "rev-parse", "HEAD^"),
-        remoteHead: git(bare, "rev-parse", "refs/heads/" + worktree.branch),
-        published,
-        pushes,
-        localBinding: loadSessionEntry(scope)?.repositoryWorkspaceId ?? null,
-      };
-
       expect(published).toMatchObject({ status: "published", repository: prRepository });
       expect(createdBase).toBe(baseBranch);
       expect(worktree.baseRef).toBe(baseBranch);
@@ -465,8 +427,8 @@ it.each([
       }
       expect(moveHead).toBe(publishedHead);
       expect(creationBase).toBe(baseCommit);
-      expect(receipt.localParent).toBe(publishedHead);
-      expect(receipt.remoteHead).toBe(localHead);
+      expect(git(worktree.path, "rev-parse", "HEAD^")).toBe(publishedHead);
+      expect(git(bare, "rev-parse", "refs/heads/" + worktree.branch)).toBe(localHead);
       expect(await fs.readFile(path.join(worktree.path, "later.txt"), "utf8")).toBe(
         "accepted after publication\n",
       );

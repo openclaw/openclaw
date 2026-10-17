@@ -37,6 +37,23 @@ import * as sessionReads from "./session-utils-store-lookup.js";
 
 const key = "agent:main:session-1";
 
+function send(
+  observer: ReturnType<typeof createSessionObserver>,
+  stream: string,
+  data: Record<string, unknown>,
+  runId?: string,
+) {
+  return observer.handleEventAsync(event({ stream, data, runId }));
+}
+
+function sendPreamble(
+  observer: ReturnType<typeof createSessionObserver>,
+  progressText: string,
+  runId?: string,
+) {
+  return send(observer, "item", { kind: "preamble", progressText }, runId);
+}
+
 function interceptNextEntryRead(storePath: string, afterRead: () => void | Promise<void>) {
   // Exercise the worker's in-flight read, even when the preceding observation warmed the key.
   sessionChanges.invalidate({
@@ -174,10 +191,10 @@ async function withObserver(
 it("does not discover physical stores for unwatched assistant deltas", async () => {
   await withObserver(async ({ observer, watch }) => {
     watch(false);
-    await observer.handleEventAsync(event({ stream: "lifecycle", data: { phase: "start" } }));
+    await send(observer, "lifecycle", { phase: "start" });
     const realpath = vi.spyOn(fs.realpathSync, "native");
     for (const delta of ["Checking ", "the implementation."]) {
-      await observer.handleEventAsync(event({ stream: "assistant", data: { delta } }));
+      await send(observer, "assistant", { delta });
     }
     expect(realpath).not.toHaveBeenCalled();
   });
@@ -214,20 +231,12 @@ it("moves observer admission, publication, terminal and companion reads off the 
         expect(inventories).toBe(1);
         inventories = 0;
         entries = 0;
-        await observer.handleEventAsync(
-          event({
-            runId: "worker-run",
-            stream: "item",
-            data: { kind: "preamble", progressText: "Worker observation" },
-          }),
-        );
+        await sendPreamble(observer, "Worker observation", "worker-run");
         expect(inventories).toBe(0);
         expect(entries).toBeGreaterThanOrEqual(2);
         entries = 0;
         for (const delta of ["Checking ", "the implementation."]) {
-          await observer.handleEventAsync(
-            event({ runId: "worker-run", stream: "assistant", data: { delta } }),
-          );
+          await send(observer, "assistant", { delta }, "worker-run");
         }
         expect(inventories).toBe(0);
         expect(entries).toBe(0);
@@ -249,13 +258,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
         entries = 0;
         const fresh = observeMainThreadSql();
         try {
-          await observer.handleEventAsync(
-            event({
-              runId: "worker-run",
-              stream: "item",
-              data: { kind: "preamble", progressText: "Retired observation" },
-            }),
-          );
+          await sendPreamble(observer, "Retired observation", "worker-run");
           expect(inventories).toBe(0);
           expect(entries).toBeGreaterThan(0);
           expect(broadcast).toHaveBeenCalledTimes(1);
@@ -267,9 +270,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
         const after = observeMainThreadSql();
         try {
           expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
-          await observer.handleEventAsync(
-            event({ runId: "worker-run", stream: "lifecycle", data: { phase: "end" } }),
-          );
+          await send(observer, "lifecycle", { phase: "end" }, "worker-run");
           await observer.disposeAsync();
           expect(broadcast).toHaveBeenCalledTimes(1);
           after.expectIdle();
@@ -296,9 +297,7 @@ it.for(["rewrite", "native rewrite", "close"] as const)(
         rewriteLifecycleWithoutPublication,
         closeDatabase,
       }) => {
-        await observer.handleEventAsync(
-          event({ stream: "item", data: { kind: "preamble", progressText: "Previous lifecycle" } }),
-        );
+        await sendPreamble(observer, "Previous lifecycle");
         let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
         const runExternalClose = AsyncLocalStorage.snapshot();
         const intercepted = interceptNextEntryRead(storePath, () => {
@@ -335,15 +334,9 @@ it("keeps queued preambles and terminal events behind awaited start admission", 
         return read(params, consume);
       },
     );
-    const start = observer.handleEventAsync(
-      event({ stream: "lifecycle", data: { phase: "start" } }),
-    );
-    const preamble = observer.handleEventAsync(
-      event({ stream: "item", data: { kind: "preamble", progressText: "Queued note" } }),
-    );
-    const terminal = observer.handleEventAsync(
-      event({ stream: "lifecycle", data: { phase: "end" } }),
-    );
+    const start = send(observer, "lifecycle", { phase: "start" });
+    const preamble = sendPreamble(observer, "Queued note");
+    const terminal = send(observer, "lifecycle", { phase: "end" });
     try {
       await entered.promise;
       expect(broadcast).not.toHaveBeenCalled();
@@ -352,9 +345,7 @@ it("keeps queued preambles and terminal events behind awaited start admission", 
       await observer.disposeAsync();
       expect(broadcast.mock.calls[0]?.[1]).toMatchObject({ headline: "Queued note" });
       expect(persisted.mock.calls.at(-1)?.[0]).toMatchObject({ digest: { health: "done" } });
-      await expect(
-        observer.handleEventAsync(event({ stream: "lifecycle", data: { phase: "start" } })),
-      ).rejects.toThrow("closed");
+      await expect(send(observer, "lifecycle", { phase: "start" })).rejects.toThrow("closed");
     } finally {
       release.resolve();
       await Promise.allSettled([start, preamble, terminal]);
@@ -370,9 +361,7 @@ it("fences an already returned row immediately when reset notification arrives",
       entered.resolve();
       await release.promise;
     });
-    const old = observer.handleEventAsync(
-      event({ stream: "item", data: { kind: "preamble", progressText: "Retired work" } }),
-    );
+    const old = sendPreamble(observer, "Retired work");
     const refused = expect(old).rejects.toThrow("Session entry changed during read");
     try {
       await entered.promise;
@@ -380,13 +369,7 @@ it("fences an already returned row immediately when reset notification arrives",
       notifyGatewaySessionReset(key, "main");
       release.resolve();
       await refused;
-      await observer.handleEventAsync(
-        event({
-          runId: "successor",
-          stream: "item",
-          data: { kind: "preamble", progressText: "Current work" },
-        }),
-      );
+      await sendPreamble(observer, "Current work", "successor");
       expect(broadcast.mock.calls.map((call) => call[1])).toEqual([
         expect.objectContaining({
           runId: "successor",
@@ -403,9 +386,7 @@ it("fences an already returned row immediately when reset notification arrives",
 
 it("does not disclose a predecessor digest when the configured store changes with matching session identities", async () => {
   await withObserver(async ({ observer, replaceStore, advanceClock }) => {
-    await observer.handleEventAsync(
-      event({ stream: "item", data: { kind: "preamble", progressText: "Previous store" } }),
-    );
+    await sendPreamble(observer, "Previous store");
     expect((await observer.getCompanionSnapshotAsync(key, "main")).digest?.headline).toBe(
       "Previous store",
     );
@@ -421,13 +402,7 @@ it("does not disclose a predecessor digest when the configured store changes wit
       agentId: "main",
       notes: [],
     });
-    await observer.handleEventAsync(
-      event({
-        runId: "replacement-run",
-        stream: "item",
-        data: { kind: "preamble", progressText: "Replacement store" },
-      }),
-    );
+    await sendPreamble(observer, "Replacement store", "replacement-run");
     expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toMatchObject({
       runId: "replacement-run",
       headline: "Replacement store",
@@ -437,14 +412,12 @@ it("does not disclose a predecessor digest when the configured store changes wit
 
 it("does not write a dormant predecessor digest into a replacement store", async () => {
   await withObserver(async ({ observer, watch, replaceStore, persisted }) => {
-    await observer.handleEventAsync(
-      event({ stream: "item", data: { kind: "preamble", progressText: "Predecessor work" } }),
-    );
+    await sendPreamble(observer, "Predecessor work");
     expect(persisted).toHaveBeenCalledOnce();
     watch(false);
     await replaceStore();
     persisted.mockClear();
-    await observer.handleEventAsync(event({ stream: "lifecycle", data: { phase: "end" } }));
+    await send(observer, "lifecycle", { phase: "end" });
     await observer.disposeAsync();
     expect(persisted).not.toHaveBeenCalled();
   });
@@ -600,36 +573,15 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
             return modelMessage({ headline: "Finished reviewing", health: "done" });
           }),
         });
+        const observer = harness.observer;
+        const deliver = (stream: string, data: Record<string, unknown>) =>
+          withinTest(send(observer, stream, data), signal);
         expect(factory).toHaveBeenCalledOnce();
         if (kind !== "synthesized terminal") {
-          await withinTest(
-            harness.observer.handleEventAsync(
-              event({
-                stream: "lifecycle",
-                data: { phase: "start", startedAt: 0 },
-              }),
-            ),
-            signal,
-          );
-          await withinTest(
-            harness.observer.handleEventAsync(
-              event({
-                stream: "tool",
-                data: { phase: "start", name: "read", args: { path: "example.ts" } },
-              }),
-            ),
-            signal,
-          );
+          await deliver("lifecycle", { phase: "start", startedAt: 0 });
+          await deliver("tool", { phase: "start", name: "read", args: { path: "example.ts" } });
         } else {
-          await withinTest(
-            harness.observer.handleEventAsync(
-              event({
-                stream: "item",
-                data: { kind: "preamble", progressText: "Reviewing", startedAt: 0 },
-              }),
-            ),
-            signal,
-          );
+          await deliver("item", { kind: "preamble", progressText: "Reviewing", startedAt: 0 });
           expect(backgroundRegistrations).toBe(1);
           await withinTest(backgroundFinished.promise, signal);
           expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
@@ -641,15 +593,7 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
         }
         expect(backgroundRegistrations).toBe(0);
         changeSourceOnRead = true;
-        await withinTest(
-          harness.observer.handleEventAsync(
-            event({
-              stream: "lifecycle",
-              data: { phase: "end", startedAt: 0, endedAt: 31_000 },
-            }),
-          ),
-          signal,
-        );
+        await deliver("lifecycle", { phase: "end", startedAt: 0, endedAt: 31_000 });
         expect(backgroundRegistrations).toBeGreaterThan(0);
         await withinTest(backgroundFinished.promise, signal);
         await withinTest(Promise.all(backgroundSettlements), signal);

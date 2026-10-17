@@ -19,6 +19,21 @@ import {
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 
 const agentId = "main";
+const defaultSessionKey = "agent:main:session-1";
+
+function withState(run: () => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await run();
+  });
+}
+
+function seed(sessionKey: string, revision: number) {
+  return upsertSessionEntryCore(
+    { sessionKey, agentId, env: process.env },
+    { sessionId: "sess-1", updatedAt: 1, observerDigest: makeDigest(sessionKey, revision) },
+  );
+}
 
 describe("normalizeSessionObserverModelOutput", () => {
   const digest = {
@@ -61,7 +76,7 @@ function makeDigest(sessionKey: string, revision: number): SessionObserverDigest
 function state(overrides: Partial<SessionObserverState> = {}): SessionObserverState {
   return {
     ...createSessionActivityNoteState(),
-    sessionKey: "agent:main:session-1",
+    sessionKey: defaultSessionKey,
     runId: "run-1",
     agentId,
     startedAt: 0,
@@ -79,8 +94,7 @@ function state(overrides: Partial<SessionObserverState> = {}): SessionObserverSt
 
 describe("defaultPersistDigest tri-state contract", () => {
   it("returns null when the session row is gone", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:persist-digest-missing";
       const changes = observeRowChanges();
       const accepted = await defaultPersistDigest({
@@ -99,17 +113,9 @@ describe("defaultPersistDigest tri-state contract", () => {
   ] as const)(
     "returns false without publishing a changed row on rejected write (%s)",
     async (_label, { seedRevision, digestRevision, sessionId }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
+      await withState(async () => {
         const sessionKey = "agent:main:persist-digest-reject";
-        await upsertSessionEntryCore(
-          { sessionKey, agentId, env: process.env },
-          {
-            sessionId: "sess-1",
-            updatedAt: 1,
-            observerDigest: makeDigest(sessionKey, seedRevision),
-          },
-        );
+        await seed(sessionKey, seedRevision);
         const changes = observeRowChanges();
         const accepted = await defaultPersistDigest({
           sessionKey,
@@ -127,17 +133,9 @@ describe("defaultPersistDigest tri-state contract", () => {
   );
 
   it("returns false without publishing a changed row for a superseded run", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:persist-digest-stale-run";
-      await upsertSessionEntryCore(
-        { sessionKey, agentId, env: process.env },
-        {
-          sessionId: "sess-1",
-          updatedAt: 1,
-          observerDigest: makeDigest(sessionKey, 0),
-        },
-      );
+      await seed(sessionKey, 0);
       const changes = observeRowChanges();
       const accepted = await defaultPersistDigest({
         sessionKey,
@@ -209,11 +207,10 @@ describe("defaultPersistDigest tri-state contract", () => {
 
 describe("session observer digest publication", () => {
   it("publishes a live/preamble persist", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const sessionKey = "agent:main:session-1";
+    await withState(async () => {
+      const sessionKey = defaultSessionKey;
       await upsertSessionEntryCore(
-        { agentId, sessionKey: "agent:main:session-1" },
+        { agentId, sessionKey },
         { sessionId: "session-1", updatedAt: 0 },
       );
       const changes = observeRowChanges();
@@ -225,26 +222,14 @@ describe("session observer digest publication", () => {
         onError: () => {},
       });
 
-      await persist(
-        state({ sessionId: "session-1" }),
-        {
-          sessionKey: "agent:main:session-1",
-          runId: "run-1",
-          revision: 1,
-          updatedAt: 0,
-          headline: "Checking files",
-          health: "on-track",
-        },
-        true,
-      );
+      await persist(state({ sessionId: "session-1" }), makeDigest(sessionKey, 1), true);
 
       expect(changes).toContainEqual(expect.objectContaining({ sessionKey, agentId }));
     });
   });
 
   it("publishes terminal-digest synthesis through the same seam", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withState(async () => {
       const sessionKey = "agent:main:session-2";
       await upsertSessionEntryCore(
         { agentId, sessionKey },
@@ -256,14 +241,7 @@ describe("session observer digest publication", () => {
         source: {
           state: {
             ...state({ sessionKey, sessionId: "session-2" }),
-            previousDigest: {
-              sessionKey,
-              runId: "run-1",
-              revision: 1,
-              updatedAt: 0,
-              headline: "Checking files",
-              health: "on-track",
-            },
+            previousDigest: makeDigest(sessionKey, 1),
             terminalHealth: "done",
           },
         },

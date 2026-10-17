@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import "../agents/utility-completion.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
@@ -25,6 +25,23 @@ vi.mock("../agents/isolated-completion.js", () => ({
   runIsolatedCompletion: runtimeMocks.completeIsolated,
 }));
 
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+});
+
+async function advance(ms = 12_000) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await flushObserver();
+}
+
+function endRun(harness: ReturnType<typeof createHarness>) {
+  harness.observer.handleEvent(
+    event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
+  );
+  return flushObserver();
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -35,8 +52,6 @@ describe("session observer model preparation", () => {
   it.each(["claude-cli", "anthropic"])(
     "publishes a digest from a runtime-owned %s utility completion after empty output without API auth",
     async (provider) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(0);
       const config = {
         agents: {
           defaults: {
@@ -109,22 +124,15 @@ describe("session observer model preparation", () => {
   );
 
   it("does not start completion after observation ends during model preparation", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let resolvePreparation: ((value: ReturnType<typeof preparedModel>) => void) | undefined;
-    const prepareModel = vi.fn(
-      () =>
-        new Promise<ReturnType<typeof preparedModel>>((resolve) => {
-          resolvePreparation = resolve;
-        }),
-    );
+    const preparation = createDeferred<ReturnType<typeof preparedModel>>();
+    const prepareModel = vi.fn(() => preparation.promise);
     const harness = createHarness({ prepareModel });
     startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     expect(prepareModel).toHaveBeenCalledOnce();
 
     harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
-    resolvePreparation?.(preparedModel());
+    preparation.resolve(preparedModel());
     await flushObserver();
 
     expect(harness.completeModel).not.toHaveBeenCalled();
@@ -134,16 +142,13 @@ describe("session observer model preparation", () => {
   it("times out stalled model preparation without starting another preparation", async ({
     signal,
   }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
     const preparation = createDeferred<ReturnType<typeof preparedModel>>();
     const prepareModel = vi.fn(() => preparation.promise);
     const harness = createHarness({ prepareModel });
     try {
       startAndAddToolNotes(harness.observer);
 
-      await vi.advanceTimersByTimeAsync(42_000);
-      await flushObserver();
+      await advance(42_000);
 
       expect(prepareModel).toHaveBeenCalledOnce();
       expect(harness.completeModel).not.toHaveBeenCalled();
@@ -155,8 +160,6 @@ describe("session observer model preparation", () => {
   });
 
   it("retries after a rejected preparation", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
     const prepareModel = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary preparation failure"))
@@ -164,8 +167,7 @@ describe("session observer model preparation", () => {
     const harness = createHarness({ prepareModel });
     startAndAddToolNotes(harness.observer);
 
-    await vi.advanceTimersByTimeAsync(24_000);
-    await flushObserver();
+    await advance(24_000);
 
     expect(prepareModel).toHaveBeenCalledTimes(2);
     expect(harness.completeModel).toHaveBeenCalledOnce();
@@ -174,45 +176,31 @@ describe("session observer model preparation", () => {
   });
 
   it.each([
-    {
-      route: "borrowed the primary's CLI runtime",
-      override: "claude-cli" as string | undefined,
-      outcome: "re-decides on the next digest",
-      preparations: 2,
+    ["claude-cli", 2],
+    [undefined, 1],
+  ] as const)(
+    "runtime override %s prepares %i times across digests",
+    async (override, preparations) => {
+      const prepareModel = vi.fn(async () => ({
+        ...preparedModel(),
+        ...(override ? { agentHarnessRuntimeOverride: override } : {}),
+      }));
+      const harness = createHarness({ prepareModel });
+      startAndAddToolNotes(harness.observer);
+
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(prepareModel).toHaveBeenCalledOnce();
+      expect(harness.completeModel).toHaveBeenCalledOnce();
+
+      await endRun(harness);
+
+      expect(harness.completeModel).toHaveBeenCalledTimes(2);
+      expect(prepareModel).toHaveBeenCalledTimes(preparations);
+      harness.observer.dispose();
     },
-    {
-      route: "borrowed no runtime",
-      override: undefined,
-      outcome: "keeps its single preparation",
-      preparations: 1,
-    },
-  ])("a route that $route $outcome", async ({ override, preparations }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const prepareModel = vi.fn(async () => ({
-      ...preparedModel(),
-      ...(override ? { agentHarnessRuntimeOverride: override } : {}),
-    }));
-    const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
-
-    await vi.advanceTimersByTimeAsync(12_000);
-    expect(prepareModel).toHaveBeenCalledOnce();
-    expect(harness.completeModel).toHaveBeenCalledOnce();
-
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
-    );
-    await flushObserver();
-
-    expect(harness.completeModel).toHaveBeenCalledTimes(2);
-    expect(prepareModel).toHaveBeenCalledTimes(preparations);
-    harness.observer.dispose();
-  });
+  );
 
   it("routes the next digest over HTTP once a credential arrives mid-run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
     let credentialPresent = false;
     const prepareModel = vi.fn(async () => ({
       ...preparedModel(),
@@ -227,10 +215,7 @@ describe("session observer model preparation", () => {
     });
 
     credentialPresent = true;
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
-    );
-    await flushObserver();
+    await endRun(harness);
 
     expect(prepareModel).toHaveBeenCalledTimes(2);
     expect(harness.completeModel.mock.calls[1]?.[0]).not.toHaveProperty(

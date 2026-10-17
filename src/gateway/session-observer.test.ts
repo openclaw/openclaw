@@ -43,6 +43,15 @@ function addToolNotes(harness: ReturnType<typeof createBaseHarness>, runId = "ru
   }
 }
 
+async function advance(ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await flushObserver();
+}
+
+function lastDigest(harness: ReturnType<typeof createBaseHarness>) {
+  return harness.broadcastToConnIds.mock.calls.at(-1)?.[1];
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
@@ -116,7 +125,7 @@ describe("session observer", () => {
     await flushObserver();
 
     expect(harness.completeModel).not.toHaveBeenCalled();
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+    expect(lastDigest(harness)).toMatchObject({
       headline: "Wrapping up",
       health: "done",
       revision: 3,
@@ -148,7 +157,7 @@ describe("session observer", () => {
     model.resolve(modelMessage({ headline: "Stale final model", health: "done" }));
     await withinTest(terminalBroadcast.promise, signal);
 
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+    expect(lastDigest(harness)).toMatchObject({
       headline: "Running tests",
       health: "done",
       revision: 2,
@@ -181,8 +190,7 @@ describe("session observer", () => {
     emitEvent(harness, "tool", { phase: "start", name: "read", args: { path: "a" } });
     emitEvent(harness, "tool", { phase: "start", name: "read", args: { path: "b" } });
 
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
     const prompt = String(harness.completeModel.mock.calls[0]?.[0]?.prompt);
     expect(prompt).not.toContain("test-token");
     expect(prompt).not.toContain(runtimeDetail);
@@ -214,8 +222,7 @@ describe("session observer", () => {
       first.resolve(modelMessage({ headline: "Starting the work", health: "on-track" }));
       await flushObserver();
       expect(completeModel).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(3_000);
-      await flushObserver();
+      await advance(3_000);
       expect(completeModel).toHaveBeenCalledTimes(2);
       const terminalPublished = createDeferred();
       harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
@@ -226,7 +233,7 @@ describe("session observer", () => {
       second.resolve(modelMessage({ headline: "Canceled live result", health: "on-track" }));
       await withinTest(terminalPublished.promise, signal);
       expect(completeModel).toHaveBeenCalledTimes(3);
-      expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({ health: "done" });
+      expect(lastDigest(harness)).toMatchObject({ health: "done" });
     } finally {
       first.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
       second.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
@@ -238,8 +245,7 @@ describe("session observer", () => {
   it("suspends when hidden and resumes on the next event after becoming visible", async () => {
     const harness = createHarness();
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
     harness.observer.setConnectionVisibility("conn-1", false);
@@ -250,8 +256,7 @@ describe("session observer", () => {
 
     harness.observer.setConnectionVisibility("conn-1", true);
     addToolNotes(harness);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
 
     expect(harness.completeModel).toHaveBeenCalledTimes(2);
   });
@@ -271,8 +276,7 @@ describe("session observer", () => {
       } else {
         addToolNotes(harness);
       }
-      await vi.advanceTimersByTimeAsync(12_000);
-      await flushObserver();
+      await advance(12_000);
       return harness.broadcastToConnIds.mock.calls.at(-1)?.[2] as ReadonlySet<string>;
     };
 
@@ -298,8 +302,7 @@ describe("session observer", () => {
       );
     const harness = createHarness({ completeModel });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
 
     expect(completeModel).toHaveBeenCalledTimes(2);
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
@@ -322,8 +325,7 @@ describe("session observer", () => {
       });
     }
 
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
     const sessions = harness.broadcastToConnIds.mock.calls.map(
       (call) => (call[1] as SessionObserverDigest).sessionKey,
     );
@@ -339,7 +341,7 @@ describe("session observer", () => {
     expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(beforePreamble + 1);
     await vi.advanceTimersByTimeAsync(1_900);
     expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(beforePreamble + 2);
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]?.headline).toBe("Running tests");
+    expect(lastDigest(harness)?.headline).toBe("Running tests");
   });
 
   it("preserves revisions across active and dormant run rollover", async () => {
@@ -347,8 +349,7 @@ describe("session observer", () => {
     startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     addToolNotes(harness);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
 
     startAndAddToolNotes(harness.observer, { runId: "run-2" });
     emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
@@ -358,8 +359,7 @@ describe("session observer", () => {
     harness.subscribers.subscribe("conn-2", "agent:main:session-1")?.commit();
     declareObserverVisibility(harness.observer, "conn-2");
     addToolNotes(harness, "run-3");
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
 
     const revisions = harness.broadcastToConnIds.mock.calls.map(
       (call) => (call[1] as SessionObserverDigest).revision,
@@ -385,13 +385,9 @@ describe("session observer digest budget", () => {
     preamble(harness, "Running focused tests");
     model.resolve(modelMessage({ headline: "Stale model summary", health: "on-track" }));
     await flushObserver();
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      headline: "Stale model summary",
-    });
+    expect(lastDigest(harness)).toMatchObject({ headline: "Stale model summary" });
     await vi.advanceTimersByTimeAsync(1_900);
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      headline: "Stale model summary",
-    });
+    expect(lastDigest(harness)).toMatchObject({ headline: "Stale model summary" });
   });
 
   it("stops live model attempts at the budget when requests are superseded", async () => {
@@ -434,7 +430,7 @@ describe("session observer digest budget", () => {
     emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: Date.now() });
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(40);
-    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({ health: "done" });
+    expect(lastDigest(harness)).toMatchObject({ health: "done" });
   });
 
   it("disables model work when digest persistence reports a missing entry", async () => {
@@ -445,8 +441,7 @@ describe("session observer digest budget", () => {
     const harness = createHarness({ persistDigest, setTimeoutFn, clearTimeoutFn });
     startAndAddToolNotes(harness.observer);
 
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advance(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
     expect(persistDigest).toHaveBeenCalledOnce();
     expect(ownedTimers.size).toBe(0);
