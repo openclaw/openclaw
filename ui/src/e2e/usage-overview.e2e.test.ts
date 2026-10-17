@@ -6,6 +6,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Usage server overview",
@@ -13,6 +14,80 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("suggests a model beyond the first six catalog entries and applies the selected filter", async () => {
+    const artifacts = createControlUiE2eArtifactDir("usage-query-catalog");
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        viewport: { width: 1440, height: 1100 },
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        const now = Date.parse("2026-08-07T12:00:00Z");
+        await page.clock.setFixedTime(new Date(now));
+        const usage = { ...createEmptyCostUsageTotals(), input: 100, totalTokens: 100 };
+        const models = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "seventh-model"];
+        const gateway = await installUsageOverviewGateway(page, {
+          methodResponses: {
+            "sessions.usage": {
+              updatedAt: now,
+              startDate: "2026-07-09",
+              endDate: "2026-08-07",
+              totals: { ...usage, input: 700, totalTokens: 700 },
+              sessions: models.map((model) => ({
+                key: `agent:main:${model}`,
+                label: `Session ${model}`,
+                model,
+                modelProvider: "example-provider",
+                updatedAt: now,
+                usage: { ...usage, firstActivity: now, lastActivity: now },
+              })),
+              aggregates: {
+                messages: {
+                  total: 0,
+                  user: 0,
+                  assistant: 0,
+                  toolCalls: 0,
+                  toolResults: 0,
+                  errors: 0,
+                },
+                tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+                byModel: [],
+                byProvider: [],
+                byAgent: [],
+                byChannel: [],
+                daily: [],
+                costDaily: [],
+              },
+            },
+            "usage.status": { updatedAt: now, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const rows = page.locator(".sessions-card .session-bar-title");
+        await expect.poll(() => rows.count()).toBe(models.length);
+        const input = page.locator(".usage-query-input");
+        await input.fill("model:seventh");
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".usage-query-section"),
+          [input],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(artifacts, "query-suggestions.png"), frame.png);
+        const suggestions = page.locator(".usage-query-suggestion");
+        await expect.poll(() => suggestions.allTextContents()).toEqual(["model:seventh-model"]);
+        await suggestions.click();
+        await input.press("Enter");
+        await expect.poll(() => rows.allTextContents()).toEqual(["Session seventh-model"]);
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
+          .toMatchObject({ projection: "overview", query: "model:seventh-model " });
+      },
+    );
+  });
+
   it("keeps all-session totals while paging and requests filters before rendering their results", async () => {
     const artifacts = createControlUiE2eArtifactDir("usage-overview");
     await suite.withPage(

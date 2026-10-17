@@ -6,9 +6,9 @@ import {
   buildQuerySuggestions,
   buildSessionsCsv,
   removeQueryToken,
+  type UsageFilterOptions,
 } from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
-import { buildUsageFilterOptions } from "./view.test-support.ts";
 
 describe("usage query token mutations", () => {
   const quotedLabel = 'label:"Team  Planning"';
@@ -20,35 +20,24 @@ describe("usage query token mutations", () => {
   });
 });
 
-it("limits suggestions before matching while preserving raw option spelling", () => {
-  const values = [
-    "OpenAI",
-    "OpenAI",
-    "openai",
-    " ",
-    "",
-    undefined,
-    "four",
-    "five",
-    "six",
-    "seventh",
-  ];
-  const sessions = values.map((value, index) => ({
-    key: `session-${index}`,
-    agentId: value,
-    channel: value,
-    modelProvider: value,
-    model: value,
-    usage: null,
-  }));
-  const options = buildUsageFilterOptions(sessions);
-  expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
-  for (const key of ["agent", "channel", "provider", "model"]) {
+it("matches the full catalog before limiting suggestions and preserves raw option spelling", () => {
+  const values = ["first", "second", "third", "fourth", "fifth", "sixth", "OpenAI", "openai"];
+  const options: UsageFilterOptions = {
+    agent: values,
+    channel: values,
+    provider: values,
+    model: values,
+    tool: values,
+  };
+  for (const key of ["agent", "channel", "provider", "model", "tool"]) {
     expect(buildQuerySuggestions(`${key}:OPEN`, options).map((entry) => entry.value)).toEqual([
       `${key}:OpenAI`,
       `${key}:openai`,
     ]);
-    expect(buildQuerySuggestions(`${key}:seventh`, options)).toEqual([]);
+    expect(buildQuerySuggestions(`${key}:`, options).map((entry) => entry.value)).toEqual(
+      values.slice(0, 6).map((value) => `${key}:${value}`),
+    );
+    expect(buildQuerySuggestions(`${key}:missing`, options)).toEqual([]);
   }
   expect(buildQuerySuggestions("constructor:", options)).toEqual([]);
   expect(buildQuerySuggestions("has:err", options)).toEqual([

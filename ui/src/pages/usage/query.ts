@@ -129,7 +129,7 @@ const buildQuerySuggestions = (query: string, options: UsageFilterOptions): Quer
     case "provider":
     case "model":
     case "tool":
-      candidates = options[key].slice(0, 6);
+      candidates = options[key];
       break;
     case "has":
       candidates = ["errors", "tools", "context", "usage", "model", "provider"];
@@ -139,6 +139,7 @@ const buildQuerySuggestions = (query: string, options: UsageFilterOptions): Quer
   }
   return candidates
     .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
+    .slice(0, 6)
     .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
 };
 
