@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   loadExactSessionEntry,
@@ -39,38 +40,22 @@ afterEach(() => resetPluginRuntimeStateForTest());
 async function resolveTextSlashDirective(
   body: string,
   options: {
-    botUsername?: string;
-    commandsText?: boolean;
-    surface?: string;
+    native?: boolean;
     authorized?: boolean;
     admin?: boolean;
   } = {},
 ) {
+  const { native = false, authorized = true, admin = true } = options;
+  const surface = native ? "discord" : "webchat";
   const storePath = path.join(tempDirs.make("openclaw-text-slash-directive-"), "sessions.json");
-  const {
-    surface = "webchat",
-    authorized = true,
-    botUsername,
-    commandsText,
-    admin = true,
-  } = options;
   const sessionKey = `agent:main:${surface}:direct:user-1`;
   const ctx = buildTestCtx({
     Body: body,
-    BodyForAgent: body,
     CommandBody: body,
-    CommandSource: "text",
     CommandAuthorized: authorized,
-    CommandTurn: {
-      kind: "text-slash",
-      source: "text",
-      authorized,
-      commandName: body.slice(1).split(/\s+/, 1)[0],
-      body,
-    },
     Provider: surface,
     Surface: surface,
-    BotUsername: botUsername,
+    BotUsername: "openclaw",
     GatewayClientScopes: admin ? ["operator.admin"] : [],
     SessionKey: sessionKey,
   });
@@ -82,7 +67,7 @@ async function resolveTextSlashDirective(
     ctx,
     cfg: markCompleteReplyConfig({
       session: { store: storePath },
-      commands: commandsText === undefined ? undefined : { text: commandsText },
+      commands: native ? { text: false } : undefined,
     }),
     agentId: "main",
     agentDir: "/tmp/agent",
@@ -110,112 +95,78 @@ async function resolveTextSlashDirective(
   return { result, read, storedBefore };
 }
 
-function resolveAddressed(body: string) {
-  return resolveTextSlashDirective(body, { botUsername: "openclaw" });
-}
-
-describe("text slash directive ownership", () => {
-  it.each([
-    "/model list -g Review this",
-    "/model list@work --runtime codex -g Review this",
-    "/model status -a -g Review this",
-  ])("ignores mixed model information metadata: %s", async (body) => {
-    for (const authorized of [true, false]) {
-      const { result, read, storedBefore } = await resolveTextSlashDirective(body, {
-        admin: false,
-        authorized,
-      });
-      expect(result).toMatchObject({
-        kind: "continue",
-        result: {
-          cleanedBody: expect.stringContaining("Review this"),
-          directives: {
-            hasModelDirective: false,
-            rawModelDirective: undefined,
-            rawModelProfile: undefined,
-            rawModelRuntime: undefined,
-            modelDirectiveSource: undefined,
-            modelScope: undefined,
-            modelScopeConflict: false,
-          },
-        },
-      });
-      expect(read()).toEqual(storedBefore);
-    }
-  });
-
-  it.each([
-    [
-      "  /exec@openclaw security=full ask=off\n",
-      "Review  this:\n```python\n    print('a  b')\n```",
-      { security: "full", ask: "off" },
-    ],
-    ["", "/unknown@openclaw explain  this\n    unchanged", undefined],
-    ["/verbose@openclaw:\r\n", "    if ready:\n        run('a  b')  \n", undefined],
-  ] as const)("preserves addressed task bytes after %s", async (prefix, task, execOverrides) => {
-    const { result } = await resolveAddressed(`${prefix}${task}`);
+const codeTask = "Please inspect this code:\n```python\nif True:\n    print('a  b')\n```";
+it.each([
+  "/model list -g Review this",
+  "/model list@work --runtime codex -g Review this",
+  "/model status -a -g Review this",
+])("ignores mixed model information metadata: %s", async (body) => {
+  for (const authorized of [true, false]) {
+    const { result, read, storedBefore } = await resolveTextSlashDirective(body, {
+      admin: false,
+      authorized,
+    });
     expect(result).toMatchObject({
       kind: "continue",
-      result: { cleanedBody: task, ...(execOverrides ? { execOverrides } : {}) },
+      result: {
+        cleanedBody: expect.stringContaining("Review this"),
+        directives: {
+          hasModelDirective: false,
+          rawModelDirective: undefined,
+          rawModelProfile: undefined,
+          rawModelRuntime: undefined,
+          modelDirectiveSource: undefined,
+          modelScope: undefined,
+          modelScopeConflict: false,
+        },
+      },
     });
-  });
+    expect(read()).toEqual(storedBefore);
+  }
+});
 
-  it.each([
-    ["/think: high", "\n", "thinkingLevel", { resolvedThinkLevel: "high" }],
-    ["/fast on", " ", "fastMode", { resolvedFastMode: true, resolvedFastModeOverride: true }],
-  ] as const)(
-    "preserves a task after %s with separator %j",
-    async (directive, separator, field, expected) => {
-      const task = "Please inspect this code:\n```python\nif True:\n    print('a  b')\n```";
-      const { result, read, storedBefore } = await resolveAddressed(
-        `${directive}${separator}${task}`,
-      );
+it.each([
+  [
+    "  /exec@openclaw security=full ask=off\n",
+    "Review  this:\n```python\n    print('a  b')\n```",
+    { execOverrides: { security: "full", ask: "off" } },
+    undefined,
+  ],
+  ["", "/unknown@openclaw explain  this\n    unchanged", {}, undefined],
+  ["/verbose@openclaw:\r\n", "    if ready:\n        run('a  b')  \n", {}, undefined],
+  ["/think: high\n", codeTask, { resolvedThinkLevel: "high" }, "thinkingLevel"],
+  ["/fast on ", codeTask, { resolvedFastMode: true, resolvedFastModeOverride: true }, "fastMode"],
+] as const)("preserves addressed task bytes after %s", async (prefix, task, expected, field) => {
+  const { result, read, storedBefore } = await resolveTextSlashDirective(`${prefix}${task}`);
+  assert(result.kind === "continue", "expected the directive task to continue");
+  const levels = field ? await result.result.resolveModelLevels() : {};
+  expect({ ...result.result, ...levels }).toMatchObject({ cleanedBody: task, ...expected });
+  if (field) {
+    expect(read()).toEqual(storedBefore);
+    expect(read()).not.toHaveProperty(field);
+  }
+});
 
-      expect(result.kind).toBe("continue");
-      if (result.kind !== "continue") {
-        throw new Error("expected the directive task to continue");
-      }
-      const levels = await result.result.resolveModelLevels();
-      expect({ ...result.result, ...levels }).toMatchObject({ cleanedBody: task, ...expected });
-      expect(read()).toEqual(storedBefore);
-      expect(read()).not.toHaveProperty(field);
-    },
-  );
+it.each([
+  ["host=gateway", expect.stringContaining("Exec defaults set (host=gateway)."), "gateway"],
+  ["gateway", 'Unexpected argument "gateway" for /exec.', undefined],
+] as const)("validates addressed exec arguments: %s", async (args, text, host) => {
+  const { result, read } = await resolveTextSlashDirective(`/exec@openclaw: ${args}`);
+  expect(result).toMatchObject({ kind: "reply", reply: { text } });
+  if (host) {
+    expect(read()?.execHost).toBe(host);
+  }
+});
 
-  it("preserves addressed exec key/value arguments", async () => {
-    const { result, read } = await resolveAddressed("/exec@openclaw: host=gateway");
+it("applies all text directives separated by newlines", async () => {
+  const { result, read } = await resolveTextSlashDirective("/verbose full\n/reasoning off");
+  expect(result).toMatchObject({ kind: "reply" });
+  expect(read()).toMatchObject({ verboseLevel: "full", reasoningLevel: "off" });
+});
 
-    expect(result).toMatchObject({
-      kind: "reply",
-      reply: { text: expect.stringContaining("Exec defaults set (host=gateway).") },
-    });
-    expect(read()?.execHost).toBe("gateway");
-  });
-
-  it("rejects positional exec arguments addressed to the current bot", async () => {
-    const { result } = await resolveAddressed("/exec@openclaw: gateway");
-
-    expect(result).toMatchObject({
-      kind: "reply",
-      reply: { text: 'Unexpected argument "gateway" for /exec.' },
-    });
-  });
-
-  it("applies all text directives separated by newlines", async () => {
-    const { result, read } = await resolveTextSlashDirective("/verbose full\n/reasoning off");
-
-    expect(result).toMatchObject({ kind: "reply" });
-    expect(read()).toMatchObject({ verboseLevel: "full", reasoningLevel: "off" });
-  });
-
-  it("preserves text exec commands when text routing is disabled on a native surface", async () => {
-    const body = "/exec host=gateway";
-    const { result, read } = await resolveTextSlashDirective(body, {
-      commandsText: false,
-      surface: "discord",
-    });
-
-    expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
-    expect(read()?.execHost).toBeUndefined();
-  });
+it("preserves text exec commands when text routing is disabled on a native surface", async () => {
+  const body = "/exec host=gateway";
+  const { result, read } = await resolveTextSlashDirective(body, { native: true });
+  expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
+  expect(read()?.execHost).toBeUndefined();
 });
