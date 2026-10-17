@@ -1,4 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { formatUrlHost } from "../infra/net/hostname.js";
 import { isLoopbackHost } from "./net.js";
 
 type HostSource = string | null | undefined;
@@ -90,7 +91,5 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
     }
   }
 
-  const formatted =
-    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
-  return `${scheme}://${formatted}:${exposedPort}`;
+  return `${scheme}://${formatUrlHost(host)}:${exposedPort}`;
 }

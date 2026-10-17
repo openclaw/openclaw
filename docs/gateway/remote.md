@@ -84,7 +84,8 @@ Persist a remote target so CLI commands use it by default:
 
 For a manually managed SSH tunnel, keep the URL at `ws://127.0.0.1:18789` and open
 the tunnel first. For a client-managed tunnel, set `gateway.remote.sshTarget`
-(`user@host` or `user@host:port`); `gateway.remote.url` stays the local tunnel URL.
+(`user@host` or `user@host:port`; bracket IPv6 addresses as `user@[2001:db8::10]`);
+`gateway.remote.url` stays the local tunnel URL.
 The macOS app uses the same settings. If the remote port differs from the local
 one, set `gateway.remote.remotePort`.
 

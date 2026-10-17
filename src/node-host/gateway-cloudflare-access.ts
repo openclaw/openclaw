@@ -6,6 +6,7 @@ import {
   normalizeSecretInputString,
   type SecretInput,
 } from "../config/types.secrets.js";
+import { formatUrlHost } from "../infra/net/hostname.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 
@@ -100,8 +101,7 @@ export async function resolveNodeHostCloudflareAccess(params: {
 
 function nodeHostGatewayOrigin(gateway: { host?: string; port?: number; tls?: boolean }): URL {
   const host = gateway.host ?? "127.0.0.1";
-  const urlHost =
-    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
+  const urlHost = formatUrlHost(host);
   const protocol = gateway.tls ? "https:" : "http:";
   const port = gateway.port ?? (gateway.tls ? 443 : 80);
   return new URL(`${protocol}//${urlHost}:${port}`);

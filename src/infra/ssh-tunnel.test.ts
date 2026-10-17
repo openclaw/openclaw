@@ -73,6 +73,27 @@ describe("parseSshTarget", () => {
       expect(parseSshTarget(target), target).toEqual(expected);
     }
   });
+
+  it("reads a bracketed IPv6 literal as the raw host and refuses malformed brackets", () => {
+    const cases: [string, ReturnType<typeof parseSshTarget>][] = [
+      ["me@[2001:db8::10]", { user: "me", host: "2001:db8::10", port: 22 }],
+      ["me@[2001:db8::10]:2222", { user: "me", host: "2001:db8::10", port: 2222 }],
+      ["[::1]:2222", { user: undefined, host: "::1", port: 2222 }],
+      ["me@[fe80::1%eth0]", { user: "me", host: "fe80::1%eth0", port: 22 }],
+      ...[
+        "me@[2001:db8::10",
+        "me@[2001:db8::10]:",
+        "me@[2001:db8::10]:0",
+        "me@[2001:db8::10]x",
+        "me@[]",
+        "me@[example.com]:22",
+        "me@[::1 -oProxyCommand=x]",
+      ].map((target): [string, null] => [target, null]),
+    ];
+    for (const [target, expected] of cases) {
+      expect(parseSshTarget(target), target).toEqual(expected);
+    }
+  });
 });
 
 describe("startSshPortForward", () => {

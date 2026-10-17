@@ -1,6 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import { isIP } from "node:net";
 import type { TlsOptions } from "node:tls";
+import { formatUrlHost } from "../../infra/net/hostname.js";
 
 /** Select a certificate-valid direct hostname without changing the listener or client URL. */
 export function resolvePortalTlsHostname(
@@ -35,7 +36,7 @@ export function resolvePortalTlsHostname(
       ? certificate.checkIP(candidate)
       : certificate.checkHost(candidate, { subject: "never" });
     if (matches) {
-      return candidate.includes(":") ? `[${candidate}]` : candidate;
+      return formatUrlHost(candidate);
     }
   }
   // Self-signed/default material may have no DNS identity. Preserve its direct

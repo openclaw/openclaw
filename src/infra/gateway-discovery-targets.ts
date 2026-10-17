@@ -1,6 +1,7 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayDiscoveryEndpoint, type GatewayBonjourBeacon } from "./bonjour-discovery.js";
+import { formatUrlHost } from "./net/hostname.js";
 
 // Gateway discovery targets turn Bonjour beacons into display, websocket, and
 // SSH connection hints without assuming every beacon has all fields.
@@ -11,7 +12,8 @@ export function buildGatewayDiscoveryTarget(
   const endpoint = resolveGatewayDiscoveryEndpoint(beacon);
   const sshPort = asPositiveFiniteNumber(beacon.sshPort) ?? null;
   const sshUser = normalizeOptionalString(opts?.sshUser) ?? "";
-  const baseSshTarget = endpoint ? (sshUser ? `${sshUser}@${endpoint.host}` : endpoint.host) : null;
+  const sshHost = endpoint ? formatUrlHost(endpoint.host) : null;
+  const baseSshTarget = sshHost ? (sshUser ? `${sshUser}@${sshHost}` : sshHost) : null;
   const sshTarget =
     baseSshTarget && sshPort && sshPort !== 22 ? `${baseSshTarget}:${sshPort}` : baseSshTarget;
   return {
@@ -27,7 +29,9 @@ export function buildGatewayDiscoveryTarget(
 
 export function buildGatewayDiscoveryLabel(beacon: GatewayBonjourBeacon): string {
   const target = buildGatewayDiscoveryTarget(beacon);
-  const hint = target.endpoint ? `${target.endpoint.host}:${target.endpoint.port}` : "host unknown";
+  const hint = target.endpoint
+    ? `${formatUrlHost(target.endpoint.host)}:${target.endpoint.port}`
+    : "host unknown";
   return `${target.title} (${hint})`;
 }
 

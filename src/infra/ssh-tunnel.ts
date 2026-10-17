@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isIPv6 } from "node:net";
 import {
   containsAsciiControlCharacter,
   normalizeStringEntries,
@@ -56,17 +57,23 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   const user = at === -1 ? undefined : trimmed.slice(0, at).trim() || undefined;
   let host = at === -1 ? trimmed : trimmed.slice(at + 1).trim();
   let port: number | null = 22;
-  const colonIdx = host.lastIndexOf(":");
-  if (colonIdx > 0 && colonIdx < host.length - 1) {
-    port = parseTcpPort(host.slice(colonIdx + 1).trim());
-    host = host.slice(0, colonIdx).trim();
+  // `[IPv6]` and `[IPv6]:port` are the only unambiguous forms; the host is the raw literal.
+  const bracketed = /^\[([^\]]*)\](?::(.*))?$/.exec(host);
+  let hostIsSafe: boolean;
+  if (bracketed) {
+    const [, literal = "", bracketedPort] = bracketed;
+    host = literal;
+    port = bracketedPort === undefined ? 22 : parseTcpPort(bracketedPort.trim());
+    hostIsSafe = isIPv6(host);
+  } else {
+    const colonIdx = host.lastIndexOf(":");
+    if (colonIdx > 0 && colonIdx < host.length - 1) {
+      port = parseTcpPort(host.slice(colonIdx + 1).trim());
+      host = host.slice(0, colonIdx).trim();
+    }
+    hostIsSafe = isSafeSshTargetHost(host);
   }
-  if (
-    !host ||
-    port === null ||
-    !isSafeSshTargetHost(host) ||
-    (user !== undefined && !isSafeSshTargetUser(user))
-  ) {
+  if (!host || port === null || !hostIsSafe || (user !== undefined && !isSafeSshTargetUser(user))) {
     return null;
   }
   return { user, host, port };

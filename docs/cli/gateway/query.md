@@ -374,7 +374,7 @@ openclaw gateway probe --ssh user@gateway-host
 <a id="param-ssh"></a>
 
 <ParamField path="--ssh <target>" type="string">
-  `user@host` or `user@host:port` (port defaults to `22`).
+  `user@host` or `user@host:port` (port defaults to `22`). Bracket IPv6 addresses: `user@[2001:db8::10]:port`.
 </ParamField>
 
 OpenClaw launches only an SSH client found in OS-managed system directories. On native Windows,

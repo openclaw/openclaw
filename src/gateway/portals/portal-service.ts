@@ -19,6 +19,7 @@ import {
 import type { GatewayPortalIngressConfig } from "../../config/types.gateway.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { formatUrlHost } from "../../infra/net/hostname.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -178,7 +179,7 @@ async function formatPortalHost(host: string): Promise<string> {
       ? await resolveAdvertisedLanHostCore().catch(() => null)
       : null;
   const openableHost = lanHost ?? (host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host);
-  return openableHost.includes(":") ? `[${openableHost}]` : openableHost;
+  return formatUrlHost(openableHost);
 }
 
 function createPortalProxyHandlers(

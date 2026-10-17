@@ -3,6 +3,7 @@ import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { TLSSocket } from "node:tls";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatUrlHost } from "../infra/net/hostname.js";
 import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
 import { registerManagedProxyGatewayLoopbackBypass } from "../infra/net/proxy/proxy-lifecycle.js";
 
@@ -66,8 +67,7 @@ async function requestGatewayLocalHttpProbe(params: {
     const pins = params.tlsFingerprints?.map(normalizeTlsFingerprint);
     const host = normalizeGatewayHttpProbeHost(params.host);
     const protocol = pins ? "https" : "http";
-    const authority = host.includes(":") ? `[${host}]` : host;
-    const targetUrl = `${protocol}://${authority}:${params.port}${params.pathname}`;
+    const targetUrl = `${protocol}://${formatUrlHost(host)}:${params.port}${params.pathname}`;
     registerManagedProxyGatewayLoopbackBypass(targetUrl);
     const proxyAgent = createNodeProxyAgent({
       mode: "env",
