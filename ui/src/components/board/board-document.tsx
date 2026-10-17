@@ -3,15 +3,7 @@ import {
   type BoardGetParams,
   type BoardSnapshot,
 } from "@openclaw/gateway-protocol";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  getOwner,
-  onCleanup,
-  runWithOwner,
-  Show,
-} from "solid-js";
+import { createEffect, createMemo, onCleanup, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   hasOperatorApprovalsAccess,
@@ -30,8 +22,8 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
-import { projectBoardProvider } from "../../lib/reactive/domain-board.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -64,32 +56,25 @@ export type BoardDocumentProps = {
 };
 
 // The provider binding remains synchronous; Solid observes its presentation facts.
-class BoardDocumentController {
-  documentState: DashboardDocumentState = "loading";
-  snapshot?: BoardSnapshot;
-  activeTabId = "";
-  errorText = "";
-  private provider: BoardProvider | null = null;
-  private providerLease: BoardProviderLease | null = null;
-  private binding: (ProviderBinding & { session: BoardGetParams }) | null = null;
-  private providerSubscriptions: (() => void)[] = [];
-  private bindingGeneration = 0;
+function createBoardDocument(props: BoardDocumentProps) {
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  let documentState: DashboardDocumentState = "loading";
+  let ownedSnapshot: BoardSnapshot | undefined;
+  let activeTabId = "";
+  let errorText = "";
+  let ownedProvider: BoardProvider | null = null;
+  let providerLease: BoardProviderLease | null = null;
+  let ownedBinding: (ProviderBinding & { session: BoardGetParams }) | null = null;
+  let providerSubscriptions: (() => void)[] = [];
+  let bindingGeneration = 0;
 
-  constructor(
-    private readonly props: BoardDocumentProps,
-    private readonly notify: () => void,
-  ) {}
-
-  update(): void {
-    this.synchronizeProvider();
-    this.notify();
+  function update(): void {
+    synchronizeProvider();
+    notify();
   }
 
-  dispose(): void {
-    this.releaseProvider();
-  }
-
-  private providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
+  function providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
     const canMutate = hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     return {
       canMutate,
@@ -105,79 +90,77 @@ class BoardDocumentController {
     };
   }
 
-  private synchronizeProvider(): void {
-    const sessionKey =
-      (this.props.preparedSession?.sessionKey ?? this.props.sessionKey)?.trim() ?? "";
+  function synchronizeProvider(): void {
+    const sessionKey = (props.preparedSession?.sessionKey ?? props.sessionKey)?.trim() ?? "";
     if (!sessionKey) {
-      this.releaseProvider();
-      this.documentState = "missing-session";
+      releaseProvider();
+      documentState = "missing-session";
       return;
     }
-    const snapshot = this.props.gatewaySnapshot;
+    const snapshot = props.gatewaySnapshot;
     const client = snapshot?.client;
     if (!snapshot || !client) {
-      this.releaseProvider();
-      this.documentState = "loading";
+      releaseProvider();
+      documentState = "loading";
       return;
     }
     if (
       !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
       isGatewayMethodAdvertised(snapshot, "board.get") === false
     ) {
-      this.releaseProvider();
-      this.documentState = "unavailable";
+      releaseProvider();
+      documentState = "unavailable";
       return;
     }
-    const capabilities = this.providerCapabilities(snapshot);
+    const capabilities = providerCapabilities(snapshot);
     const capabilityKey = JSON.stringify(capabilities);
     if (
-      this.binding?.client === client &&
-      this.binding.sessions === this.props.sessions &&
-      this.binding.sessionKey === sessionKey &&
-      (!this.props.preparedSession ||
-        this.binding.session.agentId === this.props.preparedSession.agentId) &&
-      this.binding.capabilityKey === capabilityKey
+      ownedBinding?.client === client &&
+      ownedBinding.sessions === props.sessions &&
+      ownedBinding.sessionKey === sessionKey &&
+      (!props.preparedSession || ownedBinding.session.agentId === props.preparedSession.agentId) &&
+      ownedBinding.capabilityKey === capabilityKey
     ) {
-      this.providerLease?.update(client, snapshot.phase === "connected", capabilities);
+      providerLease?.update(client, snapshot.phase === "connected", capabilities);
       return;
     }
-    this.releaseProvider();
-    this.documentState = "loading";
-    const generation = this.bindingGeneration;
-    void this.bindProvider(
-      { client, sessions: this.props.sessions, sessionKey, capabilityKey },
+    releaseProvider();
+    documentState = "loading";
+    const generation = bindingGeneration;
+    void bindProvider(
+      { client, sessions: props.sessions, sessionKey, capabilityKey },
       capabilities,
       generation,
-      this.props.preparedSession ?? null,
+      props.preparedSession ?? null,
     );
   }
 
-  private async bindProvider(
+  async function bindProvider(
     binding: ProviderBinding,
-    capabilities: ReturnType<BoardDocumentController["providerCapabilities"]>,
+    capabilities: ReturnType<typeof providerCapabilities>,
     generation: number,
     preparedSession: BoardGetParams | null,
   ): Promise<void> {
     try {
       const sessions = binding.sessions;
       if (!preparedSession && !sessions) {
-        this.documentState = "unavailable";
-        this.notify();
+        documentState = "unavailable";
+        notify();
         return;
       }
       const described =
         preparedSession || !sessions
           ? null
           : await sessions.describe({ key: binding.sessionKey }, { client: binding.client });
-      if (generation !== this.bindingGeneration) {
+      if (generation !== bindingGeneration) {
         return;
       }
       if (!preparedSession && !described?.session) {
-        this.documentState = "not-found";
-        this.notify();
+        documentState = "not-found";
+        notify();
         return;
       }
-      const current = this.props.gatewaySnapshot;
+      const current = props.gatewaySnapshot;
       if (!current || current.client !== binding.client) {
         return;
       }
@@ -195,87 +178,84 @@ class BoardDocumentController {
         capabilities.canGrant,
       );
       const provider = lease.provider;
-      this.provider = provider;
-      this.providerLease = lease;
-      this.binding = { ...binding, session };
-      const projection = projectBoardProvider(provider);
-      this.providerSubscriptions.push(
-        projection.subscribe(() => this.reconcileProvider(provider)),
-        () => projection.dispose(),
-      );
-      this.providerSubscriptions.push(
+      ownedProvider = provider;
+      providerLease = lease;
+      ownedBinding = { ...binding, session };
+      providerSubscriptions.push(
+        provider.snapshot$.subscribe(() => reconcileProvider(provider)),
+        provider.loadError$.subscribe(() => reconcileProvider(provider)),
         provider.events.subscribe(({ command }) => {
           if (
             command.kind === "focus_tab" &&
             provider.snapshot$.value.tabs.some((tab) => tab.tabId === command.tabId)
           ) {
-            this.activeTabId = command.tabId;
-            this.notify();
+            activeTabId = command.tabId;
+            notify();
           }
         }),
       );
-      this.reconcileProvider(provider);
+      reconcileProvider(provider);
     } catch (error) {
-      if (generation === this.bindingGeneration) {
-        this.errorText = formatUiError(error);
-        this.documentState = "error";
-        this.notify();
+      if (generation === bindingGeneration) {
+        errorText = formatUiError(error);
+        documentState = "error";
+        notify();
       }
     }
   }
 
-  private selectAvailableTab(): void {
-    const snapshot = this.snapshot;
+  function selectAvailableTab(): void {
+    const snapshot = ownedSnapshot;
     if (!snapshot) {
       return;
     }
-    if (snapshot.tabs.some((tab) => tab.tabId === this.activeTabId)) {
+    if (snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
       return;
     }
-    this.activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+    activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
   }
 
-  private reconcileProvider(provider: BoardProvider): void {
-    if (this.provider !== provider) {
+  function reconcileProvider(provider: BoardProvider): void {
+    if (ownedProvider !== provider) {
       return;
     }
     if (provider.hasLoadedSnapshot) {
-      this.snapshot = provider.snapshot$.value;
-      this.selectAvailableTab();
-      this.documentState = "ready";
-      this.notify();
+      ownedSnapshot = provider.snapshot$.value;
+      selectAvailableTab();
+      documentState = "ready";
+      notify();
       return;
     }
     const loadError = provider.loadError$.value;
     if (loadError) {
-      this.errorText = loadError;
-      this.documentState = "error";
+      errorText = loadError;
+      documentState = "error";
     } else {
-      this.errorText = "";
-      this.documentState = "loading";
+      errorText = "";
+      documentState = "loading";
     }
-    this.notify();
+    notify();
   }
 
-  private releaseProvider(): void {
-    this.bindingGeneration += 1;
-    for (const unsubscribe of this.providerSubscriptions) {
+  function releaseProvider(): void {
+    bindingGeneration += 1;
+    for (const unsubscribe of providerSubscriptions) {
       unsubscribe();
     }
-    this.providerSubscriptions = [];
-    this.providerLease?.release();
-    this.provider = null;
-    this.providerLease = null;
-    this.binding = null;
-    this.snapshot = undefined;
-    this.activeTabId = "";
-    this.errorText = "";
+    providerSubscriptions = [];
+    providerLease?.release();
+    ownedProvider = null;
+    providerLease = null;
+    ownedBinding = null;
+    ownedSnapshot = undefined;
+    activeTabId = "";
+    errorText = "";
   }
 
-  presentation(passive: boolean) {
-    const provider = this.provider;
-    const snapshot = this.snapshot;
-    const session = this.binding?.session;
+  function presentation(passive: boolean) {
+    const provider = ownedProvider;
+    const snapshot = ownedSnapshot;
+    const session = ownedBinding?.session;
     if (!provider || !snapshot || !session) {
       return undefined;
     }
@@ -284,8 +264,8 @@ class BoardDocumentController {
       applyOps: (ops) => provider.applyOps(ops),
       grant: (name, decision) => provider.grant(name, decision),
       selectTab: (tabId) => {
-        this.activeTabId = tabId;
-        this.notify();
+        activeTabId = tabId;
+        notify();
       },
       frameLoadFailed: (name) => provider.refreshWidgetFrame(name),
       ...(!passive
@@ -300,10 +280,7 @@ class BoardDocumentController {
       ? {
           ...snapshot,
           widgets: snapshot.widgets.filter((widget) =>
-            isPassiveBoardWidget(
-              widget,
-              this.props.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? [],
-            ),
+            isPassiveBoardWidget(widget, props.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? []),
           ),
         }
       : snapshot;
@@ -313,15 +290,29 @@ class BoardDocumentController {
       snapshot: renderSnapshot,
       session,
       callbacks,
-      activeTabId: this.activeTabId,
+      activeTabId,
     };
   }
+  return {
+    update,
+    dispose: releaseProvider,
+    read: (passive: boolean) => ({
+      kind: documentState,
+      error: errorText,
+      board: presentation(passive),
+    }),
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
 
 function BoardDocumentContent(props: BoardDocumentProps) {
-  const owner = getOwner();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new BoardDocumentController(props, () => setRevision((value) => value + 1));
+  const document = createBoardDocument(props);
+  const projection = projectOwner(document, (current) => current);
   createEffect(
     () => ({
       gatewaySnapshot: props.gatewaySnapshot,
@@ -329,17 +320,10 @@ function BoardDocumentContent(props: BoardDocumentProps) {
       sessionKey: props.sessionKey,
       preparedSession: props.preparedSession,
     }),
-    () => runWithOwner(owner, () => controller.update()),
+    () => document.update(),
   );
-  onCleanup(() => controller.dispose());
-  const state = createMemo(() => {
-    revision();
-    return {
-      kind: controller.documentState,
-      error: controller.errorText,
-      board: controller.presentation(props.passive ?? false),
-    };
-  });
+  onCleanup(document.dispose);
+  const state = createMemo(() => projection.read().read(props.passive ?? false));
   const statusText = () =>
     state().kind === "missing-session"
       ? t("dashboardDocument.missingSession")

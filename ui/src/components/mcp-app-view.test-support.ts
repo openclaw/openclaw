@@ -2,7 +2,7 @@ import { createComponent } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
-import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import type { McpAppViewElement } from "./mcp-app-view-owner.ts";
 
 const { McpAppView } = await import("./mcp-app-view.tsx");
 
