@@ -127,20 +127,21 @@ it("skips absent-field clearing only when the complete previous field set surviv
     sql("SELECT field FROM session_entry_snapshots WHERE session_key = ? ORDER BY field")
       .all(key)
       .map((row) => row.field);
-  try {
-    replace({ ...previousEntry, skillsSnapshot: { prompt: "new prompt", skills: [] } });
-    expect(writes.counts.delete).toBe(0);
-    expect(fields()).toEqual(["skillsSnapshot", "systemPromptReport"]);
-    replace(previous, false);
-    expect(fields()).toEqual(["skillsSnapshot", "systemPromptReport"]);
-    replace(previous);
-    expect(writes.counts.delete).toBe(2);
-    expect(fields()).toEqual(["skillsSnapshot"]);
-    transact(() => writeSessionEntrySnapshots(database, key, []));
-    expect(fields()).toEqual([]);
-  } finally {
-    writes.restore();
+  using _ = { [Symbol.dispose]: writes.restore };
+  const both = ["skillsSnapshot", "systemPromptReport"];
+  for (const [entry, commit, expected, deletions] of [
+    [{ ...previousEntry, skillsSnapshot: { prompt: "new prompt", skills: [] } }, true, both, 0],
+    [previous, false, both, undefined],
+    [previous, true, ["skillsSnapshot"], 2],
+  ] as const) {
+    replace(entry, commit);
+    expect(fields()).toEqual(expected);
+    if (deletions !== undefined) {
+      expect(writes.counts.delete).toBe(deletions);
+    }
   }
+  transact(() => writeSessionEntrySnapshots(database, key, []));
+  expect(fields()).toEqual([]);
 });
 
 it("batches snapshot replacement while preserving values, revisions, and rollback", () => {
@@ -171,38 +172,30 @@ it("batches snapshot replacement while preserving values, revisions, and rollbac
     transact(() => writeSessionEntrySnapshots(database, key, values), commit);
     expect.soft(writes.counts.writes - before).toBe(values.length > 0 ? 2 : 1);
   };
-  try {
-    replace(snapshots);
-    expect(rows()).toEqual(
-      snapshots.map(({ field, valueJson }) => ({ field, value_json: valueJson })),
-    );
-    expect(revision()).toBe(3);
-
-    replace(snapshots);
-    expect(revision()).toBe(3);
-
-    replace([
-      snapshots[0]!,
-      { field: "skillsSnapshot", valueJson: '{"prompt":"changed prompt","skills":[]}' },
-    ]);
-    const changed = [
-      { field: "sessionDiffBaseline", value_json: '{"sessionId":"session-0"}' },
-      { field: "skillsSnapshot", value_json: '{"prompt":"changed prompt","skills":[]}' },
-    ];
-    expect(rows()).toEqual(changed);
-    expect(revision()).toBe(5);
-
-    replace(snapshots, false);
-    expect(rows()).toEqual(changed);
-    expect(revision()).toBe(5);
-
-    replace([]);
-    expect(rows()).toEqual([]);
-    expect(revision()).toBe(7);
-    expect(read(otherKey, "full")?.skillsSnapshot).toEqual({ prompt: "saved prompt", skills: [] });
-  } finally {
-    writes.restore();
+  const changedSnapshots: SessionEntrySnapshot[] = [
+    snapshots[0]!,
+    { field: "skillsSnapshot", valueJson: '{"prompt":"changed prompt","skills":[]}' },
+  ];
+  const original = snapshots.map(({ field, valueJson }) => ({ field, value_json: valueJson }));
+  const changed = [
+    { field: "sessionDiffBaseline", value_json: '{"sessionId":"session-0"}' },
+    { field: "skillsSnapshot", value_json: '{"prompt":"changed prompt","skills":[]}' },
+  ];
+  using _ = { [Symbol.dispose]: writes.restore };
+  for (const [values, commit, expected, expectedRevision] of [
+    [snapshots, true, original, 3],
+    [snapshots, true, original, 3],
+    [changedSnapshots, true, changed, 5],
+    [snapshots, false, changed, 5],
+    [[], true, [], 7],
+  ] as const) {
+    replace(values, commit);
+    expect({ rows: rows(), revision: revision() }).toEqual({
+      rows: expected,
+      revision: expectedRevision,
+    });
   }
+  expect(read(otherKey, "full")?.skillsSnapshot).toEqual({ prompt: "saved prompt", skills: [] });
 });
 
 it("reuses detached entry and participant facts until the transaction changes", () => {

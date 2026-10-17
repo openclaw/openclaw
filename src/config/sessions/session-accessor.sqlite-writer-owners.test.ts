@@ -65,14 +65,14 @@ const withStore = (run: (fixture: ReturnType<typeof storeFixture>) => Promise<vo
 const numbers = (...keys: string[]) =>
   Object.fromEntries(keys.map((key) => [key, expect.any(Number)]));
 
-function observeSlowWriters(
-  onWarning: (operation: unknown, fields: object) => void = () => {},
-  onPruning: (fields: object) => void = () => {},
-) {
+function observeSlowWriters(onWarning: (operation: unknown, fields: object) => void = () => {}) {
   let clock = 0;
   // Cross the existing threshold deterministically; all storage and callback work remains real.
   vi.spyOn(performance, "now").mockImplementation(() => (clock += 1_001));
   const operations: unknown[] = [];
+  const writers: Record<string, object[]> = {};
+  const aggregates: object[] = [];
+  const pruning: unknown[] = [];
   const getChildLogger = logging.getChildLogger;
   vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
     const logger = getChildLogger(...args);
@@ -82,17 +82,21 @@ function observeSlowWriters(
         assert(fields && typeof fields === "object");
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
+        if (typeof operation === "string") {
+          (writers[operation] ??= []).push(fields);
+        }
         onWarning(operation, fields);
       } else if (first === "slow SQLite session archive pruning") {
         const fields = second;
         assert(fields && typeof fields === "object");
-        onPruning(fields);
+        aggregates.push(fields);
+        pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
       }
       return undefined;
     });
     return logger;
   });
-  return operations;
+  return { operations, writers, aggregates, pruning };
 }
 
 it.each(
@@ -115,7 +119,7 @@ it.each(
       const before = rows();
       const order: string[] = [];
       const warningRows: ReturnType<typeof rows>[] = [];
-      const operations = observeSlowWriters((label) => {
+      const { operations } = observeSlowWriters((label) => {
         if (label === operation) {
           order.push("warning");
           warningRows.push(rows());
@@ -259,24 +263,7 @@ it("records successful archive pruning stages", async () => {
       "capped payload".repeat(8_192),
     );
     const database = openDatabase(historyKey);
-    const pruning: unknown[] = [];
-    const aggregates: object[] = [];
-    const writerSegments: object[] = [];
-    const pageWrites: object[] = [];
-    observeSlowWriters(
-      (operation, fields) => {
-        if (operation === "session.history.archive-prune") {
-          writerSegments.push(fields);
-        }
-        if (operation === "session.history.free-pages") {
-          pageWrites.push(fields);
-        }
-      },
-      (fields) => {
-        aggregates.push(fields);
-        pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
-      },
-    );
+    const { writers, aggregates, pruning } = observeSlowWriters();
     try {
       expect(
         await enforceSqliteSessionHistoryDiskBudget({
@@ -285,6 +272,8 @@ it("records successful archive pruning stages", async () => {
           maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
         }),
       ).toMatchObject({ removedEntries: 2 });
+      const writerSegments = writers["session.history.archive-prune"] ?? [];
+      const pageWrites = writers["session.history.free-pages"] ?? [];
       expect(writerSegments.length).toBeGreaterThan(0);
       expect(pageWrites.length).toBeGreaterThan(0);
       for (const fields of [...writerSegments, ...pageWrites]) {
@@ -375,7 +364,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
         logWorkerOutcome(outcome);
       },
     );
-    const operations = observeSlowWriters();
+    const { operations } = observeSlowWriters();
     const request = {
       activeSessionKey: activeKey,
       archiveDirectory: state.sessionsDir(),
