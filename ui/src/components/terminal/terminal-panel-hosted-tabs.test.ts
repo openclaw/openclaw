@@ -10,7 +10,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 import {
   createTerminalController,
   createTestTerminalPanel,
