@@ -23,16 +23,14 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
-const runtimeLog = runtime.log;
-const runtimeError = runtime.error;
-const runtimeExit = runtime.exit;
+const { log: runtimeLog, error: runtimeError, exit: runtimeExit } = runtime;
 
-vi.doMock("../runtime.js", async () => {
-  return mockRuntimeModule(
+vi.doMock("../runtime.js", async () =>
+  mockRuntimeModule(
     () => vi.importActual<typeof import("../runtime.js")>("../runtime.js"),
     runtime,
-  );
-});
+  ),
+);
 // mock-isolation: QR setup resolves fixture config and secrets without host credentials.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
@@ -61,11 +59,7 @@ const { registerQrCli } = await import("./qr-cli.js");
 
 function createTokenGatewayConfig(customBindHost = "127.0.0.1") {
   return {
-    gateway: {
-      bind: "custom",
-      customBindHost,
-      auth: { mode: "token", token: "tok" },
-    },
+    gateway: { bind: "custom", customBindHost, auth: { mode: "token", token: "tok" } },
   };
 }
 
@@ -109,10 +103,6 @@ describe("registerQrCli", () => {
     await program.parseAsync(["qr", ...args], { from: "user" });
   }
 
-  async function expectQrExit(args: string[]) {
-    await expect(runQr(args)).rejects.toThrow("exit");
-  }
-
   function readRuntimeCallText(call: unknown[] | undefined): string {
     const value = call?.[0];
     if (typeof value === "string") {
@@ -123,17 +113,9 @@ describe("registerQrCli", () => {
 
   const errorText = () => runtimeError.mock.calls.map(readRuntimeCallText).join("\n");
 
-  function parseLastLoggedQrJson() {
-    const calls = runtimeLog.mock.calls;
-    const raw = calls[calls.length - 1]?.[0];
-    return JSON.parse(typeof raw === "string" ? raw : "{}") as {
-      setupCode?: string;
-      gatewayUrl?: string;
-      auth?: string;
-      urlSource?: string;
-      access?: "full" | "limited";
-      accessDowngraded?: boolean;
-    };
+  function parseLastLoggedQrJson(): unknown {
+    const raw = runtimeLog.mock.calls.at(-1)?.[0];
+    return JSON.parse(typeof raw === "string" ? raw : "{}");
   }
 
   function expectLoggedSetupCode(url: string) {
@@ -156,6 +138,7 @@ describe("registerQrCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     runtimeExit.mockImplementation(() => {
@@ -163,9 +146,7 @@ describe("registerQrCli", () => {
     });
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it.each([
     { args: [], profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "full" },
@@ -196,8 +177,6 @@ describe("registerQrCli", () => {
   );
 
   it("uses the bounded bootstrap profile with --limited", async () => {
-    loadConfig.mockReturnValue(createTokenGatewayConfig());
-
     await runQr(["--setup-code-only", "--limited"]);
 
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
@@ -240,7 +219,7 @@ describe("registerQrCli", () => {
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.example"));
 
-    await expectQrExit(["--setup-code-only"]);
+    await expect(runQr(["--setup-code-only"])).rejects.toThrow("exit");
 
     const output = errorText();
     expect(output).toContain("Tailscale and public mobile pairing require a secure gateway URL");
@@ -260,53 +239,48 @@ describe("registerQrCli", () => {
     expect(errorText()).toContain("Use wss:// or Tailscale Serve");
   });
 
-  it("skips local password SecretRef resolution when --token override is provided", async () => {
-    setLocalAuth({ mode: "password", password: missingPassword });
+  it.each(["explicit token override", "resolved password ref", "inactive password ref"])(
+    "generates local setup with %s",
+    async (mode) => {
+      vi.stubEnv("QR_LOCAL_GATEWAY_PASSWORD", "local-password-secret");
+      setLocalAuth({
+        ...(mode === "inactive password ref"
+          ? { mode: "token", token: "token-123" }
+          : { mode: "password" }),
+        password:
+          mode === "resolved password ref"
+            ? secretRef("QR_LOCAL_GATEWAY_PASSWORD")
+            : missingPassword,
+      });
+      await runQr([
+        "--setup-code-only",
+        ...(mode === "explicit token override" ? ["--token", "override-token"] : []),
+      ]);
+      expectLoggedSetupCode("ws://127.0.0.1:18789");
+      expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    },
+  );
 
-    await runQr(["--setup-code-only", "--token", "override-token"]);
-
-    expectLoggedSetupCode("ws://127.0.0.1:18789");
-  });
-
-  it("resolves local gateway auth password SecretRefs before setup code generation", async () => {
-    vi.stubEnv("QR_LOCAL_GATEWAY_PASSWORD", "local-password-secret");
-    setLocalAuth({ mode: "password", password: secretRef("QR_LOCAL_GATEWAY_PASSWORD") });
-
-    await runQr(["--setup-code-only"]);
-
-    expectLoggedSetupCode("ws://127.0.0.1:18789");
-    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-  });
-
-  it("does not let OPENCLAW_GATEWAY_PASSWORD mask a local password SecretRef", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "password-from-env");
-    setLocalAuth({ mode: "password", password: missingPassword });
-
-    await expectQrExit(["--setup-code-only"]);
-    expect(errorText()).toContain("MISSING_LOCAL_GATEWAY_PASSWORD");
-    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-  });
-
-  it("does not resolve local password SecretRef when auth mode is token", async () => {
-    setLocalAuth({ mode: "token", token: "token-123", password: missingPassword });
-
-    await runQr(["--setup-code-only"]);
-
-    expectLoggedSetupCode("ws://127.0.0.1:18789");
-    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-  });
-
-  it("fails when token and password SecretRefs are both configured with inferred mode", async () => {
-    vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
-    setLocalAuth(
-      { token: secretRef("QR_INFERRED_GATEWAY_TOKEN"), password: missingPassword },
-      "gateway.local",
-    );
-
-    await expectQrExit(["--setup-code-only"]);
-    expect(errorText()).toContain("gateway.auth.mode is unset");
-    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-  });
+  it.each(["environment masking", "ambiguous inferred mode"])(
+    "rejects %s of local password refs",
+    async (name) => {
+      const masking = name === "environment masking";
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", masking ? "password-from-env" : "");
+      vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
+      setLocalAuth(
+        {
+          ...(masking ? { mode: "password" } : { token: secretRef("QR_INFERRED_GATEWAY_TOKEN") }),
+          password: missingPassword,
+        },
+        masking ? "127.0.0.1" : "gateway.local",
+      );
+      await expect(runQr(["--setup-code-only"])).rejects.toThrow("exit");
+      expect(errorText()).toContain(
+        masking ? "MISSING_LOCAL_GATEWAY_PASSWORD" : "gateway.auth.mode is unset",
+      );
+      expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects invalid gateway.remote.url before printing remote setup codes", async () => {
     loadConfig.mockReturnValue({
@@ -317,45 +291,36 @@ describe("registerQrCli", () => {
       },
     });
 
-    await expectQrExit(["--setup-code-only", "--remote"]);
+    await expect(runQr(["--setup-code-only", "--remote"])).rejects.toThrow("exit");
 
     expect(errorText()).toContain("Configured gateway.remote.url is invalid.");
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("logs remote secret diagnostics in non-json output mode", async () => {
-    loadConfig.mockReturnValue(createRemoteQrConfig());
+  it.each([false, true])("routes remote secret diagnostics (json: %s)", async (json) => {
+    const config = createRemoteQrConfig();
+    const diagnostic = `gateway.remote.${json ? "password" : "token"} inactive`;
+    loadConfig.mockReturnValue(config);
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
-      resolvedConfig: createRemoteQrConfig(),
-      diagnostics: ["gateway.remote.token inactive"] as string[],
+      resolvedConfig: config,
+      diagnostics: [diagnostic],
     });
-
-    await runQr(["--remote"]);
-
-    expect(runtimeLog.mock.calls.map(readRuntimeCallText).join("\n")).toContain(
-      "gateway.remote.token inactive",
-    );
-  });
-
-  it("routes remote secret diagnostics to stderr for json output", async () => {
-    loadConfig.mockReturnValue(createRemoteQrConfig());
-    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
-      resolvedConfig: createRemoteQrConfig(),
-      diagnostics: ["gateway.remote.password inactive"] as string[],
-    });
-    mockTailscaleStatusLookup();
-
-    await runQr(["--json", "--remote"]);
-
-    const payload = parseLastLoggedQrJson();
-    expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
-    expect(errorText()).toContain("gateway.remote.password inactive");
+    if (json) {
+      mockTailscaleStatusLookup();
+    }
+    await runQr(["--remote", ...(json ? ["--json"] : [])]);
+    expect(
+      (json ? runtimeError : runtimeLog).mock.calls.map(readRuntimeCallText).join("\n"),
+    ).toContain(diagnostic);
+    if (json) {
+      expect(parseLastLoggedQrJson()).toMatchObject({ gatewayUrl: "wss://remote.example.com:444" });
+    }
   });
 
   it("errors when --remote is set but no remote URL is configured", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.local"));
 
-    await expectQrExit(["--remote"]);
+    await expect(runQr(["--remote"])).rejects.toThrow("exit");
     expect(errorText()).toContain("qr --remote requires");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });

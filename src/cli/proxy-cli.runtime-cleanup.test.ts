@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
+import type { DebugProxyCliStore } from "../proxy-capture/store.types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
 const { acquireStore, spawnChild, stopServer, startServer, ensureCa, captureSettings } = vi.hoisted(
   () => ({
     acquireStore:
-      vi.fn<() => Promise<{ store: AsyncDebugProxyCaptureStore; release: () => Promise<void> }>>(),
+      vi.fn<() => Promise<{ store: DebugProxyCliStore; release: () => Promise<void> }>>(),
     spawnChild: vi.fn<
       (
         argv: string[],
@@ -85,54 +85,50 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-function createStore(
-  upsertSession: AsyncDebugProxyCaptureStore["upsertSession"],
-  endSession: AsyncDebugProxyCaptureStore["endSession"],
-): AsyncDebugProxyCaptureStore {
-  return {
+function installCapture(
+  endSession = vi.fn<DebugProxyCliStore["endSession"]>(async () => {}),
+  release = vi.fn(async () => {}),
+) {
+  const upsertSession = vi.fn<DebugProxyCliStore["upsertSession"]>(async () => {});
+  const store: DebugProxyCliStore = {
     dbPath: "fixture.sqlite",
-    isClosed: false,
     upsertSession,
     endSession,
-    persistPayload: async (data, contentType) => ({
-      blobId: "fixture-blob",
-      sha256: "fixture-hash",
-      encoding: "gzip",
-      sizeBytes: data.length,
-      contentType,
-    }),
     recordEvent: async () => {},
     recordEventWithPayload: async () => {},
     listSessions: async () => [],
-    getSessionEvents: async () => [],
-    summarizeSessionCoverage: async (sessionId) => ({
-      sessionId,
-      totalEvents: 0,
-      unlabeledEventCount: 0,
-      providers: [],
-      apis: [],
-      models: [],
-      hosts: [],
-      localPeers: [],
-    }),
     readBlob: async () => null,
     queryPreset: async () => [],
-    deleteSessions: async () => ({ sessions: 0, events: 0, blobs: 0 }),
     purgeAll: async () => ({ sessions: 0, events: 0, blobs: 0 }),
-    close: async () => {},
   };
-}
-
-function installCapture(
-  endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(async () => {}),
-  release = vi.fn(async () => {}),
-) {
-  const upsertSession = vi.fn<AsyncDebugProxyCaptureStore["upsertSession"]>(async () => {});
-  const store = createStore(upsertSession, endSession);
   acquireStore.mockResolvedValue({ store, release });
   return { store, upsertSession, endSession, release };
 }
 const runChild = () => runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
+function expectCleanupCalls(count: number, ...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+function pendingChild() {
+  const launched = createDeferred<AbortSignal>();
+  const closed = createDeferred<{ signal: NodeJS.Signals; failed: boolean }>();
+  const child = Object.assign(closed.promise, { kill: vi.fn((_signal: NodeJS.Signals) => true) });
+  spawnChild.mockImplementation((_argv, { cancelSignal }) => {
+    if (!cancelSignal) {
+      throw new Error("Proxy child has no cancellation owner");
+    }
+    launched.resolve(cancelSignal);
+    return child;
+  });
+  return { launched, closed, child };
+}
+const rejectCleanup = (order: string[], name: string, error: Error) => async () => {
+  order.push(`${name}:start`);
+  await Promise.resolve();
+  order.push(`${name}:rejected`);
+  throw error;
+};
 function expectAggregate(error: unknown, expected: Error[]) {
   if (!(error instanceof AggregateError)) {
     throw new Error("Expected aggregate startup or cleanup failure", { cause: error });
@@ -161,13 +157,9 @@ describe("proxy command cleanup errors", () => {
       const sessionFailure = new Error("synthetic capture finalization failure");
       const releaseFailure = new Error("synthetic release failure");
       const order: string[] = [];
-      const closeSession = async () => {
-        order.push("session:start");
-        await Promise.resolve();
-        order.push("session:rejected");
-        throw sessionFailure;
-      };
-      const endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(closeSession);
+      const endSession = vi.fn<DebugProxyCliStore["endSession"]>(
+        rejectCleanup(order, "session", sessionFailure),
+      );
       const release = vi.fn(async () => {
         order.push("release");
         throw releaseFailure;
@@ -205,37 +197,26 @@ describe("proxy command cleanup errors", () => {
   ])(
     "retains child close and capture custody after parent-only $signal",
     async ({ signal, exitCode }) => {
-      const launched = createDeferred();
-      const closed = createDeferred<{ signal: NodeJS.Signals; failed: boolean }>();
+      const { launched, closed, child } = pendingChild();
       const releasing = createDeferred();
       const retired = createDeferred();
       const previousListeners = process.listeners(signal);
       const before = new Set(previousListeners);
       const order: string[] = [];
-      const child = Object.assign(closed.promise, {
-        kill: vi.fn(() => {
-          order.push("signal");
-          return true;
-        }),
+      child.kill.mockImplementation(() => {
+        order.push("signal");
+        return true;
       });
-      spawnChild.mockImplementation(() => {
-        launched.resolve();
-        return child;
-      });
-      const store = createStore(
-        async () => {},
-        async () => {
+      const { store } = installCapture(
+        vi.fn<DebugProxyCliStore["endSession"]>(async () => {
           order.push("session");
-        },
-      );
-      acquireStore.mockResolvedValue({
-        store,
-        release: async () => {
+        }),
+        vi.fn(async () => {
           order.push("release");
           releasing.resolve();
           await retired.promise;
-        },
-      });
+        }),
+      );
       stopServer.mockImplementation(async () => {
         order.push("stop");
       });
@@ -280,17 +261,9 @@ describe("proxy command cleanup errors", () => {
   it.each(["capture", "command"] as const)(
     "joins the child before capture cleanup when the %s owner cancels",
     async (owner) => {
-      const launched = createDeferred<AbortSignal>();
-      const closed = createDeferred<{ signal: NodeJS.Signals; failed: boolean }>();
+      const { launched, closed } = pendingChild();
       const work = new AsyncWorkScope();
       const { endSession, release } = installCapture();
-      spawnChild.mockImplementation((_argv, options) => {
-        if (!options.cancelSignal) {
-          throw new Error("Proxy child has no cancellation owner");
-        }
-        launched.resolve(options.cancelSignal);
-        return closed.promise;
-      });
       const command = work.track(runChild);
       let drain: Promise<void> | undefined;
       try {
@@ -305,18 +278,14 @@ describe("proxy command cleanup errors", () => {
           work.beginClose();
         }
         expect(signal.aborted).toBe(true);
-        expect(stopServer).not.toHaveBeenCalled();
-        expect(endSession).not.toHaveBeenCalled();
-        expect(release).not.toHaveBeenCalled();
+        expectCleanupCalls(0, stopServer, endSession, release);
       } finally {
         closed.resolve({ signal: "SIGTERM", failed: true });
         await command;
         await drain;
         await work.drain();
       }
-      expect(stopServer).toHaveBeenCalledOnce();
-      expect(endSession).toHaveBeenCalledOnce();
-      expect(release).toHaveBeenCalledOnce();
+      expectCleanupCalls(1, stopServer, endSession, release);
       expect(process.exitCode).toBe(143);
     },
   );
@@ -329,18 +298,12 @@ describe("proxy command cleanup errors", () => {
       const endFailure = new Error("synthetic session end failure");
       const releaseFailure = new Error("synthetic lease release failure");
       const order: string[] = [];
-      const rejectCleanup = (name: string, error: Error) => async () => {
-        order.push(`${name}:start`);
-        await Promise.resolve();
-        order.push(`${name}:rejected`);
-        throw error;
-      };
-      const endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(
-        rejectCleanup("endSession", endFailure),
+      const endSession = vi.fn<DebugProxyCliStore["endSession"]>(
+        rejectCleanup(order, "endSession", endFailure),
       );
-      const release = vi.fn(rejectCleanup("release", releaseFailure));
+      const release = vi.fn(rejectCleanup(order, "release", releaseFailure));
       const { upsertSession } = installCapture(endSession, release);
-      stopServer.mockImplementation(rejectCleanup("stop", stopFailure));
+      stopServer.mockImplementation(rejectCleanup(order, "stop", stopFailure));
       spawnChild.mockImplementation(async () => {
         if (outcome === "error") {
           throw childFailure;
@@ -358,9 +321,8 @@ describe("proxy command cleanup errors", () => {
         "release:start",
         "release:rejected",
       ]);
-      expect(stopServer).toHaveBeenCalledTimes(1);
+      expectCleanupCalls(1, stopServer, endSession, release);
       expect(endSession).toHaveBeenCalledExactlyOnceWith(upsertSession.mock.calls[0]![0].id);
-      expect(release).toHaveBeenCalledTimes(1);
       expectAggregate(failure, [
         ...(outcome === "error" ? [childFailure] : []),
         stopFailure,

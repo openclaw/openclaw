@@ -8,11 +8,40 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { debugProxyHandlers } from "../gateway/server-methods/debug-proxy.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import type { CaptureEventRecord } from "../proxy-capture/types.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { runDebugProxyRunCommand } from "./proxy-cli.runtime.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 const { stopServer } = vi.hoisted(() => ({ stopServer: vi.fn(async () => {}) }));
+function captureEvent(
+  sessionId: string,
+  sourceProcess: string,
+  flowId: string,
+): CaptureEventRecord {
+  return {
+    sessionId,
+    sourceProcess,
+    flowId,
+    ts: 1,
+    sourceScope: "openclaw",
+    protocol: "http",
+    direction: "outbound",
+    kind: "request",
+  };
+}
+async function readSessions() {
+  const lease = await acquireDebugProxyCaptureStoreAsync();
+  try {
+    return await lease.store.listSessions();
+  } finally {
+    await lease.release();
+  }
+}
+const endedSession = (details: Record<string, unknown>) => [
+  expect.objectContaining({ endedAt: expect.any(Number), ...details }),
+];
+const runProxy = () => runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
 vi.mock("../process/exec-spawn.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec-spawn.js")>();
   return {
@@ -41,14 +70,7 @@ vi.mock("../proxy-capture/proxy-server.js", async (importOriginal) => ({
       throw new Error("Fixture capture store missing");
     }
     await store.recordEvent({
-      sessionId: settings.sessionId,
-      ts: 1,
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "http",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow",
+      ...captureEvent(settings.sessionId, "openclaw", "flow"),
       path: "/fixture",
     });
     return {
@@ -72,16 +94,11 @@ beforeEach(() => {
 describe("standalone proxy owner routing", () => {
   it("routes standalone proxy session, event and cleanup writes through its owner", async () => {
     await startOwner();
-    await runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
+    await runProxy();
     ownerTransport.gatewayContext = true;
-    const lease = await acquireDebugProxyCaptureStoreAsync();
     try {
-      const sessions = await lease.store.listSessions();
-      expect(sessions).toEqual([
-        expect.objectContaining({ mode: "proxy-run", endedAt: expect.any(Number), eventCount: 1 }),
-      ]);
+      expect(await readSessions()).toEqual(endedSession({ mode: "proxy-run", eventCount: 1 }));
     } finally {
-      await lease.release();
       ownerTransport.gatewayContext = false;
     }
     expect(
@@ -99,17 +116,10 @@ describe("standalone proxy owner routing", () => {
       stopping.resolve();
       await resume.promise;
     });
-    const command = runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
+    const command = runProxy();
     await stopping.promise;
     const removeBarrier = registerSignalExitBarrier(async () => {
-      const lease = await acquireDebugProxyCaptureStoreAsync();
-      try {
-        expect(await lease.store.listSessions()).toEqual([
-          expect.objectContaining({ endedAt: expect.any(Number), eventCount: 1 }),
-        ]);
-      } finally {
-        await lease.release();
-      }
+      expect(await readSessions()).toEqual(endedSession({ eventCount: 1 }));
     });
     try {
       const drain = waitForSignalExitBarriers("SIGINT");
@@ -141,16 +151,7 @@ describe("standalone proxy owner routing", () => {
         try {
           const body = {
             type: "capture.recordEvent",
-            input: {
-              sessionId: settings.sessionId,
-              ts: 1,
-              sourceScope: "openclaw",
-              sourceProcess: "child",
-              protocol: "http",
-              direction: "outbound",
-              kind: "request",
-              flowId: "rejected",
-            },
+            input: captureEvent(settings.sessionId, "child", "rejected"),
           };
           const endpoint = `${server.proxyUrl}/.openclaw/debug-proxy-capture`;
           const captureEndpoint = new URL(server.captureEnv.OPENCLAW_DEBUG_PROXY_URL);
@@ -190,6 +191,12 @@ describe("standalone proxy owner routing", () => {
             },
           );
           Object.assign(childEnv, server.captureEnv);
+          const runChild = (env = childEnv, ...args: string[]) =>
+            promisify(execFile)(process.execPath, [...entrypoint, ...args], { env });
+          const expectNoChildDatabase = () =>
+            expect(fs.stat(path.join(childRoot, "state", "openclaw.sqlite"))).rejects.toMatchObject(
+              { code: "ENOENT" },
+            );
           expect(resolveDebugProxySettings(childEnv).proxyUrl).toBe(server.proxyUrl);
           expect(childEnv.HTTP_PROXY).toBe(server.proxyUrl);
           expect(childEnv.HTTPS_PROXY).toBe(server.proxyUrl);
@@ -197,16 +204,12 @@ describe("standalone proxy owner routing", () => {
           const invalidEndpoint = new URL(captureEndpoint);
           invalidEndpoint.password = mode === "online" ? "invalid-fixture-token" : "";
           await expect(
-            promisify(execFile)(process.execPath, entrypoint, {
-              env: {
-                ...childEnv,
-                OPENCLAW_DEBUG_PROXY_URL: invalidEndpoint.toString(),
-              },
+            runChild({
+              ...childEnv,
+              OPENCLAW_DEBUG_PROXY_URL: invalidEndpoint.toString(),
             }),
           ).rejects.toThrow(/refused capture|credentials are missing/);
-          await expect(
-            fs.stat(path.join(childRoot, "state", "openclaw.sqlite")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
+          await expectNoChildDatabase();
           const upstream = vi.fn();
           const origin = createServer((req, res) => {
             upstream(req.headers);
@@ -220,11 +223,7 @@ describe("standalone proxy owner routing", () => {
             throw new Error("Fixture origin address unavailable");
           }
           try {
-            await promisify(execFile)(
-              process.execPath,
-              [...entrypoint, `http://127.0.0.1:${address.port}/upstream`],
-              { env: childEnv },
-            );
+            await runChild(childEnv, `http://127.0.0.1:${address.port}/upstream`);
             expect(upstream).toHaveBeenCalledOnce();
             expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("authorization");
             expect(upstream.mock.calls[0]?.[0]).not.toHaveProperty("proxy-authorization");
@@ -234,18 +233,16 @@ describe("standalone proxy owner routing", () => {
               origin.close(() => resolve());
             });
           }
-          expect(await store.listSessions()).toEqual([
-            expect.objectContaining({
+          const sessions = await store.listSessions();
+          expect(sessions).toEqual(
+            endedSession({
               id: settings.sessionId,
               eventCount: 3,
-              endedAt: expect.any(Number),
               proxyUrl: server.proxyUrl,
             }),
-          ]);
-          expect(JSON.stringify(await store.listSessions())).not.toContain(token);
-          await expect(
-            fs.stat(path.join(childRoot, "state", "openclaw.sqlite")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
+          );
+          expect(JSON.stringify(sessions)).not.toContain(token);
+          await expectNoChildDatabase();
           if (mode === "online") {
             expect(
               ownerTransport.request.mock.calls.map(([request]) => request.params.command?.type),

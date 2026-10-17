@@ -57,6 +57,11 @@ function expectNoResume() {
   expect(mocks.connect).not.toHaveBeenCalled();
   expect(mocks.runTui).not.toHaveBeenCalled();
 }
+function setInteractive(value: boolean) {
+  for (const stream of [process.stdin, process.stdout]) {
+    Object.defineProperty(stream, "isTTY", { configurable: true, value });
+  }
+}
 
 const ttyDescriptors = [process.stdin, process.stdout].map(
   (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
@@ -86,8 +91,7 @@ function createGatewayClient(
 }
 
 beforeEach(() => {
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  setInteractive(true);
   mocks.connect.mockReset();
   mocks.runTui.mockReset().mockResolvedValue(undefined);
   mocks.selectStyled.mockReset();
@@ -152,72 +156,54 @@ describe("runResumeCommand", () => {
     ["old success without agent ownership", { ok: true, key: "agent:main:alpha" }],
     ["mismatched returned agent", { ok: true, key: "agent:main:alpha", agentId: "work" }],
     ["mismatched canonical key owner", { ok: true, key: "agent:work:alpha", agentId: "main" }],
+    ["RPC error with sensitive details", new Error("sensitive upstream details")],
   ])("rejects a %s handoff resolution without discovery or TUI launch", async (_name, result) => {
     const handoff = makeHandoff();
     const client = createGatewayClient([]);
-    client.resolveSession.mockResolvedValue(result);
-
-    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
-      "Could not resolve the session handoff.",
-    );
-    expect(client.listSessions).not.toHaveBeenCalled();
-    expect(mocks.runTui).not.toHaveBeenCalled();
-    expect(client.stop).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a handoff resolution RPC error without exposing it or launching the TUI", async () => {
-    const handoff = makeHandoff();
-    const client = createGatewayClient([]);
-    client.resolveSession.mockRejectedValue(new Error("sensitive upstream details"));
+    if (result instanceof Error) {
+      client.resolveSession.mockRejectedValue(result);
+    } else {
+      client.resolveSession.mockResolvedValue(result);
+    }
 
     await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
       "Could not resolve the session handoff. Copy a fresh command from the Control UI.",
     );
     expect(client.listSessions).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
+    expect(client.stop).toHaveBeenCalledOnce();
   });
 
-  it("omits the bare global session from the interactive picker", async () => {
-    const client = createGatewayClient([alpha]);
-    mocks.selectStyled.mockResolvedValue("agent:main:alpha");
-
-    await runResumeCommand(undefined, {});
-
-    expect(client.listSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ includeGlobal: false }),
-    );
-    expect(mocks.selectStyled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: [expect.objectContaining({ value: "agent:main:alpha" })],
-      }),
-    );
-    expect(mocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        boundGateway: resolvedConnection,
-        session: "agent:main:alpha",
-      }),
-    );
-  });
-
-  it("resolves the resume connection once and hands it to the TUI as bound", async () => {
-    createGatewayClient([alpha]);
-
-    await runResumeCommand("agent:main:alpha", { url: "wss://gateway.example/control" });
-
-    expect(mocks.connect).toHaveBeenCalledWith({
-      url: "wss://gateway.example/control",
-    });
-    expect(mocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        boundGateway: resolvedConnection,
-        session: "agent:main:alpha",
-      }),
-    );
-  });
+  it.each([undefined, "agent:main:alpha"])(
+    "binds the resolved connection for query %s",
+    async (query) => {
+      const client = createGatewayClient([alpha]);
+      mocks.selectStyled.mockResolvedValue("agent:main:alpha");
+      const options = query ? { url: "wss://gateway.example/control" } : {};
+      await runResumeCommand(query, options);
+      if (query) {
+        expect(mocks.connect).toHaveBeenCalledWith(options);
+      } else {
+        expect(client.listSessions).toHaveBeenCalledWith(
+          expect.objectContaining({ includeGlobal: false }),
+        );
+        expect(mocks.selectStyled).toHaveBeenCalledWith(
+          expect.objectContaining({
+            options: [expect.objectContaining({ value: "agent:main:alpha" })],
+          }),
+        );
+      }
+      expect(mocks.runTui).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boundGateway: resolvedConnection,
+          session: "agent:main:alpha",
+        }),
+      );
+    },
+  );
 
   it("rejects a non-interactive queried resume before connecting or launching the TUI", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    setInteractive(false);
 
     await expect(runResumeCommand("global", {})).rejects.toThrow(
       "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.",
@@ -226,26 +212,24 @@ describe("runResumeCommand", () => {
   });
 });
 
-describe("resume command registration", () => {
-  it("preserves the reported session miss through an exiting runtime", async () => {
-    const client = createGatewayClient([]);
-    const exit = new ExitError(1);
-    mocks.exit.mockImplementation(() => {
-      throw exit;
-    });
-    const program = new Command().name("openclaw");
-    registerResumeCli(program);
-    await expect(program.parseAsync(["resume", "missing"], { from: "user" })).rejects.toBe(exit);
-    expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(mocks.error.mock.calls).toEqual([
-      ['No recent session matched "missing".'],
-      [
-        "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
-      ],
-    ]);
-    expect(client.stop).toHaveBeenCalledOnce();
-    expect(mocks.runTui).not.toHaveBeenCalled();
+it("preserves the reported session miss through an exiting runtime", async () => {
+  const client = createGatewayClient([]);
+  const exit = new ExitError(1);
+  mocks.exit.mockImplementation(() => {
+    throw exit;
   });
+  const program = new Command().name("openclaw");
+  registerResumeCli(program);
+  await expect(program.parseAsync(["resume", "missing"], { from: "user" })).rejects.toBe(exit);
+  expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(mocks.error.mock.calls).toEqual([
+    ['No recent session matched "missing".'],
+    [
+      "Run `openclaw resume` to choose from recent sessions or `openclaw sessions` to inspect all sessions.",
+    ],
+  ]);
+  expect(client.stop).toHaveBeenCalledOnce();
+  expect(mocks.runTui).not.toHaveBeenCalled();
 });
 
 describe("real Gateway session boundary", () => {
@@ -338,11 +322,12 @@ describe("real Gateway session boundary", () => {
       { ok: true, key: "agent:main:alpha", agentId: "main" },
       { ok: false },
     ]);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({
-      gatewayCode: "INVALID_REQUEST",
-      message: 'Unknown agent id "resume-unconfigured"',
-    });
+    expect(errors).toEqual([
+      expect.objectContaining({
+        gatewayCode: "INVALID_REQUEST",
+        message: 'Unknown agent id "resume-unconfigured"',
+      }),
+    ]);
     expect(harness.sessionResolveRequests.slice(resolveStart)).toEqual(
       cases.map(({ key, agentId }) => ({ key, agentId, includeGlobal: true, allowMissing: true })),
     );
@@ -398,8 +383,7 @@ describe("real Gateway session boundary", () => {
     client.start();
     try {
       await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token"]), { timeout: 5_000 });
-      expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
-      expect(storeDeviceAuthToken).toHaveBeenCalledWith(
+      expect(storeDeviceAuthToken).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           token: expect.stringMatching(/\S/),
           scopes: expect.any(Array),

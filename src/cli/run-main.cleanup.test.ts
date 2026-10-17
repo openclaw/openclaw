@@ -11,7 +11,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -92,12 +92,6 @@ function resourceHarness(id: string) {
   let closed: Promise<unknown[]> | undefined;
   let output: readline.Interface | undefined;
   let disposeCalls = 0;
-  const pending = new Map<string, Deferred>();
-  function line(value: string) {
-    const next = createDeferredCore();
-    pending.set(value, next);
-    return next.promise;
-  }
   const harness: AgentHarness = {
     id,
     label: id,
@@ -106,7 +100,6 @@ function resourceHarness(id: string) {
       throw new Error("catalog-only fixture");
     },
     loadModelCatalog: async () => {
-      const ready = line("ready");
       child = spawn(
         process.execPath,
         [
@@ -124,8 +117,7 @@ function resourceHarness(id: string) {
       );
       closed = once(child, "close");
       output = readline.createInterface({ input: child.stdout });
-      output.on("line", (value) => pending.get(value)?.resolve());
-      await ready;
+      expect((await once(output, "line"))[0]).toBe("ready");
       return [];
     },
     dispose: async () => {
@@ -137,9 +129,9 @@ function resourceHarness(id: string) {
   return {
     harness,
     async ping() {
-      const pong = line("pong");
+      const pong = once(output!, "line");
       child?.stdin.write("ping\n");
-      await pong;
+      expect((await pong)[0]).toBe("pong");
     },
     snapshot: () => ({ disposeCalls, exitCode: child?.exitCode, signalCode: child?.signalCode }),
     async closeAndJoin() {
@@ -150,8 +142,7 @@ function resourceHarness(id: string) {
       child.stdin.end();
       await closed;
       output?.close();
-      expect(child.exitCode).toBe(0);
-      expect(child.signalCode).toBe(null);
+      expect(child).toMatchObject({ exitCode: 0, signalCode: null });
     },
   };
 }
@@ -212,6 +203,14 @@ function registerHarness(registry: PluginRegistry, harness: AgentHarness) {
     registryApi.registerAgentHarness(harness),
   );
 }
+function registeredResource(id: string, configure?: (harness: AgentHarness) => void) {
+  const registry = emptyRegistry.createEmptyPluginRegistry();
+  const resource = resourceHarness(id);
+  configure?.(resource.harness);
+  registerHarness(registry, resource.harness);
+  dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire(id));
+  return { registry, resource };
+}
 
 async function acquire(id: string) {
   await registryApi.getRegisteredAgentHarness(id)!.harness.loadModelCatalog!({
@@ -226,12 +225,33 @@ async function runProcessEntry() {
   await dispatch.command;
 }
 
+async function captureFixture(prefix: string) {
+  const stateDir = temp.make(prefix);
+  const source = path.join(stateDir, "fixture");
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+  const cache = await import("../plugins/plugin-cache.js");
+  const { PluginInstance } = await import("../plugins/plugin-instance.js");
+  const { capturePluginGenerationArtifact } =
+    await import("../plugins/plugin-generation-artifact.js");
+  return {
+    stateDir,
+    source,
+    ...cache,
+    capture() {
+      const artifact = capturePluginGenerationArtifact(source);
+      const instance = new PluginInstance("capture-fixture");
+      instance.onModuleDispose(artifact.disposeAsync);
+      cache.getPluginCache().instances.add(instance);
+      return artifact;
+    },
+  };
+}
+
 describe("CLI process harness cleanup", () => {
   it("reclaims earlier CLI captures and owns periodic cleanup until command exit", async () => {
-    const stateDir = temp.make("cli-capture-orphans-");
-    const source = path.join(stateDir, "fixture");
-    fs.mkdirSync(source);
-    fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+    const fixture = await captureFixture("cli-capture-orphans-");
+    const { stateDir, source } = fixture;
     const { acquireSqliteStagingToken } = await import("../infra/sqlite-staging-token.js");
     const prior = path.join(stateDir, "tmp", "plugin-captures", "previous-command");
     fs.mkdirSync(path.join(prior, "captures"), { recursive: true });
@@ -242,10 +262,6 @@ describe("CLI process harness cleanup", () => {
     fs.utimesSync(prior, aged, aged);
     const { getBoundLegacyPluginSdkResourceHost } =
       await import("../plugins/legacy-sdk-resource-host.js");
-    const { getPluginCache } = await import("../plugins/plugin-cache.js");
-    const { PluginInstance } = await import("../plugins/plugin-instance.js");
-    const { capturePluginGenerationArtifact } =
-      await import("../plugins/plugin-generation-artifact.js");
     // Fixture imports initialize WAL maintenance before we observe the command scheduler.
     const clock = createGatewaySchedulerClock(Date.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
@@ -255,16 +271,12 @@ describe("CLI process harness cleanup", () => {
       .mockImplementation(function () {
         return scheduler;
       });
-    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    let artifact: ReturnType<typeof fixture.capture> | undefined;
     dispatch.run = async () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const host = getBoundLegacyPluginSdkResourceHost();
-      expect(host).toBeDefined();
       expect(host?.scheduler).toBe(scheduler);
-      artifact = capturePluginGenerationArtifact(source);
-      const instance = new PluginInstance("orphan-recovery-fixture");
-      instance.onModuleDispose(artifact.disposeAsync);
-      getPluginCache().instances.add(instance);
+      artifact = fixture.capture();
       expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60 * 60_000);
       expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
         "retained",
@@ -274,8 +286,7 @@ describe("CLI process harness cleanup", () => {
       await runProcessEntry();
       expect(constructor).toHaveBeenCalledOnce();
       expect(fs.existsSync(prior)).toBe(false);
-      expect(scheduler.signal.aborted).toBe(true);
-      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(scheduler).toMatchObject({ signal: { aborted: true }, nextWakeAtMs: null });
       expect(artifact).toBeDefined();
       expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
     } finally {
@@ -289,28 +300,19 @@ describe("CLI process harness cleanup", () => {
   it.each(["failure", "gateway-adopted"])(
     "retires command captures unless their inventory is adopted (%s)",
     async (mode) => {
-      const stateDir = temp.make("cli-capture-custody-");
-      const source = path.join(stateDir, "fixture");
-      fs.mkdirSync(source);
-      fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
-      const { getPluginCache, adoptProcessPluginCache, getProcessPluginCache } =
-        await import("../plugins/plugin-cache.js");
-      const { PluginInstance } = await import("../plugins/plugin-instance.js");
-      const { capturePluginGenerationArtifact } =
-        await import("../plugins/plugin-generation-artifact.js");
+      const fixture = await captureFixture("cli-capture-custody-");
+      const { stateDir, source, getPluginCache, adoptProcessPluginCache, getProcessPluginCache } =
+        fixture;
       const { retainGatewayPluginMetadata } =
         await import("../plugins/plugin-metadata-lifecycle.js");
       const previous = getProcessPluginCache();
       let gateway: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
-      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      let artifact: ReturnType<typeof fixture.capture> | undefined;
       const failure = new Error("fixture command failed");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       dispatch.run = async () => {
         const cache = getPluginCache();
-        artifact = capturePluginGenerationArtifact(source);
-        const instance = new PluginInstance("capture-fixture");
-        instance.onModuleDispose(artifact.disposeAsync);
-        cache.instances.add(instance);
+        artifact = fixture.capture();
         if (mode === "gateway-adopted") {
           gateway = retainGatewayPluginMetadata(createTestGatewayScheduler());
           adoptProcessPluginCache(cache);
@@ -496,18 +498,16 @@ describe("CLI process harness cleanup", () => {
   );
 
   it("awaits a transient disposer before later finalizers and process completion", async () => {
-    const registry = emptyRegistry.createEmptyPluginRegistry();
     const gate = createDeferredCore();
     const entered = createDeferredCore();
-    const resource = resourceHarness("awaited");
-    const dispose = resource.harness.dispose!.bind(resource.harness);
-    resource.harness.dispose = async () => {
-      entered.resolve();
-      await gate.promise;
-      await dispose();
-    };
-    registerHarness(registry, resource.harness);
-    dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire("awaited"));
+    const { resource } = registeredResource("awaited", (harness) => {
+      const dispose = harness.dispose!.bind(harness);
+      harness.dispose = async () => {
+        entered.resolve();
+        await gate.promise;
+        await dispose();
+      };
+    });
     let returned = false;
     const command = runProcessEntry().then(() => {
       returned = true;
@@ -531,11 +531,7 @@ describe("CLI process harness cleanup", () => {
   });
 
   it("retains transient cleanup from the primary executable bootstrap", async () => {
-    const registry = emptyRegistry.createEmptyPluginRegistry();
-    const resource = resourceHarness("primary-entry");
-    registerHarness(registry, resource.harness);
-    dispatch.run = () =>
-      scopes.withPluginRuntimeRegistryScope(registry, () => acquire("primary-entry"));
+    const { resource } = registeredResource("primary-entry");
     try {
       await import("../entry.js");
       await dispatch.command;
@@ -548,11 +544,7 @@ describe("CLI process harness cleanup", () => {
   it.each(["direct", "gateway-legacy"])(
     "leaves %s transient resources with their owner",
     async (mode) => {
-      const registry = emptyRegistry.createEmptyPluginRegistry();
-      const resource = resourceHarness("borrowed");
-      registerHarness(registry, resource.harness);
-      dispatch.run = () =>
-        scopes.withPluginRuntimeRegistryScope(registry, () => acquire("borrowed"));
+      const { registry, resource } = registeredResource("borrowed");
       try {
         if (mode === "direct") {
           const { runCli } = await import("./run-main.js");
@@ -644,9 +636,7 @@ describe("CLI process harness cleanup", () => {
     const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
     const { runCli } = await import("./run-main.js");
     for (let invocation = 0; invocation < 2; invocation++) {
-      const registry = emptyRegistry.createEmptyPluginRegistry();
-      const resource = resourceHarness("sequential");
-      registerHarness(registry, resource.harness);
+      const { registry, resource } = registeredResource("sequential");
       cache.set("cleanup-used", registry);
       let retainedLookup:
         | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)

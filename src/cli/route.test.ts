@@ -1,7 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 
-const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const ensureConfigReadyMock = vi.hoisted(() =>
   vi.fn(async (_params: { runtime?: unknown; commandPath?: unknown }) => {}),
 );
@@ -11,9 +9,7 @@ const runWithLocalStateOwnerMock = vi.hoisted(() =>
   vi.fn(async ({ runLocal }: { runLocal: () => Promise<void> }) => runLocal()),
 );
 
-vi.mock("./banner.js", () => ({
-  emitCliBanner: emitCliBannerMock,
-}));
+vi.mock("./banner.js", () => ({ emitCliBanner: vi.fn() }));
 
 vi.mock("./program/config-guard.js", () => ({
   ensureConfigReady: ensureConfigReadyMock,
@@ -57,7 +53,6 @@ describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
   // Capture the same loggingState reference that route.js uses.
   let loggingState: typeof import("../logging/state.js").loggingState;
-  let originalEnv: ReturnType<typeof captureEnv>;
   let originalForceStderr: boolean;
 
   beforeAll(async () => {
@@ -67,14 +62,13 @@ describe("tryRouteCli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    originalEnv = captureEnv([
+    for (const key of [
       "OPENCLAW_DISABLE_ROUTE_FIRST",
       "OPENCLAW_HIDE_BANNER",
       "OPENCLAW_LOG_LEVEL",
-    ]);
-    delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
-    delete process.env.OPENCLAW_HIDE_BANNER;
-    delete process.env.OPENCLAW_LOG_LEVEL;
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
   });
@@ -83,7 +77,7 @@ describe("tryRouteCli", () => {
     if (loggingState) {
       loggingState.forceConsoleToStderr = originalForceStderr;
     }
-    originalEnv.restore();
+    vi.unstubAllEnvs();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
@@ -113,8 +107,16 @@ describe("tryRouteCli", () => {
     expect(runRouteMock).toHaveBeenCalledOnce();
   });
 
-  it("suppresses config get machine output without running an observing startup guard", async () => {
-    await expectOutputRouting(["config", "get", "gateway.port"], true, true);
+  it.each([
+    [["config", "get", "gateway.port"], true, true],
+    [["models", "status", "--json"], true, undefined],
+    [["agents"], false, undefined],
+  ] as const)("routes output for %j (stderr: %s)", async (args, stderr, machineOutput) => {
+    await expectOutputRouting([...args], stderr, machineOutput);
+    expect(runRouteMock).toHaveBeenCalledOnce();
+    if (!stderr) {
+      expect(loggingState.forceConsoleToStderr).toBe(false);
+    }
   });
 
   it("lets routed gateway health own its config read", async () => {
@@ -143,16 +145,6 @@ describe("tryRouteCli", () => {
     expect(runRouteMock).not.toHaveBeenCalled();
   });
 
-  it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {
-    await expectOutputRouting(["models", "status", "--json"], true);
-  });
-
-  it("keeps human action output on stdout", async () => {
-    await expectOutputRouting(["agents"], false);
-    expect(runRouteMock).toHaveBeenCalledOnce();
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
-
   it("uses the last valid routed log level option", async () => {
     await expect(route(["--log-level", "debug", "status", "--log-level=trace"])).resolves.toBe(
       true,
@@ -167,15 +159,11 @@ describe("tryRouteCli", () => {
       "later invalid value",
       ["node", "openclaw", "--log-level", "debug", "status", "--log-level", "verbose"],
     ],
-  ])("falls back for %s routed log level options before bootstrap", async (_name, argv) => {
+    ["unknown argument", ["node", "openclaw", "sessions", "--json", "--unknown"]],
+  ])("falls back for %s before bootstrap", async (_name, argv) => {
     await expect(tryRouteCli(argv)).resolves.toBe(false);
 
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
-  });
-
-  it("falls back before bootstrap when the route cannot parse the argv", async () => {
-    await expect(route(["sessions", "--json", "--unknown"])).resolves.toBe(false);
-    expect(runRouteMock).not.toHaveBeenCalled();
   });
 });
