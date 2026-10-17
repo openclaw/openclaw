@@ -834,7 +834,8 @@ uses the request and existing response fields without changing the protocol payl
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
 responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.
 Shapes distinguish receipt recovery, pending-input paging, older pages, cursor
-reads, and tail reads; outcomes are `delta`, `reset`, or `page`. Both byte counters
+reads, message-anchored windows, and tail reads; outcomes are `delta`, `reset`, or
+`page`. Both byte counters
 reuse the encoded frame size above without serializing again or inspecting rows.
 Only bounded labels are recorded, never parameter values, identifiers, or text.
 See [Prometheus metrics](/gateway/prometheus) for bucket and precedence rules.

@@ -54,6 +54,7 @@ it.each([
         { shape: "cursor", limitBucket: "<=20", outcome: "delta", source: "wire" },
         { shape: "older", limitBucket: "<=80", outcome: "page", source: "wire" },
         { shape: "receipt", limitBucket: "<=200", outcome: "reset", source: "internal" },
+        { shape: "anchor", limitBucket: "<=200", outcome: "page", source: "wire" },
       ] as const) {
         const event = {
           type: "gateway.rpc",
@@ -72,7 +73,7 @@ it.each([
         );
       }
       expect(metrics.render()).toContain(
-        'openclaw_gateway_rpc_response_bytes_sum{method="chat.history"} 3828\n',
+        'openclaw_gateway_rpc_response_bytes_sum{method="chat.history"} 5104\n',
       );
     } finally {
       metrics.stop();

@@ -47,7 +47,7 @@ export type DiagnosticGatewayRpcFields = {
       chatHistory?: {
         clientKind: GatewayClientId;
         source: "wire" | "internal";
-        shape: "cursor" | "older" | "pending" | "receipt" | "tail";
+        shape: "cursor" | "older" | "pending" | "receipt" | "anchor" | "tail";
         limitBucket: "<=20" | "<=80" | "<=200" | ">200";
         outcome: "delta" | "reset" | "page";
       };

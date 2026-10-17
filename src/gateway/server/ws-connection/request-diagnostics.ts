@@ -145,7 +145,9 @@ export class GatewayRpcDiagnostics {
                 ? "older"
                 : params?.cursor !== undefined
                   ? "cursor"
-                  : "tail",
+                  : params?.messageId !== undefined
+                    ? "anchor"
+                    : "tail",
         limitBucket: limit <= 20 ? "<=20" : limit <= 80 ? "<=80" : limit <= 200 ? "<=200" : ">200",
         outcome: result.kind === "delta" ? "delta" : result.kind === "reset" ? "reset" : "page",
       };

@@ -291,7 +291,8 @@ the request and existing response fields without changing the protocol payload.
 `openclaw_chat_history_response_bytes_total` sums their encoded response bytes.
 Both use `client_kind` and `source` as above. `shape` uses the first matching
 selector: `receipt` for `inputRunIds`, `pending` for `pendingBefore`, `older` for
-a positive `offset`, `cursor` for `cursor`, otherwise `tail`. `limit_bucket` is
+a positive `offset`, `cursor` for `cursor`, `anchor` for `messageId`, otherwise
+`tail`. `limit_bucket` is
 `<=20`, `<=80`, `<=200`, or `>200`, with an omitted limit using the handler's
 default of 200. `outcome` is the response `kind` (`delta` or `reset`), or `page`
 for a normal history page. These counters exclude rejected, failed, and unsent

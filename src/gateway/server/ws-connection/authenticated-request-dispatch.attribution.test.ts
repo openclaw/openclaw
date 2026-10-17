@@ -143,6 +143,12 @@ it.each([
     limitBucket: "<=200",
   },
   { params: { offset: 0 }, kind: undefined, shape: "tail", limitBucket: "<=200" },
+  {
+    params: { messageId: "private-anchor", sessionId: "private-archive" },
+    kind: undefined,
+    shape: "anchor",
+    limitBucket: "<=200",
+  },
   { params: { limit: 201 }, kind: undefined, shape: "tail", limitBucket: ">200" },
 ])(
   "attributes validated history response shape $shape/$limitBucket",
