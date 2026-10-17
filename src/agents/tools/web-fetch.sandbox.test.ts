@@ -100,6 +100,7 @@ it("removes the owned sandbox output directory when release rejects publication"
       const inbound = path.join(root, "media/inbound");
       const entries = await fs.readdir(inbound);
       expect(entries).toHaveLength(1);
+      assert(entries[0]);
       created = path.join(inbound, entries[0]);
       const files = await fs.readdir(created);
       expect(files).toContain("openclaw-web-fetch.log");
@@ -154,7 +155,8 @@ it("recovers omitted content through bounded read and keeps cached files with th
   await expect(first.read.execute("host", { path: outside })).rejects.toThrow();
 });
 
-it.runIf(process.platform !== "win32")("stages read-only output", async () => {
+// This local backend executes the bridge's GNU stat/readlink scripts on the host.
+it.runIf(process.platform === "linux")("stages read-only output", async () => {
   const root = tempDirs.make("web-fetch-native-read-only-");
   const sandbox = sandboxContext(root, "ro");
   const backend = {
