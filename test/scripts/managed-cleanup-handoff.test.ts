@@ -63,6 +63,59 @@ function controlChannel(child: ChildProcess) {
   }
   return channel;
 }
+function observeOwner(pause?: boolean) {
+  let child: ChildProcess | undefined;
+  let handoff: Socket | undefined;
+  let stdout = "",
+    stderr = "";
+  const exited = createDeferred();
+  const gates: Array<{ match: string | RegExp; resolve: () => void }> = [];
+  const checkGates = () => {
+    for (const gate of gates) {
+      if (typeof gate.match === "string" ? stdout.includes(gate.match) : gate.match.test(stdout)) {
+        gate.resolve();
+      }
+    }
+  };
+  return {
+    get child() {
+      return child;
+    },
+    get handoff() {
+      return handoff;
+    },
+    get stdout() {
+      return stdout;
+    },
+    get stderr() {
+      return stderr;
+    },
+    exited: exited.promise,
+    onReady(owned: ChildProcess) {
+      child = owned;
+      owned.once("exit", () => exited.resolve());
+      if (pause !== undefined) {
+        handoff = controlChannel(owned);
+        if (pause) {
+          handoff.pause();
+        }
+      }
+      owned.stdout!.on("data", (chunk) => {
+        stdout += String(chunk);
+        checkGates();
+      });
+      owned.stderr!.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+    },
+    wait(match: string | RegExp, completion: Promise<unknown>, signal: AbortSignal) {
+      const gate = createDeferred();
+      gates.push({ match, resolve: () => gate.resolve() });
+      checkGates();
+      return waitFor(gate.promise, completion, `Missing child output: ${match}`, signal);
+    },
+  };
+}
 function waitFor(
   gate: Promise<unknown>,
   completion: Promise<unknown>,
@@ -161,41 +214,23 @@ fs.writeSync(1, "completed " + JSON.stringify(statuses) + "\\n");
 process.exitCode = statuses.find(code => code !== 0) ?? 0;
 `,
         );
-        const requested = createDeferred();
         const cancellation = new AbortController();
-        let child: ChildProcess | undefined;
-        let handoff: Socket | undefined;
+        const owner = observeOwner(true);
         const completion = runNodeScript(childPath, process.env, undefined, {
           cwd,
           signal: cancellation.signal,
           maxBuffer: 64 * 1024,
-          onReady(owned, readOutput) {
-            child = owned;
-            // The helper supplied three standard descriptors. Hold the real owner's
-            // private channel before it can acknowledge either nested command.
-            handoff = controlChannel(owned);
-            handoff.pause();
-            owned.stdout!.on("data", () => {
-              if (readOutput().stdout.includes("claims-requested\n")) {
-                requested.resolve();
-              }
-            });
-          },
+          onReady: owner.onReady,
         });
         try {
-          await waitFor(
-            requested.promise,
-            completion,
-            "nested commands did not request ownership",
-            signal,
-          );
+          await owner.wait("claims-requested\n", completion, signal);
           // onReady records synchronously at spawn, so the child's marker proves
           // both callers returned pending without creating an unowned command.
           expect(readSpawnedPids(spawnRecord)).toEqual([]);
           if (action === "cancel") {
             cancellation.abort();
           }
-          handoff!.resume();
+          owner.handoff!.resume();
           const result = await withinTest(completion, signal);
           if (action === "cancel") {
             expect(result.error, result.stderr).toMatchObject({ code: "ABORT_ERR" });
@@ -219,9 +254,9 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
             }
           }
           expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          expect(isProcessAlive(child!.pid!)).toBe(false);
+          expect(isProcessAlive(owner.child!.pid!)).toBe(false);
         } finally {
-          await cleanup(completion, child, spawnRecord, handoff);
+          await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
       });
     },
@@ -297,61 +332,29 @@ fs.writeSync(1, "completed " + JSON.stringify(statuses) + "\\n");
 process.exitCode = statuses.find(code => code !== 0) ?? 0;
 `,
         );
-        const requested = createDeferred();
-        const settled = createDeferred();
-        const exited = createDeferred();
-        const leafClosed = createDeferred();
-        let child: ChildProcess | undefined;
-        let handoff: Socket | undefined;
-        let stdout = "";
-        let stderr = "";
+        const owner = observeOwner(!releasing);
         const completion = runManagedCommand({
           bin: process.execPath,
           args: [childPath],
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
-          onReady(owned) {
-            child = owned;
-            owned.once("exit", () => exited.resolve());
-            handoff = controlChannel(owned);
-            if (!releasing) {
-              handoff.pause();
-            }
-            owned.stdout!.on("data", (chunk) => {
-              stdout += String(chunk);
-              if (stdout.includes("claims-requested\n")) {
-                requested.resolve();
-              }
-              if (stdout.includes("leaf-closed\n")) {
-                leafClosed.resolve();
-              }
-              if (/settled [^\n]*\n/u.test(stdout)) {
-                settled.resolve();
-              }
-            });
-            owned.stderr!.on("data", (chunk) => (stderr += String(chunk)));
-          },
+          onReady: owner.onReady,
         }).then(
           (status) => ({ status }),
           (error: unknown) => ({ error }),
         );
         try {
-          await waitFor(requested.promise, completion, "commands did not request custody", signal);
+          await owner.wait("claims-requested\n", completion, signal);
           if (releasing) {
-            handoff!.pause();
-            child!.stdin!.end("finish\n");
-            await waitFor(leafClosed.promise, completion, "nested command did not exit", signal);
+            owner.handoff!.pause();
+            owner.child!.stdin!.end("finish\n");
+            await owner.wait("leaf-closed\n", completion, signal);
           } else {
-            child!.stdin!.end("abort\n");
+            owner.child!.stdin!.end("abort\n");
           }
-          await waitFor(
-            settled.promise,
-            completion,
-            "command outcomes did not settle without acknowledgement",
-            signal,
-          );
-          expect(stdout).toContain(
+          await owner.wait(/settled [^\n]*\n/u, completion, signal);
+          expect(owner.stdout).toContain(
             mode === "release"
               ? 'settled [{"status":0}]\n'
               : mode === "release-timeout"
@@ -362,33 +365,42 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
           expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
           if (mode !== "concurrent") {
             // Joined or never-started work must exit without an ACK keeping the socket alive.
-            await waitFor(exited.promise, completion, "settled owner did not exit", signal);
-            expect(isProcessAlive(child!.pid!)).toBe(false);
+            await waitFor(owner.exited, completion, "settled owner did not exit", signal);
+            expect(isProcessAlive(owner.child!.pid!)).toBe(false);
           }
-          handoff!.resume();
-          expect(await withinTest(completion, signal), stderr).toEqual({ status: 0 });
-          expect(stdout).toContain(`completed ${mode === "concurrent" ? "[0,0]" : "[]"}\n`);
+          owner.handoff!.resume();
+          expect(await withinTest(completion, signal), owner.stderr).toEqual({ status: 0 });
+          expect(owner.stdout).toContain(`completed ${mode === "concurrent" ? "[0,0]" : "[]"}\n`);
           expect(readSpawnedPids(spawnRecord)).toHaveLength(
             mode === "concurrent" ? 2 : releasing ? 1 : 0,
           );
           expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          expect(isProcessAlive(child!.pid!)).toBe(false);
+          expect(isProcessAlive(owner.child!.pid!)).toBe(false);
           resourceOwner.assertReleased();
         } finally {
-          await cleanup(completion, child, spawnRecord, handoff);
+          await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
       });
     },
   );
 
-  it("releases completed command custody before an idle implementation receives SIGTERM", async ({
-    signal,
-  }) => {
-    await fixture.run(async () => {
-      const { cwd, resourceOwner, childPath, spawnRecord, env } = makeFixture("idle");
-      fs.writeFileSync(
-        childPath,
-        `import fs from "node:fs";
+  it.for(["idle", "owner-loss"] as const)(
+    "settles %s custody after the owner exits",
+    async (mode, { signal }) => {
+      await fixture.run(async () => {
+        const lost = mode === "owner-loss";
+        const { cwd, resourceOwner, childPath, spawnRecord, env } = makeFixture(mode);
+        fs.writeFileSync(
+          childPath,
+          lost
+            ? `import fs from "node:fs";
+import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
+await claimManagedCleanup();
+fs.writeSync(1, "ownership-accepted\\n");
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+`
+            : `import fs from "node:fs";
 import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
 const status = await runManagedCommand({
   bin: process.execPath, args: ["-e", ""], stdio: "ignore",
@@ -398,37 +410,47 @@ if (status !== 0) throw new Error("initial command failed: " + status);
 fs.writeSync(1, "between-commands-ready\\n");
 Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 `,
-      );
-      const idle = createDeferred();
-      let child: ChildProcess | undefined;
-      const completion = runNodeScript(childPath, env, undefined, {
-        cwd,
-        maxBuffer: 64 * 1024,
-        onReady(owned, readOutput) {
-          child = owned;
-          owned.stdout!.on("data", () => {
-            if (readOutput().stdout.includes("between-commands-ready\n")) {
-              idle.resolve();
-            }
-          });
-        },
+        );
+        const owner = observeOwner();
+        const completion = runNodeScript(childPath, env, undefined, {
+          cwd,
+          maxBuffer: 64 * 1024,
+          onReady: owner.onReady,
+        });
+        try {
+          await owner.wait(
+            lost ? "ownership-accepted\n" : "between-commands-ready\n",
+            completion,
+            signal,
+          );
+          if (!lost) {
+            expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
+            expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
+          }
+          // SIGKILL closes the real pipe before an acknowledged owner can relinquish custody.
+          expect(owner.child!.kill(lost ? "SIGKILL" : "SIGTERM")).toBe(true);
+          const result = await withinTest(completion, signal);
+          if (lost) {
+            expect(result.error, result.stderr).toMatchObject({
+              code: "EPROCESSGROUP_CLEANUP_FAILED",
+              processTreeState: "indeterminate",
+            });
+            expect(result.status).toBeNull();
+            expect(() => resourceOwner.assertReleased()).toThrow(
+              "Unreleased Vitest resource claim",
+            );
+          } else {
+            expect(result, result.stderr).toMatchObject({ error: undefined, status: 143 });
+            expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
+            resourceOwner.assertReleased();
+          }
+          expect(isProcessAlive(owner.child!.pid!)).toBe(false);
+        } finally {
+          await cleanup(completion, owner.child, lost ? undefined : spawnRecord);
+        }
       });
-      try {
-        await waitFor(idle.promise, completion, "initial command did not join", signal);
-        expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-        expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        expect(child!.kill("SIGTERM")).toBe(true);
-        const result = await withinTest(completion, signal);
-        expect(result.error, result.stderr).toBeUndefined();
-        expect(result.status, result.stderr).toBe(143);
-        expect(isProcessAlive(child!.pid!)).toBe(false);
-        expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        resourceOwner.assertReleased();
-      } finally {
-        await cleanup(completion, child, spawnRecord);
-      }
-    });
-  });
+    },
+  );
 
   it("reclaims acknowledged custody before starting a later command", async ({ signal }) => {
     await fixture.run(async () => {
@@ -450,51 +472,33 @@ fs.writeSync(1, "reclaim-requested\\n");
 process.exitCode = await second;
 `,
       );
-      const idle = createDeferred();
-      const requested = createDeferred();
-      let child: ChildProcess | undefined;
-      let handoff: Socket | undefined;
-      let stdout = "";
-      let stderr = "";
+      const owner = observeOwner(false);
       const completion = runManagedCommand({
         bin: process.execPath,
         args: [childPath],
         cwd,
         env,
         stdio: ["pipe", "pipe", "pipe"],
-        onReady(owned) {
-          child = owned;
-          handoff = controlChannel(owned);
-          owned.stdout!.on("data", (chunk) => {
-            stdout += String(chunk);
-            if (stdout.includes("between-commands-ready\n")) {
-              idle.resolve();
-            }
-            if (stdout.includes("reclaim-requested\n")) {
-              requested.resolve();
-            }
-          });
-          owned.stderr!.on("data", (chunk) => (stderr += String(chunk)));
-        },
+        onReady: owner.onReady,
       }).then(
         (status) => ({ status }),
         (error: unknown) => ({ error }),
       );
       try {
-        await waitFor(idle.promise, completion, "initial command did not join", signal);
+        await owner.wait("between-commands-ready\n", completion, signal);
         expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-        handoff!.pause();
-        child!.stdin!.end("continue\n");
-        await waitFor(requested.promise, completion, "later command was not requested", signal);
+        owner.handoff!.pause();
+        owner.child!.stdin!.end("continue\n");
+        await owner.wait("reclaim-requested\n", completion, signal);
         expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-        handoff!.resume();
-        expect(await withinTest(completion, signal), stderr).toEqual({ status: 0 });
+        owner.handoff!.resume();
+        expect(await withinTest(completion, signal), owner.stderr).toEqual({ status: 0 });
         expect(readSpawnedPids(spawnRecord)).toHaveLength(2);
         expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        expect(isProcessAlive(child!.pid!)).toBe(false);
+        expect(isProcessAlive(owner.child!.pid!)).toBe(false);
         resourceOwner.assertReleased();
       } finally {
-        await cleanup(completion, child, spawnRecord, handoff);
+        await cleanup(completion, owner.child, spawnRecord, owner.handoff);
       }
     });
   });
@@ -542,7 +546,7 @@ fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify(report));
 process.exitCode = report.error ? 1 : report.status;
 `,
       );
-      const ready = createDeferred();
+      const owner = observeOwner();
       // A native parent observes whether the actual CLI can exit after reporting
       // failed custody; no outer managed finalizer can rescue its retained handles.
       const supervisor = spawn(process.execPath, [supervisorPath], {
@@ -552,21 +556,13 @@ process.exitCode = report.error ? 1 : report.status;
         stdio: ["ignore", "pipe", "pipe"],
       });
       const completion = once(supervisor, "close");
-      let stdout = "";
-      let stderr = "";
-      supervisor.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
-        if (stdout.includes("unresponsive-owner-ready\n")) {
-          ready.resolve();
-        }
-      });
-      supervisor.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      owner.onReady(supervisor);
       try {
-        await waitFor(ready.promise, completion, "owner did not accept custody", signal);
+        await owner.wait("unresponsive-owner-ready\n", completion, signal);
         const [ownerPid] = readSpawnedPids(ownerPidPath);
         expect(isProcessAlive(ownerPid!)).toBe(true);
         expect(supervisor.kill("SIGTERM")).toBe(true);
-        expect(await withinTest(completion, signal), stderr).toEqual([1, null]);
+        expect(await withinTest(completion, signal), owner.stderr).toEqual([1, null]);
         expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))).toMatchObject({
           error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
         });
@@ -576,59 +572,6 @@ process.exitCode = report.error ? 1 : report.status;
         expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         await cleanup(completion, supervisor, ownerPidPath);
-      }
-    });
-  });
-
-  it("retains the resource claim when an acknowledged owner loses its control channel", async ({
-    signal,
-  }) => {
-    await fixture.run(async () => {
-      const { cwd, resourceOwner, childPath, env } = makeFixture("owner-loss");
-      fs.writeFileSync(
-        childPath,
-        `import fs from "node:fs";
-import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
-await claimManagedCleanup();
-fs.writeSync(1, "ownership-accepted\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-`,
-      );
-      const accepted = createDeferred();
-      let child: ChildProcess | undefined;
-      const completion = runNodeScript(childPath, env, undefined, {
-        cwd,
-        maxBuffer: 64 * 1024,
-        onReady(owned, readOutput) {
-          child = owned;
-          owned.stdout!.on("data", () => {
-            if (readOutput().stdout.includes("ownership-accepted\n")) {
-              accepted.resolve();
-            }
-          });
-        },
-      });
-      try {
-        await waitFor(
-          accepted.promise,
-          completion,
-          "cleanup owner did not receive acknowledgement",
-          signal,
-        );
-        // Kill the acknowledged process before its exit handler can relinquish
-        // ownership. The real pipe closes; no protocol frame is forged or omitted.
-        expect(child!.kill("SIGKILL")).toBe(true);
-        const result = await withinTest(completion, signal);
-        expect(result.error, result.stderr).toMatchObject({
-          code: "EPROCESSGROUP_CLEANUP_FAILED",
-          processTreeState: "indeterminate",
-        });
-        expect(result.status).toBeNull();
-        expect(isProcessAlive(child!.pid!)).toBe(false);
-        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-      } finally {
-        await cleanup(completion, child);
       }
     });
   });
