@@ -150,6 +150,43 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
   });
 
+  it("suppresses every mention class when a final includes copy presentation data", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        text: "Authored text with <@999>",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy @everyone @here <@123> <@!456> <@&789>",
+                  action: {
+                    type: "copy-text",
+                    text: "SAFE-TOKEN",
+                  },
+                  disabled: true,
+                },
+              ],
+            },
+          ],
+        },
+      });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      allowedMentions: { parse: [] },
+    });
+  });
+
   it("keeps answer deltas private with default progress and delivers the final normally", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
     expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();

@@ -30,6 +30,7 @@ export type VisibleTextSuppressionReason =
 function sanitizeUserVisibleToolTextResult(
   text: string,
   bootPrompt: string | undefined,
+  options?: { preserveSourceWhenUnchanged?: boolean },
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
@@ -52,14 +53,38 @@ function sanitizeUserVisibleToolTextResult(
         ? "inbound_metadata_echo"
         : undefined;
   return {
-    text: strippedInbound,
+    // Copy targets are data, not rendered prose. Preserve their exact source
+    // text when the privacy guards made no change; in particular, a literal
+    // `\\n` must not turn into a line break in the copied value. We still run
+    // the normalized form through every guard so escaped delimiter lines
+    // cannot bypass internal-context stripping.
+    text:
+      options?.preserveSourceWhenUnchanged === true && strippedInbound === normalized
+        ? text
+        : strippedInbound,
     ...(suppressionReason ? { suppressionReason } : {}),
   };
 }
 
+function clearPresentationButtonActionTargets(button: Record<string, unknown>): void {
+  // Explicit typed actions own the control. If sanitization removes the target,
+  // legacy shadow fields must not become active fallbacks during normalization.
+  delete button.action;
+  delete button.value;
+  delete button.callbackData;
+  delete button.callback_data;
+  delete button.url;
+  delete button.webApp;
+  delete button.web_app;
+}
+
 function sanitizePresentationTextFields(
   value: unknown,
-  sanitizeText: (text: string, trim?: boolean) => string,
+  sanitizeText: (
+    text: string,
+    trim?: boolean,
+    options?: { preserveSourceWhenUnchanged?: boolean },
+  ) => string,
 ): unknown {
   if (!isRecord(value)) {
     return value;
@@ -137,8 +162,20 @@ function sanitizePresentationTextFields(
           const action = sanitizedButton.action;
           if (isRecord(action)) {
             const sanitizedAction = { ...action };
+            const actionType = normalizeOptionalLowercaseString(sanitizedAction.type);
+            if (actionType === "copy-text" && typeof sanitizedAction.text === "string") {
+              const text = sanitizeText(sanitizedAction.text, false, {
+                preserveSourceWhenUnchanged: true,
+              });
+              if (text.length > 0) {
+                sanitizedAction.text = text;
+                sanitizedButton.action = sanitizedAction;
+              } else {
+                clearPresentationButtonActionTargets(sanitizedButton);
+              }
+            }
             if (
-              (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
+              (actionType === "url" || actionType === "web-app") &&
               typeof sanitizedAction.url === "string"
             ) {
               const url = sanitizeText(sanitizedAction.url);
@@ -146,20 +183,14 @@ function sanitizePresentationTextFields(
                 sanitizedAction.url = url;
                 sanitizedButton.action = sanitizedAction;
               } else if (
-                sanitizedAction.type === "web-app" &&
+                actionType === "web-app" &&
                 typeof sanitizedAction.widgetId === "string" &&
                 sanitizedAction.widgetId.trim()
               ) {
                 delete sanitizedAction.url;
                 sanitizedButton.action = sanitizedAction;
               } else {
-                // Explicit typed actions own the control. If sanitization removes
-                // the target, legacy shadow fields must not become active fallbacks.
-                delete sanitizedButton.action;
-                delete sanitizedButton.value;
-                delete sanitizedButton.url;
-                delete sanitizedButton.webApp;
-                delete sanitizedButton.web_app;
+                clearPresentationButtonActionTargets(sanitizedButton);
               }
             }
           }
@@ -236,8 +267,12 @@ export function sanitizeMessageToolVisiblePayload(
 ): VisibleTextSuppressionReason | undefined {
   const bootPromptForSession = getBootEchoContextForSession(agentSessionKey);
   let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
-  const sanitizeText = (text: string, trim = false) => {
-    const sanitized = sanitizeUserVisibleToolTextResult(text, bootPromptForSession);
+  const sanitizeText = (
+    text: string,
+    trim = false,
+    options?: { preserveSourceWhenUnchanged?: boolean },
+  ) => {
+    const sanitized = sanitizeUserVisibleToolTextResult(text, bootPromptForSession, options);
     // Keep sanitizing after suppression; the first reason only labels the outcome.
     suppressedVisiblePayloadReason ??= sanitized.suppressionReason;
     return trim ? sanitized.text.trim() : sanitized.text;

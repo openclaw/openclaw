@@ -263,7 +263,7 @@ extensions/discord/src/monitor/thread-channel-context.ts	1
 extensions/discord/src/monitor/threading.starter.ts	1
 extensions/discord/src/monitor/timeouts.ts	1
 extensions/discord/src/network-config.ts	2
-extensions/discord/src/outbound-components.ts	2
+extensions/discord/src/outbound-components.ts	1
 extensions/discord/src/outbound-payload.ts	2
 extensions/discord/src/pluralkit.ts	1
 extensions/discord/src/probe.ts	1

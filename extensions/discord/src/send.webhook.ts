@@ -30,6 +30,7 @@ import { createDiscordRetryRunner, recordDiscordMessageCreateAmbiguity } from ".
 import {
   resolveDiscordMessageFlags,
   resolveDiscordSuppressEmbeds,
+  type DiscordAllowedMentions,
 } from "./send.message-request.js";
 import { createDiscordSendReceiptFromResults, createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -50,6 +51,7 @@ type DiscordWebhookSendOpts = {
   wait?: boolean;
   /** Opt into configured line limits; omission preserves character-only chunking. */
   chunking?: { maxChars?: number; maxLines?: number };
+  allowedMentions?: DiscordAllowedMentions;
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
@@ -172,6 +174,7 @@ export async function sendWebhookMessageDiscord(
               avatar_url: normalizeOptionalString(opts.avatarUrl),
               ...(flags ? { flags } : {}),
               ...(messageReference ? { message_reference: messageReference } : {}),
+              ...(opts.allowedMentions ? { allowed_mentions: opts.allowedMentions } : {}),
             }),
             signal: deadline.signal,
           });

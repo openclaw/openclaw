@@ -11,6 +11,7 @@ import {
   resolveChannelMessageSourceReplyDeliveryMode,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -20,7 +21,9 @@ import {
 import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { prepareDiscordCopyTextFallbacks } from "../copy-text-fallback.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
+import { DISCORD_PRESENTATION_TEXT_LIMIT } from "../outbound-components.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { createDiscordMessageProgressRuntime } from "./message-handler.process-progress.js";
@@ -44,6 +47,7 @@ import { resolveDiscordWebhookId } from "./sender-identity.js";
 const TARGETED_ONLY_ALLOWED_MENTIONS: APIAllowedMentions = {
   parse: [AllowedMentionsTypes.User, AllowedMentionsTypes.Role],
 };
+const SUPPRESS_ALL_ALLOWED_MENTIONS: APIAllowedMentions = { parse: [] };
 
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
@@ -399,10 +403,19 @@ export async function processDiscordMessage(
             ? { ...deliverablePayload, text: ttsSupplement.spokenText }
             : deliverablePayload;
         // Preserve intended user/role pings without escalating broadcast mentions.
+        const normalizedPresentation = normalizeMessagePresentation(finalPayload.presentation);
+        const suppressPresentationMentions = normalizedPresentation
+          ? prepareDiscordCopyTextFallbacks({
+              presentation: normalizedPresentation,
+              maxCharacters: DISCORD_PRESENTATION_TEXT_LIMIT,
+            }).suppressMentions
+          : false;
         const allowedMentions =
-          freshPreviewFinal && discordTextHasBroadcastMention(finalPayload.text ?? "")
-            ? TARGETED_ONLY_ALLOWED_MENTIONS
-            : undefined;
+          freshPreviewFinal && suppressPresentationMentions
+            ? SUPPRESS_ALL_ALLOWED_MENTIONS
+            : freshPreviewFinal && discordTextHasBroadcastMention(finalPayload.text ?? "")
+              ? TARGETED_ONLY_ALLOWED_MENTIONS
+              : undefined;
         deliveryResult = await deliverDiscordReply({
           ...deliveryOptions,
           replies: [finalPayload],

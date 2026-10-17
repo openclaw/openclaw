@@ -35,6 +35,8 @@ export type ChannelPresentationCapabilities = {
   supported?: boolean;
   /** Whether the channel can render button action blocks natively. */
   buttons?: boolean;
+  /** Whether the channel can render copy-text button actions natively. */
+  copyTextButtons?: boolean;
   /** Whether the channel can render select/menu blocks natively. */
   selects?: boolean;
   /** Whether the channel can render low-emphasis context blocks natively. */
@@ -68,6 +70,8 @@ export type ChannelPresentationCapabilities = {
     selects?: {
       /** Maximum options in one select/menu block. */
       maxOptions?: number;
+      /** Whether each rendered option consumes the shared action budget. */
+      optionsConsumeActionBudget?: boolean;
       /** Maximum user-visible option label length. */
       maxLabelLength?: number;
       /** Maximum option callback value size in UTF-8 bytes. */

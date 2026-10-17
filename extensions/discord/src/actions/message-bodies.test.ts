@@ -467,6 +467,39 @@ describe("Discord action message bodies", () => {
     expect(writes()[0]?.body).not.toHaveProperty("content");
   });
 
+  it.each([undefined, "Authored text with <@999>"])(
+    "suppresses mentions in adapter copy fallback with authored text %j",
+    async (content) => {
+      await send(content, {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Copy @everyone @here <@123> <@!456> <@&789>",
+                  action: { type: "copy-text", text: "x".repeat(2100) },
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]).toMatchObject({
+        method: "POST",
+        path: `/v10/channels/${channelId}/messages`,
+        body: { allowed_mentions: { parse: [] } },
+      });
+      expect(JSON.stringify(writes()[0]?.body.components)).toContain("@everyone");
+      if (content) {
+        expect(writes()[0]?.body.content).toBeUndefined();
+        expect(JSON.stringify(writes()[0]?.body.components)).toContain(content);
+      }
+    },
+  );
+
   it("keeps disabled and blocked edit targets from mutating", async () => {
     await expect(
       edit("caption", { channels: { discord: { token, actions: { messages: false } } } }),

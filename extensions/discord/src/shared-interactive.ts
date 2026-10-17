@@ -74,6 +74,8 @@ function buildDiscordButtonComponent(
     }
     component.style = "link";
     component.url = action.url;
+  } else if (action.type === "copy-text") {
+    return undefined;
   } else {
     component.callbackData = action.type === "command" ? action.command : action.value;
     if (button.action?.type === "command" || button.action?.type === "callback") {

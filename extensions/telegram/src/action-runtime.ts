@@ -18,9 +18,8 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
+  type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -40,10 +39,15 @@ import {
   readTelegramThreadId,
 } from "./action-params.js";
 import {
-  appendTelegramDroppedControlFallback,
+  appendTelegramActionDroppedControlFallback,
+  hydrateTelegramDroppedControlFallbacks,
+  readTelegramSendContent,
+  renderTelegramActionPresentationText,
+  type TelegramActionDroppedControl,
+} from "./action-runtime-presentation.js";
+import {
   buildTelegramControlDegradation,
   resolveTelegramButtonsFromParams,
-  type TelegramDroppedControl,
 } from "./button-types.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { readTelegramHistoryAction } from "./history-read.js";
@@ -52,7 +56,6 @@ import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
-import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import {
   resolveTelegramConversationReadChatId,
   resolveTelegramMessageMutationChatId,
@@ -129,48 +132,6 @@ function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | nul
   return `${parsed.chatId}:topic:${topicId}`;
 }
 
-function readTelegramSendContent(params: {
-  args: Record<string, unknown>;
-  mediaUrl?: string;
-  hasButtons: boolean;
-  hasLocation?: boolean;
-  interactive?: unknown;
-  presentation?: MessagePresentation;
-}) {
-  const explicitContent =
-    readStringParam(params.args, "content", { allowEmpty: true }) ??
-    readStringParam(params.args, "message", { allowEmpty: true }) ??
-    readStringParam(params.args, "caption", { allowEmpty: true });
-  const unsupportedBlocks =
-    params.presentation?.blocks.filter(
-      (block) => block.type === "chart" || block.type === "table",
-    ) ?? [];
-  const presentationText =
-    explicitContent == null && params.presentation
-      ? renderMessagePresentationFallbackText({ presentation: params.presentation })
-      : explicitContent != null && unsupportedBlocks.length > 0
-        ? renderMessagePresentationFallbackText({
-            text: explicitContent,
-            presentation: { ...params.presentation, blocks: unsupportedBlocks },
-          })
-        : undefined;
-  const interactiveText =
-    explicitContent == null && !params.presentation
-      ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
-      : undefined;
-  const content =
-    (presentationText?.trim() ? presentationText : undefined) ??
-    explicitContent ??
-    (interactiveText?.trim() ? interactiveText : undefined);
-  if (content == null && !params.mediaUrl && !params.hasButtons && !params.hasLocation) {
-    throw new Error("content required.");
-  }
-  return {
-    content: content ?? "",
-    hasExplicitContent: explicitContent != null,
-  };
-}
-
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
   const delivery = asOptionalRecord(params.delivery);
   const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
@@ -240,7 +201,7 @@ export async function handleTelegramAction(
       inboundEventKind: options?.inboundEventKind,
     });
   };
-  const droppedControls: TelegramDroppedControl[] = [];
+  const droppedControls: TelegramActionDroppedControl[] = [];
   const resolveButtons = (to: string, presentation?: MessagePresentation) =>
     resolveTelegramButtonsFromParams(params, presentation, {
       allowWebAppButtons: resolveTelegramTargetChatType(to) === "direct",
@@ -413,19 +374,21 @@ export async function handleTelegramAction(
     const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
     const buttons = resolveButtons(to, presentation);
+    hydrateTelegramDroppedControlFallbacks(droppedControls, presentation);
     const resolvedContent = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
+      hasDroppedControls: droppedControls.length > 0,
       hasLocation: Boolean(location),
       interactive: params.interactive,
       presentation,
     });
     const content =
-      droppedControls.length > 0 && resolvedContent.hasExplicitContent
-        ? appendTelegramDroppedControlFallback(resolvedContent.content, droppedControls)
+      droppedControls.length > 0
+        ? appendTelegramActionDroppedControlFallback(resolvedContent.content, droppedControls)
         : resolvedContent.content;
-    const droppedControlFallback = appendTelegramDroppedControlFallback("", droppedControls);
+    const droppedControlFallback = appendTelegramActionDroppedControlFallback("", droppedControls);
     const hasOnlyDroppedControlFallback =
       !resolvedContent.hasExplicitContent &&
       droppedControlFallback.length > 0 &&
@@ -637,6 +600,11 @@ export async function handleTelegramAction(
       readStringParam(params, "message", { allowEmpty: false });
     // Telegram treats an explicit empty caption as a request to remove it.
     let caption = readStringParam(params, "caption", { allowEmpty: true });
+    const presentation = normalizeMessagePresentation(params.presentation);
+    const visiblePresentation = renderTelegramActionPresentationText(presentation);
+    if (content == null && caption == null && visiblePresentation.trim()) {
+      content = visiblePresentation;
+    }
     let progressPreview: TelegramDraftPreview | undefined;
     if (options?.progressSnapshot) {
       progressPreview = renderTelegramAccountProgressDraftPreview(options.progressSnapshot, {
@@ -646,11 +614,25 @@ export async function handleTelegramAction(
       content = progressPreview.text;
     }
     const buttons = resolveButtons(chatId ?? "");
+    hydrateTelegramDroppedControlFallbacks(droppedControls, presentation);
     if (droppedControls.length > 0) {
       if (caption != null) {
-        caption = appendTelegramDroppedControlFallback(caption, droppedControls);
+        caption = appendTelegramActionDroppedControlFallback(caption, droppedControls);
       } else if (content != null) {
-        content = appendTelegramDroppedControlFallback(content, droppedControls);
+        content = appendTelegramActionDroppedControlFallback(content, droppedControls);
+      } else if (droppedControls.some((control) => control.fallbackText !== undefined)) {
+        const degradation = buildTelegramControlDegradation(droppedControls, false);
+        return jsonResult({
+          ok: false,
+          ...degradation,
+          degradedDelivery: degradation
+            ? {
+                ...degradation.degradedDelivery,
+                guidance:
+                  "Retry with explicit content or caption so readable control fallback can be delivered.",
+              }
+            : undefined,
+        });
       }
     }
     if (content == null && caption == null && buttons === undefined) {

@@ -23,11 +23,13 @@ import {
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
 import { coerceDiscordComponentParam } from "../components.js";
+import { prepareDiscordCopyTextFallbacks } from "../copy-text-fallback.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import { matchesDiscordToolContextTarget } from "../normalize.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
+  DISCORD_PRESENTATION_TEXT_LIMIT,
   isDiscordComponentSpecWithinMessageLimit,
 } from "../outbound-components.js";
 import {
@@ -202,9 +204,16 @@ async function dispatchDiscordMessageAction(
       action === "send" && explicitComponents == null
         ? normalizeMessagePresentation(params.presentation)
         : undefined;
-    const adaptedPresentation = presentation
-      ? adaptMessagePresentationForChannel({
+    const prepared = presentation
+      ? prepareDiscordCopyTextFallbacks({
           presentation,
+          maxCharacters: DISCORD_PRESENTATION_TEXT_LIMIT,
+        })
+      : undefined;
+    const preparedPresentation = prepared?.presentation;
+    const adaptedPresentation = preparedPresentation
+      ? adaptMessagePresentationForChannel({
+          presentation: preparedPresentation,
           capabilities: DISCORD_PRESENTATION_CAPABILITIES,
         })
       : undefined;
@@ -234,10 +243,10 @@ async function dispatchDiscordMessageAction(
     const rawEmbeds = action === "send" ? params.embeds : undefined;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const deliveryContent =
-      presentationFellBack && presentation
+      presentationFellBack && preparedPresentation
         ? renderMessagePresentationFallbackText({
             text: content,
-            presentation,
+            presentation: preparedPresentation,
           })
         : content;
     const filename = readStringParam(params, "filename");
@@ -260,6 +269,7 @@ async function dispatchDiscordMessageAction(
       ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
       __sessionKey: sessionKey,
       __agentId: agentId,
+      ...(prepared?.suppressMentions ? { __suppressMentions: true } : {}),
     });
     return completeOutbound(result, to, sessionKey);
   }

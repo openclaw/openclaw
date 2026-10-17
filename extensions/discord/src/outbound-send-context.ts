@@ -4,6 +4,7 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAttachedOutboundTarget } from "./channel.conversation.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 import { toDiscordOutboundDeliveryResult } from "./send.receipt.js";
@@ -14,6 +15,13 @@ type DiscordSendRuntime = typeof import("./send.js");
 type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
 type DiscordVoiceSendFn = DiscordSendRuntime["sendVoiceMessageDiscord"];
 type DiscordOutboundContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+
+function shouldSuppressDiscordPresentationMentions(
+  ctx: DiscordOutboundContext & { payload?: { channelData?: { discord?: unknown } } },
+): boolean {
+  const discordData = ctx.payload?.channelData?.discord;
+  return isRecord(discordData) && discordData.suppressPresentationMentions === true;
+}
 
 export const loadDiscordSendRuntime = createLazyRuntimeModule(() => import("./send.js"));
 
@@ -43,6 +51,7 @@ export async function createDiscordOutboundSendContext(ctx: DiscordOutboundConte
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
+    ...(shouldSuppressDiscordPresentationMentions(ctx) ? { allowedMentions: { parse: [] } } : {}),
     onPlatformSendDispatch: delivery.onPlatformSendDispatch,
     assertPlatformSendAuthorized: delivery.assertPlatformSendAuthorized,
   };

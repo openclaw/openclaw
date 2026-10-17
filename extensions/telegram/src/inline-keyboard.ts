@@ -1,6 +1,28 @@
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "grammy/types";
 import type { TelegramInlineButtons } from "./button-types.js";
 
+function toInlineKeyboardButton(
+  button: TelegramInlineButtons[number][number] | undefined,
+): InlineKeyboardButton | undefined {
+  if (!button?.text) {
+    return undefined;
+  }
+  const label = { text: button.text, ...(button.style ? { style: button.style } : {}) };
+  if (button.url) {
+    return { ...label, url: button.url };
+  }
+  if (button.callback_data) {
+    return { ...label, callback_data: button.callback_data };
+  }
+  if (button.copy_text?.text) {
+    return { ...label, copy_text: { text: button.copy_text.text } };
+  }
+  if (button.web_app?.url) {
+    return { ...label, web_app: { url: button.web_app.url } };
+  }
+  return undefined;
+}
+
 export function buildInlineKeyboard(
   buttons?: TelegramInlineButtons,
 ): InlineKeyboardMarkup | undefined {
@@ -10,22 +32,7 @@ export function buildInlineKeyboard(
   const rows = buttons
     .map((row) =>
       row
-        .map((button): InlineKeyboardButton | undefined => {
-          if (!button?.text) {
-            return undefined;
-          }
-          const label = { text: button.text, ...(button.style ? { style: button.style } : {}) };
-          if (button.url) {
-            return { ...label, url: button.url };
-          }
-          if (button.callback_data) {
-            return { ...label, callback_data: button.callback_data };
-          }
-          if (button.web_app?.url) {
-            return { ...label, web_app: { url: button.web_app.url } };
-          }
-          return undefined;
-        })
+        .map((button): InlineKeyboardButton | undefined => toInlineKeyboardButton(button))
         .filter((button): button is InlineKeyboardButton => Boolean(button)),
     )
     .filter((row) => row.length > 0);

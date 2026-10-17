@@ -1,13 +1,22 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  adaptMessagePresentationForChannel,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
+import { prepareDiscordCopyTextFallbacks } from "./copy-text-fallback.js";
 
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
 const DISCORD_MESSAGE_COMPONENT_LIMIT = 40;
 const DISCORD_TEXT_DISPLAY_LIMIT = 2000;
 const DISCORD_CONTEXT_PREFIX_LENGTH = Array.from("-# ").length;
+
+export const DISCORD_PRESENTATION_TEXT_LIMIT =
+  DISCORD_TEXT_DISPLAY_LIMIT - DISCORD_CONTEXT_PREFIX_LENGTH;
 
 export const DISCORD_PRESENTATION_CAPABILITIES = {
   supported: true,
@@ -100,13 +109,45 @@ export async function buildDiscordPresentationPayload(params: {
   presentation: Parameters<
     NonNullable<ChannelOutboundAdapter["renderPresentation"]>
   >[0]["presentation"];
+  sourcePresentation?: Parameters<
+    NonNullable<ChannelOutboundAdapter["renderPresentation"]>
+  >[0]["sourcePresentation"];
 }): Promise<typeof params.payload | null> {
+  const sourcePresentation = params.sourcePresentation ?? params.presentation;
+  const discordData = params.payload.channelData?.discord;
+  const inheritedDiscordData = isRecord(discordData) ? discordData : {};
+  const prepared = prepareDiscordCopyTextFallbacks({
+    presentation: sourcePresentation,
+    maxCharacters: DISCORD_PRESENTATION_TEXT_LIMIT,
+  });
+  const suppressPresentationMentions = prepared.suppressMentions;
+  const presentation = prepared.changed
+    ? adaptMessagePresentationForChannel({
+        presentation: prepared.presentation,
+        capabilities: DISCORD_PRESENTATION_CAPABILITIES,
+      })
+    : params.presentation;
   const componentSpec = (await loadDiscordSharedInteractive()).buildDiscordPresentationComponents(
-    params.presentation,
+    presentation,
     { questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload) },
   );
   if (!componentSpec) {
-    return null;
+    return prepared.changed
+      ? {
+          ...params.payload,
+          text: renderMessagePresentationFallbackText({
+            text: params.payload.text,
+            presentation,
+          }),
+          channelData: {
+            ...params.payload.channelData,
+            discord: {
+              ...inheritedDiscordData,
+              ...(suppressPresentationMentions ? { suppressPresentationMentions: true } : {}),
+            },
+          },
+        }
+      : null;
   }
   const includesMedia = Boolean(
     params.payload.mediaUrl || params.payload.mediaUrls?.some((mediaUrl) => mediaUrl),
@@ -120,15 +161,32 @@ export async function buildDiscordPresentationPayload(params: {
       includesMedia,
     })
   ) {
-    return null;
+    if (!prepared.changed) {
+      return null;
+    }
+    return {
+      ...params.payload,
+      text: renderMessagePresentationFallbackText({
+        text: params.payload.text,
+        presentation,
+      }),
+      channelData: {
+        ...params.payload.channelData,
+        discord: {
+          ...inheritedDiscordData,
+          ...(suppressPresentationMentions ? { suppressPresentationMentions: true } : {}),
+        },
+      },
+    };
   }
   return {
     ...params.payload,
     channelData: {
       ...params.payload.channelData,
       discord: {
-        ...(params.payload.channelData?.discord as Record<string, unknown> | undefined),
+        ...inheritedDiscordData,
         presentationComponents: componentSpec,
+        ...(suppressPresentationMentions ? { suppressPresentationMentions: true } : {}),
       },
     },
   };

@@ -1,3 +1,5 @@
+import { MessageFlags } from "discord-api-types/v10";
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
@@ -35,6 +37,50 @@ describe("Discord webhook transport", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("records the webhook receipt, outbound identity and account activity", async () => {
+    const result = await sendWebhookMessageDiscord("hello", {
+      ...opts,
+      accountId: "runtime",
+      threadId: "thread-1",
+    });
+    expect(result).toMatchObject({
+      messageId: "msg-1",
+      channelId: "thread-1",
+      receipt: {
+        platformMessageIds: ["msg-1"],
+        threadId: "thread-1",
+      },
+    });
+    expect(recordChannelActivityMock).toHaveBeenCalledExactlyOnceWith({
+      channel: "discord",
+      accountId: "runtime",
+      direction: "outbound",
+    });
+    expect(
+      isRecentOutboundMessageIdentity({
+        channel: "discord",
+        accountId: "runtime",
+        conversationId: "thread-1",
+        messageId: "msg-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("serializes an explicit no-mentions policy", async () => {
+    await sendWebhookMessageDiscord("@everyone <@123> <@&456>", {
+      ...opts,
+      allowedMentions: { parse: [] },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        content: "@everyone <@123> <@&456>",
+        flags: MessageFlags.SuppressEmbeds,
+        allowed_mentions: { parse: [] },
+      }),
+    );
   });
 
   it.each([

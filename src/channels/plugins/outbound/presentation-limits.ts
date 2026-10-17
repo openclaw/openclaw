@@ -178,6 +178,27 @@ function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
 }
 
+function consumeSelectBudget(budget: ActionBudget, count = 1): void {
+  if (budget.remainingActions !== undefined) {
+    budget.remainingActions = Math.max(0, budget.remainingActions - count);
+  }
+  if (budget.remainingRows !== undefined) {
+    budget.remainingRows = Math.max(0, budget.remainingRows - count);
+  }
+}
+
+function consumeRenderedSelectBudget(
+  budget: ActionBudget,
+  count: number,
+  limits: SelectLimits | undefined,
+): void {
+  if (limits?.optionsConsumeActionBudget === true) {
+    consumeActionBudget(budget, count, budget.maxActionsPerRow ?? count);
+    return;
+  }
+  consumeSelectBudget(budget, count > 0 ? 1 : 0);
+}
+
 function adaptControl<Control extends MessagePresentationButton | MessagePresentationOption>(
   control: Control,
   action: ReturnType<typeof resolveMessagePresentationButtonAction>,
@@ -204,8 +225,13 @@ function adaptControl<Control extends MessagePresentationButton | MessagePresent
 function adaptButton(
   button: MessagePresentationButton,
   limits: ActionLimits | undefined,
+  capabilities: ChannelPresentationCapabilities | undefined,
 ): MessagePresentationButton | undefined {
-  const adapted = adaptControl(button, resolveMessagePresentationButtonAction(button), limits);
+  const action = resolveMessagePresentationButtonAction(button);
+  if (action?.type === "copy-text" && capabilities?.copyTextButtons !== true) {
+    return undefined;
+  }
+  const adapted = adaptControl(button, action, limits);
   if (!adapted || (button.disabled === true && limits?.supportsDisabled !== true)) {
     return undefined;
   }
@@ -218,6 +244,7 @@ function adaptButton(
 function adaptButtonsBlock(
   block: Extract<MessagePresentationBlock, { type: "buttons" }>,
   limits: ActionLimits | undefined,
+  capabilities: ChannelPresentationCapabilities | undefined,
   budget: ActionBudget,
   fallbackBlockType: "context" | "text",
   buttonSelection: ButtonSelection,
@@ -226,7 +253,7 @@ function adaptButtonsBlock(
   const capacity = buttonCapacity(budget);
   const candidates: ButtonCandidate[] = block.buttons.map((button) => ({
     original: button,
-    adapted: adaptButton(button, limits),
+    adapted: adaptButton(button, limits, capabilities),
   }));
   const renderableCandidates = candidates.filter(
     (candidate): candidate is RenderableButtonCandidate => Boolean(candidate.adapted),
@@ -284,9 +311,15 @@ function adaptSelectBlock(
       Boolean(candidate.adapted),
   );
   const maxOptions = positiveInteger(limits?.maxOptions);
-  const selectedCandidates = maxOptions
+  const boundedCandidates = maxOptions
     ? renderableCandidates.slice(0, maxOptions)
     : renderableCandidates;
+  const optionCapacity =
+    limits?.optionsConsumeActionBudget === true ? buttonCapacity(budget) : undefined;
+  const selectedCandidates =
+    optionCapacity !== undefined && boundedCandidates.length > optionCapacity
+      ? boundedCandidates.slice(0, optionCapacity)
+      : boundedCandidates;
   const selected = new Set<SelectCandidate>(selectedCandidates);
   const options = selectedCandidates.map((candidate) => candidate.adapted);
   const canRenderSelect = options.length > 0 && hasActionSlotBudget(budget);
@@ -302,7 +335,7 @@ function adaptSelectBlock(
   if (!canRenderSelect) {
     return fallback;
   }
-  consumeActionBudget(budget);
+  consumeRenderedSelectBudget(budget, options.length, limits);
   return [
     {
       type: "select",
@@ -315,22 +348,28 @@ function adaptSelectBlock(
   ];
 }
 
-function countRenderableSelectBlocks(
+function reserveRenderableSelectBudget(
   blocks: readonly MessagePresentationBlock[],
   capabilities: ChannelPresentationCapabilities | undefined,
   limits: SelectLimits | undefined,
-): number {
+  budget: ActionBudget,
+): void {
   if (capabilities?.selects === false) {
-    return 0;
+    return;
   }
-  let count = 0;
   for (const block of blocks) {
-    // A valid maxOptions is at least one, so one accepted option reserves the slot.
-    if (block.type === "select" && block.options.some((option) => adaptOption(option, limits))) {
-      count += 1;
+    if (block.type !== "select") {
+      continue;
+    }
+    const maxOptions = positiveInteger(limits?.maxOptions);
+    const renderableOptions = block.options.filter((option) => adaptOption(option, limits));
+    const renderableCount = maxOptions
+      ? renderableOptions.slice(0, maxOptions).length
+      : renderableOptions.length;
+    if (renderableCount > 0) {
+      consumeRenderedSelectBudget(budget, renderableCount, limits);
     }
   }
-  return count;
 }
 
 function createGlobalButtonSelection(params: {
@@ -343,13 +382,11 @@ function createGlobalButtonSelection(params: {
     return undefined;
   }
   const reservationBudget = createActionBudget(params.limits);
-  consumeActionBudget(
+  reserveRenderableSelectBudget(
+    params.presentation.blocks,
+    params.capabilities,
+    params.selectLimits,
     reservationBudget,
-    countRenderableSelectBlocks(
-      params.presentation.blocks,
-      params.capabilities,
-      params.selectLimits,
-    ),
   );
   // Without a per-row size, row-only limits follow authored block order rather than preselecting buttons.
   const capacity =
@@ -379,7 +416,7 @@ function createGlobalButtonSelection(params: {
     return block.buttons
       .map((button) => ({
         original: button,
-        adapted: adaptButton(button, params.limits),
+        adapted: adaptButton(button, params.limits, params.capabilities),
       }))
       .filter((candidate): candidate is RenderableButtonCandidate => Boolean(candidate.adapted));
   });
@@ -464,6 +501,7 @@ export function adaptMessagePresentationForChannel(params: {
       return adaptButtonsBlock(
         block,
         limits?.actions,
+        capabilities,
         actionBudget,
         fallbackBlockType,
         buttonSelection,
@@ -496,6 +534,7 @@ export function applyPresentationActionLimits(
   const block = adaptButtonsBlock(
     { type: "buttons", buttons: [...buttons] },
     capabilities?.limits?.actions,
+    capabilities,
     createActionBudget(capabilities?.limits?.actions),
     capabilities?.context === false ? "text" : "context",
     undefined,

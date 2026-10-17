@@ -2559,6 +2559,7 @@ src/gateway/chat-display-projection.commentary.ts
 src/gateway/chat-display-projection.sanitize.ts
 src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
+src/interactive/payload-fallback-blocks.ts
 src/interactive/payload.ts
 src/media/media-reference.ts
 src/media/store.shared.ts

@@ -186,6 +186,8 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const threadName = readStringParam(ctx.params, "threadName");
       const sessionKey = readStringParam(ctx.params, "__sessionKey");
       const agentId = readStringParam(ctx.params, "__agentId");
+      const allowedMentions =
+        readBooleanParam(ctx.params, "__suppressMentions") === true ? { parse: [] } : undefined;
 
       const sendOptions = {
         ...ctx.withOpts(),
@@ -214,6 +216,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaUrl,
           filename,
           ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
+          ...(allowedMentions ? { allowedMentions } : {}),
         });
       } else if (asVoice) {
         if (!mediaUrl) {
@@ -240,6 +243,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           components,
           embeds,
           ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
+          ...(allowedMentions ? { allowedMentions } : {}),
         });
       }
       return jsonResult(
