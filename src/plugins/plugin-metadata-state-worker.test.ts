@@ -18,7 +18,7 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import * as machineState from "../state/config-machine-state.js";
 import {
   withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
+  withOpenClawStateDatabaseReadSnapshot as withSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -37,8 +37,8 @@ import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plu
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   parseInstalledPluginIndex,
-  readPersistedInstalledPluginIndex,
-  readPersistedInstalledPluginIndexSync,
+  readPersistedInstalledPluginIndex as readIndex,
+  readPersistedInstalledPluginIndexSync as readIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
@@ -98,6 +98,14 @@ async function seedFixture(value = index()) {
 
 function withFreshCache<T>(run: () => T): T {
   return withPluginCache(createPluginCache(), run);
+}
+
+const diagnostics = (message = "synthetic index") => [{ level: "warn", message }];
+const readRow = (env: NodeJS.ProcessEnv) =>
+  metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+async function expectLedger(env: NodeJS.ProcessEnv, message: string) {
+  const row = await readRow(env);
+  expect(JSON.parse(row!.value_json).index.diagnostics).toEqual(diagnostics(message));
 }
 
 async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
@@ -166,19 +174,14 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
   try {
     await withPluginCache(cache, () =>
       withArtifactPreservingStateReads(() =>
-        withOpenClawStateDatabaseReadSnapshot(
-          () => preparePluginMetadataMachineStateAsync({ env }),
-          { env },
-        ),
+        withSnapshot(() => preparePluginMetadataMachineStateAsync({ env }), { env }),
       ),
     );
     adoptProcessPluginCache(cache);
     await withoutMainThreadSql(async () => {
       await preparePluginMetadataMachineStateAsync({ env });
       expect(readStartupBundledDiscoveryMode(config, env)).toBeUndefined();
-      expect((await readPersistedInstalledPluginIndex({ env }))?.diagnostics).toEqual(
-        index().diagnostics,
-      );
+      expect((await readIndex({ env }))?.diagnostics).toEqual(diagnostics());
     });
     expect(reads).not.toHaveBeenCalled();
     expect(batches).toHaveBeenCalledOnce();
@@ -194,11 +197,7 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
           expect(readStartupBundledDiscoveryMode({}, env)).toBe("compat");
         });
       };
-      if (snapshot) {
-        await withArtifactPreservingStateReads(read);
-      } else {
-        await read();
-      }
+      await (snapshot ? withArtifactPreservingStateReads(read) : read());
     }
   } finally {
     adoptProcessPluginCache(processCache);
@@ -263,22 +262,21 @@ it("reuses the synchronous discovery reader and sees in-process writes between p
 });
 
 it("refreshes current package facts in pinned install roots without parent SQL or lost admissions", async () => {
-  const env = environment();
+  const { env } = await seedFixture();
   const roots = resolvePluginInstallRoots(env);
   const redirectedEnv = environment();
   const rootDir = path.join(roots.extensionsDir, "fixture");
   fs.mkdirSync(rootDir, { recursive: true });
   const fixture = createColdPluginFixture({ rootDir, pluginId: "refresh-fixture" });
   const config = { plugins: { entries: { [fixture.pluginId]: { enabled: true } } } };
-  await seed(env, index());
   const refresh = () =>
-    withPluginLifecycleLease({ env }, async (lease) => {
-      await withoutMainThreadSql(async () => {
-        await withPluginInstallRoots(roots, () =>
+    withPluginLifecycleLease({ env }, (lease) =>
+      withoutMainThreadSql(() =>
+        withPluginInstallRoots(roots, () =>
           refreshPluginRegistry({ config, env: redirectedEnv, lease, reason: "source-changed" }),
-        );
-      });
-    });
+        ),
+      ),
+    );
   await refresh();
   const admission = {
     signature: "fixture-generation",
@@ -296,9 +294,9 @@ it("refreshes current package facts in pinned install roots without parent SQL o
   ).toBe(true);
   createColdPluginFixture({ rootDir, pluginId: fixture.pluginId, packageVersion: "2.0.0" });
   await refresh();
-  await withoutMainThreadSql(async () => {
-    await withFreshCache(async () => {
-      const persisted = await readPersistedInstalledPluginIndex({ env });
+  await withoutMainThreadSql(() =>
+    withFreshCache(async () => {
+      const persisted = await readIndex({ env });
       expect(persisted?.plugins).toContainEqual(
         expect.objectContaining({
           pluginId: fixture.pluginId,
@@ -307,8 +305,8 @@ it("refreshes current package facts in pinned install roots without parent SQL o
           sourceAdmissions: { [rootDir]: admission },
         }),
       );
-    });
-  });
+    }),
+  );
   expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
 });
 
@@ -320,6 +318,12 @@ it("merges source admissions into the current install without main-thread SQL or
   } satisfies InstalledPluginIndex["plugins"][number];
   const current = { ...index("current inventory"), plugins: [plugin] };
   await seed(env, current);
+  const capture = {
+    sourceIdentity: "1:2:3:4:5:6",
+    capturedIdentity: "1:7:3:4:5:6",
+    contentHash: "b".repeat(64),
+    sizeBytes: 4,
+  };
   const publication = {
     pluginId: plugin.pluginId,
     rootDir: plugin.rootDir,
@@ -330,12 +334,9 @@ it("merges source admissions into the current install without main-thread SQL or
       sourceDigest: "a".repeat(64),
       nativeArtifacts: {
         "native-tool": {
-          sourceIdentity: "1:2:3:4:5:6",
-          contentHash: "b".repeat(64),
-          sizeBytes: 4,
+          ...capture,
           capturedPath: "/captures/namespace/content/native-tool",
           namespace: "/captures/namespace",
-          capturedIdentity: "1:7:3:4:5:6",
         },
       },
       nativeNamespaces: {
@@ -346,11 +347,8 @@ it("merges source admissions into the current install without main-thread SQL or
           members: {
             "native-tool": {
               source: plugin.rootDir + "/native-tool",
-              sourceIdentity: "1:2:3:4:5:6",
-              capturedIdentity: "1:7:3:4:5:6",
+              ...capture,
               boundaryChecked: false,
-              contentHash: "b".repeat(64),
-              sizeBytes: 4,
             },
           },
         },
@@ -358,16 +356,14 @@ it("merges source admissions into the current install without main-thread SQL or
     },
   };
   await withoutMainThreadSql(async () => {
-    const before = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+    const before = await readRow(env);
     const publish = createPluginSourceAdmissionPublisher({ env })!;
     expect(await withArtifactPreservingStateReads(() => publish(publication))).toBe(false);
-    expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
-      before,
-    );
+    expect(await readRow(env)).toEqual(before);
     expect(await publish(publication)).toBe(true);
-    const committed = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+    const committed = await readRow(env);
     await withFreshCache(async () => {
-      const loaded = await readPersistedInstalledPluginIndex({ env });
+      const loaded = await readIndex({ env });
       expect(loaded?.diagnostics).toEqual(current.diagnostics);
       expect(loaded?.plugins[0]?.sourceAdmissions).toEqual({
         [publication.key]: publication.receipt,
@@ -376,9 +372,7 @@ it("merges source admissions into the current install without main-thread SQL or
     expect(await publish(publication)).toBe(true);
     expect(await publish({ ...publication, rootDir: "/replaced/plugin" })).toBe(false);
     expect(await publish({ ...publication, installRecordHash: "old-install" })).toBe(false);
-    expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
-      committed,
-    );
+    expect(await readRow(env)).toEqual(committed);
   });
   expect(
     parseInstalledPluginIndex({
@@ -393,41 +387,11 @@ it("preserves database-family bytes during ambient artifact-preserving async ins
   const before = familyHashes(databasePath);
   const inspect = () =>
     withFreshCache(async () => {
-      expect((await readPersistedInstalledPluginIndex({ env }))?.diagnostics).toEqual([
-        { level: "warn", message: "synthetic index" },
-      ]);
+      expect((await readIndex({ env }))?.diagnostics).toEqual(diagnostics());
     });
   await withoutMainThreadSql(() => withArtifactPreservingStateReads(inspect));
   await closeOpenClawStateDatabaseAsync();
   expect(familyHashes(databasePath)).toEqual(before);
-});
-
-it("reads retained metadata snapshots off-thread and sees committed writes after the scope", async () => {
-  const { env } = await seedFixture(index("captured ledger"));
-  await withArtifactPreservingStateReads(() =>
-    withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        writeConfigMachineState(
-          "plugins.installedIndex",
-          { revision: 2, index: index("new ledger") },
-          { env },
-        );
-        await withoutMainThreadSql(async () => {
-          const row = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
-          expect(JSON.parse(row!.value_json).index.diagnostics).toEqual([
-            { level: "warn", message: "captured ledger" },
-          ]);
-        });
-      },
-      { env },
-    ),
-  );
-  await withoutMainThreadSql(async () => {
-    const row = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
-    expect(JSON.parse(row!.value_json).index.diagnostics).toEqual([
-      { level: "warn", message: "new ledger" },
-    ]);
-  });
 });
 
 it("prepares cold metadata once and preserves the merged workspace inventory without main SQL", async () => {
@@ -492,11 +456,11 @@ it("shares a pending index read and returns the same validated inventory", async
   const read = vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
   await using cache = createPluginCache();
   await withPluginCache(cache, async () => {
-    const first = readPersistedInstalledPluginIndex({ env });
-    const second = readPersistedInstalledPluginIndex({ env });
+    const first = readIndex({ env });
+    const second = readIndex({ env });
     row.resolve({ value_json: JSON.stringify({ revision: 1, index: index() }) });
     const [left, right] = await Promise.all([first, second]);
-    expect(left?.diagnostics).toEqual([{ level: "warn", message: "synthetic index" }]);
+    expect(left?.diagnostics).toEqual(diagnostics());
     expect(right).toBe(left);
     expect(read).toHaveBeenCalledTimes(1);
   });
@@ -507,7 +471,7 @@ it("joins a retired cache's worker read without publishing its inventory", async
   const row = createDeferredCore<{ value_json: string }>();
   vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
   const cache = createPluginCache();
-  const pending = withPluginCache(cache, () => readPersistedInstalledPluginIndex({ env }));
+  const pending = withPluginCache(cache, () => readIndex({ env }));
   const rejected = expect(pending).rejects.toThrow();
   const retirement = retirePluginCache(cache);
   row.resolve({ value_json: JSON.stringify({ revision: 1, index: index() }) });
@@ -534,8 +498,9 @@ it("returns persisted bundled recovery locations through its existing async cons
     const recovered = await withPluginCache(cache, () =>
       listPersistedBundledPluginRecoveryLocations({ env }),
     );
-    expect(recovered).toMatchObject([{ pluginId: "fixture" }]);
-    expect(recovered[0]?.loadPaths).toContain(rootDir);
+    expect(recovered).toMatchObject([
+      { pluginId: "fixture", loadPaths: expect.arrayContaining([rootDir]) },
+    ]);
   });
 });
 
@@ -551,9 +516,7 @@ it("reads the installed ledger inside the existing install lifecycle lease witho
     await withoutMainThreadSql(async () => {
       const options = { env, filePath: lease.databasePath };
       expect(await loadInstalledPluginIndexInstallRecords(options)).toEqual(stored.installRecords);
-      expect((await readPersistedInstalledPluginIndex(options))?.installRecords).toEqual(
-        stored.installRecords,
-      );
+      expect((await readIndex(options))?.installRecords).toEqual(stored.installRecords);
     });
     lease.assertOwned();
   });
@@ -574,7 +537,7 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
   const inspect = () =>
     withArtifactPreservingStateReads(() =>
       withFreshCache(() =>
-        withOpenClawStateDatabaseReadSnapshot(
+        withSnapshot(
           async () => {
             captured.resolve();
             await resume.promise;
@@ -585,8 +548,9 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
                 env: readEnv,
                 allowCurrent: false,
               });
+              await expectLedger(readEnv, "captured ledger");
             });
-            const stored = readPersistedInstalledPluginIndexSync({ env: readEnv });
+            const stored = readIndexSync({ env: readEnv });
             const mode = bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv);
             for (let decision = 0; decision < 3; decision++) {
               expect(bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv)).toBe(mode);
@@ -620,8 +584,9 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
     resume.resolve();
     expect(await reading).toEqual({
       mode: "compat",
-      diagnostics: [{ level: "warn", message: "captured ledger" }],
+      diagnostics: diagnostics("captured ledger"),
     });
+    await withoutMainThreadSql(() => expectLedger(env, "new ledger"));
     expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
     // An escaped descendant cannot replace its closed snapshot with live policy.
     writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });

@@ -203,116 +203,96 @@ it.each([false, true])(
   },
 );
 
-it.each([true, false])(
-  "observes deferred turn cleanup and joins it on shutdown (borrowed: %s)",
-  async (borrowed) => {
+it.each([
+  { borrowed: true, deferred: true, releasedBeforeClose: false },
+  { borrowed: false, deferred: true, releasedBeforeClose: false },
+  { borrowed: true, deferred: false, releasedBeforeClose: false },
+  { borrowed: true, deferred: false, releasedBeforeClose: true },
+])(
+  "settles retirement (borrowed: $borrowed, deferred: $deferred, early release: $releasedBeforeClose)",
+  async ({ borrowed, deferred, releasedBeforeClose }) => {
     const cache = getPluginCache();
+    const pluginId = deferred ? "turn-owner" : "retained-publication";
+    const dispose = vi.fn();
+    if (!deferred) {
+      const instance = new PluginInstance(pluginId);
+      instance.lifecycle.onDispose(dispose);
+      cache.setupModules.set(pluginId, instance);
+    }
     const release = borrowed ? retainPluginCache(cache) : () => {};
     const owner = retainMetadata(createScheduler());
     owner.publish(owner.runBootstrap(createSnapshot));
-    const next = withPluginCache(createPluginCache(), createSnapshot);
-    const failure = {
-      pluginId: "turn-owner",
-      hookId: "instance",
-      error: new Error("cleanup failed"),
-    };
+    const failure = { pluginId, hookId: "instance", error: new Error("cleanup failed") };
     const completed = { cleanupCount: 1, failures: [failure] };
     const cleanup = createDeferredCore<typeof completed>();
-    owner.publish(next, new Set(["turn-owner"]), (options?: { deferConsumers?: true }) =>
-      options?.deferConsumers
-        ? Promise.resolve({ cleanupCount: 0, failures: [], deferredPluginIds: ["turn-owner"] })
-        : cleanup.promise,
-    );
-    let published = false;
-    const publication = owner.waitForRetirement().then((result) => {
-      published = true;
-      return result;
-    });
-    try {
-      await expect.poll(() => published).toBe(true);
-      expect(await publication).toEqual({
-        cleanupCount: 0,
-        failures: [],
-        deferredPluginIds: ["turn-owner"],
-      });
-      expect(cache.retirement).toBeUndefined();
-      await owner.beginClose();
-      let joined = false;
-      const shutdown = owner.close().then((result) => {
-        joined = true;
-        return result;
-      });
-      await Promise.resolve();
-      expect(joined).toBe(false);
-      release();
+    if (!deferred) {
       cleanup.resolve(completed);
-      expect(await shutdown).toEqual(completed);
-    } finally {
-      release();
-      cleanup.resolve(completed);
-      await publication;
-      await owner.close();
     }
-  },
-);
-
-it.each([false, true])(
-  "settles publication and reports cleanup failures (released before final close: %s)",
-  async (releasedBeforeClose) => {
-    const cache = getPluginCache();
-    const instance = new PluginInstance("retained-publication");
-    const failure = new Error("retained consumer cleanup failed");
-    const dispose = vi.fn();
-    instance.lifecycle.onDispose(dispose);
-    cache.setupModules.set("retained-publication", instance);
-    const release = retainPluginCache(cache);
-    const owner = retainMetadata(createScheduler());
-    owner.publish(owner.runBootstrap(createSnapshot));
     owner.publish(
       withPluginCache(createPluginCache(), createSnapshot),
-      new Set(["retained-publication"]),
-      async (options) =>
+      new Set([pluginId]),
+      (options) =>
         options?.deferConsumers
-          ? { cleanupCount: 0, failures: [], deferredPluginIds: ["retained-publication"] }
-          : {
-              cleanupCount: 1,
-              failures: [{ pluginId: "retained-publication", hookId: "instance", error: failure }],
-            },
+          ? Promise.resolve({ cleanupCount: 0, failures: [], deferredPluginIds: [pluginId] })
+          : cleanup.promise,
     );
-    await owner.beginClose();
+    if (!deferred) {
+      await owner.beginClose();
+    }
     const publication = owner.waitForRetirement();
     let closing: Promise<unknown> | undefined;
     try {
       await withTestTimeout(publication, 1_000, "Publication waited for its retained consumer");
-      expect(dispose).not.toHaveBeenCalled();
-      if (releasedBeforeClose) {
-        release();
-        await retirePluginCache(cache);
-        expect(dispose).toHaveBeenCalledOnce();
+      if (deferred) {
+        expect(await publication).toEqual({
+          cleanupCount: 0,
+          failures: [],
+          deferredPluginIds: ["turn-owner"],
+        });
+        expect(cache.retirement).toBeUndefined();
+        await owner.beginClose();
+      } else {
+        expect(dispose).not.toHaveBeenCalled();
+        if (releasedBeforeClose) {
+          release();
+          await retirePluginCache(cache);
+          expect(dispose).toHaveBeenCalledOnce();
+        }
       }
       const finalEntered = createDeferredCore();
       let closed = false;
       closing = owner
-        .close(async (retire) => {
-          finalEntered.resolve();
-          await retire();
-        })
-        .then(() => {
+        .close(
+          deferred
+            ? undefined
+            : async (retire) => {
+                finalEntered.resolve();
+                await retire();
+              },
+        )
+        .then((result) => {
           closed = true;
+          return result;
         });
-      await finalEntered.promise;
+      await (deferred ? Promise.resolve() : finalEntered.promise);
       expect(closed).toBe(false);
-      if (!releasedBeforeClose) {
+      if (!deferred && !releasedBeforeClose) {
         expect(dispose).not.toHaveBeenCalled();
       }
       release();
-      await closing;
-      expect((await owner.close()).failures).toEqual([
-        expect.objectContaining({ pluginId: "retained-publication", error: failure }),
-      ]);
-      expect(dispose).toHaveBeenCalledOnce();
+      cleanup.resolve(completed);
+      if (deferred) {
+        expect(await closing).toEqual(completed);
+      } else {
+        await closing;
+        expect((await owner.close()).failures).toEqual([
+          expect.objectContaining({ pluginId: "retained-publication", error: failure.error }),
+        ]);
+        expect(dispose).toHaveBeenCalledOnce();
+      }
     } finally {
       release();
+      cleanup.resolve(completed);
       await Promise.allSettled([publication, closing ?? owner.close()]);
     }
   },
