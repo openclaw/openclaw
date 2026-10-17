@@ -11,7 +11,10 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
@@ -31,6 +34,25 @@ const usageRecord =
       usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
     },
   }) + "\n";
+
+function openDatabase(state: OpenClawTestState, databasePath: string, agentId = "main") {
+  return openOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
+}
+function makeStore(state: OpenClawTestState, name: string) {
+  const storePath = state.path(name, "sessions.json");
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  return storePath;
+}
+function expectSummary(sessionFile: string, config = {}, agentId = "main") {
+  return expect(
+    loadSessionCostSummariesFromCache({
+      agentId,
+      config,
+      sessions: [{ sessionFile }],
+      requestRefresh: false,
+    }),
+  ).resolves.toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
+}
 
 it("refreshes retained transcript windows whose session IDs contain colons", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -56,26 +78,14 @@ it("refreshes retained transcript windows whose session IDs contain colons", asy
     await expect(
       refreshCostUsageCacheForAgent({ agentId: "main", config: {}, env: state.env }),
     ).resolves.toBe("refreshed");
-    await expect(
-      loadSessionCostSummariesFromCache({
-        agentId: "main",
-        config: {},
-        sessions: [{ sessionFile: `sqlite:main:legacy:session:${database.path}` }],
-        requestRefresh: false,
-      }),
-    ).resolves.toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
+    await expectSummary(`sqlite:main:legacy:session:${database.path}`);
   });
 });
 
 it("retains requested SQLite selectors separately from physical rollup keys", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.path("custom", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(path.dirname(storePath), "openclaw-agent.sqlite"),
-      env: state.env,
-    });
+    const storePath = makeStore(state, "custom");
+    openDatabase(state, path.join(path.dirname(storePath), "openclaw-agent.sqlite"));
     const sessionFiles = ["first", "second"].map((id) => `sqlite:main:${id}:${storePath}`);
     const prepared = prepareUsageCostWorker({
       agentId: "main",
@@ -94,15 +104,10 @@ it("retains requested SQLite selectors separately from physical rollup keys", as
 
 it("refreshes a custom store after another database changes its registered owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.path("custom", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    const storePath = makeStore(state, "custom");
     const databasePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
     openOpenClawAgentDatabase({ agentId: "main", path: databasePath, env: state.env });
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(path.dirname(storePath), "openclaw-agent.main.sqlite"),
-      env: state.env,
-    });
+    openDatabase(state, path.join(path.dirname(storePath), "openclaw-agent.main.sqlite"));
     const warmStore = state.path("warm", "sessions.json");
     fs.mkdirSync(path.dirname(warmStore), { recursive: true });
     // Warm discovery on an unrelated store; replacing this database must not retire that worker.
@@ -116,30 +121,18 @@ it("refreshes a custom store after another database changes its registered owner
     await expect(
       refreshCostUsageCacheForAgent({ agentId: "main", storePath, env: state.env, maxFiles: 1 }),
     ).resolves.toBe("refreshed");
-    await expect(
-      loadSessionCostSummariesFromCache({
-        agentId: "main",
-        config: { session: { store: storePath } },
-        sessions: [{ sessionFile }],
-        requestRefresh: false,
-      }),
-    ).resolves.toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
+    await expectSummary(sessionFile, { session: { store: storePath } });
   });
 });
 
 it("keeps a usage inventory within its captured sibling database owners", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.path("usage-store", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    const storePath = makeStore(state, "usage-store");
     const sessionFile = path.join(path.dirname(storePath), "recorded.jsonl");
     fs.writeFileSync(sessionFile, "{}\n");
     const prepared = prepareUsageCostWorker({ agentId: "main", storePath, env: state.env });
     // Another startup refresh creates a sibling after this operation captured its custody.
-    openOpenClawAgentDatabase({
-      agentId: "other",
-      path: path.join(path.dirname(storePath), "openclaw-agent.other.sqlite"),
-      env: state.env,
-    });
+    openDatabase(state, path.join(path.dirname(storePath), "openclaw-agent.other.sqlite"), "other");
     await expect(runUsageCostWorker(prepared, { kind: "inventory" })).resolves.toMatchObject({
       kind: "inventory",
       files: [{ kind: "jsonl", sourcePath: sessionFile }],
@@ -201,14 +194,7 @@ it("refreshes and reads usage with the captured Windows environment and database
         cacheStatus: { status: "fresh", cachedFiles: 1 },
       });
       process.env = originalEnv;
-      expect(
-        await loadSessionCostSummariesFromCache({
-          agentId,
-          config,
-          sessions: [{ sessionFile }],
-          requestRefresh: false,
-        }),
-      ).toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
+      await expectSummary(sessionFile, config, agentId);
       expect(fs.existsSync(databasePath)).toBe(true);
       expect(fs.existsSync(defaultRoot)).toBe(false);
       expect(fs.existsSync(laterRoot)).toBe(false);

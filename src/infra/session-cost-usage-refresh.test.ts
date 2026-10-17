@@ -18,6 +18,32 @@ import {
 } from "./session-cost-usage.js";
 
 const config = {};
+function expectNoTimers() {
+  expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+}
+function queueRefresh(scope: AsyncWorkScope, agentId: string, sessionFile: string) {
+  return scope.run(() =>
+    requestCostUsageCacheRefresh({
+      config,
+      agentId,
+      storePath: path.dirname(sessionFile),
+      sessionFiles: [sessionFile],
+      coalesce: true,
+    }),
+  );
+}
+function readSession(
+  agentId: string,
+  sessionFile: string,
+  overrides: Partial<Parameters<typeof loadSessionCostSummariesFromCache>[0]> = {},
+) {
+  return loadSessionCostSummariesFromCache({
+    config,
+    agentId,
+    sessions: [{ sessionFile }],
+    ...overrides,
+  });
+}
 
 // mock-isolation: This suite owns refresh timers; filesystem observation has separate coverage.
 vi.mock("./owned-directory-observation.js", () => ({
@@ -108,7 +134,7 @@ describe("session cost usage refresh", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(refresh).toHaveBeenCalledTimes(13);
         await queuedSubset;
-        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+        expectNoTimers();
         expect(
           await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
         ).toMatchObject({
@@ -127,7 +153,7 @@ describe("session cost usage refresh", () => {
           ).toMatchObject({
             cacheStatus: { status: "stale" },
           });
-          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+          expectNoTimers();
         } finally {
           refresh.mockReset();
           vi.useRealTimers();
@@ -167,16 +193,7 @@ describe("session cost usage refresh", () => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {
       const scope = new AsyncWorkScope();
       const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
-      const dirty = (sessionFile: string) =>
-        scope.run(() =>
-          requestCostUsageCacheRefresh({
-            config,
-            agentId,
-            storePath: path.dirname(sessionFile),
-            sessionFiles: [sessionFile],
-            coalesce: true,
-          }),
-        );
+      const dirty = (sessionFile: string) => queueRefresh(scope, agentId, sessionFile);
       try {
         dirty(sessionFiles[0]);
         await vi.advanceTimersByTimeAsync(20_000);
@@ -196,7 +213,7 @@ describe("session cost usage refresh", () => {
         );
         await vi.advanceTimersByTimeAsync(300_000);
         expect(refresh).toHaveBeenCalledTimes(2);
-        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+        expectNoTimers();
       } finally {
         await scope.drain();
       }
@@ -207,16 +224,7 @@ describe("session cost usage refresh", () => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {
       const scope = new AsyncWorkScope();
       const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
-      const dirty = () =>
-        scope.run(() =>
-          requestCostUsageCacheRefresh({
-            config,
-            agentId,
-            storePath: path.dirname(sessionFiles[0]),
-            sessionFiles: [sessionFiles[0]],
-            coalesce: true,
-          }),
-        );
+      const dirty = () => queueRefresh(scope, agentId, sessionFiles[0]);
       let claim: ReturnType<typeof claimAgentRunContext>;
       try {
         dirty();
@@ -247,24 +255,8 @@ describe("session cost usage refresh", () => {
       const scope = new AsyncWorkScope();
       const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
       try {
-        scope.run(() =>
-          requestCostUsageCacheRefresh({
-            config,
-            agentId,
-            storePath: path.dirname(sessionFiles[0]),
-            sessionFiles: [sessionFiles[0]],
-            coalesce: true,
-          }),
-        );
-        await withinTest(
-          loadSessionCostSummariesFromCache({
-            config,
-            agentId,
-            sessions: [{ sessionFile: sessionFiles[1] }],
-            requestRefresh: false,
-          }),
-          signal,
-        );
+        queueRefresh(scope, agentId, sessionFiles[0]);
+        await withinTest(readSession(agentId, sessionFiles[1], { requestRefresh: false }), signal);
         expect(refresh).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(30_000);
         expect(refresh).toHaveBeenCalledOnce();
@@ -285,15 +277,7 @@ describe("session cost usage refresh", () => {
         .mockReturnValueOnce(held.promise);
       let claim: ReturnType<typeof claimAgentRunContext>;
       try {
-        scope.run(() =>
-          requestCostUsageCacheRefresh({
-            config,
-            agentId,
-            storePath: path.dirname(sessionFiles[0]),
-            sessionFiles: [sessionFiles[0]],
-            coalesce: true,
-          }),
-        );
+        queueRefresh(scope, agentId, sessionFiles[0]);
         await vi.advanceTimersByTimeAsync(30_000);
         expect(refresh).toHaveBeenCalledTimes(1);
         claim = claimAgentRunContext("usage-busy-turn", { agentId }, { trackOwner: true });
@@ -319,16 +303,7 @@ describe("session cost usage refresh", () => {
         .mocked(refreshCostUsageCacheForAgent)
         .mockResolvedValue("refreshed")
         .mockReturnValueOnce(held.promise);
-      const dirty = () =>
-        scope.run(() =>
-          requestCostUsageCacheRefresh({
-            config,
-            agentId,
-            storePath: path.dirname(sessionFiles[0]),
-            sessionFiles: [sessionFiles[0]],
-            coalesce: true,
-          }),
-        );
+      const dirty = () => queueRefresh(scope, agentId, sessionFiles[0]);
       try {
         dirty();
         await vi.advanceTimersByTimeAsync(30_000);
@@ -472,20 +447,9 @@ describe("session cost usage refresh", () => {
         const release = createDeferredCore<"refreshed">();
         const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockReturnValue(release.promise);
         const reason = new Error("usage client disconnected");
-        refreshOwner.run(() =>
-          requestCostUsageCacheRefresh({
-            config,
-            agentId,
-            storePath: path.dirname(sessionFiles[0]),
-            sessionFiles: [sessionFiles[0]],
-            coalesce: true,
-          }),
-        );
+        queueRefresh(refreshOwner, agentId, sessionFiles[0]);
         const reading = requestOwner.track(() =>
-          loadSessionCostSummariesFromCache({
-            config,
-            agentId,
-            sessions: [{ sessionFile: sessionFiles[0] }],
+          readSession(agentId, sessionFiles[0], {
             requestRefresh: false,
             maxPublicationWaitMs: 100,
           }),
@@ -516,7 +480,7 @@ describe("session cost usage refresh", () => {
             expect(refreshOwner.hasPendingWork).toBe(true);
             expect(refreshOwner.signal.aborted).toBe(false);
           }
-          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+          expectNoTimers();
         } finally {
           release.resolve("refreshed");
           await result;
@@ -556,12 +520,7 @@ describe("session cost usage refresh", () => {
           }),
         );
         await vi.advanceTimersByTimeAsync(0);
-        reading = loadSessionCostSummariesFromCache({
-          config,
-          agentId,
-          sessions: [{ sessionFile: logical }],
-          requestRefresh: false,
-        });
+        reading = readSession(agentId, logical, { requestRefresh: false });
         let settled = false;
         void reading.then(() => {
           settled = true;
@@ -637,7 +596,7 @@ describe("session cost usage refresh", () => {
           late,
         ]);
         expect(accepted.map((params) => params.rebuildRows)).toEqual([[rebuild], [rebuild], []]);
-        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+        expectNoTimers();
       } finally {
         scope.beginClose();
         await vi.advanceTimersByTimeAsync(50);
@@ -660,13 +619,7 @@ describe("session cost usage refresh", () => {
         const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockReturnValueOnce(work);
         refresh.mockResolvedValue("refreshed");
         try {
-          await scope.track(() =>
-            loadSessionCostSummariesFromCache({
-              config,
-              agentId,
-              sessions: [{ sessionFile: sessionFiles[0] }],
-            }),
-          );
+          await scope.track(() => readSession(agentId, sessionFiles[0]));
           expect(refresh).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(0);
           expect(refresh).toHaveBeenCalledOnce();
@@ -678,7 +631,7 @@ describe("session cost usage refresh", () => {
           await vi.advanceTimersByTimeAsync(50);
           expect(events).toEqual(["refresh settled", "scope drained"]);
           expect(refresh).toHaveBeenCalledOnce();
-          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+          expectNoTimers();
         } finally {
           release.resolve();
           scope.beginClose();
@@ -746,7 +699,7 @@ describe("session cost usage refresh", () => {
             expect(write).toHaveBeenCalledWith(expect.stringContaining("background refresh"));
           }
           expect(refresh).toHaveBeenCalledOnce();
-          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+          expectNoTimers();
         } finally {
           try {
             release.resolve("refreshed");
@@ -769,13 +722,7 @@ describe("session cost usage refresh", () => {
           refresh.mockResolvedValueOnce("busy");
         }
         try {
-          await scope.track(() =>
-            loadSessionCostSummariesFromCache({
-              config,
-              agentId,
-              sessions: [{ sessionFile: sessionFiles[0] }],
-            }),
-          );
+          await scope.track(() => readSession(agentId, sessionFiles[0]));
           if (phase === "busy retry") {
             await vi.advanceTimersByTimeAsync(0);
             expect(refresh).toHaveBeenCalledOnce();
@@ -784,7 +731,7 @@ describe("session cost usage refresh", () => {
           await scope.drain();
           await vi.advanceTimersByTimeAsync(50);
           expect(refresh).toHaveBeenCalledTimes(callsBeforeClose);
-          expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+          expectNoTimers();
         } finally {
           scope.beginClose();
           await vi.advanceTimersByTimeAsync(50);
@@ -819,9 +766,7 @@ describe("session cost usage refresh", () => {
           { scope: first, sessionFile: sessionFiles[0] },
           { scope: second, sessionFile: sessionFiles[1] },
         ]) {
-          await scope.track(() =>
-            loadSessionCostSummariesFromCache({ config, agentId, sessions: [{ sessionFile }] }),
-          );
+          await scope.track(() => readSession(agentId, sessionFile));
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(refresh.mock.calls.map(([params]) => params.sessionFiles)).toEqual(

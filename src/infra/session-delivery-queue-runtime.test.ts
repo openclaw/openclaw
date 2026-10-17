@@ -1,5 +1,4 @@
-// Covers same-process scheduling for durable session delivery retries.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -37,6 +36,24 @@ function agentTurn(messageId = "artifact:ready") {
     message: "generated artifact ready",
     messageId,
   };
+}
+
+async function expectDelivered(
+  deliver: Mock<() => Promise<void>>,
+  queueContext: OpenClawStateWorkerContext,
+  count = 1,
+) {
+  expect(deliver).toHaveBeenCalledTimes(count);
+  expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+}
+function heldDelivery() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const deliver = vi.fn(() => {
+    entered.resolve();
+    return release.promise;
+  });
+  return { entered, release, deliver };
 }
 
 type StartRuntimeForTest = (
@@ -185,8 +202,7 @@ describe("session delivery queue runtime", () => {
         expect(deliver).not.toHaveBeenCalled();
         await time.advanceBy(1);
         await stop();
-        expect(deliver).toHaveBeenCalledTimes(1);
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        await expectDelivered(deliver, queueContext);
       });
     },
   );
@@ -238,8 +254,7 @@ describe("session delivery queue runtime", () => {
         await time.advanceBy(0);
         await entered.promise;
         await stop();
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        await expectDelivered(deliver, queueContext);
       });
     },
   );
@@ -275,8 +290,7 @@ describe("session delivery queue runtime", () => {
       expect(deliver).not.toHaveBeenCalled();
       await time.advanceBy(1);
       await stop();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      await expectDelivered(deliver, queueContext);
     });
   });
 
@@ -295,8 +309,7 @@ describe("session delivery queue runtime", () => {
       await time.advanceBy(0);
       await stop();
 
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+      await expectDelivered(deliver, queueContext);
     });
   });
 
@@ -332,8 +345,7 @@ describe("session delivery queue runtime", () => {
         await time.advanceBy(0);
         await stop();
 
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        await expectDelivered(deliver, queueContext);
       } finally {
         staleRead.resolve(claimed);
         await staleScheduling;
@@ -347,12 +359,7 @@ describe("session delivery queue runtime", () => {
         agentTurn("image:task-in-flight:agent-loop"),
         queueContext,
       );
-      const delivery = createDeferredCore();
-      const entered = createDeferredCore();
-      const deliver = vi.fn(() => {
-        entered.resolve();
-        return delivery.promise;
-      });
+      const { release: delivery, entered, deliver } = heldDelivery();
       let stopping: Promise<void> | undefined;
       const wakes: Promise<void>[] = [];
       const stop = startRuntime({ deliver, log: logger });
@@ -435,8 +442,7 @@ describe("session delivery queue runtime", () => {
         expect(deliver).toHaveBeenCalledTimes(1);
         await time.advanceBy(1);
         await stop();
-        expect(deliver).toHaveBeenCalledTimes(2);
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        await expectDelivered(deliver, queueContext, 2);
       });
     },
   );
@@ -470,18 +476,8 @@ describe("session delivery queue runtime", () => {
 
   it("joins only the retired owner's drains after a runtime replacement", async () => {
     await withRuntime(async (startRuntime, queueContext, time) => {
-      const oldDelivery = createDeferredCore();
-      const newDelivery = createDeferredCore();
-      const oldEntered = createDeferredCore();
-      const newEntered = createDeferredCore();
-      const oldDeliver = vi.fn(() => {
-        oldEntered.resolve();
-        return oldDelivery.promise;
-      });
-      const newDeliver = vi.fn(() => {
-        newEntered.resolve();
-        return newDelivery.promise;
-      });
+      const { release: oldDelivery, entered: oldEntered, deliver: oldDeliver } = heldDelivery();
+      const { release: newDelivery, entered: newEntered, deliver: newDeliver } = heldDelivery();
       const oldId = await enqueueSessionDelivery(agentTurn("old-owner-delivery"), queueContext);
       const newId = await enqueueSessionDelivery(agentTurn("new-owner-delivery"), queueContext);
       const stopOld = startRuntime({ deliver: oldDeliver, log: logger });
@@ -589,8 +585,7 @@ describe("session delivery queue runtime", () => {
         await newScheduling;
         await time.advanceBy(0);
         await stopNew();
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        await expectDelivered(deliver, queueContext);
       } finally {
         oldRead.resolve();
         newRead.resolve();
@@ -622,8 +617,7 @@ describe("session delivery queue runtime", () => {
       await expect(listPending.mock.results[2]?.value).resolves.toHaveLength(1);
       await time.advanceBy(0);
       await stop();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      await expectDelivered(deliver, queueContext);
     });
   });
 });

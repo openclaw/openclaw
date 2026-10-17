@@ -13,12 +13,19 @@ import {
 import type { CostBreakdown } from "./session-cost-usage.types.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-const flatPricing = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
+const breakdown = (input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({
+  input,
+  output,
+  cacheRead,
+  cacheWrite,
+});
+const zeroPricing = breakdown();
+const flatPricing = breakdown(1, 2, 0.5);
 const tieredPricing: ModelDefinitionConfig["cost"] = {
   ...flatPricing,
   tieredPricing: [
     { ...flatPricing, range: [0, 1_000] },
-    { input: 2, output: 4, cacheRead: 1, cacheWrite: 0, range: [1_000, 100_000] },
+    { ...breakdown(2, 4, 1), range: [1_000, 100_000] },
   ],
 };
 
@@ -32,77 +39,57 @@ type PricingCase = {
   expectedBreakdown?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 };
 
+function pricingCase(
+  name: string,
+  expectedCost: number | undefined,
+  options: Omit<PricingCase, "name" | "expectedCost"> = {},
+): PricingCase {
+  return { name, expectedCost, ...options };
+}
+
 describe("session usage reporting pricing", () => {
-  it.each<PricingCase>([
-    {
-      name: "top-level usage and pricing metadata",
+  it.each([
+    pricingCase("top-level usage and pricing metadata", 0.0021, {
       pricing: flatPricing,
       topLevelUsage: true,
-      expectedCost: 0.0021,
-      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
-    },
-    {
-      name: "unknown recorded zero cost",
+      expectedBreakdown: breakdown(0.001, 0.001, 0.0001),
+    }),
+    pricingCase("unknown recorded zero cost", undefined, { recordedCost: { total: 0 } }),
+    pricingCase("configured all-zero pricing", 0, {
+      pricing: zeroPricing,
       recordedCost: { total: 0 },
-      expectedCost: undefined,
-    },
-    {
-      name: "configured all-zero pricing",
-      pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      recordedCost: { total: 0 },
-      expectedCost: 0,
-    },
-    {
-      name: "interrupted usage with zero pricing and placeholder cost",
-      pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }),
+    pricingCase("interrupted usage with zero pricing and placeholder cost", undefined, {
+      pricing: zeroPricing,
       recordedCost: { total: 0 },
       usageUnavailable: true,
-      expectedCost: undefined,
-    },
-    {
-      name: "interrupted usage with an interim billed amount",
+    }),
+    pricingCase("interrupted usage with an interim billed amount", undefined, {
       recordedCost: { total: 0.001, totalOrigin: "provider-billed" },
       usageUnavailable: true,
-      expectedCost: undefined,
-    },
-    {
-      // The recorded call owns its estimate; a later catalog cannot recover its service tier.
-      name: "recorded flat estimate preserved after catalog gains tiers",
+    }),
+    // A later catalog cannot recover the recorded call's service tier.
+    pricingCase("recorded flat estimate preserved after catalog gains tiers", 0.001, {
       pricing: tieredPricing,
       recordedCost: { total: 0.001 },
-      expectedCost: 0.001,
-    },
-    {
-      name: "priority-adjusted recorded cost preserved with tiered pricing",
+    }),
+    pricingCase("priority-adjusted recorded cost preserved with tiered pricing", 0.0084, {
       pricing: tieredPricing,
-      recordedCost: {
-        total: 0.0084,
-        input: 0.004,
-        output: 0.004,
-        cacheRead: 0.0004,
-        cacheWrite: 0,
-      },
-      expectedCost: 0.0084,
-      expectedBreakdown: { input: 0.004, output: 0.004, cacheRead: 0.0004, cacheWrite: 0 },
-    },
-    {
-      name: "missing recorded cost estimated from tiered pricing",
+      recordedCost: { total: 0.0084, ...breakdown(0.004, 0.004, 0.0004) },
+      expectedBreakdown: breakdown(0.004, 0.004, 0.0004),
+    }),
+    pricingCase("missing recorded cost estimated from tiered pricing", 0.0042, {
       pricing: tieredPricing,
-      expectedCost: 0.0042,
-      expectedBreakdown: { input: 0.002, output: 0.002, cacheRead: 0.0002, cacheWrite: 0 },
-    },
-    {
-      name: "provider-billed zero preserved with tiered pricing",
+      expectedBreakdown: breakdown(0.002, 0.002, 0.0002),
+    }),
+    pricingCase("provider-billed zero preserved with tiered pricing", 0, {
       pricing: tieredPricing,
       recordedCost: { total: 0, totalOrigin: "provider-billed" },
-      expectedCost: 0,
-    },
-    {
-      name: "zero total with recorded component evidence",
+    }),
+    pricingCase("zero total with recorded component evidence", 0, {
       recordedCost: { total: 0, input: 0.25 },
-      expectedCost: 0,
-      expectedBreakdown: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0 },
-    },
+      expectedBreakdown: breakdown(0.25),
+    }),
   ])("keeps logs, summaries, and charts consistent for $name", async (testCase) => {
     const root = tempDirs.make("openclaw-usage-reporting-");
     const sessionFile = path.join(root, "transcript.jsonl");

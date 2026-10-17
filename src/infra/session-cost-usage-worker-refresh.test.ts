@@ -29,10 +29,21 @@ function message(
     },
   };
 }
-const initial: Row[] = [
-  { seq: 1, event: message("root", null, 1) },
-  { seq: 4, event: message("a", "root", 2) },
-];
+const makeRow = (
+  seq: number,
+  id: string,
+  parent: string | null,
+  tokens: number,
+  incomplete = false,
+): Row => ({ seq, event: message(id, parent, tokens, incomplete) });
+const control = (
+  seq: number,
+  type: string,
+  id: string,
+  parentId: string | null,
+  targetId?: string,
+): Row => ({ seq, event: { type, id, parentId, ...(targetId ? { targetId } : {}) } });
+const initial = [makeRow(1, "root", null, 1), makeRow(4, "a", "root", 2)];
 async function scan(
   rows: Row[],
   previous?: UsageCostRollupEntry,
@@ -93,25 +104,19 @@ describe("paged SQLite usage rollups", () => {
     const reason = new Error("usage client disconnected");
     const readSequences: number[] = [];
     await expect(
-      scan(
-        [...initial, { seq: 9, event: message("b", "a", 4) }],
-        undefined,
-        "initial",
-        readSequences,
-        () => {
-          if (readSequences.length > 0) {
-            controller.abort(reason);
-          }
-          controller.signal.throwIfAborted();
-        },
-      ),
+      scan([...initial, makeRow(9, "b", "a", 4)], undefined, "initial", readSequences, () => {
+        if (readSequences.length > 0) {
+          controller.abort(reason);
+        }
+        controller.signal.throwIfAborted();
+      }),
     ).rejects.toBe(reason);
     expect(readSequences).toEqual([1, 4]);
   });
 
   it("keeps known billing separate from unavailable usage across incremental refreshes", async () => {
     const before = await scan(initial);
-    const interrupted = [...initial, { seq: 9, event: message("aborted", "a", 100, true) }];
+    const interrupted = [...initial, makeRow(9, "aborted", "a", 100, true)];
     const afterAbort = await scan(interrupted, before);
     expect(afterAbort.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
       usageReport: { state: "unavailable" },
@@ -121,7 +126,7 @@ describe("paged SQLite usage rollups", () => {
     });
 
     const afterSuccess = await scan(
-      [...interrupted, { seq: 12, event: message("completed", "aborted", 4) }],
+      [...interrupted, makeRow(12, "completed", "aborted", 4)],
       afterAbort,
     );
     expect(afterSuccess.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
@@ -134,53 +139,33 @@ describe("paged SQLite usage rollups", () => {
 
   it("selects a branch after reading all short pages and preserves sparse sequence numbers", async () => {
     const result = await scan([
-      { seq: 1, event: message("root", null, 1) },
-      { seq: 4, event: message("hidden", "root", 100) },
-      { seq: 5, event: message("hidden-tail", "hidden", 100) },
-      { seq: 8, event: { type: "leaf", id: "switch", parentId: "hidden-tail", targetId: "root" } },
-      { seq: 13, event: message("chosen", "switch", 2) },
-      { seq: 20, event: message("chosen-tail", "chosen", 3) },
+      makeRow(1, "root", null, 1),
+      makeRow(4, "hidden", "root", 100),
+      makeRow(5, "hidden-tail", "hidden", 100),
+      control(8, "leaf", "switch", "hidden-tail", "root"),
+      makeRow(13, "chosen", "switch", 2),
+      makeRow(20, "chosen-tail", "chosen", 3),
     ]);
     expectUsage(result, 6, 3, "chosen-tail");
     expect(result.checkpoint).toMatchObject({ maxSeq: 20, eventCount: 6 });
   });
 
-  it.each([
-    {
-      kind: "append",
-      suffix: [{ seq: 16, event: message("d", "c", 16) }],
-      tokens: 31,
-      records: 5,
-      leaf: "d",
-    },
-    {
-      kind: "leaf",
-      suffix: [{ seq: 20, event: { type: "leaf", id: "switch", parentId: "c", targetId: "root" } }],
-      tokens: 1,
-      records: 1,
-      leaf: "root",
-    },
-    {
-      kind: "reset",
-      suffix: [
-        { seq: 20, event: { type: "reset", id: "reset", parentId: null } },
-        { seq: 25, event: message("after-reset", "root", 16) },
-      ],
-      tokens: 16,
-      records: 1,
-      leaf: "after-reset",
-    },
+  it.each<[string, Row[], number, number, string]>([
+    ["append", [makeRow(16, "d", "c", 16)], 31, 5, "d"],
+    ["leaf", [control(20, "leaf", "switch", "c", "root")], 1, 1, "root"],
+    [
+      "reset",
+      [control(20, "reset", "reset", null), makeRow(25, "after-reset", "root", 16)],
+      16,
+      1,
+      "after-reset",
+    ],
   ])(
-    "preserves the selected rollup through later $kind pages",
-    async ({ suffix, tokens, records, leaf }) => {
+    "preserves the selected rollup through later %s pages",
+    async (_kind, suffix, tokens, records, leaf) => {
       const previous = await scan(initial);
       const result = await scan(
-        [
-          ...initial,
-          { seq: 9, event: message("b", "a", 4) },
-          { seq: 12, event: message("c", "b", 8) },
-          ...suffix,
-        ],
+        [...initial, makeRow(9, "b", "a", 4), makeRow(12, "c", "b", 8), ...suffix],
         previous,
       );
       expectUsage(result, tokens, records, leaf);
@@ -189,7 +174,7 @@ describe("paged SQLite usage rollups", () => {
 
   it("reads only appended rows once while retaining the full-scan totals", async () => {
     const previous = await scan(initial);
-    const rows = [...initial, { seq: 9, event: message("b", "a", 4) }];
+    const rows = [...initial, makeRow(9, "b", "a", 4)];
     const readSequences: number[] = [];
     const incremental = await scan(rows, previous, "initial", readSequences);
     expectUsage(incremental, 7, 3, "b");
@@ -197,42 +182,31 @@ describe("paged SQLite usage rollups", () => {
     expect(incremental.rollup).toEqual((await scan(rows)).rollup);
   });
 
-  it.each([
-    {
-      change: "rewrite an earlier row then append",
-      generation: "rewritten",
-      rows: [
-        { seq: 1, event: message("root", null, 8) },
-        initial[1]!,
-        { seq: 9, event: message("b", "a", 4) },
+  it.each<[string, string, Row[], number, number, string]>([
+    [
+      "rewrite an earlier row then append",
+      "rewritten",
+      [makeRow(1, "root", null, 8), initial[1]!, makeRow(9, "b", "a", 4)],
+      14,
+      3,
+      "b",
+    ],
+    ["rewind", "rewound", [initial[0]!], 1, 1, "root"],
+    [
+      "compact",
+      "compacted",
+      [
+        control(1, "compaction", "compact", null),
+        makeRow(4, "a", "compact", 2),
+        makeRow(9, "b", "a", 4),
       ],
-      tokens: 14,
-      records: 3,
-      leaf: "b",
-    },
-    {
-      change: "rewind",
-      generation: "rewound",
-      rows: [initial[0]!],
-      tokens: 1,
-      records: 1,
-      leaf: "root",
-    },
-    {
-      change: "compact",
-      generation: "compacted",
-      rows: [
-        { seq: 1, event: { type: "compaction", id: "compact", parentId: null } },
-        { seq: 4, event: message("a", "compact", 2) },
-        { seq: 9, event: message("b", "a", 4) },
-      ],
-      tokens: 6,
-      records: 2,
-      leaf: "b",
-    },
+      6,
+      2,
+      "b",
+    ],
   ])(
-    "rebuilds after $change without counting retired usage",
-    async ({ generation, rows, tokens, records, leaf }) => {
+    "rebuilds after %s without counting retired usage",
+    async (_change, generation, rows, tokens, records, leaf) => {
       const previous = await scan(initial);
       const readSequences: number[] = [];
       const rebuilt = await scan(rows, previous, generation, readSequences);
@@ -260,7 +234,7 @@ describe("paged SQLite usage rollups", () => {
         },
       },
       { seq: 3, event: user(timestamp + 1000) },
-      { seq: 4, event: { type: "leaf", id: "switch", parentId: "user", targetId: "answer" } },
+      control(4, "leaf", "switch", "user", "answer"),
     ]);
     expectUsage(result, 3, 1, "answer");
     expect(result.rollup.lastUserTimestamp).toBe(timestamp + 1000);
