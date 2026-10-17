@@ -126,6 +126,34 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.profiles.count).toBe(1);
   });
 
+  it.each([
+    ["api-key", "models.json"],
+    [undefined, "profiles"],
+  ] as const)("reports the credential inference selects with auth %s", (auth, kind) => {
+    const overview = resolveProviderAuthOverview({
+      provider: "ollama-2",
+      cfg: {
+        models: {
+          providers: {
+            "ollama-2": {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              ...(auth ? { auth } : {}),
+              apiKey: "configured-key",
+              models: [],
+            },
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "ollama-2:ambient": createApiKeyCredential("ollama-2", "ambient-key"),
+      }),
+      modelsPath: "/tmp/models.json",
+    });
+
+    expect(overview.effective.kind).toBe(kind);
+  });
+
   it("reports the main auth store for inherited profiles", () => {
     persistedStores.set("__main__", {
       profiles: {
