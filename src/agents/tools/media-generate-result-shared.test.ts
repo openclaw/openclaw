@@ -31,6 +31,40 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
+type Result = Awaited<ReturnType<typeof buildMediaGenerateToolExecutionResult>>;
+type ContextOptions = Parameters<typeof resolveMediaGenerateToolContext>[1];
+
+function toolContext(options: ContextOptions) {
+  const context = resolveMediaGenerateToolContext(
+    "imageGenerationProviders",
+    options,
+    { warn: vi.fn(), error: vi.fn() },
+    true,
+  );
+  if (!context) {
+    throw new Error("Expected a media tool context");
+  }
+  return context;
+}
+
+function projection(
+  workspaceDir: string,
+  dispose = vi.fn(),
+  fsBridge = createHostSandboxFsBridge(workspaceDir),
+) {
+  return createSandboxTestContext({
+    overrides: { workspaceDir, fsBridge, [Symbol.dispose]: dispose },
+  });
+}
+
+async function expectStaged(result: Result, workspace: string) {
+  const [relativePath] = result.details.sandboxPaths as string[];
+  if (!relativePath) {
+    throw new Error("Expected a sandbox path for the generated image");
+  }
+  await expect(fs.readFile(path.join(workspace, relativePath))).resolves.toEqual(png);
+  return relativePath;
+}
 
 async function fixture() {
   const root = tempDirs.make("generated-media-result-");
@@ -48,24 +82,24 @@ async function fixture() {
     maxBytes: 1024,
     details: {},
   };
-  return { root, workspace, mediaPath, sandbox, acquireSandbox, params };
+  const build = (
+    overrides: Partial<Parameters<typeof buildMediaGenerateToolExecutionResult>[0]> = {},
+  ) => buildMediaGenerateToolExecutionResult({ ...params, ...overrides });
+  const context = (options: ContextOptions) => toolContext({ sandbox, ...options });
+  const expectDelivery = (result: Result) => {
+    expect(result.attachments).toEqual(params.attachments);
+    expect(result.details.paths).toEqual(params.mediaUrls);
+  };
+  return { root, workspace, sandbox, acquireSandbox, build, context, expectDelivery };
 }
 
 describe("generated media sandbox access", () => {
   it("stages only the current outputs for follow-up references and retains delivery paths", async () => {
-    const { root, workspace, mediaPath, sandbox, acquireSandbox, params } = await fixture();
+    const { root, workspace, sandbox, acquireSandbox, build, expectDelivery } = await fixture();
     await fs.writeFile(path.join(root, "other-session.png"), png);
-    const result = await buildMediaGenerateToolExecutionResult({
-      ...params,
-      sandbox: acquireSandbox,
-    });
-    const [relativePath] = result.details.sandboxPaths as string[];
-    if (!relativePath) {
-      throw new Error("Expected a sandbox path for the generated image");
-    }
-
+    const result = await build({ sandbox: acquireSandbox });
+    const relativePath = await expectStaged(result, workspace);
     expect(relativePath).toMatch(/^media\/inbound\/openclaw-staged-[^/]+\/image\.png$/);
-    await expect(fs.readFile(path.join(workspace, relativePath))).resolves.toEqual(png);
     await expect(fs.readdir(path.dirname(path.join(workspace, relativePath)))).resolves.toEqual([
       ".gitignore",
       "image.png",
@@ -73,8 +107,7 @@ describe("generated media sandbox access", () => {
     await expect(
       fs.readFile(path.join(workspace, path.dirname(relativePath), ".gitignore"), "utf8"),
     ).resolves.toBe(STAGED_INPUT_GITIGNORE);
-    expect(result.attachments).toEqual(params.attachments);
-    expect(result.details.paths).toEqual([mediaPath]);
+    expectDelivery(result);
     expect(result.contentText).toContain(`Sandbox file: "${relativePath}"`);
     expect(result.wakeResult).toBe(result.contentText);
 
@@ -90,14 +123,13 @@ describe("generated media sandbox access", () => {
   });
 
   it("leaves non-sandboxed results and remote-only video outputs unchanged", async () => {
-    const { workspace, acquireSandbox, params } = await fixture();
-    const result = await buildMediaGenerateToolExecutionResult(params);
+    const { workspace, acquireSandbox, build } = await fixture();
+    const result = await build();
     expect(result.details.sandboxPaths).toBeUndefined();
     expect(result.contentText).not.toContain("Sandbox");
 
     const url = "https://example.com/generated.mp4";
-    const remote = await buildMediaGenerateToolExecutionResult({
-      ...params,
+    const remote = await build({
       kind: "video",
       sandbox: acquireSandbox,
       attachments: [{ type: "video", url }],
@@ -111,19 +143,17 @@ describe("generated media sandbox access", () => {
   it.each(["size limit", "read-only workspace"])(
     "keeps delivery and reports unavailable copies on %s",
     async (failure) => {
-      const { workspace, sandbox, acquireSandbox, params } = await fixture();
+      const { workspace, sandbox, acquireSandbox, build, expectDelivery } = await fixture();
       if (failure === "read-only workspace") {
         vi.spyOn(sandbox.bridge, "createFileExclusive").mockRejectedValue(
           new Error("Sandbox path is read-only"),
         );
       }
-      const result = await buildMediaGenerateToolExecutionResult({
-        ...params,
+      const result = await build({
         sandbox: acquireSandbox,
-        maxBytes: failure === "size limit" ? 1 : params.maxBytes,
+        maxBytes: failure === "size limit" ? 1 : 1024,
       });
-      expect(result.attachments).toEqual(params.attachments);
-      expect(result.details.paths).toEqual(params.mediaUrls);
+      expectDelivery(result);
       expect(result.details.sandboxPaths).toBeUndefined();
       expect(result.wakeResult).toContain("Sandbox copy unavailable:");
       await expect(fs.readdir(workspace)).resolves.toEqual([]);
@@ -137,7 +167,7 @@ describe("generated media sandbox access", () => {
   ])(
     "reacquires the admitted policy owner for $requesterAgentId (projection closed: $projectionClosed) and rejects rerouting",
     async ({ requesterAgentId, projectionClosed }) => {
-      const { workspace, sandbox, params } = await fixture();
+      const { workspace, sandbox, build, context: makeContext } = await fixture();
       const originalWrite = vi.spyOn(sandbox.bridge, "createFileExclusive");
       if (projectionClosed) {
         originalWrite.mockRejectedValue(new Error("Originating projection has closed"));
@@ -159,41 +189,23 @@ describe("generated media sandbox access", () => {
       setRuntimeConfigSnapshot(config);
       resolveSandboxContext.mockImplementation(async (selection) => {
         resolveSessionAgentIds({ ...selection, config });
-        return createSandboxTestContext({
-          overrides: {
-            workspaceDir: workspace,
-            fsBridge: createHostSandboxFsBridge(workspace),
-            [Symbol.dispose]: dispose,
-          },
-        });
+        return projection(workspace, dispose);
       });
-      const context = resolveMediaGenerateToolContext(
-        "imageGenerationProviders",
-        {
-          config,
-          agentSessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
-          sandboxSessionKey: "agent:main:policy",
-          sandboxAgentId: "main",
-          requesterAgentId,
-          workspaceDir: "/closed/projection",
-          spawnWorkspaceDir: "/canonical/worktree",
-          skillsSnapshot,
-          sandbox,
-        },
-        { warn: vi.fn(), error: vi.fn() },
-        true,
-      );
-      if (!context) {
-        throw new Error("Expected a media tool context");
-      }
+      const context = makeContext({
+        config,
+        agentSessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
+        sandboxSessionKey: "agent:main:policy",
+        sandboxAgentId: "main",
+        requesterAgentId,
+        workspaceDir: "/closed/projection",
+        spawnWorkspaceDir: "/canonical/worktree",
+        skillsSnapshot,
+      });
       expect(context.taskOptions()).toMatchObject({
         requesterAgentId,
         sessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
       });
-      const result = await buildMediaGenerateToolExecutionResult({
-        ...params,
-        sandbox: context.acquireOutputSandbox,
-      });
+      const result = await build({ sandbox: context.acquireOutputSandbox });
       expect(resolveSandboxContext).toHaveBeenCalledWith({
         config,
         sessionKey: "agent:main:policy",
@@ -203,28 +215,13 @@ describe("generated media sandbox access", () => {
         execOverrides: undefined,
         assertCurrent: expect.any(Function),
       });
-      const [relativePath] = result.details.sandboxPaths as string[];
-      if (!relativePath) {
-        throw new Error("Expected a sandbox path after reacquisition");
-      }
-      await expect(fs.readFile(path.join(workspace, relativePath))).resolves.toEqual(png);
+      await expectStaged(result, workspace);
       expect(originalWrite).not.toHaveBeenCalled();
       expect(dispose).toHaveBeenCalledOnce();
 
       const otherWorkspace = tempDirs.make("other-sandbox-");
-      resolveSandboxContext.mockResolvedValue(
-        createSandboxTestContext({
-          overrides: {
-            workspaceDir: otherWorkspace,
-            fsBridge: createHostSandboxFsBridge(otherWorkspace),
-            [Symbol.dispose]: dispose,
-          },
-        }),
-      );
-      const refused = await buildMediaGenerateToolExecutionResult({
-        ...params,
-        sandbox: context.acquireOutputSandbox,
-      });
+      resolveSandboxContext.mockResolvedValue(projection(otherWorkspace, dispose));
+      const refused = await build({ sandbox: context.acquireOutputSandbox });
       expect(refused.details.sandboxPaths).toBeUndefined();
       expect(refused.wakeResult).toContain("Sandbox copy unavailable");
       await expect(fs.readdir(otherWorkspace)).resolves.toEqual([]);
@@ -242,7 +239,7 @@ describe("generated media sandbox access", () => {
     "reload after gitignore",
     "unrelated reload",
   ])("revalidates foreground staging policy: %s", async (transition) => {
-    const { workspace, sandbox, params } = await fixture();
+    const { workspace, sandbox, build, context: makeContext, expectDelivery } = await fixture();
     const config: OpenClawConfig = {
       agents: {
         defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
@@ -250,23 +247,14 @@ describe("generated media sandbox access", () => {
       },
     };
     setRuntimeConfigSnapshot(config);
-    const context = resolveMediaGenerateToolContext(
-      "imageGenerationProviders",
-      {
-        config,
-        agentSessionKey: "agent:work:generated",
-        sandboxSessionKey: "agent:main:policy",
-        sandboxAgentId: "main",
-        requesterAgentId: "work",
-        spawnWorkspaceDir: workspace,
-        sandbox,
-      },
-      { warn: vi.fn(), error: vi.fn() },
-      true,
-    );
-    if (!context) {
-      throw new Error("Expected a media tool context");
-    }
+    const context = makeContext({
+      config,
+      agentSessionKey: "agent:work:generated",
+      sandboxSessionKey: "agent:main:policy",
+      sandboxAgentId: "main",
+      requesterAgentId: "work",
+      spawnWorkspaceDir: workspace,
+    });
     const replacement: OpenClawConfig = structuredClone(config);
     if (transition.startsWith("workspace")) {
       replacement.agents!.entries!.work!.workspace = path.join(workspace, "replacement");
@@ -296,23 +284,13 @@ describe("generated media sandbox access", () => {
       if (transition === "reload during acquisition") {
         setRuntimeConfigSnapshot(replacement);
       }
-      return createSandboxTestContext({
-        overrides: {
-          workspaceDir: workspace,
-          fsBridge: sandbox.bridge,
-          [Symbol.dispose]: dispose,
-        },
-      });
+      return projection(workspace, dispose, sandbox.bridge);
     });
     if (transition.endsWith("before completion") || transition === "unrelated reload") {
       setRuntimeConfigSnapshot(replacement);
     }
-    const result = await buildMediaGenerateToolExecutionResult({
-      ...params,
-      sandbox: context.acquireOutputSandbox,
-    });
-    expect(result.attachments).toEqual(params.attachments);
-    expect(result.details.paths).toEqual(params.mediaUrls);
+    const result = await build({ sandbox: context.acquireOutputSandbox });
+    expectDelivery(result);
     if (transition === "unrelated reload") {
       expect(result.details.sandboxPaths).toHaveLength(1);
       expect(resolveSandboxContext).toHaveBeenLastCalledWith(
@@ -332,18 +310,10 @@ describe("generated media sandbox access", () => {
   });
 
   it("refuses to reuse a captured bridge without a sandbox session", async () => {
-    const { workspace, sandbox, params } = await fixture();
+    const { workspace, build, context: makeContext } = await fixture();
     setRuntimeConfigSnapshot({});
-    const context = resolveMediaGenerateToolContext(
-      "imageGenerationProviders",
-      { config: {}, sandbox },
-      { warn: vi.fn(), error: vi.fn() },
-      true,
-    );
-    const result = await buildMediaGenerateToolExecutionResult({
-      ...params,
-      sandbox: context?.acquireOutputSandbox,
-    });
+    const context = makeContext({ config: {} });
+    const result = await build({ sandbox: context.acquireOutputSandbox });
     expect(result.details.sandboxPaths).toBeUndefined();
     expect(result.wakeResult).toContain("The requesting sandbox session is unavailable");
     await expect(fs.readdir(workspace)).resolves.toEqual([]);

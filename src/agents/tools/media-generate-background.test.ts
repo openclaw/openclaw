@@ -6,8 +6,6 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
     await import("../media-generation-activity.observer.test-support.js");
   return { ...observeMediaActivity(actual, taskExecutorMocks) };
 });
-// Media generation background tests cover detached task creation, progress
-// updates, and completion wake delivery for generated media results.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -25,8 +23,6 @@ import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce
 import {
   createMediaCompletionFixture,
   expectFallbackMediaAnnouncement,
-  expectQueuedTaskRun,
-  expectRecordedTaskProgress,
   resetMediaBackgroundMocks,
   taskDeliveryRuntimeMocks,
 } from "./media-generate-background.test-support.js";
@@ -66,20 +62,50 @@ const {
 
 beforeEach(() => {
   resetMediaBackgroundMocks({ taskExecutorMocks, taskDeliveryRuntimeMocks, announceDeliveryMocks });
+  taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-123" });
+  announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+    delivered: true,
+    path: "direct",
+  });
+  resetAgentEventsForTest();
 });
-afterEach(clearRuntimeConfigSnapshot);
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.useRealTimers();
+  resetAgentEventsForTest();
+});
+
+function expectReplyInstruction(required: string[]) {
+  const event = getDeliveredInternalEvents().at(0);
+  const instruction = String(event?.replyInstruction);
+  for (const text of [...required, "Keep internal task/session details private"]) {
+    expect(instruction).toContain(text);
+  }
+  for (const text of ['message(action="send")', "NO_REPLY", "MEDIA:"]) {
+    expect(instruction).not.toContain(text);
+  }
+  return event;
+}
+
+function completion(kind: "image" | "music" | "video", result: string, mediaUrls?: string[]) {
+  return createMediaCompletionFixture({
+    runId: `tool:${kind}_generate:abc`,
+    taskLabel: `${kind} generation`,
+    result,
+    mediaUrls,
+  });
+}
+
+function setDelivery(to: string, accountId: string) {
+  sessionMocks.entry.delivery = normalizeSessionDeliveryState({
+    context: { channel: "telegram", to, accountId },
+  });
+}
 
 describe("media requester provenance", () => {
   beforeEach(() => {
     taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-provenance" });
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({ delivered: true });
-    sessionMocks.entry = {
-      sessionId: "media-requester",
-      updatedAt: 1,
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "test-room", accountId: "test-bot" },
-      }),
-    };
+    setDelivery("test-room", "test-bot");
   });
   afterEach(() => {
     sessionMocks.entry = { sessionId: "media-requester", updatedAt: 1 };
@@ -136,17 +162,15 @@ describe("media requester provenance", () => {
         }),
       });
       assert(backgroundWork);
-      sessionMocks.entry.delivery = normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "changed-room", accountId: "changed-bot" },
-      });
+      setDelivery("changed-room", "changed-bot");
       await backgroundWork();
       expect(run).toHaveBeenCalledOnce();
       expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-      const completion = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0];
-      assert(completion);
+      const delivered = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0];
+      assert(delivered);
       expect(
         resolveGeneratedMediaSessionDeliveryRoute({
-          ...completion,
+          ...delivered,
           sessionKey: "agent:main:main",
         }).route,
       ).toEqual(
@@ -163,310 +187,225 @@ describe("media requester provenance", () => {
   );
 });
 
-describe("image generate background helpers", () => {
-  it("records task progress updates", () => {
-    imageGenerationTaskLifecycle.recordTaskProgress({
-      handle: admitMediaHandle({
-        taskId: "task-123",
-        runId: "tool:image_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        taskLabel: "small watercolor robot",
-      }),
-      progressSummary: "Saving generated image",
-    });
-
-    expectRecordedTaskProgress({
-      taskExecutorMocks,
+it("records task progress updates", () => {
+  imageGenerationTaskLifecycle.recordTaskProgress({
+    handle: admitMediaHandle({
+      taskId: "task-123",
       runId: "tool:image_generate:abc",
-      progressSummary: "Saving generated image",
-    });
-  });
-
-  it("queues a completion event through the shared generated-media wake path", async () => {
-    // Successful media completion is routed through the announce handoff so the
-    // requesting session receives model-mediated visible reply instructions.
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
-      path: "direct",
-    });
-
-    await imageGenerationTaskLifecycle.wakeTaskCompletion(
-      createMediaCompletionFixture({
-        runId: "tool:image_generate:abc",
-        taskLabel: "small watercolor robot",
-        result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
-        mediaUrls: ["/tmp/generated-robot.png"],
-      }),
-    );
-    expectFallbackMediaAnnouncement({
-      deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
       requesterSessionKey: "agent:main:discord:direct:123",
-      channel: "discord",
-      to: "channel:1",
-      source: "image_generation",
-      announceType: "image generation task",
-      resultMediaPath: "MEDIA:/tmp/generated-robot.png",
-      mediaUrls: ["/tmp/generated-robot.png"],
-    });
-  });
-
-  it("keeps failed completion notices in the durable agent-loop handoff", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: false,
-      path: "direct",
-      reason: "generated_media_missing",
-      error: "completion agent did not deliver generated media",
-    });
-    const completion = createMediaCompletionFixture({
-      runId: "tool:image_generate:abc",
       taskLabel: "small watercolor robot",
-      result: "provider failed",
-    });
+    }),
+    progressSummary: "Saving generated image",
+  });
 
-    await expect(
-      imageGenerationTaskLifecycle.wakeTaskCompletion({
-        ...completion,
-        status: "error",
-        statusLabel: "failed",
-      }),
-    ).resolves.toEqual({ status: "permanent_failure" });
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  expect(taskExecutorMocks.recordProgress.mock.calls[0]?.[0]).toMatchObject({
+    runId: "tool:image_generate:abc",
+    progressSummary: "Saving generated image",
   });
 });
 
-function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  // Completion agents receive internal events; tests inspect them to keep the
-  // visible-reply media contract explicit.
-  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
-    | { internalEvents?: unknown }
-    | undefined;
-  if (!Array.isArray(params?.internalEvents)) {
-    throw new Error("Expected delivered internal events");
-  }
-  return params.internalEvents as Array<Record<string, unknown>>;
-}
-
-// Music background tests cover task-run creation, progress recording, and
-// completion delivery through the durable requester-agent handoff.
-describe("music generate background helpers", () => {
-  it("creates a running task with queued progress text", async () => {
-    taskExecutorMocks.createOperation.mockReturnValue({
-      taskId: "task-123",
-    });
-
-    setRuntimeConfigSnapshot({});
-    const handle = await musicGenerationTaskLifecycle.createTaskRun({
-      sessionKey: "agent:main:discord:direct:123",
-      requesterOrigin: {
-        channel: "discord",
-        to: "channel:1",
-      },
-      prompt: "night-drive synthwave",
-      providerId: "google",
-    });
-
-    expect(handle).toMatchObject({
-      taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      taskLabel: "night-drive synthwave",
-    });
-    expectQueuedTaskRun({
-      taskExecutorMocks,
-      taskKind: MUSIC_GENERATION_TASK_KIND,
-      sourceId: "music_generate:google",
-      progressSummary: "Queued music generation",
-    });
-  });
-
-  it.each([
-    "agent:main:discord:direct:123",
-    "agent:main:discord:channel:C123",
-    "agent:main:whatsapp:123@g.us",
-  ])(
-    "gives %s tool-agnostic visible-reply guidance with every generated attachment",
-    async (requesterSessionKey) => {
-      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-        delivered: true,
-        path: "direct",
-      });
-      const attachments = [
-        {
-          type: "audio" as const,
-          path: "/tmp/generated-night-drive.mp3",
-          mimeType: "audio/mpeg",
-          name: "night-drive.mp3",
-        },
-        {
-          type: "image" as const,
-          path: "/tmp/generated-night-drive-cover.png",
-          mimeType: "image/png",
-          name: "night-drive-cover.png",
-        },
-      ];
-      const completion = createMediaCompletionFixture({
-        runId: "tool:music_generate:abc",
-        taskLabel: "night-drive synthwave",
-        result: "Generated a track and cover art.",
-      });
-
-      await musicGenerationTaskLifecycle.wakeTaskCompletion({
-        ...completion,
-        attachments,
-        handle: {
-          ...completion.handle,
-          requesterSessionKey,
-        },
-      });
-
-      const event = getDeliveredInternalEvents().at(0);
-      expect(event?.attachments).toEqual(attachments);
-      const replyInstruction = String(event?.replyInstruction);
-      expect(replyInstruction).toContain("do not send them again");
-      expect(replyInstruction).toContain("Check the result against what the user asked for");
-      expect(replyInstruction).toContain("generate again with adjusted parameters");
-      expect(replyInstruction).toContain("current visible-reply contract");
-      expect(replyInstruction).toContain("Keep internal task/session details private");
-      expect(replyInstruction).not.toContain('message(action="send")');
-      expect(replyInstruction).not.toContain("NO_REPLY");
-      expect(replyInstruction).not.toContain("MEDIA:");
-    },
+it("queues a completion event through the shared generated-media wake path", async () => {
+  await imageGenerationTaskLifecycle.wakeTaskCompletion(
+    completion("image", "Generated 1 image.\nMEDIA:/tmp/generated-robot.png", [
+      "/tmp/generated-robot.png",
+    ]),
   );
+  expectFallbackMediaAnnouncement({
+    deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
+    requesterSessionKey: "agent:main:discord:direct:123",
+    channel: "discord",
+    to: "channel:1",
+    source: "image_generation",
+    announceType: "image generation task",
+    resultMediaPath: "MEDIA:/tmp/generated-robot.png",
+    mediaUrls: ["/tmp/generated-robot.png"],
+  });
 });
 
-// Video generation background tests cover detached task lifecycle, keepalive
-// progress and completion delivery through the durable requester-agent handoff.
-describe("video generate background helpers", () => {
-  beforeEach(() => {
-    resetAgentEventsForTest();
+it("keeps failed completion notices in the durable agent-loop handoff", async () => {
+  announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+    delivered: false,
+    path: "direct",
+    reason: "generated_media_missing",
+    error: "completion agent did not deliver generated media",
   });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    resetAgentEventsForTest();
-  });
-
-  it("keeps the detached video tool run context registered until terminal status", async () => {
-    taskExecutorMocks.createOperation.mockReturnValue({
-      taskId: "task-123",
-    });
-
-    setRuntimeConfigSnapshot({});
-    const handle = await videoGenerationTaskLifecycle.createTaskRun({
-      sessionKey: "agent:main:discord:channel:123",
-      prompt: "friendly lobster surfing",
-      providerId: "fal",
-    });
-    if (!handle) {
-      throw new Error("expected video generation task handle");
-    }
-
-    expect(handle.runId).toMatch(/^tool:video_generate:/);
-    expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
-
-    const beforeProgress = Date.now();
-    videoGenerationTaskLifecycle.recordTaskProgress({
-      handle,
-      progressSummary: "Generating video",
-    });
-
-    expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
-
-    videoGenerationTaskLifecycle.failTaskRun({
-      handle,
-      error: new Error("provider failed"),
-    });
-
-    expect(getAgentRunContext(handle.runId)).toBeUndefined();
-  });
-
-  it("keeps active video generation failure wakes agent-mediated", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
-      path: "steered",
-    });
-
-    await videoGenerationTaskLifecycle.wakeTaskCompletion({
-      ...createMediaCompletionFixture({
-        runId: "tool:video_generate:abc",
-        taskLabel: "friendly lobster surfing",
-        result: "All video generation models failed.",
-      }),
+  await expect(
+    imageGenerationTaskLifecycle.wakeTaskCompletion({
+      ...completion("image", "provider failed"),
       status: "error",
       statusLabel: "failed",
-    });
+    }),
+  ).resolves.toEqual({ status: "permanent_failure" });
+  expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+});
+function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
+  const events: unknown =
+    announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0]?.internalEvents;
+  assert(Array.isArray(events), "Expected delivered internal events");
+  return events;
+}
 
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
-    const replyInstruction = String(getDeliveredInternalEvents().at(0)?.replyInstruction);
-    expect(replyInstruction).toContain("retry with adjusted parameters");
-    expect(replyInstruction).toContain("tell the user briefly what failed");
-    expect(replyInstruction).toContain("Keep internal task/session details private");
-    expect(replyInstruction).toContain("do not copy the internal event text verbatim");
-    expect(replyInstruction).not.toContain('message(action="send")');
-    expect(replyInstruction).not.toContain("NO_REPLY");
-    expect(replyInstruction).not.toContain("MEDIA:");
+it("creates a running task with queued progress text", async () => {
+  setRuntimeConfigSnapshot({});
+  const handle = await musicGenerationTaskLifecycle.createTaskRun({
+    sessionKey: "agent:main:discord:direct:123",
+    requesterOrigin: {
+      channel: "discord",
+      to: "channel:1",
+    },
+    prompt: "night-drive synthwave",
+    providerId: "google",
+  });
+
+  expect(handle).toMatchObject({
+    taskId: "task-123",
+    requesterSessionKey: "agent:main:discord:direct:123",
+    taskLabel: "night-drive synthwave",
+  });
+  expect(taskExecutorMocks.createOperation.mock.calls[0]?.[0]).toMatchObject({
+    taskKind: MUSIC_GENERATION_TASK_KIND,
+    sourceId: "music_generate:google",
+    progressSummary: "Queued music generation",
   });
 });
 
-describe("media task failure resource cleanup", () => {
-  it.each(["admission", "generation"] as const)(
-    "awaits cleanup and retains both errors after %s fails",
-    async (phase) => {
-      const error = new Error(phase);
-      const cleanupError = new Error("cleanup failed");
-      const cleanupStarted = createDeferredCore();
-      const finishCleanup = createDeferredCore();
-      const release = vi.fn(async () => {
-        cleanupStarted.resolve();
-        await finishCleanup.promise;
-        throw cleanupError;
-      });
-      const lifecycle = {
-        createTaskRun: vi.fn(async () => {
-          if (phase === "admission") {
-            throw error;
-          }
-          return null;
-        }),
-        recordTaskProgress: vi.fn(),
-        completeTaskRun: vi.fn(),
-        failTaskRun: vi.fn(),
-        wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
-      };
-      const run = vi.fn(async () => {
-        throw error;
-      });
-      const scheduleBackgroundWork = vi.fn();
-      const observed = vi.fn();
-      const outcome = runMediaGenerationTask({
-        lifecycle,
-        generationLabel: "image",
-        prompt: "synthetic cleanup proof",
-        requestKey: "cleanup-proof",
-        scheduleBackgroundWork,
-        onFailure: vi.fn(),
-        resources: {
-          run: async <T>(work: () => T | Promise<T>) => await work(),
-          release,
-        },
-        run,
-      }).catch(observed);
-      await cleanupStarted.promise;
-      expect(observed).not.toHaveBeenCalled();
-      expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
-      finishCleanup.resolve();
-      await outcome;
-      expect(release).toHaveBeenCalledOnce();
-      expect(observed).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          message: `Media ${phase} and cleanup failed`,
-          errors: [error, cleanupError],
-          cause: error,
-        }),
-      );
-      expect(run).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
-      expect(lifecycle.failTaskRun).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
-      expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
-      expect(scheduleBackgroundWork).not.toHaveBeenCalled();
-    },
-  );
+it.each([
+  "agent:main:discord:direct:123",
+  "agent:main:discord:channel:C123",
+  "agent:main:whatsapp:123@g.us",
+])(
+  "gives %s tool-agnostic visible-reply guidance with every generated attachment",
+  async (requesterSessionKey) => {
+    const attachments = (
+      [
+        ["audio", "audio/mpeg", "night-drive.mp3"],
+        ["image", "image/png", "night-drive-cover.png"],
+      ] as const
+    ).map(([type, mimeType, name]) => ({ type, mimeType, name, path: `/tmp/generated-${name}` }));
+    const completed = completion("music", "Generated a track and cover art.");
+    await musicGenerationTaskLifecycle.wakeTaskCompletion({
+      ...completed,
+      attachments,
+      handle: {
+        ...completed.handle,
+        requesterSessionKey,
+      },
+    });
+
+    const event = expectReplyInstruction([
+      "do not send them again",
+      "Check the result against what the user asked for",
+      "generate again with adjusted parameters",
+      "current visible-reply contract",
+    ]);
+    expect(event?.attachments).toEqual(attachments);
+  },
+);
+it("keeps the detached video tool run context registered until terminal status", async () => {
+  setRuntimeConfigSnapshot({});
+  const handle = await videoGenerationTaskLifecycle.createTaskRun({
+    sessionKey: "agent:main:discord:channel:123",
+    prompt: "friendly lobster surfing",
+    providerId: "fal",
+  });
+  assert(handle, "expected video generation task handle");
+
+  expect(handle.runId).toMatch(/^tool:video_generate:/);
+  expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
+
+  const beforeProgress = Date.now();
+  videoGenerationTaskLifecycle.recordTaskProgress({
+    handle,
+    progressSummary: "Generating video",
+  });
+
+  expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
+
+  videoGenerationTaskLifecycle.failTaskRun({
+    handle,
+    error: new Error("provider failed"),
+  });
+
+  expect(getAgentRunContext(handle.runId)).toBeUndefined();
 });
+
+it("keeps active video generation failure wakes agent-mediated", async () => {
+  announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+    delivered: true,
+    path: "steered",
+  });
+
+  await videoGenerationTaskLifecycle.wakeTaskCompletion({
+    ...completion("video", "All video generation models failed."),
+    status: "error",
+    statusLabel: "failed",
+  });
+
+  expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  expectReplyInstruction([
+    "retry with adjusted parameters",
+    "tell the user briefly what failed",
+    "do not copy the internal event text verbatim",
+  ]);
+});
+it.each(["admission", "generation"] as const)(
+  "awaits cleanup and retains both errors after %s fails",
+  async (phase) => {
+    const error = new Error(phase);
+    const cleanupError = new Error("cleanup failed");
+    const cleanupStarted = createDeferredCore();
+    const finishCleanup = createDeferredCore();
+    const release = vi.fn(async () => {
+      cleanupStarted.resolve();
+      await finishCleanup.promise;
+      throw cleanupError;
+    });
+    const lifecycle = {
+      createTaskRun: vi.fn(async () => {
+        if (phase === "admission") {
+          throw error;
+        }
+        return null;
+      }),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
+    };
+    const run = vi.fn(async () => {
+      throw error;
+    });
+    const scheduleBackgroundWork = vi.fn();
+    const observed = vi.fn();
+    const outcome = runMediaGenerationTask({
+      lifecycle,
+      generationLabel: "image",
+      prompt: "synthetic cleanup proof",
+      requestKey: "cleanup-proof",
+      scheduleBackgroundWork,
+      onFailure: vi.fn(),
+      resources: {
+        run: async <T>(work: () => T | Promise<T>) => await work(),
+        release,
+      },
+      run,
+    }).catch(observed);
+    await cleanupStarted.promise;
+    expect(observed).not.toHaveBeenCalled();
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+    finishCleanup.resolve();
+    await outcome;
+    expect(release).toHaveBeenCalledOnce();
+    expect(observed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: `Media ${phase} and cleanup failed`,
+        errors: [error, cleanupError],
+        cause: error,
+      }),
+    );
+    expect(run).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
+    expect(lifecycle.failTaskRun).toHaveBeenCalledTimes(phase === "generation" ? 1 : 0);
+    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+  },
+);

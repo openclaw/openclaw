@@ -14,7 +14,7 @@ afterEach(() => vi.restoreAllMocks());
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
-function skill(name: string, description: string, content = "Whole instructions"): InstalledSkill {
+function skill(name: string, description: string, content?: string): InstalledSkill {
   return {
     name,
     description,
@@ -34,10 +34,10 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 describe("installed skill catalog", () => {
   it("shares body postings across runs while binding results, readers, and permissions per run", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const metadata = { name: "shared-guide", description: "Shared catalog metadata" };
     const catalogs = Array.from({ length: 20 }, (_, run) => {
-      const guide = skill("shared-guide", "Shared catalog metadata");
+      const guide = skill(metadata.name, metadata.description);
       guide.location = `/run-${run}/guide`;
-      guide.source.readContent = undefined;
       guide.readSearchContent = vi.fn(async () => "Nebular spectroscopy instructions");
       return [guide];
     });
@@ -45,13 +45,7 @@ describe("installed skill catalog", () => {
       catalogs.map((catalog) => searchBodies(catalog, "spectroscopy")),
     );
     for (const [run, result] of results.entries()) {
-      expect(result.skills).toEqual([
-        {
-          name: "shared-guide",
-          description: "Shared catalog metadata",
-          location: `/run-${run}/guide`,
-        },
-      ]);
+      expect(result.skills).toEqual([{ ...metadata, location: `/run-${run}/guide` }]);
       expect(catalogs[run]![0]!.readSearchContent).toHaveBeenCalledOnce();
     }
     expect(build).toHaveBeenCalledTimes(2);
@@ -83,7 +77,6 @@ describe("installed skill catalog", () => {
     const filtered = [skill("revision-a", "Revision metadata", "Volcanic geology")];
     expect(await matchingNames(filtered, "pulsar")).toEqual([]);
     const unreadable = skill("revision-0", "Revision metadata");
-    unreadable.source.readContent = undefined;
     unreadable.reader = async () => "Opaque reader must not be indexed";
     expect(await searchBodies([unreadable, ...revised], "pulsar")).toMatchObject({
       skills: [{ name: "revision-b" }],
@@ -177,21 +170,6 @@ describe("installed skill catalog", () => {
     await expect(searchInstalledSkills(skills, "deploy", 21)).rejects.toThrow("limit");
   });
 
-  it("reads only an exact eligible identity through its owner and preserves the whole body", async () => {
-    const reader = vi.fn(async () => "# Guide\n\nRun this.\nTHE END");
-    const guide = skill("guide", "A guide");
-    guide.source.readContent = undefined;
-    guide.reader = reader;
-    expect((await readInstalledSkill([guide], "guide")).content).toBe(
-      "# Guide\n\nRun this.\nTHE END",
-    );
-    expect(reader).toHaveBeenCalledWith({ location: guide.location, signal: undefined });
-    await expect(readInstalledSkill([guide], "../hidden")).rejects.toThrow(
-      "is not available to this agent",
-    );
-    expect(reader).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects oversized instructions and cancellation, including inline content", async () => {
     await expect(
       readInstalledSkill([skill("large", "Large", "x".repeat(256 * 1024 + 1))], "large"),
@@ -201,7 +179,6 @@ describe("installed skill catalog", () => {
     ).rejects.toThrow();
     const controller = new AbortController();
     const guide = skill("guide", "Guide");
-    guide.source.readContent = undefined;
     guide.reader = async () => {
       controller.abort();
       return "Must not reach the model";

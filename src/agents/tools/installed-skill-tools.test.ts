@@ -12,11 +12,15 @@ import {
 import type { InstalledSkill } from "../installed-skill-catalog.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
+const guideMetadata = {
+  name: "guide",
+  description: "Operations",
+  location: "/skills/guide/SKILL.md",
+};
+
 function skill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
   return {
-    name: "guide",
-    description: "Operations",
-    location: "/skills/guide/SKILL.md",
+    ...guideMetadata,
     source: { filePath: "/skills/guide/SKILL.md" },
     ...overrides,
   };
@@ -60,50 +64,37 @@ it("requires the effective native read tool for body I/O and cached body matches
   await withTempDir("installed-skill-authority-", async (dir) => {
     const filePath = path.join(dir, "SKILL.md");
     await writeFile(filePath, "Private canary deployment instructions");
-    let reads = 0;
+    const reader = vi.fn(async (maxBytes: number) =>
+      (await readLocalFileSafely({ filePath, maxBytes })).buffer.toString("utf8"),
+    );
     const tools = createInstalledSkillTools([
-      skill({
-        location: filePath,
-        source: { filePath },
-        readSearchContent: async (maxBytes) => {
-          reads += 1;
-          return (await readLocalFileSafely({ filePath, maxBytes })).buffer.toString("utf8");
-        },
-      }),
+      skill({ location: filePath, source: { filePath }, readSearchContent: reader }),
     ]);
     const search = expectDefined(tools[0], "search");
     const read = expectDefined(tools[1], "read");
+    const find = async (id: string, query = "canary") =>
+      (await search.execute(id, { query })).details;
+    const check = async (id: string, names: string[], reads: number, query = "canary") => {
+      expect(await find(id, query)).toMatchObject({ skills: names.map((name) => ({ name })) });
+      expect(reader).toHaveBeenCalledTimes(reads);
+    };
     finalizeAgentToolAvailability([search]);
-    expect((await search.execute("denied", { query: "canary" })).details).toMatchObject({
+    expect(await find("denied")).toMatchObject({
       skills: [],
       coverage: { bodyIndexed: 0, metadataOnly: 1 },
     });
-    expect((await search.execute("metadata", { query: "operations" })).details).toMatchObject({
-      skills: [{ name: "guide" }],
-    });
-    expect(reads).toBe(0);
+    await check("metadata", ["guide"], 0, "operations");
     finalizeAgentToolAvailability(tools);
-    expect((await search.execute("allowed", { query: "canary" })).details).toMatchObject({
-      skills: [{ name: "guide" }],
-    });
-    expect(reads).toBe(1);
+    await check("allowed", ["guide"], 1);
     finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["skills_search"] });
-    expect((await search.execute("revoked", { query: "canary" })).details).toMatchObject({
-      skills: [],
-    });
+    await check("revoked", [], 1);
     finalizeAgentToolAvailability([search, { ...read }]);
-    expect((await search.execute("shadowed", { query: "canary" })).details).toMatchObject({
-      skills: [],
-    });
+    await check("shadowed", [], 1);
     markAgentToolExecutionUnavailable(read);
     finalizeAgentToolAvailability(tools);
-    expect((await search.execute("execution-denied", { query: "canary" })).details).toMatchObject({
-      skills: [],
-    });
-    expect(reads).toBe(1);
+    await check("execution-denied", [], 1);
   });
 });
-
 it("does not publish an in-flight body index across read revocation and regrant", async () => {
   const body = createDeferredCore<string>();
   const reader = vi.fn(() => body.promise);
@@ -127,69 +118,67 @@ it.each(["inline", "reader", "partial"] as const)(
   async (mode) => {
     const content =
       mode === "partial"
-        ? `${"x".repeat(16 * 1024)}\nUnabridged ending`
-        : mode === "reader"
-          ? "# Release\n\nUse a canary deployment.\nPreserve the complete rollback procedure."
-          : "# Release\n\nCheck everything.\n";
+        ? "x".repeat(16 * 1024) + "\nUnabridged ending"
+        : "# Guide\n\nUse a canary deployment.\nPreserve the complete rollback procedure.";
     const reader = vi.fn(async () => content);
-    const name = mode === "partial" ? "large" : "release-guide";
-    const location = mode === "partial" ? "/skills/large/SKILL.md" : "/skills/release/SKILL.md";
-    const entry = skill({
-      name,
-      description: mode === "partial" ? "Deployment guide" : "Publish a software release",
-      location,
-      source: {
-        filePath: location,
-        ...(mode === "reader" ? {} : { readContent: content }),
-      },
-      ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
-    });
-    const unavailable = skill({
-      name: "unavailable",
-      description: "Deployment guide",
-      location: "/skills/unavailable/SKILL.md",
-      source: { filePath: "/skills/unavailable/SKILL.md" },
-      reader: async () => {
-        throw new Error("Unavailable");
-      },
-    });
-    const { search, read } = admittedTools(mode === "partial" ? [entry, unavailable] : [entry]);
-    const result = await search.execute("find", {
-      query: mode === "partial" ? "deployment" : mode === "reader" ? "canary" : "publish release",
-    });
-    if (mode === "partial") {
-      expect(result.details).toMatchObject({
-        skills: [{ name: "large" }, { name: "unavailable" }],
-        coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 },
-      });
-    } else {
-      expect(result.details).toEqual({
-        skills: [
-          {
-            name: "release-guide",
-            description: "Publish a software release",
-            location: "/skills/release/SKILL.md",
-          },
-        ],
-        hasMore: false,
-      });
-      if (mode === "reader") {
-        expect(JSON.stringify(result)).not.toContain("rollback");
-        await search.execute("cached-search", { query: "rollback" });
-        expect(reader).toHaveBeenCalledTimes(1);
-      } else {
-        await expect(read.execute("invalid", { name: "/etc/passwd" })).rejects.toThrow(
-          "is not available to this agent",
-        );
-        expect(createInstalledSkillTools([])).toEqual([]);
-      }
-    }
-    expect((await read.execute("load", { name })).content).toEqual(
-      instructionContent(location, content),
+    const entry = skill(
+      mode === "reader"
+        ? { reader, readSearchContent: reader }
+        : { source: { filePath: guideMetadata.location, readContent: content } },
     );
+    const unavailable = {
+      name: "unavailable",
+      description: "Operations",
+      location: "/skills/unavailable/SKILL.md",
+    };
+    const catalog =
+      mode === "partial"
+        ? [
+            entry,
+            skill({
+              ...unavailable,
+              reader: async () => {
+                throw new Error("Unavailable");
+              },
+            }),
+          ]
+        : [entry];
+    const { search, read } = admittedTools(catalog);
+    const result = await search.execute("find", {
+      query: mode === "reader" ? "canary" : "operations",
+    });
+    expect(result.details).toEqual({
+      skills: mode === "partial" ? [guideMetadata, unavailable] : [guideMetadata],
+      hasMore: false,
+      ...(mode === "partial"
+        ? { coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 } }
+        : {}),
+    });
+    if (mode === "reader") {
+      expect(JSON.stringify(result)).not.toContain("rollback");
+      await search.execute("cached-search", { query: "rollback" });
+      expect(reader).toHaveBeenCalledTimes(1);
+    } else if (mode === "inline") {
+      await expect(read.execute("invalid", { name: "/etc/passwd" })).rejects.toThrow(
+        "is not available to this agent",
+      );
+      expect(createInstalledSkillTools([])).toEqual([]);
+    }
+    expect((await read.execute("load", { name: "guide" })).content).toEqual(
+      instructionContent(guideMetadata.location, content),
+    );
+    if (mode === "reader") {
+      expect(reader).toHaveBeenLastCalledWith({
+        location: guideMetadata.location,
+        signal: undefined,
+      });
+      await expect(read.execute("invalid", { name: "../hidden" })).rejects.toThrow(
+        "is not available to this agent",
+      );
+      expect(reader).toHaveBeenCalledTimes(2);
+    }
   },
 );
-
 it("does not serve a cached body index after its owner loses authority", async () => {
   let current = true;
   const { search } = admittedTools([

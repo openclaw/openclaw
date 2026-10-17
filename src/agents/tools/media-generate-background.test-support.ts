@@ -27,19 +27,6 @@ type MediaBackgroundResetMocks = {
   announceDeliveryMocks: { deliverSubagentAnnouncement: MockWithReset };
 };
 
-type QueuedTaskExpectation = {
-  taskExecutorMocks: TaskExecutorBackgroundMocks;
-  taskKind: string;
-  sourceId: string;
-  progressSummary: string;
-};
-
-type ProgressExpectation = {
-  taskExecutorMocks: TaskExecutorBackgroundMocks;
-  runId: string;
-  progressSummary: string;
-};
-
 type FallbackAnnouncementExpectation = {
   deliverAnnouncementMock: unknown;
   requesterSessionKey: string;
@@ -120,25 +107,6 @@ export function resetMediaBackgroundMocks({
     result: { messageId: "msg-1" },
   });
   announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
-}
-
-export function expectQueuedTaskRun({
-  taskExecutorMocks,
-  taskKind,
-  sourceId,
-  progressSummary,
-}: QueuedTaskExpectation): void {
-  const params = requireMockFirstParam(taskExecutorMocks.createOperation, "createOperation params");
-  expect(params).toMatchObject({ taskKind, sourceId, progressSummary });
-}
-
-export function expectRecordedTaskProgress({
-  taskExecutorMocks,
-  runId,
-  progressSummary,
-}: ProgressExpectation): void {
-  const params = requireMockFirstParam(taskExecutorMocks.recordProgress, "recordProgress params");
-  expect(params).toMatchObject({ runId, progressSummary });
 }
 
 export function expectFallbackMediaAnnouncement({
