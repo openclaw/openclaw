@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { activityRunInspectorSearch } from "../../ui/src/pages/activity/run-inspector-model.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -25,13 +26,28 @@ afterEach(async () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function approval(id: string): Parameters<typeof insertOperatorApproval>[0]["approval"] {
+function databaseOptions() {
+  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-approval-receipts-") } };
+}
+
+function approval(
+  id: string,
+  overrides: {
+    runId?: string;
+    createdAtMs?: number;
+    expiresAtMs?: number;
+    contextId?: string;
+    executionId?: string;
+  } = {},
+): Parameters<typeof insertOperatorApproval>[0]["approval"] {
+  const createdAtMs = overrides.createdAtMs ?? 1_000;
   return {
     id,
     kind: "exec" as const,
     presentation: {
       kind: "exec" as const,
       commandText: "secret command --token private-value",
+      agentId: "main",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     },
     requester: {
@@ -44,17 +60,19 @@ function approval(id: string): Parameters<typeof insertOperatorApproval>[0]["app
       agentId: "main",
       sessionKey: "session-secret",
       sessionId: "session-id-secret",
-      runId: context.runId,
+      runId: overrides.runId ?? "run-receipts",
       toolCallId: "tool-call-secret",
       toolName: "exec",
     },
     runtimeEpoch: "runtime-secret",
-    createdAtMs: 1_000,
-    expiresAtMs: 11_000,
+    createdAtMs,
+    expiresAtMs: overrides.expiresAtMs ?? createdAtMs + 10_000,
     executionIdentityToken: {
-      ...context,
       tokenVersion: 1,
-      createdAt: 1_000,
+      createdAt: createdAtMs,
+      runId: overrides.runId ?? "run-receipts",
+      contextId: overrides.contextId ?? "context-receipts",
+      executionId: overrides.executionId ?? "execution-receipts",
     },
   };
 }
@@ -81,79 +99,37 @@ const identityContext: ExecutionIdentityContextV1 = {
   missingEvidence: [],
 };
 
-function receiptFixture() {
-  const database = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-approval-receipts-") } };
-  const db = openOpenClawStateDatabase(database).db;
-  const insert = (id: string) =>
-    insertOperatorApproval({ approval: approval(id), databaseOptions: database });
-  const resolve = (
-    id: string,
-    decision: Parameters<typeof resolveOperatorApproval>[0]["decision"],
-    params: Partial<Parameters<typeof resolveOperatorApproval>[0]> = {},
-  ) =>
-    resolveOperatorApproval({
-      resolver: { kind: "device", id: "reviewer-device-secret" },
-      nowMs: 2_000,
-      ...params,
-      id,
-      decision,
-      databaseOptions: database,
-    });
-  const deny = (
-    id: string,
-    status: Parameters<typeof forceDenyOperatorApproval>[0]["status"],
-    reason: Parameters<typeof forceDenyOperatorApproval>[0]["reason"],
-    params: Partial<Parameters<typeof forceDenyOperatorApproval>[0]> = {},
-  ) =>
-    forceDenyOperatorApproval({
-      resolver: { kind: "system", id: null },
-      nowMs: 2_000,
-      ...params,
-      id,
-      status,
-      reason,
-      databaseOptions: database,
-    });
-  const page = (
-    params: Partial<Parameters<typeof pageOperatorApprovalReceiptsForRunInDatabase>[1]> = {},
-  ) =>
-    pageOperatorApprovalReceiptsForRunInDatabase(db, {
-      context,
-      limit: 20,
-      nowMs: 3_000,
-      ...params,
-    });
-  const summary = () =>
-    summarizeOperatorApprovalReceiptsForRunInDatabase(db, { context, nowMs: 3_000 });
-  const displays = (decisionLimit = 20) =>
-    presentExecutionDecisionReceiptsInDatabase(db, {
-      schema: {
-        cronRunReceipts: tableExists(db, "cron_run_receipts"),
-        executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
-      },
-      context: identityContext,
-      decisionCursor: "a:0:0",
-      decisionLimit,
-      now: 3_000,
-    }).decisionDisplays;
-  return { db, insert, resolve, deny, page, summary, displays };
-}
-
 describe("operator approval decision receipts", () => {
-  it("requests approval again when the outer approval scope closed", async () => {
-    const { insert, deny, page } = receiptFixture();
-    await insert("cancelled-scope");
-    await deny("cancelled-scope", "cancelled", "run-aborted", {
-      resolver: { kind: "system", id: "approval-scope-closed" },
-    });
-    const receipt = page({ limit: 1 }).entries[0]?.receipt;
-    expect(receipt?.remediation).toEqual([
-      expect.objectContaining({ code: "request_approval_again" }),
-    ]);
-  });
+  it.each(["approval-scope-closed"])(
+    "only recommends a new run when the outer approval owner stopped (%s)",
+    async (resolverId) => {
+      const database = databaseOptions();
+      await insertOperatorApproval({
+        approval: approval("cancelled-scope"),
+        databaseOptions: database,
+      });
+      await forceDenyOperatorApproval({
+        id: "cancelled-scope",
+        status: "cancelled",
+        reason: "run-aborted",
+        resolver: { kind: "system", id: resolverId },
+        nowMs: 2_000,
+        databaseOptions: database,
+      });
+      const receipt = pageOperatorApprovalReceiptsForRunInDatabase(
+        openOpenClawStateDatabase(database).db,
+        { context, limit: 1, nowMs: 3_000 },
+      ).entries[0]?.receipt;
+      expect(receipt?.remediation).toEqual([
+        expect.objectContaining({
+          code: "request_approval_again",
+        }),
+      ]);
+    },
+  );
 
   it("projects every terminal state from the authoritative first answer", async () => {
-    const { db, insert, resolve, deny, page, summary, displays } = receiptFixture();
+    const database = databaseOptions();
     for (const id of [
       "allowed",
       "denied",
@@ -163,35 +139,86 @@ describe("operator approval decision receipts", () => {
       "storage-corrupt",
       "payload-corrupt",
     ]) {
-      await insert(id);
+      await insertOperatorApproval({ approval: approval(id), databaseOptions: database });
     }
-    await resolve("allowed", "allow-once");
-    await resolve("denied", "deny", { nowMs: 2_001 });
-    await deny("expired", "expired", "timeout", { nowMs: 2_002 });
-    await deny("cancelled", "cancelled", "run-aborted", { nowMs: 2_003 });
-    await deny("no-route", "denied", "no-route", {
+    await resolveOperatorApproval({
+      id: "allowed",
+      decision: "allow-once",
+      resolver: { kind: "device", id: "reviewer-device-secret" },
+      nowMs: 2_000,
+      databaseOptions: database,
+    });
+    await resolveOperatorApproval({
+      id: "denied",
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer-device-secret" },
+      nowMs: 2_001,
+      databaseOptions: database,
+    });
+    await forceDenyOperatorApproval({
+      id: "expired",
+      status: "expired",
+      reason: "timeout",
+      resolver: { kind: "system", id: null },
+      nowMs: 2_002,
+      databaseOptions: database,
+    });
+    await forceDenyOperatorApproval({
+      id: "cancelled",
+      status: "cancelled",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: null },
+      nowMs: 2_003,
+      databaseOptions: database,
+    });
+    await forceDenyOperatorApproval({
+      id: "no-route",
+      status: "denied",
+      reason: "no-route",
       resolver: { kind: "system", id: "no-approval-route" },
       nowMs: 2_004,
+      databaseOptions: database,
     });
-    await deny("storage-corrupt", "denied", "storage-corrupt", {
+    await forceDenyOperatorApproval({
+      id: "storage-corrupt",
+      status: "denied",
+      reason: "storage-corrupt",
       resolver: { kind: "system", id: "storage-error" },
       nowMs: 2_005,
+      databaseOptions: database,
     });
-    await resolve("payload-corrupt", "deny", {
+    await resolveOperatorApproval({
+      id: "payload-corrupt",
+      decision: "deny",
       resolver: { kind: "channel", id: "channel-reviewer-secret" },
       nowMs: 2_006,
+      databaseOptions: database,
     });
-    db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?").run(
-      "{",
-      "payload-corrupt",
-    );
+    openOpenClawStateDatabase(database)
+      .db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?")
+      .run("{", "payload-corrupt");
 
-    const entries = page().entries;
-    const receipts = entries.map((entry) => entry.receipt);
-    expect(entries.map((entry) => entry.selectorId)).toEqual(
-      Array.from({ length: 7 }, (_, index) => `approval-decision:${index + 1}`),
+    const page = pageOperatorApprovalReceiptsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context, limit: 20, nowMs: 3_000 },
     );
-    expect(summary()).toEqual({
+    const receipts = page.entries.map((entry) => entry.receipt);
+    expect(page.entries.map((entry) => entry.selectorId)).toEqual([
+      "approval-decision:1",
+      "approval-decision:2",
+      "approval-decision:3",
+      "approval-decision:4",
+      "approval-decision:5",
+      "approval-decision:6",
+      "approval-decision:7",
+    ]);
+    expect(page.entries).toHaveLength(receipts.length);
+    expect(
+      summarizeOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+        context,
+        nowMs: 3_000,
+      }),
+    ).toEqual({
       count: 7,
       coverageState: "unknown",
       missingEvidence: ["operator_approval.valid"],
@@ -234,8 +261,18 @@ describe("operator approval decision receipts", () => {
       expect(encoded).not.toContain(secret);
     }
 
-    const decisionDisplays = displays();
-    expect(decisionDisplays?.[0]).toMatchObject({
+    const db = openOpenClawStateDatabase(database).db;
+    const displays = presentExecutionDecisionReceiptsInDatabase(db, {
+      schema: {
+        cronRunReceipts: tableExists(db, "cron_run_receipts"),
+        executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
+      },
+      context: identityContext,
+      decisionCursor: "a:0:0",
+      decisionLimit: 20,
+      now: 3_000,
+    }).decisionDisplays;
+    expect(displays?.[0]).toMatchObject({
       action: {
         family: "exec",
         operation: "approval",
@@ -244,24 +281,39 @@ describe("operator approval decision receipts", () => {
       provenance: { state: "verified", producer: "operator-approval" },
       remediation: [],
     });
-    expect(JSON.stringify(decisionDisplays)).not.toContain("secret command");
+    expect(JSON.stringify(displays)).not.toContain("secret command");
   });
 
   it("keeps a denied first answer after a conflicting allow retry", async () => {
-    const { insert, resolve, page } = receiptFixture();
-    await insert("first-answer");
+    const database = databaseOptions();
+    await insertOperatorApproval({ approval: approval("first-answer"), databaseOptions: database });
     expect(
-      await resolve("first-answer", "deny", {
-        resolver: { kind: "device", id: "first" },
-      }),
-    ).toMatchObject({ outcome: "resolved" });
+      (
+        await resolveOperatorApproval({
+          id: "first-answer",
+          decision: "deny",
+          resolver: { kind: "device", id: "first" },
+          nowMs: 2_000,
+          databaseOptions: database,
+        })
+      ).outcome,
+    ).toBe("resolved");
     expect(
-      await resolve("first-answer", "allow-once", {
+      await resolveOperatorApproval({
+        id: "first-answer",
+        decision: "allow-once",
         resolver: { kind: "device", id: "second" },
         nowMs: 2_001,
+        databaseOptions: database,
       }),
     ).toMatchObject({ outcome: "already-resolved", retry: "conflict" });
-    expect(page({ limit: 10, nowMs: 2_001 }).entries[0]?.receipt).toMatchObject({
+    expect(
+      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+        context,
+        limit: 10,
+        nowMs: 2_001,
+      }).entries[0]?.receipt,
+    ).toMatchObject({
       decision: { outcome: "denied", reasonCode: "operator_approval_denied_by_reviewer" },
       enforcement: {
         coverageState: "enforced",
@@ -272,14 +324,25 @@ describe("operator approval decision receipts", () => {
   });
 
   it("keeps high-cardinality summary work bounded and conservative", async () => {
-    const { insert, resolve, summary } = receiptFixture();
+    const database = databaseOptions();
     for (let index = 0; index < 130; index += 1) {
       const id = `bounded-${String(index).padStart(3, "0")}`;
-      await insert(id);
-      await resolve(id, "deny", { nowMs: 2_000 + index });
+      await insertOperatorApproval({ approval: approval(id), databaseOptions: database });
+      await resolveOperatorApproval({
+        id,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device-secret" },
+        nowMs: 2_000 + index,
+        databaseOptions: database,
+      });
     }
 
-    expect(summary()).toEqual({
+    expect(
+      summarizeOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+        context,
+        nowMs: 3_000,
+      }),
+    ).toEqual({
       count: 129,
       coverageState: "unknown",
       missingEvidence: ["operator_approval.summary_bounded"],
@@ -287,15 +350,28 @@ describe("operator approval decision receipts", () => {
   });
 
   it("pages portable approval cursors after maximum reuse and bounds oversized presentations", async () => {
-    const { db, insert, resolve, page, displays } = receiptFixture();
+    const database = databaseOptions();
     for (const id of ["page-a", "page-b", "page-c"]) {
-      await insert(id);
-      await resolve(id, "deny");
+      await insertOperatorApproval({ approval: approval(id), databaseOptions: database });
+      await resolveOperatorApproval({
+        id,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer" },
+        nowMs: 2_000,
+        databaseOptions: database,
+      });
     }
+    const db = openOpenClawStateDatabase(database).db;
     db.exec("UPDATE operator_approvals SET rowid = 100 WHERE approval_id = 'page-a'");
     db.exec("DELETE FROM operator_approvals WHERE approval_id = 'page-c'");
-    await insert("page-c");
-    await resolve("page-c", "deny");
+    await insertOperatorApproval({ approval: approval("page-c"), databaseOptions: database });
+    await resolveOperatorApproval({
+      id: "page-c",
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer" },
+      nowMs: 2_000,
+      databaseOptions: database,
+    });
     expect(
       db.prepare("SELECT cursor_id FROM operator_approvals WHERE approval_id = 'page-c'").get(),
     ).toEqual({ cursor_id: 3 });
@@ -304,15 +380,43 @@ describe("operator approval decision receipts", () => {
       "page-b",
     );
 
-    const first = page({ limit: 1 });
+    const first = pageOperatorApprovalReceiptsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context, limit: 1, nowMs: 3_000 },
+    );
     expect(first.entries[0]?.receipt.receiptId).toContain("approval:");
     expect(first.nextCursor).toEqual({ occurredAt: 2_000, rowId: 1 });
-    const firstDisplay = displays(1)[0];
+    const firstDisplay = presentExecutionDecisionReceiptsInDatabase(db, {
+      schema: {
+        cronRunReceipts: tableExists(db, "cron_run_receipts"),
+        executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
+      },
+      context: identityContext,
+      decisionCursor: "a:0:0",
+      decisionLimit: 1,
+      now: 3_000,
+    }).decisionDisplays[0];
     expect(firstDisplay?.selectorId).toBe(`approval-decision:${first.nextCursor?.rowId}`);
     expect(first.entries[0]?.selectorId).toBe(firstDisplay?.selectorId);
     expect(firstDisplay?.selectorId).not.toBe(first.entries[0]?.receipt.receiptId);
-    const next = page({ after: first.nextCursor, limit: 2 });
-    expect(next.entries.map((entry) => entry.receipt)).toEqual([
+    const receiptSearch = activityRunInspectorSearch(
+      { kind: "run", id: context.runId },
+      { id: firstDisplay?.selectorId ?? "" },
+    );
+    expect(new URLSearchParams(receiptSearch.slice(1)).get("receipt")).toBe(
+      firstDisplay?.selectorId,
+    );
+    expect(receiptSearch).not.toContain(
+      encodeURIComponent(first.entries[0]?.receipt.receiptId ?? ""),
+    );
+    expect(
+      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+        context,
+        after: first.nextCursor,
+        limit: 2,
+        nowMs: 3_000,
+      }).entries.map((entry) => entry.receipt),
+    ).toEqual([
       expect.objectContaining({
         decision: { outcome: "unknown", reasonCode: "operator_approval_payload_bounded" },
         missingEvidence: ["operator_approval.payload_bounded"],
@@ -329,22 +433,39 @@ describe("operator approval decision receipts", () => {
       ["malformed", "operator_approval_execution_link_malformed"],
       ["mismatch", "operator_approval_execution_link_mismatch"],
     ] as const) {
-      const { db, insert, resolve, page } = receiptFixture();
-      await insert(`binding-${bindingState}`);
+      const database = databaseOptions();
+      await insertOperatorApproval({
+        approval: approval(`binding-${bindingState}`),
+        databaseOptions: database,
+      });
+      const db = openOpenClawStateDatabase(database).db;
       if (bindingState === "missing") {
         db.prepare("DELETE FROM operator_approval_execution_identities").run();
+      } else if (bindingState === "malformed") {
+        db.exec("PRAGMA ignore_check_constraints = ON");
+        db.prepare(
+          "UPDATE operator_approval_execution_identities SET source_context_id = ''",
+        ).run();
       } else {
-        if (bindingState === "malformed") {
-          db.exec("PRAGMA ignore_check_constraints = ON");
-        }
-        db.prepare("UPDATE operator_approval_execution_identities SET source_context_id = ?").run(
-          bindingState === "malformed" ? "" : "context-other",
-        );
+        db.prepare(
+          "UPDATE operator_approval_execution_identities SET source_context_id = 'context-other'",
+        ).run();
       }
-      await resolve(`binding-${bindingState}`, "deny", { nowMs: 3_000 });
+      await resolveOperatorApproval({
+        id: `binding-${bindingState}`,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer" },
+        nowMs: 3_000,
+        databaseOptions: database,
+      });
 
-      const receipts = page({ limit: 10, nowMs: 4_000 }).entries.map((entry) => entry.receipt);
-      expect(receipts).toEqual([
+      expect(
+        pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+          context,
+          limit: 10,
+          nowMs: 4_000,
+        }).entries.map((entry) => entry.receipt),
+      ).toEqual([
         expect.objectContaining({
           decision: { outcome: "unknown", reasonCode },
           enforcement: expect.objectContaining({ coverageState: "unknown", grantRefs: [] }),

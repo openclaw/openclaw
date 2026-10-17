@@ -1,26 +1,13 @@
+// Npm Onboard Channel Agent Assertions tests cover npm onboard channel agent assertions script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 
 const assertionsPath = path.resolve("scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs");
 const disableExperimentalWarning = "--disable-warning=ExperimentalWarning";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let tempDir: string;
-beforeEach(() => {
-  tempDir = tempDirs.make("openclaw-onboard-assertions-");
-});
-
-function authStore(fields: Record<string, unknown>) {
-  return {
-    version: 1,
-    profiles: { "openai:api-key": { type: "api_key", provider: "openai", ...fields } },
-  };
-}
-const envStore = () =>
-  authStore({ keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" } });
 
 function nodeOptionsWithoutExperimentalWarnings(): string {
   const current = process.env.NODE_OPTIONS ?? "";
@@ -39,18 +26,11 @@ function storeRef(fill: string) {
   return { source: "store", provider: "default", id: `CHANNEL_SETUP_${fill.repeat(32)}` };
 }
 
-function withDatabase(file: string, write: (db: DatabaseSync) => void): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  try {
-    write(db);
-  } finally {
-    db.close();
-  }
-}
-
 function writeTeamSecrets(home: string, values: Record<string, string>): void {
-  withDatabase(path.join(home, ".openclaw/state/openclaw.sqlite"), (db) => {
+  const stateDir = path.join(home, ".openclaw", "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
+  try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS secret_store_entries (
         scope_kind TEXT NOT NULL,
@@ -67,7 +47,9 @@ function writeTeamSecrets(home: string, values: Record<string, string>): void {
     for (const [fill, value] of Object.entries(values)) {
       insert.run(storeRef(fill).id, value);
     }
-  });
+  } finally {
+    db.close();
+  }
 }
 
 function writeOnboardConfig(home: string): void {
@@ -86,7 +68,10 @@ function writeOnboardConfig(home: string): void {
 }
 
 function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
-  withDatabase(path.join(home, ".openclaw/state/openclaw.sqlite"), (db) => {
+  const stateDir = path.join(home, ".openclaw", "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
+  try {
     db.exec(`
       PRAGMA user_version = 13;
       CREATE TABLE IF NOT EXISTS config_machine_state (
@@ -101,11 +86,16 @@ function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
         VALUES (?, ?, ?)
       `,
     ).run("authProfiles.store", JSON.stringify(store), Date.now());
-  });
+  } finally {
+    db.close();
+  }
 }
 
 function writeLegacyPrimaryAuthProfileStoreSqlite(home: string, store: unknown): void {
-  withDatabase(path.join(home, ".openclaw/agents/main/agent/openclaw-agent.sqlite"), (db) => {
+  const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+  try {
     db.exec(`
       CREATE TABLE auth_profile_store (
         store_key TEXT NOT NULL PRIMARY KEY,
@@ -116,25 +106,34 @@ function writeLegacyPrimaryAuthProfileStoreSqlite(home: string, store: unknown):
     db.prepare(
       "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
     ).run("primary", JSON.stringify(store), Date.now());
-  });
+  } finally {
+    db.close();
+  }
 }
 
-function runAssertions(args: string[], home?: string) {
-  return spawnSync(process.execPath, [assertionsPath, ...args], {
+function runAssert(home: string, channel: string, ...tokens: string[]) {
+  return spawnSync(
+    process.execPath,
+    [assertionsPath, "assert-channel-config", channel, ...tokens],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+      },
+    },
+  );
+}
+
+function runOnboardAssert(home: string) {
+  return spawnSync(process.execPath, [assertionsPath, "assert-onboard-state", home], {
     encoding: "utf8",
     env: {
       ...process.env,
-      ...(home ? { HOME: home } : {}),
       NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
     },
   });
-}
-const runAssert = (home: string, channel: string, ...tokens: string[]) =>
-  runAssertions(["assert-channel-config", channel, ...tokens], home);
-const runOnboardAssert = (home: string) => runAssertions(["assert-onboard-state", home]);
-function expectRejected(result: ReturnType<typeof runAssertions>, message: string) {
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain(message);
 }
 
 function runMockModelAssert(home: string, command: string, port: string) {
@@ -269,48 +268,107 @@ describe("npm onboard channel agent assertions", () => {
   });
 
   it("validates OpenAI env refs from the shared SQLite auth profile store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
-    writeOnboardConfig(tempDir);
-    writeSharedAuthProfileStoreSqlite(tempDir, envStore());
 
-    const result = runOnboardAssert(tempDir);
+    try {
+      writeOnboardConfig(tempDir);
+      writeSharedAuthProfileStoreSqlite(tempDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(fs.existsSync(agentDir)).toBe(false);
-    expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+      const result = runOnboardAssert(tempDir);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(fs.existsSync(agentDir)).toBe(false);
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("validates OpenAI env refs from a frozen release's primary agent store", () => {
-    writeOnboardConfig(tempDir);
-    writeLegacyPrimaryAuthProfileStoreSqlite(tempDir, envStore());
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+    try {
+      writeOnboardConfig(tempDir);
+      writeLegacyPrimaryAuthProfileStoreSqlite(tempDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
 
-    const result = runOnboardAssert(tempDir);
+      const result = runOnboardAssert(tempDir);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("rejects auth profile stores without a usable OpenAI env ref", () => {
     const cases: unknown[] = [
       "OPENAI_API_KEY",
-      { version: 1, profiles: { "openai:api-key": { note: "OPENAI_API_KEY" } } },
+      {
+        version: 1,
+        profiles: {
+          "openai:api-key": { note: "OPENAI_API_KEY" },
+        },
+      },
     ];
 
     for (const store of cases) {
-      const home = tempDirs.make("openclaw-invalid-profile-");
-      writeOnboardConfig(home);
-      writeSharedAuthProfileStoreSqlite(home, store);
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
 
-      expectRejected(runOnboardAssert(home), "auth profile did not persist OPENAI_API_KEY env ref");
+      try {
+        writeOnboardConfig(tempDir);
+        writeSharedAuthProfileStoreSqlite(tempDir, store);
+
+        const result = runOnboardAssert(tempDir);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("auth profile did not persist OPENAI_API_KEY env ref");
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
     }
   });
 
   it("rejects inline OpenAI keys in the SQLite auth profile store", () => {
-    writeOnboardConfig(tempDir);
-    writeSharedAuthProfileStoreSqlite(tempDir, authStore({ key: "sk-openclaw-npm-onboard-e2e" }));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+    try {
+      writeOnboardConfig(tempDir);
+      writeSharedAuthProfileStoreSqlite(tempDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-openclaw-npm-onboard-e2e",
+          },
+        },
+      });
 
-    expectRejected(runOnboardAssert(tempDir), "auth profile persisted the raw OpenAI test key");
+      const result = runOnboardAssert(tempDir);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("auth profile persisted the raw OpenAI test key");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("permits an unrelated main-agent database", () => {
@@ -342,57 +400,70 @@ describe("npm onboard channel agent assertions", () => {
   });
 
   it("validates channel tokens in their canonical config fields", () => {
-    writeConfig(tempDir, {
-      discord: { enabled: true, token: storeRef("A") },
-      slack: { enabled: true, appToken: storeRef("B"), botToken: storeRef("C") },
-      telegram: { enabled: true, botToken: storeRef("D") },
-    });
-    writeTeamSecrets(tempDir, {
-      A: "discord-token",
-      B: "xapp-token",
-      C: "xoxb-token",
-      D: "telegram-token",
-    });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    try {
+      writeConfig(tempDir, {
+        discord: { enabled: true, token: storeRef("A") },
+        slack: { enabled: true, appToken: storeRef("B"), botToken: storeRef("C") },
+        telegram: { enabled: true, botToken: storeRef("D") },
+      });
+      writeTeamSecrets(tempDir, {
+        A: "discord-token",
+        B: "xapp-token",
+        C: "xoxb-token",
+        D: "telegram-token",
+      });
 
-    expect(runAssert(tempDir, "telegram", "telegram-token").status).toBe(0);
-    expect(runAssert(tempDir, "discord", "discord-token").status).toBe(0);
-    expect(runAssert(tempDir, "slack", "xoxb-token", "xapp-token").status).toBe(0);
-    expect(runAssert(tempDir, "discord", "wrong-discord-token").stderr).toContain(
-      `discord token SecretRef ${storeRef("A").id} did not store the expected token`,
-    );
-    // Swapped Slack credentials must not pass.
-    expect(runAssert(tempDir, "slack", "xapp-token", "xoxb-token").stderr).toContain(
-      "did not store the expected token",
-    );
+      expect(runAssert(tempDir, "telegram", "telegram-token").status).toBe(0);
+      expect(runAssert(tempDir, "discord", "discord-token").status).toBe(0);
+      expect(runAssert(tempDir, "slack", "xoxb-token", "xapp-token").status).toBe(0);
+      expect(runAssert(tempDir, "discord", "wrong-discord-token").stderr).toContain(
+        `discord token SecretRef ${storeRef("A").id} did not store the expected token`,
+      );
+      // Swapped Slack credentials must not pass.
+      expect(runAssert(tempDir, "slack", "xapp-token", "xoxb-token").stderr).toContain(
+        "did not store the expected token",
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("rejects tokens persisted on the wrong channel config field", () => {
-    writeConfig(tempDir, {
-      telegram: { enabled: true, token: storeRef("A") },
-    });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    try {
+      writeConfig(tempDir, {
+        telegram: { enabled: true, token: storeRef("A") },
+      });
 
-    expectRejected(
-      runAssert(tempDir, "telegram", "telegram-token"),
-      "telegram config did not persist botToken",
-    );
+      const result = runAssert(tempDir, "telegram", "telegram-token");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("telegram config did not persist botToken");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("rejects plaintext channel tokens in config", () => {
-    writeConfig(tempDir, {
-      telegram: { enabled: true, botToken: "telegram-token" },
-    });
-    expectRejected(
-      runAssert(tempDir, "telegram", "telegram-token"),
-      "did not persist botToken as a store SecretRef",
-    );
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    try {
+      writeConfig(tempDir, {
+        telegram: { enabled: true, botToken: "telegram-token" },
+      });
+      const result = runAssert(tempDir, "telegram", "telegram-token");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("did not persist botToken as a store SecretRef");
 
-    writeConfig(tempDir, {
-      telegram: { enabled: true, botToken: storeRef("A"), note: "telegram-token" },
-    });
-    expectRejected(
-      runAssert(tempDir, "telegram", "telegram-token"),
-      "telegram config persisted the plaintext botToken",
-    );
+      writeConfig(tempDir, {
+        telegram: { enabled: true, botToken: storeRef("A"), note: "telegram-token" },
+      });
+      const leaked = runAssert(tempDir, "telegram", "telegram-token");
+      expect(leaked.status).not.toBe(0);
+      expect(leaked.stderr).toContain("telegram config persisted the plaintext botToken");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("validates configured channels in the plain status Channels section", () => {
