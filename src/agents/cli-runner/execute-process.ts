@@ -43,6 +43,7 @@ import {
 import { createCliOutputFailoverError } from "./output-error.js";
 import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
+import { rejectClaudeCliUsageLimitNotice } from "./usage-limit-notice.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
 
@@ -592,7 +593,10 @@ export async function executeCliProcess(params: {
       finalPromptText: params.prompt,
     };
   }
-  const parsed = parsedStructuredOutput ?? parseOutput();
+  const parsed = rejectClaudeCliUsageLimitNotice(
+    runParams.provider,
+    parsedStructuredOutput ?? parseOutput(),
+  );
   const parsedError = createCliOutputFailoverError({
     output: parsed,
     ...outputErrorContext,

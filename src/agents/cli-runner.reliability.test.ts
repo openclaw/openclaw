@@ -72,6 +72,7 @@ import { persistCliSessionBindingResult } from "./cli-session-store.js";
 import * as cliTranscript from "./command/attempt-execution.helpers.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
+import { runWithModelFallback } from "./model-fallback-runner.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
@@ -1060,6 +1061,111 @@ describe("runCliAgent reliability", () => {
 
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
     expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  describe("Claude CLI subscription limit reported as a successful turn", () => {
+    const limitNotice = "You've hit your session limit \u00b7 resets 4:10pm (Asia/Seoul)";
+
+    function claudeJsonlContext(sessionKey: string) {
+      const context = makeClaudePreparedContext({ sessionKey, runId: `run-${sessionKey}` });
+      context.preparedBackend.backend = {
+        ...context.preparedBackend.backend,
+        output: "jsonl",
+        input: "stdin",
+        jsonlDialect: "claude-stream-json",
+      };
+      context.backendResolved.config = context.preparedBackend.backend;
+      return context;
+    }
+
+    function claudeStdout(text: string) {
+      return [
+        JSON.stringify({
+          type: "assistant",
+          message: { model: "<synthetic>", content: [{ type: "text", text }] },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false, result: text }),
+      ].join("\n");
+    }
+
+    it("fails the turn with rate_limit and leaves no assistant reply in the transcript", async () => {
+      supervisorSpawnMock.mockResolvedValueOnce(
+        makeManagedRun({ stdout: claudeStdout(limitNotice) }),
+      );
+      const { dir, sessionTarget } = createSessionFixture({
+        sessionKey: "agent:main:subagent:limit-notice",
+        history: [{ role: "user", content: "earlier context" }],
+      });
+      const context = claudeJsonlContext("agent:main:subagent:limit-notice");
+
+      await expect(
+        runPreparedCliAgent(withParams(context, sessionParams(sessionTarget, dir))),
+      ).rejects.toMatchObject({
+        name: "FailoverError",
+        reason: "rate_limit",
+        status: 429,
+        provider: "claude-cli",
+      });
+
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(await loadTranscriptEvents(sessionTarget))).not.toContain(
+        "session limit",
+      );
+    });
+
+    it("moves to the next fallback candidate within the same turn", async () => {
+      supervisorSpawnMock.mockResolvedValueOnce(
+        makeManagedRun({ stdout: claudeStdout(limitNotice) }),
+      );
+      const { dir, sessionTarget } = createSessionFixture({
+        sessionKey: "agent:main:subagent:limit-fallback",
+      });
+      const context = withParams(
+        claudeJsonlContext("agent:main:subagent:limit-fallback"),
+        sessionParams(sessionTarget, dir),
+      );
+      const attempts: string[] = [];
+
+      const result = await runWithModelFallback({
+        cfg: undefined,
+        provider: "claude-cli",
+        model: "opus",
+        manifestPlugins: [],
+        fallbacksOverride: ["openai/fallback-model"],
+        run: async (provider) => {
+          attempts.push(provider);
+          if (provider === "claude-cli") {
+            return await runPreparedCliAgent(context);
+          }
+          return "fallback-reply";
+        },
+      });
+
+      expect(attempts).toEqual(["claude-cli", "openai"]);
+      expect(result.result).toBe("fallback-reply");
+      expect(result.attempts[0]).toMatchObject({ provider: "claude-cli", reason: "rate_limit" });
+    });
+
+    it.each([
+      `The CLI prints "${limitNotice}" when your plan is exhausted.`,
+      `Example output:\n${limitNotice}`,
+      `${limitNotice}\nI can still help once it resets.`,
+      `"${limitNotice}"`,
+    ])("keeps a normal answer that mentions the notice a success: %s", async (answer) => {
+      supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: claudeStdout(answer) }));
+      const { dir, sessionTarget } = createSessionFixture({
+        sessionKey: "agent:main:subagent:limit-quoted",
+      });
+
+      const result = await runPreparedCliAgent(
+        withParams(
+          claudeJsonlContext("agent:main:subagent:limit-quoted"),
+          sessionParams(sessionTarget, dir),
+        ),
+      );
+
+      expect(result.payloads?.[0]?.text).toBe(answer);
+    });
   });
 
   it.each(["timeout", "unknown", "context_overflow", "format"] as const)(

@@ -2,6 +2,7 @@ import type { CliOutput } from "../cli-output-contracts.js";
 import { formatCliOutputError } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { isClaudeCliUsageLimitNotice } from "./usage-limit-notice.js";
 
 export function createCliOutputFailoverError(params: {
   output: CliOutput;
@@ -25,7 +26,9 @@ export function createCliOutputFailoverError(params: {
     ? terminalFailure === "synthetic_no_response"
       ? "format"
       : "unknown"
-    : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
+    : isClaudeCliUsageLimitNotice(params.provider, message)
+      ? "rate_limit"
+      : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
   const code = terminalFailure
     ? `cli_${terminalFailure}`
     : reason === "context_overflow"
