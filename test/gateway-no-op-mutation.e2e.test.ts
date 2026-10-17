@@ -1,7 +1,7 @@
 // E2E: a Gateway agent turn continues after a real no-op write tool call.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -10,7 +10,10 @@ import {
   startOpenAiResponsesModelServer,
   type OpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
-import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -84,8 +87,7 @@ describe("Gateway no-op mutation continuation", () => {
           { expectFinal: true, timeoutMs: 120_000 },
         );
 
-        expect(response.status).toBe("ok");
-        expect(response.runId).toBe(runId);
+        expect(response).toMatchObject({ status: "ok", runId });
         expect(response.result?.payloads).toContainEqual(
           expect.objectContaining({ text: VISIBLE_MARKER }),
         );
@@ -105,81 +107,24 @@ async function startMockModelServer(): Promise<MockModelServer> {
   const server = await startOpenAiResponsesModelServer({
     modelId: "no-op-proof",
     bindError: "no-op proof model server did not bind",
-    onRequest: (request, response) => handleRequest(request, response, requests),
+    onRequest: async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as CapturedRequest);
+      if (requests.length === 1) {
+        writeToolResponse(response);
+      } else {
+        writeOpenAiResponsesText(response, {
+          text: VISIBLE_MARKER,
+          messageId: "msg_no_op_visible",
+          responseId: "resp_no_op_visible",
+        });
+      }
+    },
   });
   return { ...server, requests };
-}
-
-async function handleRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requests: CapturedRequest[],
-): Promise<void> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as CapturedRequest;
-  requests.push(body);
-  if (requests.length === 1) {
-    writeToolResponse(response);
-    return;
-  }
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: "msg_no_op_visible",
-        role: "assistant",
-        status: "in_progress",
-        content: [],
-      },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: "msg_no_op_visible",
-      output_index: 0,
-      content_index: 0,
-      delta: VISIBLE_MARKER,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: "msg_no_op_visible",
-      output_index: 0,
-      content_index: 0,
-      text: VISIBLE_MARKER,
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: "msg_no_op_visible",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text: VISIBLE_MARKER, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_no_op_visible",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: "msg_no_op_visible",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: VISIBLE_MARKER, annotations: [] }],
-          },
-        ],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
 }
 
 function writeToolResponse(response: ServerResponse): void {

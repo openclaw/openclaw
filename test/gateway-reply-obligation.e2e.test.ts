@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -20,7 +21,6 @@ import {
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const MODEL_REF = "reply-obligation/reply-obligation";
 const REQUIRED_REQUEST = "REQUIRED_EMPTY_CONTROL";
 const REQUIRED_RECOVERED = "REQUIRED_RECOVERED";
 const variants = ["empty", "no-reply"] as const;
@@ -125,6 +125,27 @@ describe("Gateway trusted reply obligations", () => {
           }
         },
       });
+      const history = async (sessionKey: string) =>
+        (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 }))
+          .messages;
+      const requestReply = (
+        sessionKey: string,
+        message: string,
+        idempotencyKey = randomUUID(),
+        inputProvenance?: { kind: "inter_session"; sourceTool: "sessions_send" },
+      ) =>
+        client.request(
+          "agent",
+          {
+            sessionKey,
+            message,
+            channel: "webchat",
+            deliver: false,
+            idempotencyKey,
+            inputProvenance,
+          },
+          { expectFinal: true, timeoutMs: 60_000 },
+        );
       try {
         await client.request("sessions.subscribe", {});
         for (const scenario of scenarios) {
@@ -134,25 +155,17 @@ describe("Gateway trusted reply obligations", () => {
             key: scenario.parentKey,
             subscriptionId: "reply-obligation-" + scenario.variant,
           });
-          const parent = await client.request(
-            "agent",
-            {
-              sessionKey: scenario.parentKey,
-              message: scenario.parentPrompt,
-              channel: "webchat",
-              deliver: false,
-              idempotencyKey: scenario.parentRunId,
-            },
-            { expectFinal: true, timeoutMs: 60_000 },
+          const parent = await requestReply(
+            scenario.parentKey,
+            scenario.parentPrompt,
+            scenario.parentRunId,
           );
           expect(parent, gateway.logs()).toMatchObject({ status: "ok" });
           await withinTest(scenario.peerStarted.promise, signal);
           expect(scenario.callbackRequests).toBe(0);
-          const before = await client.request<{ messages: unknown[] }>("chat.history", {
-            sessionKey: scenario.parentKey,
-            limit: 100,
-          });
-          expect(modelReplyTexts(before.messages)).toEqual([scenario.parentFinal]);
+          expect(modelReplyTexts(await history(scenario.parentKey))).toEqual([
+            scenario.parentFinal,
+          ]);
 
           // Release only after the original final is committed and publicly readable.
           scenario.releasePeer.resolve();
@@ -166,12 +179,9 @@ describe("Gateway trusted reply obligations", () => {
           );
           expect(settled, gateway.logs()).toMatchObject({ status: "ok" });
           expect(asOptionalRecord(settled)?.error).toBeUndefined();
-          const after = await client.request<{ messages: unknown[] }>("chat.history", {
-            sessionKey: scenario.parentKey,
-            limit: 100,
-          });
-          expect(modelReplyTexts(after.messages)).toEqual([scenario.parentFinal]);
-          const forwarded = interSessionInputs(after.messages);
+          const after = await history(scenario.parentKey);
+          expect(modelReplyTexts(after)).toEqual([scenario.parentFinal]);
+          const forwarded = interSessionInputs(after);
           expect(forwarded).toHaveLength(1);
           expect(contentText(forwarded[0]?.content).trim()).toBe(scenario.peerResult);
           expect(forwarded[0]).toMatchObject({
@@ -184,9 +194,11 @@ describe("Gateway trusted reply obligations", () => {
             senderSession: { agentId: "main", sessionKey: scenario.peerKey },
             senderLabel: "Forwarded from main",
           });
-          expect(scenario.parentRequests).toBe(2);
-          expect(scenario.peerRequests).toBe(1);
-          expect(scenario.callbackRequests).toBe(1);
+          expect(scenario).toMatchObject({
+            parentRequests: 2,
+            peerRequests: 1,
+            callbackRequests: 1,
+          });
           expect(
             events.filter((event) => {
               const payload = asOptionalRecord(event.payload);
@@ -201,27 +213,16 @@ describe("Gateway trusted reply obligations", () => {
         }
 
         const requiredKey = "agent:main:reply-obligation-required";
-        const required = await client.request(
-          "agent",
-          {
-            sessionKey: requiredKey,
-            message: REQUIRED_REQUEST,
-            channel: "webchat",
-            deliver: false,
-            idempotencyKey: randomUUID(),
-            // Public provenance is not the trusted owner's optional-reply decision.
-            inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-          },
-          { expectFinal: true, timeoutMs: 60_000 },
-        );
+        // Public provenance is not the trusted owner's optional-reply decision.
+        const required = await requestReply(requiredKey, REQUIRED_REQUEST, randomUUID(), {
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+        });
         expect(required, gateway.logs()).toMatchObject({ status: "ok" });
         expect(activeFixture.requiredRequests()).toBe(2);
-        const requiredHistory = await client.request<{ messages: unknown[] }>("chat.history", {
-          sessionKey: requiredKey,
-          limit: 100,
-        });
-        expect(modelReplyTexts(requiredHistory.messages)).toEqual([REQUIRED_RECOVERED]);
-        const requiredInputs = interSessionInputs(requiredHistory.messages);
+        const requiredHistory = await history(requiredKey);
+        expect(modelReplyTexts(requiredHistory)).toEqual([REQUIRED_RECOVERED]);
+        const requiredInputs = interSessionInputs(requiredHistory);
         expect(requiredInputs).toHaveLength(1);
         expect(contentText(requiredInputs[0]?.content).trim()).toBe(REQUIRED_REQUEST);
         expect(requiredInputs[0]).toMatchObject({
@@ -274,16 +275,20 @@ function modelReplyTexts(messages: unknown[]): string[] {
 }
 
 function createConfig(url: string): OpenClawConfig {
+  const model = createOpenAiResponsesModelConfig({
+    baseUrl: url,
+    providerId: "reply-obligation",
+    modelId: "reply-obligation",
+    reasoning: false,
+    toolProfile: "coding",
+  });
   return {
+    ...model,
     plugins: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
+        ...model.agents?.defaults,
         sandbox: { mode: "off" },
       },
     },
@@ -294,29 +299,6 @@ function createConfig(url: string): OpenClawConfig {
       allow: ["sessions_send"],
       sessions: { visibility: "all" },
       agentToAgent: { enabled: true },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        "reply-obligation": {
-          baseUrl: url + "/v1",
-          apiKey: "test-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "reply-obligation",
-              name: "reply-obligation",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
     },
   };
 }

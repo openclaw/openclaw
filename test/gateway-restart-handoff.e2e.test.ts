@@ -151,15 +151,17 @@ it.skipIf(process.platform !== "linux")(
           },
         });
         await instance.startGateway();
-        expect(
-          journal(instance.logs()).some(
-            (row) =>
-              row.message.includes("shutdown budget at startup:") &&
-              row.message.includes("shutdown=41000ms") &&
-              row.message.includes("TimeoutStopUSec=46000ms"),
-          ),
-          instance.logs(),
-        ).toBe(true);
+        const expectLog = (rows: ReturnType<typeof journal>, ...fragments: string[]) =>
+          expect(
+            rows.some((row) => fragments.every((fragment) => row.message.includes(fragment))),
+            instance!.logs(),
+          ).toBe(true);
+        expectLog(
+          journal(instance.logs()),
+          "shutdown budget at startup:",
+          "shutdown=41000ms",
+          "TimeoutStopUSec=46000ms",
+        );
         const child = instance.child;
         if (!child) {
           throw new Error("Gateway exited before restart proof");
@@ -267,58 +269,21 @@ it.skipIf(process.platform !== "linux")(
           )
           .toSorted((left, right) => left.at - right.at);
         const receipt = cleanReceipts.at(-1);
-        const firstReceipt = cleanReceipts[0];
         const abort = rows.find((row) =>
           /restart drain budget.*exhausted|aborted for restart/.test(row.message),
         );
         const deadline = rows.find((row) => row.message.includes("shutdown deadline reached"));
         const serviceStop = rows.find((row) => row.message.includes(SERVICE_STOP));
-        console.info(
-          JSON.stringify({
-            proof: "gateway-restart-handoff",
-            signalAtMs: signaledAt,
-            abortAtMs: abort?.at,
-            receiptAtMs: receipt?.at,
-            firstReceiptAtMs: firstReceipt?.at,
-            receiptCount: cleanReceipts.length,
-            exitAtMs: exitedAt,
-            receiptAfterSignalMs: receipt ? receipt.at - signaledAt : null,
-            receiptAfterAbortMs: receipt && abort ? receipt.at - abort.at : null,
-            exitAfterSignalMs: exitedAt - signaledAt,
-            exitAfterReceiptMs: receipt ? exitedAt - receipt.at : null,
-            exitAfterFirstReceiptMs: firstReceipt ? exitedAt - firstReceipt.at : null,
-            applicationBudgetMs: APPLICATION_STOP_MS,
-            shutdownDeadlineAtMs: deadline?.at,
-            serviceStopAtMs: serviceStop?.at,
-            acceptedRuns: runIds.length,
-            backgroundExecSessions: 2,
-            exitCode: exit[0],
-            exitSignal: exit[1],
-          }),
-        );
         expect(exit, instance.logs()).toEqual([0, null]);
         expect(receipt, instance.logs()).toBeDefined();
         expect(abort, instance.logs()).toBeDefined();
-        expect(
-          rows.some(
-            (row) =>
-              row.message.includes("shutdown budget at shutdown:") &&
-              row.message.includes("TimeoutStopUSec=46000ms"),
-          ),
-          instance.logs(),
-        ).toBe(true);
+        expectLog(rows, "shutdown budget at shutdown:", "TimeoutStopUSec=46000ms");
         expect(receipt!.at).toBeGreaterThanOrEqual(abort!.at);
         expect(receipt!.at).toBeLessThan(
           Math.min(signaledAt + APPLICATION_STOP_MS, exitedAt, deadline?.at ?? Infinity),
         );
-        expect(
-          rows.some((row) => row.message.includes("backgroundExecSessions=2")),
-          instance.logs(),
-        ).toBe(true);
-        expect(
-          rows.some((row) => row.message.includes("embeddedRuns=6")),
-          instance.logs(),
-        ).toBe(true);
+        expectLog(rows, "backgroundExecSessions=2");
+        expectLog(rows, "embeddedRuns=6");
         expect(exitedAt - receipt!.at, instance.logs()).toBeLessThanOrEqual(5_000);
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();
@@ -382,16 +347,6 @@ it.skipIf(process.platform !== "linux")(
             });
             persistedSessions.set(sessionKey, row.current_session_id);
           }
-          console.info(
-            JSON.stringify({
-              proof: "gateway-restart-handoff-state",
-              bootOutcome: boot?.outcome,
-              bootCompletedAtMs: boot?.completed_at_ms,
-              remainingLeases: leases.length,
-              cleanClose: seal !== undefined,
-              persistedRecoverySessions: persistedSessions.size,
-            }),
-          );
         } finally {
           shared.close();
           agent.close();
@@ -402,7 +357,6 @@ it.skipIf(process.platform !== "linux")(
         observingRecovery = true;
         const successorStartedAt = Date.now();
         await instance.startGateway();
-        const successorReadyAt = Date.now();
         const successor = instance.child;
         if (!successor) {
           throw new Error("Successor exited before restart admission proof");
@@ -432,20 +386,15 @@ it.skipIf(process.platform !== "linux")(
           const history = await client.request<{
             messages: Array<{ role: string; content?: unknown }>;
           }>("chat.history", { sessionKey });
-          expect(
-            history.messages.filter(
-              (message) =>
-                message.role === "user" &&
-                JSON.stringify(message.content)?.includes(`RESTART_HANDOFF_${index}:`),
-            ),
-          ).toHaveLength(1);
-          expect(
-            history.messages.filter(
-              (message) =>
-                message.role === "assistant" &&
-                JSON.stringify(message.content)?.includes(`RESTART_HANDOFF_RESUMED_${index}`),
-            ),
-          ).toHaveLength(1);
+          const expectMessage = (role: string, marker: string) =>
+            expect(
+              history.messages.filter(
+                (message) =>
+                  message.role === role && JSON.stringify(message.content)?.includes(marker),
+              ),
+            ).toHaveLength(1);
+          expectMessage("user", `RESTART_HANDOFF_${index}:`);
+          expectMessage("assistant", `RESTART_HANDOFF_RESUMED_${index}`);
         }
         expect(
           journal(gateway.logs()).filter(
@@ -455,16 +404,6 @@ it.skipIf(process.platform !== "linux")(
               row.message.includes("database integrity verification passed"),
           ),
         ).toEqual([]);
-        console.info(
-          JSON.stringify({
-            proof: "gateway-restart-handoff-successor",
-            receiptAdmission: "seal-reused-without-verification",
-            successorReadyAfterExitMs: successorReadyAt - exitedAt,
-            preservedSessions: persistedSessions.size,
-            preservedUserTurns: sessionKeys.length,
-            completedRecoveryTurns: recovered.length,
-          }),
-        );
       },
       () => {
         clearTimeout(nativeDeadline);

@@ -1,11 +1,15 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -61,29 +65,13 @@ function createQueuedRotationConfig(fixtureDir: string, baseUrl: string): OpenCl
       entries: { main: { model: { primary: modelRef }, skills: [] } },
     },
     tools: { profile: "minimal" },
-    models: {
-      mode: "replace",
-      providers: {
-        "queued-rotation": {
-          baseUrl: `${baseUrl}/v1`,
-          apiKey: "secret-token",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "queued-rotation",
-              name: "queued-rotation",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4_096,
-            },
-          ],
-        },
-      },
-    },
+    models: createOpenAiResponsesModelConfig({
+      baseUrl,
+      providerId: "queued-rotation",
+      modelId: "queued-rotation",
+      reasoning: false,
+      toolProfile: "minimal",
+    }).models,
     messages: { queue: { mode: "followup" } },
   };
 }
@@ -91,18 +79,10 @@ function createQueuedRotationConfig(fixtureDir: string, baseUrl: string): OpenCl
 async function startMockModelServer(): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
   const heldResponse = createDeferred();
-  const server = createServer((req, res) => {
-    void (async () => {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      if (req.method === "GET" && url.pathname === "/v1/models") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ data: [{ id: "queued-rotation", object: "model" }] }));
-        return;
-      }
-      if (req.method !== "POST" || url.pathname !== "/v1/responses") {
-        res.writeHead(404).end();
-        return;
-      }
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "queued-rotation",
+    bindError: "mock model server did not bind",
+    onRequest: async (req, res) => {
       requests.push({ body: await readJsonRequest(req) });
       if (requests.length === 1) {
         await heldResponse.promise;
@@ -115,19 +95,11 @@ async function startMockModelServer(): Promise<MockModelServer> {
         messageId: "msg_queued_rotation",
         responseId: "resp_queued_rotation",
       });
-    })();
+    },
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("mock model server did not bind");
-  }
   let stopped = false;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: server.baseUrl,
     requests,
     releaseHeldResponse: () => heldResponse.resolve(),
     stop: async () => {
@@ -136,10 +108,7 @@ async function startMockModelServer(): Promise<MockModelServer> {
       }
       stopped = true;
       heldResponse.resolve();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      });
+      await server.close();
     },
   };
 }
@@ -184,52 +153,49 @@ async function readTraceCount(tracePath: string): Promise<number> {
   }
 }
 
+async function startScenario(name: string, trace = false) {
+  const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
+  cleanupDirs.push(fixtureDir);
+  const modelServer = await startMockModelServer();
+  modelServers.push(modelServer);
+  const config = createQueuedRotationConfig(fixtureDir, modelServer.baseUrl);
+  const tracePath = path.join(fixtureDir, "turns.ndjson");
+  if (trace) {
+    const pluginDir = path.join(fixtureDir, "plugin");
+    await mkdir(pluginDir, { recursive: true });
+    await writeTurnTracerPlugin(pluginDir, tracePath);
+    config.plugins = {
+      enabled: true,
+      allow: ["queued-rotation-tracer"],
+      load: { paths: [pluginDir] },
+      entries: {
+        "queued-rotation-tracer": { enabled: true, hooks: { allowConversationAccess: true } },
+      },
+      slots: { memory: "none" },
+    };
+  }
+  const instance = await createOpenClawTestInstance({
+    name,
+    gatewayToken: "secret-token",
+    config,
+    env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+  });
+  instances.push(instance);
+  await instance.startGateway();
+  const client = new GatewayChatClient({ url: instance.url, token: "secret-token" });
+  client.start();
+  await client.waitForReady();
+  return { instance, client, modelServer, tracePath };
+}
+
 describe("Gateway queued session rotation", () => {
   it(
     "runs a replacement turn after /new cancels an active turn",
     async () => {
-      const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-queued-rotation-"));
-      cleanupDirs.push(fixtureDir);
-      const pluginDir = path.join(fixtureDir, "plugin");
-      const tracePath = path.join(fixtureDir, "turns.ndjson");
-      await mkdir(pluginDir, { recursive: true });
-      await writeTurnTracerPlugin(pluginDir, tracePath);
-
-      const modelServer = await startMockModelServer();
-      modelServers.push(modelServer);
-      const config = {
-        plugins: {
-          enabled: true,
-          allow: ["queued-rotation-tracer"],
-          load: { paths: [pluginDir] },
-          entries: {
-            "queued-rotation-tracer": {
-              enabled: true,
-              hooks: { allowConversationAccess: true },
-            },
-          },
-          slots: { memory: "none" },
-        },
-        ...createQueuedRotationConfig(fixtureDir, modelServer.baseUrl),
-      } satisfies OpenClawConfig;
-      const instance = await createOpenClawTestInstance({
-        name: "queued-session-rotation",
-        gatewayToken: "secret-token",
-        config,
-        env: {
-          OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        },
-      });
-      instances.push(instance);
-      await instance.startGateway();
-
-      const client = new GatewayChatClient({
-        url: instance.url,
-        token: "secret-token",
-      });
-      client.start();
-      await client.waitForReady();
+      const { client, modelServer, tracePath } = await startScenario(
+        "queued-session-rotation",
+        true,
+      );
       const sessionKey = "agent:main:queued-rotation-e2e";
       try {
         const first = await client.sendChat({
@@ -270,29 +236,7 @@ describe("Gateway queued session rotation", () => {
   it(
     "stops without retrying a queued followup during shutdown",
     async () => {
-      const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-followup-restart-"));
-      cleanupDirs.push(fixtureDir);
-      const modelServer = await startMockModelServer();
-      modelServers.push(modelServer);
-      const config = createQueuedRotationConfig(fixtureDir, modelServer.baseUrl);
-      const instance = await createOpenClawTestInstance({
-        name: "followup-drain-restart",
-        gatewayToken: "secret-token",
-        config,
-        env: {
-          OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        },
-      });
-      instances.push(instance);
-      await instance.startGateway();
-
-      const client = new GatewayChatClient({
-        url: instance.url,
-        token: "secret-token",
-      });
-      client.start();
-      await client.waitForReady();
+      const { instance, client, modelServer } = await startScenario("followup-drain-restart");
       const sessionKey = "agent:main:followup-drain-restart-e2e";
       try {
         const first = await client.sendChat({
