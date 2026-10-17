@@ -8,6 +8,7 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   createUsagePageFixture,
+  loadUsagePage,
   settleUsageTimers,
   usageCalls,
   textOf,
@@ -68,8 +69,7 @@ describe("UsagePage cache convergence", () => {
       const visibility = vi.spyOn(document, "visibilityState", "get");
       let snapshot = cacheSnapshot(hidden ? "fresh" : "stale");
       const request = usageRequest(() => snapshot.result);
-      const { context, page } = await createUsagePageFixture(request);
-      await preloadUsage(page);
+      const { context, page } = await loadUsagePage(request);
       await settleUsageTimers(page, 35_000);
 
       expect(page.querySelector(".usage-overview-card")).not.toBeNull();
@@ -129,8 +129,7 @@ describe("UsagePage cache convergence", () => {
         })),
       };
       const request = usageRequest(() => result);
-      const { context, page } = await createUsagePageFixture(request);
-      await preloadUsage(page);
+      const { context, page } = await loadUsagePage(request);
 
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
@@ -168,10 +167,9 @@ describe("UsagePage cache convergence", () => {
     async (scopeId) => {
       const ownerAgentId = scopeId ?? "main";
       const request = usageRequest(() => cacheSnapshot("stale").result);
-      const { context, page } = await createUsagePageFixture(request, true, (initial) => {
+      const { context, page } = await loadUsagePage(request, true, (initial) => {
         initial.agentSelection.state.scopeId = scopeId;
       });
-      await preloadUsage(page);
       expect(request.mock.calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject(
         scopeId ? { agentId: scopeId } : { agentScope: "all" },
       );
@@ -196,8 +194,7 @@ describe("UsagePage cache convergence", () => {
       ...snapshot.result,
       creatorOptions: [{ key: "user:one" }],
     }));
-    const { context, page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { context, page } = await loadUsagePage(request);
     context.publishUsage({ usageUpdatedAt: 1, usageRefreshFailed: true });
     await page.updateComplete;
     expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
@@ -218,10 +215,9 @@ describe("UsagePage cache convergence", () => {
 
   it("acknowledges only failed receipts in the explicit Refresh scope", async () => {
     const request = usageRequest(() => cacheSnapshot("stale").result);
-    const { context, page } = await createUsagePageFixture(request, true, (initial) =>
+    const { context, page } = await loadUsagePage(request, true, (initial) =>
       initial.agentSelection.setScope("main"),
     );
-    await preloadUsage(page);
     context.publishUsage({ agentId: "other", usageUpdatedAt: 1, usageRefreshFailed: true });
     context.publishUsage({ agentId: "main", usageUpdatedAt: 2, usageRefreshFailed: true });
     await page.updateComplete;
@@ -259,8 +255,7 @@ describe("UsagePage cache convergence", () => {
       const request = usageRequest(() =>
         phase === "pending" ? pending.promise : phase === "stale" ? stale : fresh,
       );
-      const { context, page } = await createUsagePageFixture(request);
-      await preloadUsage(page);
+      const { context, page } = await loadUsagePage(request);
       phase = "pending";
       refreshButton(page).click();
       for (const usageUpdatedAt of [1, 1, 2]) {
@@ -366,8 +361,7 @@ it("does not transfer a manual detail refresh to a replacement selection", async
     }
     return { providers: [] };
   });
-  const { page } = await createUsagePageFixture(request);
-  await preloadUsage(page);
+  const { page } = await loadUsagePage(request);
   page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[0]!.click();
   await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[0]));
 
@@ -395,16 +389,11 @@ describe("UsagePage provider usage outcome", () => {
       const visibility = vi.spyOn(document, "visibilityState", "get");
       let providerUsageRefreshing = true;
       let heldUsage: ReturnType<typeof deferred<SessionsUsageResult>> | undefined;
-      const client = {
-        request: vi.fn(async (method: string) =>
-          method === "usage.status"
-            ? { updatedAt: 1, providers: [], refreshing: providerUsageRefreshing }
-            : (heldUsage?.promise ?? cacheSnapshot("fresh").result),
-        ),
-      } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      const page = await createPage(client, false, context);
-      await preloadUsage(page);
+      const request = usageRequest(
+        () => heldUsage?.promise ?? cacheSnapshot("fresh").result,
+        () => ({ updatedAt: 1, providers: [], refreshing: providerUsageRefreshing }),
+      );
+      const { context, page } = await loadUsagePage(request, false);
       for (let attempt = 0; attempt < 3; attempt += 1) {
         if (state === "pending") {
           heldUsage = deferred<SessionsUsageResult>();
@@ -467,9 +456,8 @@ describe("UsagePage provider usage outcome", () => {
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
       };
       await page.updateComplete;
-      const refresh = () => page.refresh();
       if (loadSource === "direct") {
-        await refresh();
+        await page.refresh();
         await vi.waitFor(() => {
           if (failed) {
             expect(page.read().data.providerUsageUnavailable).toBe(true);
@@ -478,12 +466,10 @@ describe("UsagePage provider usage outcome", () => {
           }
         });
       }
-      const previousCalls = request.mock.calls.filter(
-        ([method]) => method === "usage.status",
-      ).length;
+      const previousCalls = usageCalls(request, "usage.status").length;
       phase = 2;
       if (aggregateFails) {
-        await refresh();
+        await page.refresh();
         await vi.waitFor(() => expect(page.read().data.error).not.toBeNull());
         expect(page.read().data.providerUsageUnavailable).toBe(false);
         if (!failed) {

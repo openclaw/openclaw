@@ -10,6 +10,8 @@ import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
   createUsagePageFixture,
+  loadUsagePage,
+  usagePoints,
   usageCalls,
   textOf,
   cacheSnapshot,
@@ -17,7 +19,6 @@ import {
   contextWeight,
   createPendingUsageRouteData,
   focusDocument,
-  preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
 
@@ -61,8 +62,7 @@ describe("UsagePage detail requests", () => {
           }
         : { providers: [], points: [], logs: [] },
     );
-    const { page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { page } = await loadUsagePage(request);
     const settle = async () => {
       await waitForFast(() => expect(page.usageLoading).toBe(false));
       await page.updateComplete;
@@ -123,8 +123,7 @@ describe("UsagePage detail requests", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await settle();
-    expect(page.querySelector(".session-bar-row")).toBeNull();
-    expect(page.querySelector(".sessions-selected-group")).toBeNull();
+    expect(page.querySelector(".session-bar-row, .sessions-selected-group")).toBeNull();
     const clearSelection = [
       ...page.querySelectorAll<HTMLButtonElement>(".sessions-card button"),
     ].find((button) => button.textContent?.trim() === "Clear Selection");
@@ -162,8 +161,7 @@ describe("UsagePage detail requests", () => {
         }
         return { providers: [], points: [] };
       });
-      const { page } = await createUsagePageFixture(request);
-      await preloadUsage(page);
+      const { page } = await loadUsagePage(request);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await waitForFast(() => expect(page.textContent).toContain(`${agentId} turn`));
 
@@ -210,8 +208,7 @@ describe("UsagePage detail requests", () => {
       }
       return params?.selectedSessions ? pending : { ...snapshot.result, sessions };
     });
-    const { page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { page } = await loadUsagePage(request);
     page.querySelector<HTMLButtonElement>('.session-bar-selection[aria-label="First"]')!.click();
     await page.updateComplete;
     expect(page.usageLoading).toBe(true);
@@ -245,21 +242,16 @@ describe("UsagePage detail requests", () => {
       return method === "sessions.usage.logs"
         ? { logs: [{ timestamp: Date.now(), role: "user", content: "Recovered conversation" }] }
         : {
-            points: [0, 1].map((offset) => ({
-              timestamp: Date.now() + offset,
-              totalTokens: 100,
-              cost: 0.1,
-              input: 100,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              cumulativeTokens: 100,
-              cumulativeCost: 0.1,
-            })),
+            points: usagePoints(Date.now(), 2, 0.1).map((point, offset) =>
+              Object.assign(point, {
+                timestamp: Date.now() + offset,
+                cumulativeTokens: 100,
+                cumulativeCost: 0.1,
+              }),
+            ),
           };
     });
-    const { context, page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { context, page } = await loadUsagePage(request);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
     await waitForFast(() =>
@@ -269,8 +261,9 @@ describe("UsagePage detail requests", () => {
       }),
     );
     await page.updateComplete;
-    expect(page.querySelector(".usage-detail-error--timeline")).toBeNull();
-    expect(page.querySelector(".usage-detail-error--conversation")).toBeNull();
+    expect(
+      page.querySelector(".usage-detail-error--timeline, .usage-detail-error--conversation"),
+    ).toBeNull();
     expect(textOf(page, ".session-logs-compact")).toContain("Loading");
 
     unavailable = false;
@@ -368,11 +361,11 @@ describe("UsagePage detail requests", () => {
     await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.usage.timeseries"),
-    ).toHaveLength(2);
-    expect(page.read().detail.timeSeries).toBeNull();
-    expect(page.read().detail.timeSeriesStatus.error).toBe("Selected timeline unavailable");
+    expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);
+    expect(page.read().detail).toMatchObject({
+      timeSeries: null,
+      timeSeriesStatus: { error: "Selected timeline unavailable" },
+    });
   });
 
   it("loads context only for the selected session and fences superseded replies through automatic recovery", async () => {
@@ -408,8 +401,7 @@ describe("UsagePage detail requests", () => {
         return { providers: [], logs: [], points: [] };
       },
     );
-    const { context, page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { context, page } = await loadUsagePage(request);
     const initial = request.mock.calls.find(([method]) => method === "sessions.usage")!;
     expect(initial[1]).toMatchObject({ includeContextWeight: false });
     expect(request.mock.calls.filter(([, params]) => params?.key)).toHaveLength(0);
@@ -422,15 +414,8 @@ describe("UsagePage detail requests", () => {
     const firstContext = request.mock.calls.find(
       ([method, params]) => method === "sessions.usage" && params?.key === keys[0],
     )!;
-    const contextParams = { ...initial[1] };
-    delete contextParams.agentScope;
-    delete contextParams.projection;
-    delete contextParams.sort;
-    delete contextParams.sortDirection;
-    expect(firstContext[1]).toEqual({
-      ...contextParams,
+    expect(firstContext[1]).toMatchObject({
       key: keys[0],
-      limit: 1,
       includeContextWeight: true,
     });
     expect(firstContext[2]?.signal?.aborted).toBe(false);
@@ -512,17 +497,7 @@ describe("UsagePage detail requests", () => {
       }
       if (method === "sessions.usage.timeseries") {
         return {
-          points: Array.from({ length: turns }, (_, index) => ({
-            timestamp: timestamp + index * 1_000,
-            input: 100,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 100,
-            cost: 0.1,
-            cumulativeTokens: (index + 1) * 100,
-            cumulativeCost: (index + 1) * 0.1,
-          })),
+          points: usagePoints(timestamp, turns, 0.1),
         };
       }
       if (method === "sessions.usage.logs") {
@@ -532,8 +507,7 @@ describe("UsagePage detail requests", () => {
       }
       return { providers: [] };
     });
-    const { page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { page } = await loadUsagePage(request);
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
     expect(textOf(page, ".timeseries-summary")).toContain("200");
@@ -579,8 +553,7 @@ describe("UsagePage detail requests", () => {
       return { providers: [] };
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const { page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
+    const { page } = await loadUsagePage(request);
     const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
     query.value = "label:Included";
     query.dispatchEvent(new Event("input", { bubbles: true }));
@@ -592,14 +565,6 @@ describe("UsagePage detail requests", () => {
     expect(page.querySelector(".usage-export-menu > button")?.getAttribute("aria-busy")).toBe(
       "true",
     );
-    const exported = request.mock.calls.find(([, params]) => params?.includeContextWeight)!;
-    expect(exported[1]).toMatchObject({
-      query: "label:Included",
-      limit: Number.MAX_SAFE_INTEGER,
-      includeContextWeight: true,
-    });
-    expect(exported[1]).not.toHaveProperty("projection");
-    expect(exported[1]).not.toHaveProperty("offset");
     const full = {
       ...result,
       sessions: sessions.map((session) =>

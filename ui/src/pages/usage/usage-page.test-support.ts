@@ -7,15 +7,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { page as usageRoute } from "./route.ts";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
+import { buildAggregatesFromSessions } from "./view.test-support.ts";
 
 export type TestUsagePage = Awaited<ReturnType<typeof createPage>>;
-
-const pageCleanups = new Set<() => void>();
 
 export async function createUsagePageFixture(
   request: (...args: never[]) => unknown,
@@ -27,6 +26,26 @@ export async function createUsagePageFixture(
   configure?.(context);
   const page = await createPage(client, renderView, context);
   return { client, context, page };
+}
+
+export async function loadUsagePage(...args: Parameters<typeof createUsagePageFixture>) {
+  const fixture = await createUsagePageFixture(...args);
+  await preloadUsage(fixture.page);
+  return fixture;
+}
+
+export function usagePoints(timestamp: number, count: number, cost = 0) {
+  return Array.from({ length: count }, (_, index) => ({
+    timestamp: timestamp + index * 1_000,
+    input: 100,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 100,
+    cost,
+    cumulativeTokens: (index + 1) * 100,
+    cumulativeCost: (index + 1) * cost,
+  }));
 }
 
 export async function settleUsageTimers(page: TestUsagePage, milliseconds = 0) {
@@ -177,7 +196,6 @@ export async function createPage(
   let model: ReturnType<typeof createUsagePage>;
   let routeData: UsageRouteData | undefined;
   let disposeView: () => void;
-  let disposed = false;
   const mount = () => {
     disposeView = mountSolid(
       () => {
@@ -195,14 +213,6 @@ export async function createPage(
       { container },
     ).unmount;
   };
-  const cleanup = () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    disposeView();
-    pageCleanups.delete(cleanup);
-  };
   const page = {
     element: container,
     querySelector: container.querySelector.bind(container),
@@ -219,8 +229,6 @@ export async function createPage(
     set context(next: ApplicationContext) {
       disposeView();
       context = next;
-      disposed = false;
-      pageCleanups.add(cleanup);
       mount();
       if (routeData) {
         model.setRouteData(routeData);
@@ -253,12 +261,11 @@ export async function createPage(
       });
     },
     remove() {
-      cleanup();
+      disposeView();
       container.remove();
     },
   };
   document.body.append(container);
-  pageCleanups.add(cleanup);
   mount();
   await page.updateComplete;
   return page;
@@ -292,9 +299,7 @@ export function createPendingUsageRouteData(
 }
 
 export function cleanupUsagePageTest(): void {
-  for (const cleanup of pageCleanups) {
-    cleanup();
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -333,13 +338,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
       sessions: [],
       totals,
       aggregates: {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
+        ...buildAggregatesFromSessions([]),
         costDaily: [],
       },
       cacheStatus,

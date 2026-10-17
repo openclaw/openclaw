@@ -13,29 +13,28 @@ import {
   focusDocument,
   preloadUsage,
   refreshButton,
+  usageCalls,
   type TestUsagePage,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 let baseResult: ReturnType<typeof cacheSnapshot>["result"];
 beforeEach(() => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+  vi.useFakeTimers({ now: new Date("2026-08-07T12:00:00Z") });
   focusDocument();
   baseResult = cacheSnapshot("fresh").result;
 });
 
-function changeControl(control: HTMLInputElement | HTMLSelectElement, value: string) {
+type Control = HTMLInputElement | HTMLSelectElement;
+function changeControl(control: Control, value: string) {
   control.value = value;
   control.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function rangeSnapshot(page: TestUsagePage) {
-  return {
-    range: textOf(page, ".cost-window-range-label")?.trim(),
-    value: textOf(page, ".cost-window-card--range .cost-window-card__value")?.trim(),
-  };
-}
+const rangeSnapshot = (page: TestUsagePage) => ({
+  range: textOf(page, ".cost-window-range-label")?.trim(),
+  value: textOf(page, ".cost-window-card--range .cost-window-card__value")?.trim(),
+});
 
 const providerPlan = () => ({
   updatedAt: Date.now(),
@@ -47,15 +46,15 @@ function usageRow(label: string, key = "agent:main:query-proof", agentId = "main
 }
 
 it.each([
-  ["startDate", "2026-07-01", "input.usage-date-input", 0],
-  ["endDate", "2026-08-08", "input.usage-date-input", 1],
-  ["groupBy", "instance", null, 0],
-  ["mode", "utc", "select.usage-select", 0],
-  ["agentId", "writer", null, 0],
-  ["creatorKey", "profile:opaque-alex", ".usage-creator-filter", 0],
+  ["startDate", "2026-07-01", '[aria-label="Start date"]'],
+  ["endDate", "2026-08-08", '[aria-label="End date"]'],
+  ["groupBy", "instance", null],
+  ["mode", "utc", "select.usage-select"],
+  ["agentId", "writer", null],
+  ["creatorKey", "profile:opaque-alex", ".usage-creator-filter"],
 ] as const)(
-  "does not attribute cached or late results to a changed %s",
-  async (change, value, selector, index) => {
+  "rejects cached and late results after changing %s",
+  async (change, value, selector) => {
     const original = {
       ...usageRow("Old query row", "agent:main:old"),
       creatorOptions: [
@@ -64,32 +63,20 @@ it.each([
     };
     const oldReply = deferred<typeof original>();
     const newReply = deferred<typeof original>();
-    let phase: "initial" | "old" | "new" = "initial";
+    let reply: typeof original | Promise<typeof original> = original;
     const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
       const replies: Record<string, unknown> = {
-        "sessions.usage": { initial: original, old: oldReply.promise, new: newReply.promise }[
-          phase
-        ],
+        "sessions.usage": reply,
         "sessions.usage.timeseries": { points: [] },
         "sessions.usage.logs": { logs: [] },
       };
       return replies[method] ?? providerPlan();
     });
-    const lastQuery = () =>
-      request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
-    let disposeSelection = () => {};
+    let selection: ReturnType<typeof createAgentSelectionCapability> | undefined;
     try {
       const { page, context } = await createUsagePageFixture(request, true, (fixture) => {
-        const selection = createAgentSelectionCapability(
-          {
-            connection: { gatewayUrl: "ws://qa.invalid" },
-            snapshot: { assistantAgentId: null },
-            subscribe: () => () => {},
-          },
-          fixture.agents,
-        );
+        selection = createAgentSelectionCapability(fixture.gateway, fixture.agents);
         fixture.agentSelection = selection;
-        disposeSelection = () => selection.dispose();
       });
       await preloadUsage(page);
       expect(page.textContent).toContain("Old query row");
@@ -98,15 +85,12 @@ it.each([
         await vi.advanceTimersByTimeAsync(0);
         expect(page.usageSelectedSessions).toEqual(["agent:main:old"]);
       }
-      phase = "old";
+      reply = oldReply.promise;
       refreshButton(page).click();
       await page.updateComplete;
-      phase = "new";
+      reply = newReply.promise;
       if (selector) {
-        changeControl(
-          page.querySelectorAll<HTMLInputElement | HTMLSelectElement>(selector)[index]!,
-          value,
-        );
+        changeControl(page.querySelector<Control>(selector)!, value);
       } else if (change === "groupBy") {
         [...page.querySelectorAll<HTMLButtonElement>("button")]
           .find((button) => button.textContent?.trim() === "Current instance")!
@@ -117,8 +101,7 @@ it.each([
       await page.updateComplete;
       expect(page.usageSelectedSessions).toEqual([]);
       expect.soft(page.textContent).not.toContain("Old query row");
-      expect.soft(page.querySelector(".usage-metric-badge")).toBeNull();
-      expect.soft(page.querySelector(".usage-empty-state")).toBeNull();
+      expect.soft(page.querySelector(".usage-metric-badge, .usage-empty-state")).toBeNull();
       expect(page.textContent).toContain("QA Provider Plan");
       expect(page.querySelector<HTMLInputElement>("input.usage-date-input")?.disabled).toBe(false);
 
@@ -126,7 +109,7 @@ it.each([
       await settleUsageTimers(page);
       expect.soft(page.textContent).not.toContain("Old query row");
       await vi.advanceTimersByTimeAsync(400);
-      const query = lastQuery();
+      const query = usageCalls(request).at(-1)?.[1];
       expect(query).toMatchObject({ [change]: value });
       newReply.resolve({
         ...original,
@@ -142,53 +125,51 @@ it.each([
         const select = page.querySelector<HTMLSelectElement>(".usage-creator-filter")!;
         expect(select.value).toBe("profile:opaque-alex");
         expect(select.textContent).toContain("Alex Morgan");
-        phase = "initial";
+        reply = original;
         changeControl(select, "");
         await settleUsageTimers(page);
-        expect(lastQuery()).not.toHaveProperty("creatorKey");
+        expect(usageCalls(request).at(-1)?.[1]).not.toHaveProperty("creatorKey");
         expect(page.textContent).toContain("Old query row");
         expect(page.textContent).not.toContain("New query row");
       }
     } finally {
-      disposeSelection();
+      selection?.dispose();
     }
   },
 );
 
-it.each(["same query", "dates"] as const)(
+it.each([
+  ["same query", { startDate: "2026-07-09", endDate: "2026-08-07" }],
+  ["dates", { startDate: "2026-07-01", endDate: "2026-07-01" }],
+] as const)(
   "keeps overview data owned by its query after a failed %s request",
-  async (change) => {
+  async (change, dates) => {
     let phase: "initial" | "failure" | "recovered" = "initial";
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "usage.status") {
         return providerPlan();
       }
-      if (method === "sessions.usage" && phase === "failure") {
+      assert.equal(method, "sessions.usage", `Unexpected Usage request: ${method}`);
+      if (phase === "failure") {
         throw new Error("QA usage temporarily unavailable");
       }
       const { startDate: date, endDate } = params ?? {};
       assert(typeof date === "string" && typeof endDate === "string");
-      if (method === "sessions.usage") {
-        const result = usageRow(
-          phase === "recovered" ? "Recovered query row" : "Original query row",
-        );
-        return {
-          ...result,
-          startDate: date,
-          endDate,
-          aggregates: {
-            ...result.aggregates,
-            costDaily: [{ date, ...result.totals }],
-          },
-        };
-      }
-      throw new Error(`Unexpected Usage request: ${method}`);
+      const label = phase === "recovered" ? "Recovered query row" : "Original query row";
+      return {
+        ...usageRow(label),
+        startDate: date,
+        endDate,
+        aggregates: {
+          ...baseResult.aggregates,
+          costDaily: [{ date, ...baseResult.totals }],
+        },
+      };
     });
     const { page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     expect(page.textContent).toContain("Original query row");
     expect(page.textContent).toContain("QA Provider Plan");
-    expect(textOf(page, ".cost-window-card--range")).toContain("$1");
     const original = rangeSnapshot(page);
     expect(original.range).toBeTruthy();
     expect(original.value).toMatch(/^\$1(?:\.0+)?$/);
@@ -206,12 +187,7 @@ it.each(["same query", "dates"] as const)(
     expect(textOf(page, ".usage-callout.danger")).toContain("QA usage temporarily unavailable");
     expect(refreshButton(page).disabled).toBe(false);
     expect(page.textContent).toContain("QA Provider Plan");
-    const query = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
-    expect(query).toMatchObject(
-      change === "dates"
-        ? { startDate: "2026-07-01", endDate: "2026-07-01" }
-        : { startDate: "2026-07-09", endDate: "2026-08-07" },
-    );
+    expect(usageCalls(request).at(-1)?.[1]).toMatchObject(dates);
     const failed = rangeSnapshot(page);
     if (change === "same query") {
       expect(page.textContent).toContain("Original query row");

@@ -14,23 +14,35 @@ import {
   focusDocument,
   preloadUsage,
   refreshButton,
+  usagePoints,
 } from "./usage-page.test-support.ts";
 
 beforeEach(focusDocument);
 afterEach(cleanupUsagePageTest);
 
-function overviewFixture({ result } = cacheSnapshot("fresh")) {
-  return (row: Partial<UsageSessionEntry>, updatedAt = result.updatedAt) => ({
-    ...result,
-    updatedAt,
-    sessions: [{ key: "global", agentId: "main", usage: result.totals, ...row }],
-  });
+function overviewFixture(row: Partial<UsageSessionEntry> = {}) {
+  const { result } = cacheSnapshot("fresh");
+  const session: UsageSessionEntry = {
+    key: "global",
+    agentId: "main",
+    usage: { ...result.totals },
+    ...row,
+  };
+  return { ...result, sessions: [session] };
 }
 
 function usageRequest(handlers: Record<string, () => unknown>) {
   return vi.fn(async (method: string, _params?: Record<string, unknown>) =>
     handlers[method] ? handlers[method]() : { providers: [] },
   );
+}
+
+function readOverview(
+  result: ReturnType<typeof overviewFixture>,
+  patch: Partial<UsageSessionEntry> = {},
+) {
+  const row = result.sessions[0]!;
+  return { ...result, sessions: [{ ...row, usage: { ...row.usage }, ...patch }] };
 }
 
 async function selectSession(request: Parameters<typeof createUsagePageFixture>[0]) {
@@ -41,35 +53,23 @@ async function selectSession(request: Parameters<typeof createUsagePageFixture>[
 }
 
 async function timelineFixture(sessionId: string | undefined, turnText?: string) {
-  const snapshot = cacheSnapshot("fresh");
-  const overview = overviewFixture(snapshot);
+  const overview = overviewFixture({ sessionId, label: turnText ? "Original summary" : undefined });
   const state = {
-    sessionId,
+    row: overview.sessions[0]!,
     points: usagePoints(new Date().setHours(12, 0, 0, 0), 3),
-    label: turnText ? "Original summary" : undefined,
-    tokens: 100,
-    revision: snapshot.result.updatedAt,
   };
   const request = usageRequest({
-    "sessions.usage": () =>
-      overview(
-        {
-          sessionId: state.sessionId,
-          label: state.label,
-          usage: { ...snapshot.result.totals, input: state.tokens, totalTokens: state.tokens },
-        },
-        state.revision,
-      ),
-    "sessions.usage.timeseries": () => ({ sessionId: state.sessionId, points: state.points }),
+    "sessions.usage": () => readOverview(overview),
+    "sessions.usage.timeseries": () => ({ sessionId: state.row.sessionId, points: state.points }),
     "sessions.usage.logs": () => ({
       logs: state.points.map(({ timestamp }, index) => ({
         timestamp,
         role: turnText ? "user" : "assistant",
-        content: turnText ?? `${state.sessionId} reply ${index + 1}`,
+        content: turnText ?? `${state.row.sessionId} reply ${index + 1}`,
       })),
     }),
   });
-  return { ...(await selectSession(request)), request, state };
+  return { ...(await selectSession(request)), request, state, overview };
 }
 
 async function refreshOverview(
@@ -82,20 +82,6 @@ async function refreshOverview(
     context.publishUsage({ usageUpdatedAt: 1 });
     await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
   }
-}
-
-function usagePoints(timestamp: number, count: number) {
-  return Array.from({ length: count }, (_, index) => ({
-    timestamp: timestamp + index * 1_000,
-    input: 100,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 100,
-    cost: 0,
-    cumulativeTokens: (index + 1) * 100,
-    cumulativeCost: 0,
-  }));
 }
 
 function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
@@ -129,11 +115,11 @@ it.each([
       if (!activeDrag) {
         drag.end();
       }
-      state.sessionId = "replacement-instance";
+      state.row.sessionId = "replacement-instance";
       state.points = usagePoints(state.points[0]!.timestamp + 60_000, points);
       await refreshOverview(fixture, refresh);
       await vi.waitFor(() =>
-        expect(page.read().detail.timeSeries?.sessionId).toBe(state.sessionId),
+        expect(page.read().detail.timeSeries?.sessionId).toBe(state.row.sessionId),
       );
       if (activeDrag) {
         drag.move();
@@ -142,7 +128,7 @@ it.each([
       expect.soft(page.usageSelectedSessions).toEqual(["global"]);
       expect
         .soft([...page.querySelectorAll(".session-log-content")].map((entry) => entry.textContent))
-        .toEqual(state.points.map((_, index) => `${state.sessionId} reply ${index + 1}`));
+        .toEqual(state.points.map((_, index) => `${state.row.sessionId} reply ${index + 1}`));
       expect.soft(page.querySelector(".timeseries-summary__range")).toBeNull();
       expect.soft(textOf(page, ".session-logs-header-count")).not.toContain("timeline filtered");
     } finally {
@@ -157,10 +143,9 @@ it.each([
 ])(
   "retires old-$replacement details and pending recovery on $refresh refresh",
   async ({ replacement, refresh }) => {
-    const overview = overviewFixture();
+    const overview = overviewFixture({ sessionId: "original-instance", label: "Original session" });
+    const row = overview.sessions[0]!;
     const retired = deferred<SessionUsageTimeSeries>();
-    let agentId = "main";
-    let sessionId = "original-instance";
     let holdOriginal = false;
     let replaced = false;
     const detailResponse = (method: "logs" | "timeseries") => {
@@ -174,12 +159,7 @@ it.each([
           : { sessionId: "original-instance", points: [] };
     };
     const request = usageRequest({
-      "sessions.usage": () =>
-        overview({
-          agentId,
-          sessionId,
-          label: replaced ? "Replacement session" : "Original session",
-        }),
+      "sessions.usage": () => readOverview(overview),
       "sessions.usage.logs": () => detailResponse("logs"),
       "sessions.usage.timeseries": () => detailResponse("timeseries"),
     });
@@ -194,10 +174,11 @@ it.each([
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     replaced = true;
+    row.label = "Replacement session";
     if (replacement === "owner") {
-      agentId = "opus";
+      row.agentId = "opus";
     } else {
-      sessionId = "replacement-instance";
+      row.sessionId = "replacement-instance";
     }
     const beforeRefresh = request.mock.calls.length;
     await refreshOverview(fixture, refresh);
@@ -225,7 +206,7 @@ it.each([
       expect.soft(requests, method).toHaveLength(1);
       expect.soft(requests[0]?.[1], method).toEqual({
         key: "global",
-        agentId,
+        agentId: row.agentId,
         ...(method === "sessions.usage.logs" ? { limit: 1000 } : {}),
       });
     }
@@ -239,7 +220,7 @@ it.each([
   "retains details and range on $refresh refresh of instance $sessionId",
   async ({ sessionId, refresh }) => {
     const fixture = await timelineFixture(sessionId, "Retained turn");
-    const { context, page, request, state } = fixture;
+    const { context, page, request, state, overview } = fixture;
     await vi.waitFor(() => expect(page.textContent).toContain("Retained turn"));
     dragTimelineRange(page).end();
     await page.updateComplete;
@@ -247,14 +228,16 @@ it.each([
     const range = textOf(page, ".timeseries-summary__range");
     const timeSeries = page.read().detail.timeSeries;
     const logs = page.read().detail.sessionLogs;
-    state.label = "Refreshed summary";
-    state.tokens = 350;
-    state.revision += 1;
+    state.row.label = "Refreshed summary";
+    state.row.usage!.input = state.row.usage!.totalTokens = 350;
+    overview.updatedAt += 1;
     await refreshOverview(fixture, refresh);
-    await vi.waitFor(() => expect(textOf(page, ".session-bar-selection")).toContain(state.label));
+    await vi.waitFor(() =>
+      expect(textOf(page, ".session-bar-selection")).toContain(state.row.label),
+    );
     await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
     await page.updateComplete;
-    expect(textOf(page, ".session-bar-selection")).toContain(state.label);
+    expect(textOf(page, ".session-bar-selection")).toContain(state.row.label);
     await vi.waitFor(() => expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350));
     expect(textOf(page, ".session-detail-stats strong")).toBe("200");
     expect(page.usageSelectedSessions).toEqual(["global"]);
@@ -267,10 +250,7 @@ it.each([
     await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
     expect(usageCalls(request)).toHaveLength(summaryReads + 1);
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
-      expect(
-        request.mock.calls.filter(([name]) => name === method),
-        method,
-      ).toHaveLength(refresh === "manual" ? 2 : 1);
+      expect(usageCalls(request, method), method).toHaveLength(refresh === "manual" ? 2 : 1);
     }
     [...page.querySelectorAll<HTMLButtonElement>(".timeseries-controls button")]
       .find((button) => button.textContent?.trim() === "Reset")!
@@ -280,6 +260,7 @@ it.each([
     expect(textOf(page, ".session-detail-stats strong")).toBe("350");
   },
 );
+
 it.each([
   { captured: "selected-instance", returned: "retired-instance", conflict: true },
   { captured: "selected-instance", returned: undefined, conflict: false },
@@ -287,20 +268,18 @@ it.each([
 ])(
   "binds context response $returned to optional captured instance $captured",
   async ({ captured, returned, conflict }) => {
-    const overview = overviewFixture();
-    let returnedId = returned;
-    let report = "Initial context";
-    const session = {
+    const overview = overviewFixture({
       agentId: "opus",
       sessionId: captured,
       hasContextWeight: true,
-    };
+    });
+    let returnedId = returned;
+    let report = "Initial context";
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.usage") {
-        return overview(
-          params?.key
-            ? { ...session, sessionId: returnedId, contextWeight: contextWeight(report) }
-            : session,
+        return readOverview(
+          overview,
+          params?.key ? { sessionId: returnedId, contextWeight: contextWeight(report) } : {},
         );
       }
       return { providers: [], logs: [], points: [] };
