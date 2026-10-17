@@ -28,6 +28,32 @@ const temporary = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
 let sources: Map<string, string>;
 const cfg = { plugins: { enabled: false } };
+const doctorParams = () => ({
+  cfg,
+  env: process.env,
+  legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+});
+const migrate = () =>
+  autoMigrateLegacyState({ ...doctorParams(), doctorOnlyStateMigrations: true });
+function startup() {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return {
+    log,
+    run: () =>
+      runGatewayPostReadyStartupMaintenance({
+        getConfig: () => cfg,
+        getPluginRegistry: createEmptyPluginRegistry,
+        databases: [],
+        signal: new AbortController().signal,
+        log,
+      }),
+  };
+}
+async function expectSources(suffix = "") {
+  for (const [relative, bytes] of sources) {
+    expect(await fs.readFile(path.join(stateDir, relative) + suffix, "utf8")).toBe(bytes);
+  }
+}
 
 beforeEach(async () => {
   const home = temporary.make("openclaw-doctor-pairing-boundary-");
@@ -93,24 +119,16 @@ describe("legacy pairing repair ownership", () => {
           stateDir,
         );
       }
-      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const { run, log } = startup();
       const retired = await migrateLegacyDesktopStreamOptOuts(cfg, stateDir);
-      await runGatewayPostReadyStartupMaintenance({
-        getConfig: () => cfg,
-        getPluginRegistry: createEmptyPluginRegistry,
-        databases: [],
-        signal: new AbortController().signal,
-        log,
-      });
+      await run();
       if (desktop) {
         expect((await getPairedDevice("desktop-node", stateDir))?.nodeSurface?.commands).toEqual([
           "system.run",
         ]);
         expect(retired).toBe(1);
       } else {
-        for (const [relative, bytes] of sources) {
-          expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
-        }
+        await expectSources();
         expect(await getPairedDevice("synthetic", stateDir)).toBeNull();
         expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
       }
@@ -126,66 +144,36 @@ describe("legacy pairing repair ownership", () => {
         ? Promise.reject(Object.assign(new Error(`synthetic ${code}`), { code }))
         : access(file, mode),
     );
-    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    await expect(
-      runGatewayPostReadyStartupMaintenance({
-        getConfig: () => cfg,
-        getPluginRegistry: createEmptyPluginRegistry,
-        databases: [],
-        signal: new AbortController().signal,
-        log,
-      }),
-    ).resolves.toBeUndefined();
+    const { run, log } = startup();
+    await expect(run()).resolves.toBeUndefined();
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`synthetic ${code}`));
-    await expect(
-      autoMigrateLegacyState({
-        cfg,
-        env: process.env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      }),
-    ).resolves.toBeDefined();
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env: process.env,
-      doctorOnlyStateMigrations: true,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    await expect(autoMigrateLegacyState(doctorParams())).resolves.toBeDefined();
+    const result = await migrate();
     expect(
       result.stepReceipts.find((receipt) => receipt.id === "migration-detection"),
     ).toMatchObject({ outcome: "refused" });
-    for (const [relative, bytes] of sources) {
-      expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
-    }
+    await expectSources();
   });
   it.each([false, true])(
     "imports device approvals before node capabilities in Doctor (failed first attempt: %s)",
     async (retry) => {
-      const params = {
-        cfg,
-        env: process.env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      };
       if (retry) {
         const devicePath = path.join(stateDir, "devices/paired.json");
         await fs.writeFile(devicePath, "{invalid");
-        const failed = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
+        const failed = await migrate();
         expect(
           failed.stepReceipts.find((receipt) => receipt.id === "pairing-stores"),
-        ).toMatchObject({
-          outcome: "refused",
-        });
+        ).toMatchObject({ outcome: "refused" });
         expect(await fs.readFile(devicePath, "utf8")).toBe("{invalid");
         expect(await fs.readFile(path.join(stateDir, "nodes/paired.json"), "utf8")).toBe(
           sources.get("nodes/paired.json"),
         );
         await fs.writeFile(devicePath, sources.get("devices/paired.json")!);
       } else {
-        await autoMigrateLegacyState(params);
-        for (const [relative, bytes] of sources) {
-          expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
-        }
+        await autoMigrateLegacyState(doctorParams());
+        await expectSources();
       }
-      const result = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
+      const result = await migrate();
       expect(result.warnings).toEqual([]);
       expect(await getPairedDevice("synthetic", stateDir)).toMatchObject({
         publicKey: "synthetic-public-key",
@@ -193,14 +181,9 @@ describe("legacy pairing repair ownership", () => {
         nodeSurface: { caps: ["canvas"] },
       });
       expect((await listDevicePairing(stateDir)).pending).toEqual([]);
-      for (const [relative, bytes] of sources) {
-        expect(await fs.readFile(path.join(stateDir, relative) + ".migrated", "utf8")).toBe(bytes);
-      }
+      await expectSources(".migrated");
       if (!retry) {
-        const repeated = await autoMigrateLegacyState({
-          ...params,
-          doctorOnlyStateMigrations: true,
-        });
+        const repeated = await migrate();
         expect(repeated.changes).toEqual([]);
       }
     },

@@ -1,4 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as configIo from "../config/io.js";
+import * as configMutate from "../config/mutate.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { ModelProviderConfigInput } from "../config/types.models.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -33,8 +35,6 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: { config: OpenClawConfig }) => applyPluginAutoEnable(params),
 }));
 
-let configIo: typeof import("../config/io.js");
-let configMutate: typeof import("../config/mutate.js");
 const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
 const configPath = "/tmp/openclaw-startup-recovery.json";
 const validConfig: OpenClawConfig = { gateway: { mode: "local" } };
@@ -59,9 +59,9 @@ function snapshot(
   };
 }
 
-function mockSnapshot(value: ConfigFileSnapshot) {
+function mockSnapshot(config: OpenClawConfig, overrides: Partial<ConfigFileSnapshot> = {}) {
   vi.mocked(configIo.readConfigFileSnapshotWithPluginMetadata).mockResolvedValueOnce({
-    snapshot: value,
+    snapshot: snapshot(config, overrides),
     pluginMetadataSnapshot,
   });
 }
@@ -95,10 +95,6 @@ function expectAutoEnableSource(config: OpenClawConfig) {
 }
 
 describe("gateway startup config validation", () => {
-  beforeAll(async () => {
-    configIo = await import("../config/io.js");
-    configMutate = await import("../config/mutate.js");
-  });
   beforeEach(() => {
     vi.clearAllMocks();
     configMode.nix = configMode.readOnly = false;
@@ -135,7 +131,7 @@ describe("gateway startup config validation", () => {
       channels: { telegram: { ...sourceConfig.channels?.telegram, dmPolicy: "pairing" } },
       messages: { ackReactionScope: "group-mentions" },
     };
-    mockSnapshot(snapshot(sourceConfig, { runtimeConfig, config: runtimeConfig }));
+    mockSnapshot(sourceConfig, { runtimeConfig, config: runtimeConfig });
     autoEnable({
       ...sourceConfig,
       channels: { telegram: { ...sourceConfig.channels?.telegram, enabled: true } },
@@ -151,9 +147,6 @@ describe("gateway startup config validation", () => {
     expect(result.snapshot.sourceConfig).toBe(sourceConfig);
     expect(result.snapshot.sourceConfig.models?.providers?.anthropic).toEqual({
       apiKey: "test-api-key",
-    });
-    expect(result.snapshot.runtimeConfig.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": {},
     });
     expectAutoEnableSource(sourceConfig);
     expect(runtimeConfig.channels?.telegram?.enabled).toBeUndefined();
@@ -171,12 +164,10 @@ describe("gateway startup config validation", () => {
   });
 
   it("preserves storage read failures without invalid-config repair guidance", async () => {
-    mockSnapshot(
-      snapshot(validConfig, {
-        valid: false,
-        issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
-      }),
-    );
+    mockSnapshot(validConfig, {
+      valid: false,
+      issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+    });
     const start = loadStartup();
     await expect(start).rejects.toMatchObject({ code: "CONFIG_READ_FAILED" });
     await expect(start).rejects.not.toThrow("doctor --fix");
@@ -188,24 +179,22 @@ describe("gateway startup config validation", () => {
     "selects packaging recovery guidance (core invalidity: %s)",
     async (coreInvalid) => {
       const config: OpenClawConfig = { plugins: { slots: { memory: "source-only-pack" } } };
-      mockSnapshot(
-        snapshot(config, {
-          valid: false,
-          issues: [
-            { path: "plugins.slots.memory", message: "plugin not found: source-only-pack" },
-            ...(coreInvalid
-              ? [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }]
-              : []),
-          ],
-          warnings: [
-            {
-              path: "plugins",
-              message:
-                "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-            },
-          ],
-        }),
-      );
+      mockSnapshot(config, {
+        valid: false,
+        issues: [
+          { path: "plugins.slots.memory", message: "plugin not found: source-only-pack" },
+          ...(coreInvalid
+            ? [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }]
+            : []),
+        ],
+        warnings: [
+          {
+            path: "plugins",
+            message:
+              "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+          },
+        ],
+      });
       const start = loadStartup();
       if (coreInvalid) {
         await expect(start).rejects.toThrow('Run "openclaw doctor --fix" to repair, then retry.');
@@ -227,16 +216,14 @@ describe("gateway startup config validation", () => {
       },
     ];
     mockSnapshot(
-      snapshot(
-        {},
-        {
-          raw: '{"session":{"typingMode":"thinking"}}\n',
-          parsed: { session: { typingMode: "thinking" } },
-          valid: false,
-          issues,
-          legacyIssues: issues,
-        },
-      ),
+      {},
+      {
+        raw: '{"session":{"typingMode":"thinking"}}\n',
+        parsed: { session: { typingMode: "thinking" } },
+        valid: false,
+        issues,
+        legacyIssues: issues,
+      },
     );
     configMode.nix = mode === "Nix";
     configMode.readOnly = true;

@@ -1,11 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
-} from "../agents/auth-profiles/runtime-snapshots.js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -19,8 +14,28 @@ import {
   SharedGatewaySessionGenerationState,
   type SharedGatewayAuthClient,
 } from "./server-shared-auth-generation.js";
+import { makePreparedSecretsSnapshot } from "./server-startup-config.test-support.js";
 import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+
+function generationState(current: string | undefined, required: string | null = null) {
+  return new SharedGatewaySessionGenerationState({ current, required });
+}
+
+function observeSource(
+  state: SharedGatewaySessionGenerationState,
+  client: SharedGatewayAuthClient,
+) {
+  const source = new AbortController();
+  onTestFinished(
+    state.onInvalidated(
+      client.sharedGatewaySessionGeneration,
+      () => source.abort(),
+      client.authPolicy,
+    ),
+  );
+  return source.signal;
+}
 
 function proxyConfig(
   policy: Partial<GatewayTrustedProxyConfig> = {},
@@ -90,18 +105,10 @@ describe("shared gateway generation publication", () => {
     ({ next }) => {
       const initial = proxyConfig();
       const client = proxyClient(initial);
-      const state = new SharedGatewaySessionGenerationState({
-        current: client.sharedGatewaySessionGeneration,
-        required: null,
-      });
-      const source = new AbortController();
-      const releaseGeneration = state.onInvalidated(
-        client.sharedGatewaySessionGeneration,
-        () => source.abort(),
-        client.authPolicy,
-      );
+      const state = generationState(client.sharedGatewaySessionGeneration);
+      const source = observeSource(state, client);
       const sourceInvalidated = vi.fn();
-      const releaseClient = onGatewayPolicyClientInvalidated(client, sourceInvalidated);
+      onTestFinished(onGatewayPolicyClientInvalidated(client, sourceInvalidated));
       const publication = vi.spyOn(state, "publishInvalidation");
       const nextGeneration = sharedGeneration(next);
       const transition = { previous: initial, next };
@@ -122,10 +129,8 @@ describe("shared gateway generation publication", () => {
       expect(client.invalidated).toBe(true);
       expect(client.sourceInvalidated).toBeFalsy();
       expect(sourceInvalidated).not.toHaveBeenCalled();
-      expect(source.signal.aborted).toBe(false);
+      expect(source.aborted).toBe(false);
       expect(publication).not.toHaveBeenCalled();
-      releaseClient();
-      releaseGeneration();
     },
   );
 
@@ -133,22 +138,9 @@ describe("shared gateway generation publication", () => {
     const initial = proxyConfig();
     const retained = proxyClient(initial);
     const removed = proxyClient(initial, "removed@example.test");
-    const state = new SharedGatewaySessionGenerationState({
-      current: sharedGeneration(initial),
-      required: null,
-    });
-    const retainedSource = new AbortController();
-    const removedSource = new AbortController();
-    const releaseRetained = state.onInvalidated(
-      retained.sharedGatewaySessionGeneration,
-      () => retainedSource.abort(),
-      retained.authPolicy,
-    );
-    const releaseRemoved = state.onInvalidated(
-      removed.sharedGatewaySessionGeneration,
-      () => removedSource.abort(),
-      removed.authPolicy,
-    );
+    const state = generationState(sharedGeneration(initial));
+    const retainedSource = observeSource(state, retained);
+    const removedSource = observeSource(state, removed);
     const next = proxyConfig({ allowUsers: ["retained@example.test"] });
     const nextGeneration = sharedGeneration(next);
 
@@ -161,9 +153,9 @@ describe("shared gateway generation publication", () => {
     });
 
     expect(retained.sourceInvalidated).toBeFalsy();
-    expect(retainedSource.signal.aborted).toBe(false);
+    expect(retainedSource.aborted).toBe(false);
     expect(removed.socket.close).not.toHaveBeenCalled();
-    expect(removedSource.signal.aborted).toBe(true);
+    expect(removedSource.aborted).toBe(true);
     disconnectStaleSharedGatewayAuthClients({
       state,
       clients: [removed],
@@ -172,17 +164,12 @@ describe("shared gateway generation publication", () => {
     });
     expect(removed.sourceInvalidated).toBe(true);
     expect(removed.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
-    releaseRetained();
-    releaseRemoved();
   });
 
   it("keeps explicit all-source revocation independent of proxy policy fencing", () => {
     const initial = proxyConfig();
     const client = proxyClient(initial);
-    const state = new SharedGatewaySessionGenerationState({
-      current: sharedGeneration(initial),
-      required: null,
-    });
+    const state = generationState(sharedGeneration(initial));
     const revoked = vi.fn();
     const release = state.onInvalidated(
       client.sharedGatewaySessionGeneration,
@@ -201,21 +188,10 @@ describe("shared gateway generation publication", () => {
   });
 
   it("revokes a rotated local proxy password without revoking the proxy identity", () => {
-    const proxy = proxyConfig();
-    const initial: OpenClawConfig = {
-      ...proxy,
-      gateway: {
-        ...proxy.gateway,
-        auth: { ...proxy.gateway?.auth, password: "old-local-fallback" },
-      },
-    };
-    const next: OpenClawConfig = {
-      ...initial,
-      gateway: {
-        ...initial.gateway,
-        auth: { ...initial.gateway?.auth, password: "new-local-fallback" },
-      },
-    };
+    const initial = proxyConfig();
+    initial.gateway!.auth!.password = "old-local-fallback";
+    const next = structuredClone(initial);
+    next.gateway!.auth!.password = "new-local-fallback";
     const retained = proxyClient(initial);
     const fallback: SharedGatewayAuthClient = {
       usesSharedGatewayAuth: true,
@@ -225,25 +201,15 @@ describe("shared gateway generation publication", () => {
     };
     const generation = sharedGeneration(next);
     expect(generation).toBe(fallback.sharedGatewaySessionGeneration);
-    const state = new SharedGatewaySessionGenerationState({ current: generation, required: null });
-    const retainedSource = new AbortController();
-    const detachedFallbackSource = new AbortController();
-    const releaseRetained = state.onInvalidated(
-      generation,
-      () => retainedSource.abort(),
-      retained.authPolicy,
-    );
-    const releaseFallback = state.onInvalidated(
-      generation,
-      () => detachedFallbackSource.abort(),
-      fallback.authPolicy,
-    );
+    const state = generationState(generation);
+    const retainedSource = observeSource(state, retained);
+    const detachedFallbackSource = observeSource(state, fallback);
     const fallbackInvalidated = vi.fn();
     const releaseClient = onGatewayPolicyClientInvalidated(fallback, fallbackInvalidated);
     const transition = { previous: initial, next };
 
     expect(state.finalize(claimGeneration(state, generation), transition)).toBe(true);
-    expect(detachedFallbackSource.signal.aborted).toBe(true);
+    expect(detachedFallbackSource.aborted).toBe(true);
     enforceSharedGatewaySessionGenerationForConfigWrite({
       state,
       nextConfig: next,
@@ -256,10 +222,8 @@ describe("shared gateway generation publication", () => {
     expect(fallbackInvalidated).toHaveBeenCalledOnce();
     expect(retained.socket.close).not.toHaveBeenCalled();
     expect(retained.sourceInvalidated).toBeFalsy();
-    expect(retainedSource.signal.aborted).toBe(false);
+    expect(retainedSource.aborted).toBe(false);
     releaseClient();
-    releaseFallback();
-    releaseRetained();
   });
 
   it.each([
@@ -278,21 +242,10 @@ describe("shared gateway generation publication", () => {
       refresh: false,
     },
   ])("finalizes only the current owner after $name", ({ claimed, newer, refresh }) => {
-    const state = new SharedGatewaySessionGenerationState({
-      current: "generation-a",
-      required: "generation-a",
-    });
+    const state = generationState("generation-a", "generation-a");
     const ownership = claimGeneration(state, claimed);
     if (refresh) {
-      const snapshot = {
-        sourceConfig: {},
-        config: {},
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-        warnings: [],
-        webTools: createEmptyRuntimeWebToolsMetadata(),
-      };
+      const snapshot = makePreparedSecretsSnapshot({});
       activateSecretsRuntimeSnapshot(snapshot);
       const publishedRevision = getActiveSecretsRuntimeSnapshotRevision();
       activateSecretsRuntimeSnapshot(snapshot);
@@ -314,10 +267,7 @@ describe("shared gateway generation publication", () => {
   });
 
   it("rejects a stale restart marker after a newer config write", () => {
-    const state = new SharedGatewaySessionGenerationState({
-      current: "generation-a",
-      required: null,
-    });
+    const state = generationState("generation-a");
     const restartOwnership = state.capture();
     enforceSharedGatewaySessionGenerationForConfigWrite({
       state,

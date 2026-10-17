@@ -83,6 +83,24 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
 const { scheduleGatewayHandlerPrewarm, scheduleGatewayPrewarm } =
   await import("./server-startup-handler-prewarm.js");
 
+type PrewarmOptions = Parameters<typeof scheduleGatewayHandlerPrewarm>[0];
+function schedule(options: Partial<PrewarmOptions> = {}) {
+  return scheduleGatewayHandlerPrewarm({
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    getConfig: () => ({}),
+    log: { warn: vi.fn() },
+    ...options,
+  });
+}
+
+async function drainPrewarm() {
+  // Dynamic imports can enqueue another idle timer after the current timer drain.
+  do {
+    await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
+  } while (vi.getTimerCount() > 0);
+}
+
 beforeEach(() => {
   mocks.events.length = 0;
   mocks.executeRequest.mockClear();
@@ -109,19 +127,11 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
     const cfg: OpenClawConfig = { agents: { entries: {} } };
 
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => cfg,
-      log: { warn: vi.fn() },
-    });
+    const sidecar = schedule({ getConfig: () => cfg });
 
     try {
       expect(mocks.events).toEqual([]);
-      // Dynamic imports can enqueue the next idle timer after the current timer drain.
-      do {
-        await vi.runAllTimersAsync();
-        await vi.dynamicImportSettled();
-      } while (vi.getTimerCount() > 0);
+      await drainPrewarm();
 
       expect(mocks.events[0]).toBe("session-history-worker");
       expect(mocks.events).toContain("agent-events");
@@ -152,29 +162,18 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     }
   });
 
-  it.each([undefined])(
-    "skips retrieval preparation when Memory Core is inactive (%s)",
-    async (pluginId) => {
-      vi.useFakeTimers();
-      mocks.getMemoryCapabilityRegistration.mockReturnValue(pluginId ? { pluginId } : undefined);
-      const sidecar = scheduleGatewayHandlerPrewarm({
-        scheduler: createTestGatewayScheduler("fake-timers"),
-        getConfig: () => ({ agents: { entries: {} } }),
-        log: { warn: vi.fn() },
-      });
-      try {
-        do {
-          await vi.runAllTimersAsync();
-          await vi.dynamicImportSettled();
-        } while (vi.getTimerCount() > 0);
-        expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
-        expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
-        expect(mocks.listManagedPlugins).toHaveBeenCalledOnce();
-      } finally {
-        await sidecar.stop();
-      }
-    },
-  );
+  it("skips retrieval preparation when Memory Core is inactive", async () => {
+    vi.useFakeTimers();
+    const sidecar = schedule({ getConfig: () => ({ agents: { entries: {} } }) });
+    try {
+      await drainPrewarm();
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+      expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
+      expect(mocks.listManagedPlugins).toHaveBeenCalledOnce();
+    } finally {
+      await sidecar.stop();
+    }
+  });
 
   it("does not wait again when earlier work passes a later item's startup deadline", async () => {
     const clock = createGatewaySchedulerClock(1_000);
@@ -195,10 +194,8 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       },
     });
     const later = vi.fn(async () => {});
-    const sidecar = scheduleGatewayHandlerPrewarm({
+    const sidecar = schedule({
       scheduler,
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
       items: [
         { name: "earlier", load: async () => clock.advanceBy(6_000) },
         { name: "later", notBeforeMs: 5_000, load: later },
@@ -225,10 +222,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
       const load = vi.fn(async () => {});
 
-      const sidecar = scheduleGatewayHandlerPrewarm({
-        scheduler: createTestGatewayScheduler("fake-timers"),
-        getConfig: () => ({}),
-        log: { warn: vi.fn() },
+      const sidecar = schedule({
         items: [{ name: "sessions", load }],
         waitForPostReadyWork: () => gatewayReady,
       });
@@ -249,10 +243,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     vi.useFakeTimers();
     const admission = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground admission");
     const prepared: string[] = [];
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
+    const sidecar = schedule({
       startupTrace: {
         measure: async (name, load) => {
           prepared.push(name);
@@ -281,15 +272,10 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       .mockRejectedValueOnce(new Error("cold read failed"))
       .mockResolvedValue("request result");
 
-    scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
+    schedule({
       log: { warn },
       items: [
-        {
-          name: "broken",
-          load: requestLoad,
-        },
+        { name: "broken", load: requestLoad },
         { name: "later", load: laterPrewarm },
       ],
     });
@@ -306,18 +292,10 @@ describe("scheduleGatewayHandlerPrewarm", () => {
 
   it("stops before scheduling another event-loop turn", async () => {
     vi.useFakeTimers();
-    let releaseFirst!: () => void;
-    const first = vi.fn(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseFirst = resolve;
-        }),
-    );
+    const firstDone = createDeferred();
+    const first = vi.fn(() => firstDone.promise);
     const second = vi.fn(async () => {});
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
+    const sidecar = schedule({
       items: [
         { name: "first", load: first },
         { name: "second", load: second },
@@ -327,7 +305,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     await vi.advanceTimersToNextTimerAsync();
     expect(first).toHaveBeenCalledOnce();
     const stopping = sidecar.stop();
-    releaseFirst();
+    firstDone.resolve();
     await stopping;
     await vi.runAllTimersAsync();
 
@@ -339,17 +317,10 @@ it("keeps the context cache delayed and uses current config after foreground wor
   vi.useFakeTimers();
   const initial: OpenClawConfig = { agents: { entries: {} } };
   let current = initial;
-  const handle = scheduleGatewayHandlerPrewarm({
-    scheduler: createTestGatewayScheduler("fake-timers"),
-    getConfig: () => current,
-    log: { warn: vi.fn() },
-  });
+  const handle = schedule({ getConfig: () => current });
   await vi.advanceTimersByTimeAsync(4_999);
   expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
-  const request = tryBeginGatewayRootWorkAdmission();
-  if (!request) {
-    throw new Error("Expected foreground admission");
-  }
+  const request = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground admission");
   try {
     await vi.advanceTimersByTimeAsync(1);
     expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
@@ -371,16 +342,13 @@ it("keeps the context cache delayed and uses current config after foreground wor
 it("keeps worker preparation but skips optional discovery when foreground work arrives after admission", async () => {
   vi.useFakeTimers();
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
-  const handle = scheduleGatewayHandlerPrewarm({
-    scheduler: createTestGatewayScheduler("fake-timers"),
-    getConfig: () => ({}),
-    log: { warn: vi.fn() },
+  const handle = schedule({
     startupTrace: {
       measure: async (_name, load) => {
-        const request = tryBeginGatewayIndependentRootWorkAdmission("test-request");
-        if (!request) {
-          throw new Error("Expected foreground admission");
-        }
+        const request = expectDefined(
+          tryBeginGatewayIndependentRootWorkAdmission("test-request"),
+          "foreground admission",
+        );
         try {
           return await load();
         } finally {
@@ -390,10 +358,7 @@ it("keeps worker preparation but skips optional discovery when foreground work a
     },
   });
   try {
-    do {
-      await vi.runAllTimersAsync();
-      await vi.dynamicImportSettled();
-    } while (vi.getTimerCount() > 0);
+    await drainPrewarm();
     expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
     expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
   } finally {
@@ -401,8 +366,14 @@ it("keeps worker preparation but skips optional discovery when foreground work a
   }
 });
 
-function scheduleDependencyPreparation(params: Parameters<typeof scheduleGatewayPrewarm>[0]) {
-  const handles = scheduleGatewayPrewarm({ ...params, items: [] });
+function scheduleDependencyPreparation(options: Partial<PrewarmOptions> = {}) {
+  const handles = scheduleGatewayPrewarm({
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    getConfig: () => ({}),
+    log: { warn: vi.fn() },
+    ...options,
+    items: [],
+  });
   return {
     stop: async () => {
       await Promise.all(handles.map((handle) => Promise.resolve(handle.stop())));
@@ -417,8 +388,6 @@ it.each([false, true])(
     const ready = createDeferred();
     const warn = vi.fn();
     const handle = scheduleDependencyPreparation({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
       waitForPostReadyWork: () => ready.promise,
       log: { warn },
     });
@@ -446,11 +415,7 @@ it.each(["close", "restart"] as const)(
       await cleanup.promise;
     });
     const foreground = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground request");
-    const handle = scheduleDependencyPreparation({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getConfig: () => ({}),
-      log: { warn: vi.fn() },
-    });
+    const handle = scheduleDependencyPreparation();
     let stopping: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(0);
