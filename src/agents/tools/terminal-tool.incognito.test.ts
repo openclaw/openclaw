@@ -8,10 +8,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import {
-  runWithSessionActorStorage,
-  type SessionActorStorageBinding,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
 import {
@@ -43,7 +40,7 @@ vi.mock("../bash-tools.exec-approval-request.js", () => ({
 const temporary = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {}, authorize() {} };
 let actor: ReturnType<typeof memorySessionActorOwners.get>;
-const bindings: SessionActorStorageBinding[] = [];
+const actors: Array<Awaited<ReturnType<typeof actor.acquire>>> = [];
 let sql: ReturnType<typeof observeHostDataSql>;
 const managers = new Set<TerminalSessionManager>();
 beforeAll(async () => {
@@ -54,8 +51,8 @@ beforeAll(async () => {
   });
 });
 afterAll(async () => {
-  for (const binding of bindings) {
-    await binding.actor.release();
+  for (const handle of actors) {
+    await handle.release();
   }
   memorySessionActorOwners.closeDatabase(actor);
 });
@@ -65,9 +62,7 @@ beforeEach(() => {
   approvals.decide.mockReset().mockResolvedValue("allow-once");
 });
 afterEach(() => {
-  for (const manager of managers) {
-    manager.disposeAll();
-  }
+  managers.forEach((manager) => manager.disposeAll());
   managers.clear();
   try {
     expect(sql.queries).toEqual([]);
@@ -84,7 +79,7 @@ async function terminal(name: string, permissionMode: "full" | "workspace" = "wo
     { assertCurrent() {}, assertReadable() {} },
   );
   const binding = { actor: handle, authority, agentId: actor.agentId, path: actor.path };
-  bindings.push(binding);
+  actors.push(handle);
   expect(
     await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
   ).toMatchObject({ kind: "committed" });
@@ -92,7 +87,7 @@ async function terminal(name: string, permissionMode: "full" | "workspace" = "wo
   const backend = makeFakePty();
   const manager = new TerminalSessionManager({ emit() {}, spawn: async () => backend });
   managers.add(manager);
-  const opened = expectTerminalOpen(await manager.open(baseOpenRequest({ owner })));
+  const { sessionId } = expectTerminalOpen(await manager.open(baseOpenRequest({ owner })));
   const invoke = <T>(
     route: "owner" | "bearer-mcp",
     consume: (
@@ -120,7 +115,7 @@ async function terminal(name: string, permissionMode: "full" | "workspace" = "wo
           }),
           () =>
             consume((data = "pwd\r") =>
-              tool.execute("input", { action: "input", sessionId: opened.sessionId, data }),
+              tool.execute("input", { action: "input", sessionId, data }),
             ),
         );
       } finally {
@@ -130,51 +125,45 @@ async function terminal(name: string, permissionMode: "full" | "workspace" = "wo
   return { entry, backend, invoke, target: { agentId: "main", sessionKey, storePath: actor.path } };
 }
 
-it.each(["owner", "bearer-mcp"] as const)(
-  "loads actor policy for %s input without prepared execSession",
-  async (route) => {
-    const fixture = await terminal(`input-${route}`, "full");
-    await fixture.invoke(route, (input) =>
-      expect(input()).resolves.toMatchObject({ details: { ok: true } }),
-    );
-    expect(fixture.backend.writes).toEqual(["pwd\r"]);
-    expect(approvals.register).not.toHaveBeenCalled();
-  },
-);
+it.each(["owner", "bearer-mcp"] as const)("reads %s actor policy", async (route) => {
+  const fixture = await terminal(`input-${route}`, "full");
+  await fixture.invoke(route, (input) =>
+    expect(input()).resolves.toMatchObject({ details: { ok: true } }),
+  );
+  expect(fixture.backend.writes).toEqual(["pwd\r"]);
+  expect(approvals.register).not.toHaveBeenCalled();
+});
 
-it.each(["permission revocation", "session rebound"])(
-  "refuses input after %s while approval is pending",
-  async (change) => {
-    const fixture = await terminal(change.replaceAll(" ", "-"));
-    const requested = createDeferredCore();
-    const decision = createDeferredCore<string>();
-    approvals.decide.mockImplementationOnce(() => {
-      requested.resolve();
-      return decision.promise;
-    });
-    await fixture.invoke("bearer-mcp", async (input) => {
-      const result = input("echo stale\r");
-      try {
-        await awaitGateBeforeSettlement(requested.promise, result, "Input settled before approval");
-        expect(fixture.backend.writes).toEqual([]);
-        if (change === "permission revocation") {
-          await patchSessionEntryCore(fixture.target, () => ({ permissionMode: "read-only" }));
-        } else {
-          await replaceSessionEntry(fixture.target, {
-            ...fixture.entry,
-            sessionId: "replacement",
-            lifecycleRevision: "next",
-          });
-        }
-      } finally {
-        decision.resolve("allow-once");
-        await expect(result).rejects.toThrow("execution policy changed");
+it.each(["permission revocation", "session rebound"])("rejects pending %s", async (change) => {
+  const fixture = await terminal(change.replaceAll(" ", "-"));
+  const requested = createDeferredCore();
+  const decision = createDeferredCore<string>();
+  approvals.decide.mockImplementationOnce(() => {
+    requested.resolve();
+    return decision.promise;
+  });
+  await fixture.invoke("bearer-mcp", async (input) => {
+    const result = input("echo stale\r");
+    try {
+      await awaitGateBeforeSettlement(requested.promise, result, "Input settled before approval");
+      expect(fixture.backend.writes).toEqual([]);
+      if (change === "permission revocation") {
+        await patchSessionEntryCore(fixture.target, () => ({ permissionMode: "read-only" }));
+      } else {
+        await replaceSessionEntry(fixture.target, {
+          ...fixture.entry,
+          sessionId: "replacement",
+          lifecycleRevision: "next",
+        });
       }
-    });
-    expect(fixture.backend.writes).toEqual([]);
-    expect(approvals.register).toHaveBeenCalledOnce();
-  },
-);
+    } finally {
+      decision.resolve("allow-once");
+      await expect(result).rejects.toThrow("execution policy changed");
+    }
+  });
+  expect(fixture.backend.writes).toEqual([]);
+  expect(approvals.register).toHaveBeenCalledOnce();
+});
 
 it("refuses selected actor absence without discovery or approval", async () => {
   const fixture = await terminal("absent");

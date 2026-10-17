@@ -63,8 +63,7 @@ describe("sessions_yield tool", () => {
       acknowledgment,
     });
     expect(JSON.stringify(result)).not.toContain(message);
-    expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith(message, acknowledgment, undefined);
+    expect(onYield).toHaveBeenCalledExactlyOnceWith(message, acknowledgment, undefined);
   });
 
   it("claims completion ownership before aborting the requester run", async () => {

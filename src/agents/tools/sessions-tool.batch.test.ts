@@ -25,22 +25,22 @@ const values = (
   field: "category" | "archivedAt" | "pinnedAt",
   keys = [...targetKeys, currentKey],
 ) => keys.map((key) => session(key)?.[field]);
-const createTool = (
+function createTool(
   callGateway: AgentToolGatewayRequestCaller,
   config: OpenClawConfig = {},
   agentSessionId?: string,
-) =>
-  createSessionsTool({
+) {
+  const tool = createSessionsTool({
     agentSessionKey: currentKey,
     ...(agentSessionId ? { agentSessionId } : {}),
     config,
     callGateway,
   });
-const patch = (
-  tool: ReturnType<typeof createSessionsTool>,
-  id: string,
-  args: Record<string, unknown>,
-) => tool.execute(id, { action: "patch", ...args });
+  return {
+    parameters: tool.parameters,
+    patch: (args: Record<string, unknown>) => tool.execute("batch", { action: "patch", ...args }),
+  };
+}
 
 afterEach(() => flushPendingSessionsChangedEvents());
 
@@ -89,7 +89,7 @@ function createStoredSessionTool(config: OpenClawConfig = {}) {
 }
 
 async function withStoredTool(
-  run: (tool: ReturnType<typeof createSessionsTool>) => Promise<void>,
+  run: (tool: ReturnType<typeof createTool>) => Promise<void>,
   config: OpenClawConfig = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -114,14 +114,14 @@ describe("sessions tool batch patch", () => {
       expect(Value.Check(tool.parameters, { action: "patch", targets, group: "Reviews" })).toBe(
         true,
       );
-      const grouped = await patch(tool, "group-selected", { targets, group: "Reviews" });
+      const grouped = await tool.patch({ targets, group: "Reviews" });
       expect(grouped.details).toMatchObject({ status: "updated", succeeded: [0, 1], failed: [] });
       expect(values("category", targetKeys)).toEqual(["Reviews", "Reviews"]);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: targetKeys[1]! },
         { sessionId: "replacement", updatedAt: 2, category: "Replacement" },
       );
-      const changed = await patch(tool, "regroup-selected", { targets, group: "Done" });
+      const changed = await tool.patch({ targets, group: "Done" });
       expect(changed.details).toMatchObject({
         status: "partial",
         succeeded: [0],
@@ -133,7 +133,7 @@ describe("sessions tool batch patch", () => {
 
   it("continues valid archives after missing identity and current-session targets", () =>
     withStoredTool(async (tool) => {
-      const result = await patch(tool, "archive-selected", {
+      const result = await tool.patch({
         targets: [
           { sessionKey: targetKeys[0] },
           { sessionKey: currentKey, expectedSessionId: "current-session" },
@@ -148,7 +148,7 @@ describe("sessions tool batch patch", () => {
   it("preserves session visibility while applying allowed targets", () =>
     withStoredTool(
       async (tool) => {
-        const result = await patch(tool, "pin-visible", {
+        const result = await tool.patch({
           targets: [{ sessionKey: targetKeys[0] }, { sessionKey: "current" }],
           pinned: true,
         });
@@ -167,25 +167,23 @@ describe("sessions tool batch patch", () => {
   ])("rejects invalid batch %j before dispatch", async (args) => {
     const callGateway = vi.fn();
     const tool = createTool(callGateway);
-    await expect(patch(tool, "invalid-batch", { pinned: true, ...args })).rejects.toThrow();
+    await expect(tool.patch({ pinned: true, ...args })).rejects.toThrow();
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("accounts for all 100 failures within the response budget", async () => {
+    const targets = Array.from({ length: 100 }, (_, index) => ({
+      sessionKey: `agent:main:dashboard:${index}`,
+    }));
     const callGateway = vi.fn(async () => ({
-      outcomes: Array.from({ length: 100 }, (_, index) => ({
+      outcomes: targets.map(({ sessionKey }) => ({
         ok: false,
-        key: `agent:main:dashboard:${index}`,
+        key: sessionKey,
         error: { code: "INVALID_REQUEST", message: "界".repeat(10_000) },
       })),
     }));
     const tool = createTool(callGateway as AgentToolGatewayRequestCaller);
-    const result = await patch(tool, "failed-batch", {
-      pinned: true,
-      targets: Array.from({ length: 100 }, (_, index) => ({
-        sessionKey: `agent:main:dashboard:${index}`,
-      })),
-    });
+    const result = await tool.patch({ pinned: true, targets });
     expect(result.details).toMatchObject({
       status: "error",
       succeeded: [],
