@@ -174,9 +174,11 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       rows: skills.map((skill) => ({
         Status: formatSkillStatus(skill),
         Skill: formatSkillName(skill),
-        Description: theme.muted(skill.description),
-        Source: skill.source,
-        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+        // The single-skill report already sanitizes these fields; the list table must not hand
+        // workspace-owned SKILL.md text to the terminal uncleaned.
+        Description: theme.muted(sanitizeForLog(skill.description)),
+        Source: sanitizeForLog(skill.source),
+        Missing: opts.verbose ? theme.warn(sanitizeForLog(formatSkillMissingSummary(skill))) : "",
       })),
     }),
   );
