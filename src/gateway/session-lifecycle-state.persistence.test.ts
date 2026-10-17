@@ -96,28 +96,62 @@ const silentLog: SubsystemLogger = {
   child: () => silentLog,
 };
 
+function createTarget(sessionKey: string) {
+  const target = { storePath: path.join(tempDirs.make(), "sessions.json"), sessionKey };
+  routing.loadSessionEntry.mockImplementation(() => ({
+    ...target,
+    canonicalKey: sessionKey,
+    entry: loadSessionEntry(target),
+  }));
+  return target;
+}
+
+async function closeStore(root: string) {
+  await closeOpenClawAgentDatabasesAsync(root);
+  closeOpenClawAgentDatabasesForTest(root);
+}
+
+type Subscriptions = ReturnType<typeof startGatewayEventSubscriptions>;
+function subscribe(
+  chatRunState: ReturnType<typeof createChatRunState>,
+  overrides: Partial<Parameters<typeof startGatewayEventSubscriptions>[0]> = {},
+) {
+  return startGatewayEventSubscriptions({
+    scheduler: createTestGatewayScheduler(),
+    signal: new AbortController().signal,
+    log: silentLog,
+    broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    nodeHasSessionSubscribers: () => false,
+    nodeSendToSession: vi.fn(),
+    agentRunSeq: new Map(),
+    chatRunState,
+    toolEventRecipients: chatRunState.toolEventRecipients,
+    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    chatAbortControllers: new Map(),
+    restartRecoveryCandidates: new Map(),
+    refreshConnectedUserProfiles: vi.fn(),
+    ...overrides,
+  });
+}
+
+async function stopSubscriptions(subscriptions: Subscriptions | undefined) {
+  await subscriptions?.agentUnsub();
+  subscriptions?.heartbeatUnsub();
+  subscriptions?.transcriptUnsub();
+  subscriptions?.lifecycleUnsub();
+}
+
 it.each([
-  {
-    stopReason: "restart",
-    status: "interrupted",
-    recovery: "recoverable",
-    timeoutPhase: undefined,
-  },
-  { stopReason: "aborted", status: "killed", recovery: "inactive", timeoutPhase: undefined },
-  { stopReason: "restart", status: "timeout", recovery: "inactive", timeoutPhase: "provider" },
-])(
-  "retains $stopReason cancellation as $status after reopening a store without a shutdown marker",
-  async ({ stopReason, status, recovery, timeoutPhase }) => {
-    const target = {
-      storePath: path.join(tempDirs.make(), "sessions.json"),
-      sessionKey: "agent:main:restart-terminal",
-    };
+  ["restart", "interrupted", "recoverable", undefined],
+  ["aborted", "killed", "inactive", undefined],
+  ["restart", "timeout", "inactive", "provider"],
+] as const)(
+  "retains %s cancellation as %s after reopening a store without a shutdown marker",
+  async (stopReason, status, recovery, timeoutPhase) => {
+    const target = createTarget("agent:main:restart-terminal");
     const runId = "interrupted-run";
-    routing.loadSessionEntry.mockImplementation(() => ({
-      ...target,
-      canonicalKey: target.sessionKey,
-      entry: loadSessionEntry(target),
-    }));
     try {
       await replaceSessionEntry(target, {
         sessionId: "restart-terminal-session",
@@ -136,8 +170,7 @@ it.each([
           data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
         },
       });
-      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+      await closeStore(path.dirname(target.storePath));
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored?.status).toBe(status);
       if (recovery === "recoverable") {
@@ -162,24 +195,15 @@ it.each([
       expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
     } finally {
       routing.loadSessionEntry.mockReset();
-      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+      await closeStore(path.dirname(target.storePath));
     }
   },
 );
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
-  const target = {
-    storePath: path.join(tempDirs.make(), "sessions.json"),
-    sessionKey: "agent:main:timing",
-  };
+  const target = createTarget("agent:main:timing");
   let now = 1_000_000;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-  routing.loadSessionEntry.mockImplementation(() => ({
-    ...target,
-    canonicalKey: target.sessionKey,
-    entry: loadSessionEntry(target),
-  }));
   let persistence = Promise.resolve();
   const unsubscribe = onAgentEvent((event) => {
     if (event.sessionKey === target.sessionKey && event.stream === "lifecycle") {
@@ -243,8 +267,7 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     now += 11_192;
     recovered.emit("end", { meta: {} });
     await persistence;
-    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+    await closeStore(path.dirname(target.storePath));
     expect(loadSessionEntry(target)).toMatchObject({
       status: "done",
       startedAt: 3_600_000,
@@ -257,8 +280,7 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     await persistence;
     clock.mockRestore();
     routing.loadSessionEntry.mockReset();
-    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+    await closeStore(path.dirname(target.storePath));
   }
 });
 
@@ -348,7 +370,7 @@ it.each(["success", "failed-write"])(
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
     let heldWriter: Promise<unknown> | undefined;
-    let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
+    let subscriptions: Subscriptions | undefined;
     let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
     const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
       "./session-utils-store-worker.js",
@@ -387,23 +409,13 @@ it.each(["success", "failed-write"])(
       bindSessionRowProjection(context, () => rowProjection);
       const sessionEventSubscribers = createSessionEventSubscriberRegistry();
       sessionEventSubscribers.subscribe("session-observer");
-      subscriptions = startGatewayEventSubscriptions({
-        scheduler: createTestGatewayScheduler(),
+      subscriptions = subscribe(chatRunState, {
         getSessionRowProjection: () => getSessionRowProjection(context),
-        signal: new AbortController().signal,
-        log: silentLog,
         broadcast,
         broadcastToConnIds,
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq: new Map(),
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers,
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates,
-        refreshConnectedUserProfiles: vi.fn(),
       });
       const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
@@ -526,8 +538,7 @@ it.each(["success", "failed-write"])(
           prepareSessionProjection: expect.any(Function),
         },
       );
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      closeOpenClawAgentDatabasesForTest(state.root);
+      await closeStore(state.root);
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored).toMatchObject({
         status: "killed",
@@ -543,10 +554,7 @@ it.each(["success", "failed-write"])(
       terminalWrite.resolve();
       releaseWriter.resolve();
       await heldWriter;
-      await subscriptions?.agentUnsub();
-      subscriptions?.heartbeatUnsub();
-      subscriptions?.transcriptUnsub();
-      subscriptions?.lifecycleUnsub();
+      await stopSubscriptions(subscriptions);
       getSessionRowProjection(context)?.dispose();
       registration.cleanup();
       persistenceSpy?.mockRestore();
@@ -563,27 +571,14 @@ afterEach(async () => {
 });
 
 it.for([
-  { label: "end", phase: "end", data: {}, status: "done" },
-  {
-    label: "cancellation",
-    phase: "error",
-    data: { aborted: true, stopReason: "aborted" },
-    status: "killed",
-  },
-  {
-    label: "settled failure",
-    phase: "error",
-    data: { executionSettled: true, error: "Preparation failed" },
-    status: "failed",
-  },
-])(
-  "keeps an owner claim active until its queued $label write commits",
-  ({ phase, data, status }, { signal }) =>
+  ["end", "end", {}, "done"],
+  ["cancellation", "error", { aborted: true, stopReason: "aborted" }, "killed"],
+  ["settled failure", "error", { executionSettled: true, error: "Preparation failed" }, "failed"],
+] as const)(
+  "keeps an owner claim active until its queued %s write commits",
+  ([, phase, data, status], { signal }) =>
     ownerClaimFixture.run(async () => {
-      const target = {
-        storePath: path.join(tempDirs.make(), "sessions.json"),
-        sessionKey: "agent:main:worker-terminal",
-      };
+      const target = createTarget("agent:main:worker-terminal");
       const runId = "worker-terminal-run";
       const sessionId = "worker-terminal-session";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -591,14 +586,9 @@ it.for([
       const releaseWriter = createDeferred();
       const clearRequested = createDeferred<string>();
       let claimId: string | undefined;
-      let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
+      let subscriptions: Subscriptions | undefined;
       let heldWriter: Promise<unknown> | undefined;
       persistenceTestWarnings.mockReset();
-      routing.loadSessionEntry.mockImplementation(() => ({
-        ...target,
-        canonicalKey: target.sessionKey,
-        entry: loadSessionEntry(target),
-      }));
       try {
         await replaceSessionEntry(target, {
           lifecycleRunId: runId,
@@ -628,24 +618,7 @@ it.for([
         const terminalClaimId = claimId;
         const chatRunState = createChatRunState();
         const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
-        const agentRunSeq = new Map<string, number>();
-        subscriptions = startGatewayEventSubscriptions({
-          scheduler: createTestGatewayScheduler(),
-          signal: new AbortController().signal,
-          log: silentLog,
-          broadcast: vi.fn(),
-          broadcastToConnIds: vi.fn(),
-          nodeHasSessionSubscribers: () => false,
-          nodeSendToSession: vi.fn(),
-          agentRunSeq,
-          chatRunState,
-          toolEventRecipients: chatRunState.toolEventRecipients,
-          sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-          sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-          chatAbortControllers: new Map(),
-          restartRecoveryCandidates: new Map(),
-          refreshConnectedUserProfiles: vi.fn(),
-        });
+        subscriptions = subscribe(chatRunState);
 
         emitAgentEventForOwner(
           {
@@ -695,14 +668,10 @@ it.for([
       } finally {
         releaseWriter.resolve();
         await heldWriter;
-        await subscriptions?.agentUnsub();
-        subscriptions?.heartbeatUnsub();
-        subscriptions?.transcriptUnsub();
-        subscriptions?.lifecycleUnsub();
+        await stopSubscriptions(subscriptions);
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
-        await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-        closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+        await closeStore(path.dirname(target.storePath));
       }
     }),
 );

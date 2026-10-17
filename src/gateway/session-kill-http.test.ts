@@ -1,5 +1,4 @@
-// Session kill HTTP tests cover subagent kill authorization, requester/admin
-// scope handling, local request checks, and error responses.
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +11,7 @@ import { finishFailedGatewayHttpResponse } from "./http-common.js";
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 const WORKER_SESSION_KEY = "agent:main:subagent:worker";
 const WORKER_KILL_PATH = "/sessions/agent%3Amain%3Asubagent%3Aworker/kill";
-const ADMIN_SCOPE_HEADERS = {
-  "x-openclaw-scopes": "operator.admin",
-};
+const ADMIN_SCOPE_HEADERS = { "x-openclaw-scopes": "operator.admin" };
 const REQUESTER_WRITE_HEADERS = {
   "x-openclaw-scopes": "operator.write",
   "x-openclaw-requester-session-key": "agent:main:main",
@@ -54,7 +51,7 @@ vi.mock("../agents/subagents/registry/subagent-control.js", () => ({
 const { handleSessionKillHttpRequest } = await import("./session-kill-http.js");
 
 let port = 0;
-let server: ReturnType<typeof createServer> | undefined;
+let server: ReturnType<typeof createServer>;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -73,31 +70,21 @@ beforeAll(async () => {
       .catch(() => finishFailedGatewayHttpResponse(res));
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server?.once("error", reject);
-    server?.listen(0, "127.0.0.1", () => {
-      const address = server?.address() as AddressInfo | null;
-      if (!address) {
-        reject(new Error("server missing address"));
-        return;
-      }
-      port = address.port;
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  port = (server.address() as AddressInfo).port;
 });
 
 afterAll(async () => {
   await new Promise<void>((resolve, reject) => {
-    server?.close((err) => (err ? reject(err) : resolve()));
+    server.close((err) => (err ? reject(err) : resolve()));
   });
 });
 
 beforeEach(() => {
   cfg = {};
   resolvedAuth = { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false };
-  authMock.mockReset();
-  authMock.mockResolvedValue({ ok: true, method: "token" });
+  authMock.mockReset().mockResolvedValue({ ok: true, method: "token" });
   loadSessionEntryMock.mockReset();
   killSubagentRunAdminMock.mockReset();
 });
@@ -107,14 +94,9 @@ async function post(
   token = TEST_GATEWAY_TOKEN,
   extraHeaders?: Record<string, string>,
 ) {
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  Object.assign(headers, extraHeaders ?? {});
   return fetch(`http://127.0.0.1:${port}${pathname}`, {
     method: "POST",
-    headers,
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extraHeaders },
   });
 }
 
@@ -138,6 +120,22 @@ async function expectForbiddenMissingScope(response: Response, message: string) 
   expectErrorResponse(await response.json(), {
     type: "forbidden",
     message,
+  });
+  expectNoKill();
+}
+
+function expectNoKill() {
+  expect(loadSessionEntryMock).not.toHaveBeenCalled();
+  expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+}
+
+async function expectKilled(response: Response) {
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
+  expect(killSubagentRunAdminMock.mock.calls[0]?.[0]).toEqual({
+    cfg,
+    sessionKey: WORKER_SESSION_KEY,
+    agentId: "main",
   });
 }
 
@@ -186,33 +184,21 @@ describe("POST /sessions/:sessionKey/kill", () => {
         type: "invalid_request_error",
       });
       expect(authMock).not.toHaveBeenCalled();
-      expect(loadSessionEntryMock).not.toHaveBeenCalled();
-      expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expectNoKill();
     },
   );
 
   it("kills a matching session via the admin kill helper using the canonical key", async () => {
     allowTrustedProxyAuth();
-    loadSessionEntryMock.mockReturnValue({
-      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
-      canonicalKey: WORKER_SESSION_KEY,
-    });
+    mockWorkerSession();
     killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
     const response = await post(
       "/sessions/agent%3AMain%3ASubagent%3AWorker/kill",
       TEST_GATEWAY_TOKEN,
-      {
-        "x-openclaw-scopes": "operator.admin",
-      },
+      ADMIN_SCOPE_HEADERS,
     );
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(killSubagentRunAdminMock.mock.calls[0]?.[0]).toEqual({
-      cfg,
-      sessionKey: WORKER_SESSION_KEY,
-      agentId: "main",
-    });
+    await expectKilled(response);
   });
 
   it.each(["unchanged settings", "policy revocation", "credential rotation"] as const)(
@@ -271,16 +257,12 @@ describe("POST /sessions/:sessionKey/kill", () => {
   it("does not trust x-openclaw-scopes on shared-secret bearer auth", async () => {
     const response = await postWorkerKill(TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
     await expectForbiddenMissingScope(response, "missing scope: operator.admin");
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
-    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
   it("rejects trusted-proxy requester-session kills without admin scope", async () => {
     allowTrustedProxyAuth();
     const response = await postWorkerKill("", REQUESTER_WRITE_HEADERS);
     await expectForbiddenMissingScope(response, "missing scope: operator.admin");
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
-    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
   it("uses the admin kill path even when the requester session header is present", async () => {
@@ -289,12 +271,6 @@ describe("POST /sessions/:sessionKey/kill", () => {
     killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
     const response = await postWorkerKill("", REQUESTER_ADMIN_HEADERS);
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(killSubagentRunAdminMock.mock.calls[0]?.[0]).toEqual({
-      cfg,
-      sessionKey: WORKER_SESSION_KEY,
-      agentId: "main",
-    });
+    await expectKilled(response);
   });
 });

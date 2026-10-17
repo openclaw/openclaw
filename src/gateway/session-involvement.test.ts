@@ -24,12 +24,38 @@ import {
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 
+type InboxFixture = Parameters<Parameters<typeof withInbox>[0]>[0];
+const sessionScope = { agentId: "main", sessionKey: SESSION_KEY };
+const readEntry = () => loadSessionEntry(sessionScope)!;
+function listInvolvement(f: InboxFixture, personal = true) {
+  return listSessionFixture({
+    cfg: { agents: { entries: { main: {} } } },
+    storePath: "",
+    store: { [SESSION_KEY]: readEntry() },
+    opts: personal ? {} : { profileRelation: { profileId: f.bob.id, relationship: "involving" } },
+    ...(personal ? { involvingActorId: f.bob.id } : { ownerFirstActorId: f.alice.id }),
+  });
+}
+async function setHidden(
+  f: InboxFixture,
+  hidden: boolean,
+  key = SESSION_KEY,
+  expectedSessionId = SESSION_ID,
+  client = f.bobClient,
+) {
+  const result = await f.call(
+    "sessions.setInvolvement",
+    { key, expectedSessionId, hidden },
+    client,
+  );
+  expect(result.ok).toBe(true);
+}
+
 describe("personal session involvement", () => {
   it("includes a mentioned recipient without recording an authored contribution", async () => {
     await withInbox(async (f) => {
-      const scope = { agentId: "main", sessionKey: SESSION_KEY };
       const list = async (profileId = f.bob.id, involving = true) => {
-        const entry = loadSessionEntry(scope)!;
+        const entry = readEntry();
         expect(projectPublicSessionEntry(entry)).not.toHaveProperty("profileInvolvement");
         expect(entry.participants).toBeUndefined();
         return await listSessionFixture({
@@ -51,32 +77,27 @@ describe("personal session involvement", () => {
         items.map((item) => item.id),
       );
       expect((await list()).sessions.map((row) => row.key)).toEqual([SESSION_KEY]);
-      const setHidden = async (hidden: boolean) => {
+      const setVisibility = async (hidden: boolean) => {
         const sql = observeHostDataSql();
         try {
-          const result = await f.call("sessions.setInvolvement", {
-            key: SESSION_KEY,
-            expectedSessionId: SESSION_ID,
-            hidden,
-          });
+          await setHidden(f, hidden);
           expect(
             sql.queries.filter((query) =>
               /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_nodes\b/i.test(query),
             ),
           ).toEqual([]);
-          return result;
         } finally {
           sql.restore();
         }
       };
-      expect((await setHidden(true)).ok).toBe(true);
+      await setVisibility(true);
       expect((await list()).sessions).toEqual([]);
       expect((await list(f.bob.id, false)).sessions[0]?.hiddenFromInvolvingMe).toBe(true);
       expect((await list(f.alice.id)).sessions).toHaveLength(1);
       await f.post();
       expect((await list()).sessions).toEqual([]);
       // A stale generic metadata replacement must not erase the personal choice.
-      replaceSessionEntrySync(scope, {
+      replaceSessionEntrySync(sessionScope, {
         sessionId: SESSION_ID,
         updatedAt: Date.now(),
         displayName: "Renamed",
@@ -90,14 +111,14 @@ describe("personal session involvement", () => {
       expect((await list()).sessions).toEqual([]);
       await f.post("fresh-mention", {}, restarted);
       expect((await list()).sessions.map((row) => row.key)).toEqual([SESSION_KEY]);
-      expect((await setHidden(true)).ok).toBe(true);
-      expect((await setHidden(false)).ok).toBe(true);
+      await setVisibility(true);
+      await setVisibility(false);
       expect((await list()).sessions).toHaveLength(1);
       // Reset retains the logical node; a fork must not inherit anyone's list choices.
-      const previous = loadSessionEntry(scope)!;
-      replaceSessionEntrySync(scope, { ...previous, sessionId: "reset-generation" });
+      const previous = readEntry();
+      replaceSessionEntrySync(sessionScope, { ...previous, sessionId: "reset-generation" });
       expect((await list()).sessions).toHaveLength(1);
-      const forkScope = { ...scope, sessionKey: "agent:main:fork" };
+      const forkScope = { ...sessionScope, sessionKey: "agent:main:fork" };
       replaceSessionEntrySync(forkScope, { ...previous, sessionId: "fork-generation" });
       expect(loadSessionEntry(forkScope)).not.toHaveProperty("profileInvolvement");
     });
@@ -105,10 +126,10 @@ describe("personal session involvement", () => {
 
   it("preserves existing metadata, personal choices and replay watermarks across cold reopen", async () => {
     await withInbox(async (f) => {
-      const hiddenScope = { agentId: "main", sessionKey: SESSION_KEY };
-      const shownScope = { agentId: "main", sessionKey: `${SESSION_KEY}-shown` };
-      const untouchedScope = { agentId: "main", sessionKey: `${SESSION_KEY}-untouched` };
-      const scopes = [hiddenScope, shownScope, untouchedScope];
+      const scopes = ["", "-shown", "-untouched"].map((suffix) => ({
+        agentId: "main",
+        sessionKey: `${SESSION_KEY}${suffix}`,
+      }));
       for (const [index, scope] of scopes.entries()) {
         await f.setSession(
           {
@@ -141,22 +162,13 @@ describe("personal session involvement", () => {
           },
           inbox,
         );
-      const setHidden = async (index: number, hidden: boolean) => {
-        expect(
-          (
-            await f.call("sessions.setInvolvement", {
-              key: scopes[index]!.sessionKey,
-              expectedSessionId: existing[index]!.sessionId,
-              hidden,
-            })
-          ).ok,
-        ).toBe(true);
-      };
+      const setVisibility = (index: number, hidden: boolean) =>
+        setHidden(f, hidden, scopes[index]!.sessionKey, existing[index]!.sessionId);
       await post("before-restart", 0);
-      await setHidden(0, true);
+      await setVisibility(0, true);
       await post("explicitly-shown", 1);
-      await setHidden(1, true);
-      await setHidden(1, false);
+      await setVisibility(1, true);
+      await setVisibility(1, false);
       const beforeClose = entries();
       await reopen();
       expect(entries()).toEqual(beforeClose);
@@ -184,14 +196,13 @@ describe("personal session involvement", () => {
 
   it("withholds a fresh Inbox alert when the involvement writer refuses a changed entry", async () => {
     await withInbox(async (f) => {
-      const scope = { agentId: "main", sessionKey: SESSION_KEY };
       await f.post("existing");
-      await involvementStore.updateSessionProfileInvolvementAsync(scope, {
+      await involvementStore.updateSessionProfileInvolvementAsync(sessionScope, {
         expectedSessionId: SESSION_ID,
         profileIds: [f.bob.id],
         change: { kind: "visibility", hidden: true },
       });
-      const before = loadSessionEntry(scope)?.profileInvolvement;
+      const before = readEntry().profileInvolvement;
       f.push.mockClear();
       const record = involvementStore.updateSessionProfileInvolvementAsync;
       let accepted: boolean | undefined;
@@ -206,7 +217,7 @@ describe("personal session involvement", () => {
       try {
         await f.post("refused");
         expect(accepted).toBe(false);
-        expect(loadSessionEntry(scope)?.profileInvolvement).toEqual(before);
+        expect(readEntry().profileInvolvement).toEqual(before);
         expect((await read(f.inbox, f.bobClient)).items.map((item) => item.messageId)).toEqual([
           "message-existing",
         ]);
@@ -220,99 +231,49 @@ describe("personal session involvement", () => {
   it("rejects personal hide requests for another identity or stale/inaccessible sessions", async () => {
     await withInbox(async (f) => {
       const params = { key: SESSION_KEY, expectedSessionId: SESSION_ID, hidden: true };
-      expect(
-        (await f.call("sessions.setInvolvement", { ...params, profileId: f.alice.id })).ok,
-      ).toBe(false);
-      expect(
-        (await f.call("sessions.setInvolvement", { ...params, expectedSessionId: "stale" })).ok,
-      ).toBe(false);
-      expect(
-        (
-          await f.call("sessions.setInvolvement", params, {
-            ...f.bobClient,
-            internal: { syntheticClient: true },
-          })
-        ).ok,
-      ).toBe(false);
+      const deny = async (
+        overrides: Partial<typeof params> & { profileId?: string } = {},
+        client: Parameters<InboxFixture["call"]>[2] = f.bobClient,
+      ) => {
+        expect(
+          (await f.call("sessions.setInvolvement", { ...params, ...overrides }, client)).ok,
+        ).toBe(false);
+      };
+      await deny({ profileId: f.alice.id });
+      await deny({ expectedSessionId: "stale" });
+      await deny({}, { ...f.bobClient, internal: { syntheticClient: true } });
       await f.setSession({ visibility: "draft" });
-      expect((await f.call("sessions.setInvolvement", params)).ok).toBe(false);
+      await deny();
       await f.setSession({ incognito: true });
-      expect((await f.call("sessions.setInvolvement", params)).ok).toBe(false);
-      expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY })).not.toHaveProperty(
-        "profileInvolvement",
-      );
+      await deny();
+      expect(readEntry()).not.toHaveProperty("profileInvolvement");
     });
   });
 
   it("does not let a personal show choice change another viewer's involvement query", async () => {
     await withInbox(async (f) => {
-      const list = async (personal: boolean) =>
-        listSessionFixture({
-          cfg: { agents: { entries: { main: {} } } },
-          storePath: "",
-          store: { [SESSION_KEY]: loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY })! },
-          opts: personal
-            ? {}
-            : { profileRelation: { profileId: f.bob.id, relationship: "involving" } },
-          ...(personal ? { involvingActorId: f.bob.id } : { ownerFirstActorId: f.alice.id }),
-        });
       for (const hidden of [true, false, true]) {
-        expect(
-          (
-            await f.call("sessions.setInvolvement", {
-              key: SESSION_KEY,
-              expectedSessionId: SESSION_ID,
-              hidden,
-            })
-          ).ok,
-        ).toBe(true);
-        expect((await list(true)).sessions).toHaveLength(hidden ? 0 : 1);
-        expect((await list(false)).sessions).toEqual([]);
+        await setHidden(f, hidden);
+        expect((await listInvolvement(f)).sessions).toHaveLength(hidden ? 0 : 1);
+        expect((await listInvolvement(f, false)).sessions).toEqual([]);
       }
     });
   });
 
-  it.each([true])(
-    "keeps merged visibility separate from mention evidence (both mentioned: %s)",
-    async (bothMentioned) => {
-      await withInbox(async (f) => {
-        const old = ensureProfileForEmail("previous@mentions.example.test");
-        const oldClient = { ...identifiedClient(old.id, "Previous"), connId: "previous" };
-        await f.post("old-mention", { recipientProfileIds: [old.id] });
-        if (bothMentioned) {
-          await f.post("existing-current-profile-mention");
-        }
-        expect(
-          (
-            await f.call(
-              "sessions.setInvolvement",
-              { key: SESSION_KEY, expectedSessionId: SESSION_ID, hidden: true },
-              bothMentioned ? oldClient : f.bobClient,
-            )
-          ).ok,
-        ).toBe(true);
-        linkEmail("previous@mentions.example.test", f.bob.id);
-        const list = async (personal = true) =>
-          listSessionFixture({
-            cfg: { agents: { entries: { main: {} } } },
-            storePath: "",
-            store: {
-              [SESSION_KEY]: loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY })!,
-            },
-            opts: personal
-              ? {}
-              : { profileRelation: { profileId: f.bob.id, relationship: "involving" } },
-            ...(personal ? { involvingActorId: f.bob.id } : { ownerFirstActorId: f.alice.id }),
-          });
-        expect((await list()).sessions).toEqual([]);
-        expect((await list(false)).sessions).toHaveLength(1);
-        if (bothMentioned) {
-          await f.post("existing-current-profile-mention");
-        }
-        expect((await list()).sessions).toEqual([]);
-        await f.post("new-mention");
-        expect((await list()).sessions).toHaveLength(1);
-      });
-    },
-  );
+  it("keeps merged visibility separate from mention evidence when both profiles were mentioned", async () => {
+    await withInbox(async (f) => {
+      const old = ensureProfileForEmail("previous@mentions.example.test");
+      const oldClient = { ...identifiedClient(old.id, "Previous"), connId: "previous" };
+      await f.post("old-mention", { recipientProfileIds: [old.id] });
+      await f.post("existing-current-profile-mention");
+      await setHidden(f, true, SESSION_KEY, SESSION_ID, oldClient);
+      linkEmail("previous@mentions.example.test", f.bob.id);
+      expect((await listInvolvement(f)).sessions).toEqual([]);
+      expect((await listInvolvement(f, false)).sessions).toHaveLength(1);
+      await f.post("existing-current-profile-mention");
+      expect((await listInvolvement(f)).sessions).toEqual([]);
+      await f.post("new-mention");
+      expect((await listInvolvement(f)).sessions).toHaveLength(1);
+    });
+  });
 });

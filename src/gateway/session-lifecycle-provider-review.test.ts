@@ -13,6 +13,7 @@ import { createSessionEntryWithTranscript } from "../config/sessions/session-acc
 import * as sessionEntries from "../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.transcript.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import {
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
@@ -33,39 +34,83 @@ afterEach(() => {
   memorySessionActorOwners.reset();
 });
 
+function reviewFixture(env: NodeJS.ProcessEnv, name: string) {
+  const runId = `review-terminal-${name}`;
+  const target = {
+    agentId: "main",
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+    sessionKey: `agent:main:dashboard:incognito-${name}`,
+    sessionId: `review-session-${name}`,
+    lifecycleRevision: "generation-1",
+  };
+  const review: SessionProviderReview = {
+    id: `review-${name}`,
+    sessionId: target.sessionId,
+    runId,
+    provider: "openai",
+    model: "test-model",
+    runtimeId: "codex",
+  };
+  const entry: SessionEntry = {
+    sessionId: target.sessionId,
+    incognito: true,
+    lifecycleRevision: target.lifecycleRevision,
+    activeWriterRunId: runId,
+    lifecycleRunId: runId,
+    updatedAt: 1_000,
+    startedAt: 1_000,
+  };
+  const scope = {
+    agentId: target.agentId,
+    storePath: target.storePath,
+    sessionKey: target.sessionKey,
+    env,
+  };
+  return {
+    runId,
+    target,
+    review,
+    entry,
+    scope,
+    capture: (assertCurrent: () => void) =>
+      captureAgentRunProviderReview({
+        runId,
+        target,
+        review,
+        expectedWriterRunId: runId,
+        assertCurrent,
+      }),
+    async seed() {
+      await createSessionEntryWithTranscript(scope, () => ({ ok: true, entry }));
+      if (entry.providerReview) {
+        await sessionEntries.patchSessionEntryCore(
+          scope,
+          () => ({ providerReview: entry.providerReview }),
+          { providerReviewMutation: true, skipMaintenance: true },
+        );
+      }
+      await appendTranscriptMessage(
+        { ...scope, sessionId: entry.sessionId },
+        {
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "Provider pause",
+            __openclaw: { runId },
+          },
+        },
+      );
+    },
+  };
+}
+
 it("keeps embedded completion pending until its incognito pause fences the next admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     setRuntimeConfigSnapshot({});
-    const runId = "incognito-deferred-review";
-    const target = {
-      agentId: "main",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-      sessionKey: "agent:main:dashboard:incognito-deferred-review",
-      sessionId: "incognito-deferred-session",
-      lifecycleRevision: "generation-1",
-    };
-    const entry = {
-      sessionId: target.sessionId,
-      incognito: true as const,
-      lifecycleRevision: target.lifecycleRevision,
-      activeWriterRunId: runId,
-      lifecycleRunId: runId,
-      updatedAt: 1_000,
-      startedAt: 1_000,
-    };
-    await createSessionEntryWithTranscript({ ...target, env }, () => ({ ok: true, entry }));
-    await appendTranscriptMessage(
-      { ...target, env },
-      {
-        message: {
-          role: "assistant",
-          content: [],
-          stopReason: "error",
-          errorMessage: "Provider pause",
-          __openclaw: { runId },
-        },
-      },
-    );
+    const fixture = reviewFixture(env, "deferred-review");
+    const { runId, target, entry } = fixture;
+    await fixture.seed();
     const lifecycleGeneration = getAgentRunLifecycleGeneration();
     const admission = prepareAgentCommandExecutionIdentity({
       opts: { message: "Inspect this operation." },
@@ -94,20 +139,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         lifecycleGeneration,
         lifecycleStartedAt: 1_000,
       });
-      captureAgentRunProviderReview({
-        runId,
-        target,
-        expectedWriterRunId: runId,
-        assertCurrent: admission.assertSourceCurrent,
-        review: {
-          id: "deferred-review",
-          sessionId: target.sessionId,
-          runId,
-          provider: "openai",
-          model: "test-model",
-          runtimeId: "codex",
-        },
-      });
+      fixture.capture(admission.assertSourceCurrent);
       // This is the production capture path, with no CLI-specific context binding.
       const captured = captureAgentRunTerminalPersistence(runId).writeContext;
       if (!captured) {
@@ -174,7 +206,6 @@ it("keeps embedded completion pending until its incognito pause fences the next 
 it("records an incognito pause in actor state without SQL and rejects stale facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     setRuntimeConfigSnapshot({});
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
     for (const variant of [
       "ordinary",
       "current",
@@ -185,62 +216,20 @@ it("records an incognito pause in actor state without SQL and rejects stale fact
       "old-event",
       "revoked",
     ] as const) {
-      const runId = `review-terminal-${variant}`;
-      const target = {
-        agentId: "main",
-        storePath,
-        sessionKey: `agent:main:dashboard:incognito-${variant}`,
-        sessionId: `review-session-${variant}`,
-        lifecycleRevision: "generation-1",
-      };
-      const entryScope = {
-        agentId: target.agentId,
-        storePath,
-        sessionKey: target.sessionKey,
-        env,
-      };
-      const review: SessionProviderReview = {
-        id: `review-${variant}`,
-        sessionId: target.sessionId,
-        runId,
-        provider: "openai",
-        model: "test-model",
-        runtimeId: "codex",
-        review: { explanation: "The provider asks you to inspect this operation." },
-      };
-      const entry = {
+      const fixture = reviewFixture(env, variant);
+      const { runId, target, review, scope } = fixture;
+      review.review = { explanation: "The provider asks you to inspect this operation." };
+      const entry = Object.assign(fixture.entry, {
         sessionId: variant === "session" ? "replacement-session" : target.sessionId,
-        incognito: true as const,
         lifecycleRevision:
           variant === "revision" ? "replacement-generation" : target.lifecycleRevision,
         activeWriterRunId: variant === "writer" ? "replacement-writer" : runId,
         lifecycleRunId: variant === "writer" ? "replacement-writer" : runId,
-        updatedAt: 1_000,
-        startedAt: 1_000,
         ...(variant === "newer-review"
           ? { providerReview: { ...review, id: "newer-review" } }
           : {}),
-      };
-      await createSessionEntryWithTranscript(entryScope, () => ({ ok: true, entry }));
-      if (entry.providerReview) {
-        await sessionEntries.patchSessionEntryCore(
-          entryScope,
-          () => ({ providerReview: entry.providerReview }),
-          { providerReviewMutation: true, skipMaintenance: true },
-        );
-      }
-      await appendTranscriptMessage(
-        { ...target, env, sessionId: entry.sessionId },
-        {
-          message: {
-            role: "assistant",
-            content: [],
-            stopReason: "error",
-            errorMessage: "Provider pause",
-            __openclaw: { runId },
-          },
-        },
-      );
+      });
+      await fixture.seed();
       let current = true;
       const assertSourceCurrent = () => {
         if (!current) {
@@ -258,13 +247,7 @@ it("records an incognito pause in actor state without SQL and rejects stale fact
       });
       try {
         if (variant !== "ordinary") {
-          captureAgentRunProviderReview({
-            runId,
-            target,
-            review,
-            expectedWriterRunId: runId,
-            assertCurrent: assertSourceCurrent,
-          });
+          fixture.capture(assertSourceCurrent);
         }
         const fact = readAgentRunProviderReview(runId);
         const event = {
@@ -297,18 +280,18 @@ it("records an incognito pause in actor state without SQL and rejects stale fact
           });
           if (variant === "revoked") {
             await expect(persistence).rejects.toThrow("Source authority expired");
-            expect(sessionEntries.loadSessionEntry(entryScope)?.status).toBeUndefined();
+            expect(sessionEntries.loadSessionEntry(scope)?.status).toBeUndefined();
           } else {
             await persistence;
           }
           expect(statements.queries.filter(isSessionEntryDataSql)).toEqual([]);
           if (variant === "current" || variant === "ordinary") {
-            expect(sessionEntries.loadSessionEntry(entryScope)?.status).toBe("failed");
+            expect(sessionEntries.loadSessionEntry(scope)?.status).toBe("failed");
           }
         } finally {
           statements.restore();
         }
-        expect(sessionEntries.loadSessionEntry(entryScope)?.providerReview).toEqual(
+        expect(sessionEntries.loadSessionEntry(scope)?.providerReview).toEqual(
           variant === "current" ? review : entry.providerReview,
         );
       } finally {
