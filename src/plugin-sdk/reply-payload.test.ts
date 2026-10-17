@@ -1,4 +1,3 @@
-// Reply payload tests cover reply target parsing, media payloads, and approval metadata.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTtsSupplementMediaPayload,
@@ -57,12 +56,15 @@ describe("isReasoningReplyPayload", () => {
 });
 
 describe("sendPayloadWithChunkedTextAndMedia", () => {
+  const defaults = {
+    sendText: async () => ({ channel: "test", messageId: "text" }),
+    sendMedia: async () => ({ channel: "test", messageId: "media" }),
+    emptyResult: { channel: "test", messageId: "" },
+  };
   it("returns empty result when payload has no text and no media", async () => {
     const result = await sendPayloadWithChunkedTextAndMedia({
+      ...defaults,
       ctx: { payload: {} },
-      sendText: async () => ({ channel: "test", messageId: "text" }),
-      sendMedia: async () => ({ channel: "test", messageId: "media" }),
-      emptyResult: { channel: "test", messageId: "" },
     });
     expect(result).toEqual({ channel: "test", messageId: "" });
   });
@@ -70,15 +72,14 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
   it("sends first media with text and remaining media without text", async () => {
     const calls: Array<{ text: string; mediaUrl: string }> = [];
     const result = await sendPayloadWithChunkedTextAndMedia({
+      ...defaults,
       ctx: {
         payload: { text: "hello", mediaUrls: ["https://a", "https://b"] },
       },
-      sendText: async () => ({ channel: "test", messageId: "text" }),
       sendMedia: async (ctx) => {
         calls.push({ text: ctx.text, mediaUrl: ctx.mediaUrl });
         return { channel: "test", messageId: ctx.mediaUrl };
       },
-      emptyResult: { channel: "test", messageId: "" },
     });
     expect(calls).toEqual([
       { text: "hello", mediaUrl: "https://a" },
@@ -95,17 +96,17 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     const onResult = vi.fn();
 
     const result = await sendPayloadWithChunkedTextAndMedia({
+      ...defaults,
       ctx: { payload: { text: "visible reply" } },
       textChunkLimit: 64,
       chunker: () => [],
       sendText,
-      sendMedia: async () => ({ channel: "test", messageId: "media" }),
-      emptyResult: { channel: "test", messageId: "" },
       onResult,
     });
 
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "visible reply" }));
+    expect(sendText).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "visible reply" }),
+    );
     expect(onResult).toHaveBeenCalledWith({ channel: "test", messageId: "visible reply" });
     expect(result).toEqual({ channel: "test", messageId: "visible reply" });
   });
@@ -118,35 +119,27 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
   });
 });
 
-describe("sendPayloadTextChunkSequence", () => {
-  it.each([
-    {
-      name: "multiple",
-      chunks: ["one", "two"],
-      expectedCalls: [
-        ["one", 0, true],
-        ["two", 1, false],
-      ],
-      expectedResult: "two",
+it("sends multiple text chunks in sequence", async () => {
+  const chunks = ["one", "two"];
+  const calls: Array<[string, number, boolean]> = [];
+  const results: string[] = [];
+  const result = await sendPayloadTextChunkSequence({
+    chunks,
+    send: async ({ text, index, isFirst }) => {
+      calls.push([text, index, isFirst]);
+      return text;
     },
-  ])("sends $name chunk sequences", async ({ chunks, expectedCalls, expectedResult }) => {
-    const calls: Array<[string, number, boolean]> = [];
-    const results: string[] = [];
-    const result = await sendPayloadTextChunkSequence({
-      chunks,
-      send: async ({ text, index, isFirst }) => {
-        calls.push([text, index, isFirst]);
-        return text;
-      },
-      onResult: (value) => {
-        results.push(value);
-      },
-    });
-
-    expect(calls).toEqual(expectedCalls);
-    expect(results).toEqual(chunks);
-    expect(result).toBe(expectedResult);
+    onResult: (value) => {
+      results.push(value);
+    },
   });
+
+  expect(calls).toEqual([
+    ["one", 0, true],
+    ["two", 1, false],
+  ]);
+  expect(results).toEqual(chunks);
+  expect(result).toBe("two");
 });
 
 describe("sendPayloadMediaSequence", () => {
@@ -209,6 +202,19 @@ describe("sendPayloadMediaSequence", () => {
 });
 
 describe("sendTextMediaPayload", () => {
+  type Options = Parameters<typeof sendTextMediaPayload>[0];
+  function sendPayload(
+    payload: Options["ctx"]["payload"],
+    adapter: Options["adapter"],
+    context: Partial<Options["ctx"]> = {},
+  ) {
+    return sendTextMediaPayload({
+      channel: "test",
+      ctx: { cfg: {}, to: "target", text: "", ...context, payload },
+      adapter,
+    });
+  }
+
   it("does not duplicate a caption when a media sender returns undefined", async () => {
     const sendMediaMock = vi.fn(async () => undefined);
     const sendText = vi.fn();
@@ -217,16 +223,11 @@ describe("sendTextMediaPayload", () => {
     >;
 
     await expect(
-      sendTextMediaPayload({
-        channel: "test",
-        ctx: {
-          cfg: {},
-          to: "target",
-          text: "caption",
-          payload: { text: "caption", mediaUrl: "https://example.com/image.png" },
-        },
-        adapter: { sendMedia, sendText },
-      }),
+      sendPayload(
+        { text: "caption", mediaUrl: "https://example.com/image.png" },
+        { sendMedia, sendText },
+        { text: "caption" },
+      ),
     ).resolves.toBeUndefined();
     expect(sendMediaMock).toHaveBeenCalledOnce();
     expect(sendText).not.toHaveBeenCalled();
@@ -236,20 +237,14 @@ describe("sendTextMediaPayload", () => {
     const sendMedia = vi.fn();
     const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
 
-    const result = await sendTextMediaPayload({
-      channel: "test",
-      ctx: {
-        cfg: {},
-        to: "target",
-        text: "caption",
-        payload: { text: "caption", mediaUrls: ["", ""] },
-      },
-      adapter: { sendMedia, sendText },
-    });
+    const result = await sendPayload(
+      { text: "caption", mediaUrls: ["", ""] },
+      { sendMedia, sendText },
+      { text: "caption" },
+    );
 
     expect(sendMedia).not.toHaveBeenCalled();
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "caption" }));
+    expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "caption" }));
     expect(result).toEqual({ channel: "test", messageId: "caption" });
   });
 
@@ -257,24 +252,15 @@ describe("sendTextMediaPayload", () => {
     const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
     const onDeliveryResult = vi.fn();
 
-    const result = await sendTextMediaPayload({
-      channel: "test",
-      ctx: {
-        cfg: {},
-        to: "target",
-        text: "",
-        payload: { text: "visible reply" },
-        onDeliveryResult,
-      },
-      adapter: {
-        textChunkLimit: 64,
-        chunker: () => [],
-        sendText,
-      },
-    });
+    const result = await sendPayload(
+      { text: "visible reply" },
+      { textChunkLimit: 64, chunker: () => [], sendText },
+      { onDeliveryResult },
+    );
 
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "visible reply" }));
+    expect(sendText).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "visible reply" }),
+    );
     expect(onDeliveryResult).toHaveBeenCalledWith({
       channel: "test",
       messageId: "visible reply",
@@ -290,28 +276,19 @@ describe("sendTextMediaPayload", () => {
     const onDeliveryResult = vi.fn();
 
     await expect(
-      sendTextMediaPayload({
-        channel: "test",
-        ctx: {
-          cfg: {},
-          to: "target",
-          text: "",
-          payload: { text: "abcd" },
+      sendPayload(
+        { text: "abcd" },
+        { textChunkLimit: 2, chunker: () => ["ab", "cd"], sendText },
+        {
           onDeliveryResult,
           replyToId: "reply-1",
           replyToIdSource: "implicit",
           replyToMode: "first",
         },
-        adapter: {
-          textChunkLimit: 2,
-          chunker: () => ["ab", "cd"],
-          sendText,
-        },
-      }),
+      ),
     ).rejects.toThrow("second chunk failed");
 
-    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
-    expect(onDeliveryResult).toHaveBeenCalledWith({ channel: "test", messageId: "ab" });
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({ channel: "test", messageId: "ab" });
     expect(sendText.mock.calls.map((call) => call[0].replyToId)).toEqual(["reply-1", undefined]);
   });
 
@@ -319,22 +296,16 @@ describe("sendTextMediaPayload", () => {
     const onDeliveryResult = vi.fn();
     const result = { channel: "test", messageId: "m1" };
 
-    await sendTextMediaPayload({
-      channel: "test",
-      ctx: {
-        cfg: {},
-        to: "target",
-        text: "",
-        payload: { mediaUrl: "https://example.com/a.png" },
-        onDeliveryResult,
-      },
-      adapter: {
+    await sendPayload(
+      { mediaUrl: "https://example.com/a.png" },
+      {
         sendMedia: async (ctx) => {
           await ctx.onDeliveryResult?.(result);
           return result;
         },
       },
-    });
+      { onDeliveryResult },
+    );
 
     expect(onDeliveryResult).toHaveBeenCalledTimes(1);
   });
@@ -344,23 +315,19 @@ describe("sendTextMediaPayload", () => {
       NonNullable<Parameters<typeof sendTextMediaPayload>[0]["adapter"]["sendMedia"]>
     >(async () => ({ channel: "test", messageId: "media" }));
 
-    await sendTextMediaPayload({
-      channel: "test",
-      ctx: {
-        cfg: {},
-        to: "target",
-        text: "",
-        payload: {
-          text: "caption",
-          mediaUrls: ["https://example.com/voice.ogg", "https://example.com/next.ogg"],
-          audioAsVoice: true,
-        },
+    await sendPayload(
+      {
+        text: "caption",
+        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/next.ogg"],
+        audioAsVoice: true,
+      },
+      { sendMedia },
+      {
         replyToId: "reply-1",
         replyToIdSource: "implicit",
         replyToMode: "batched",
       },
-      adapter: { sendMedia },
-    });
+    );
 
     expect(sendMedia.mock.calls.map((call) => call[0].audioAsVoice)).toEqual([true, true]);
     expect(sendMedia.mock.calls.map((call) => call[0].replyToId)).toEqual(["reply-1", undefined]);
@@ -432,23 +399,21 @@ describe("TTS supplement payload helpers", () => {
   });
 });
 
-describe("hasOutboundReplyContent", () => {
-  it.each([
-    [
-      "still reports content when trimmed text is blank but media exists",
+it("still reports content when trimmed text is blank but media exists", () => {
+  expect(
+    hasOutboundReplyContent(
       { text: "   ", mediaUrls: ["https://example.com/a.png"] },
       { trimText: true },
-      true,
-    ],
-  ])("%s", (_name, payload, options, expected) => {
-    expect(hasOutboundReplyContent(payload, options)).toBe(expected);
-  });
+    ),
+  ).toBe(true);
 });
 
 describe("deliverTextOrMediaReply", () => {
+  function senders() {
+    return { sendMedia: vi.fn(async () => undefined), sendText: vi.fn(async () => undefined) };
+  }
   it("sends media first with caption only on the first attachment", async () => {
-    const sendMedia = vi.fn(async () => undefined);
-    const sendText = vi.fn(async () => undefined);
+    const { sendMedia, sendText } = senders();
 
     await expect(
       deliverTextOrMediaReply({
@@ -471,8 +436,7 @@ describe("deliverTextOrMediaReply", () => {
   });
 
   it("preserves non-empty text when the reply chunker returns no chunks", async () => {
-    const sendMedia = vi.fn(async () => undefined);
-    const sendText = vi.fn(async () => undefined);
+    const { sendMedia, sendText } = senders();
 
     await expect(
       deliverTextOrMediaReply({
@@ -489,8 +453,7 @@ describe("deliverTextOrMediaReply", () => {
   });
 
   it("returns empty when chunking produces no sendable text", async () => {
-    const sendMedia = vi.fn(async () => undefined);
-    const sendText = vi.fn(async () => undefined);
+    const { sendMedia, sendText } = senders();
 
     await expect(
       deliverTextOrMediaReply({
@@ -524,8 +487,7 @@ describe("sendMediaWithLeadingCaption", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith(
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         mediaUrl: "https://example.com/a.png",
         caption: "hello",

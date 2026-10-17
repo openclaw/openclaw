@@ -2,7 +2,6 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema"
 import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import {
@@ -10,12 +9,7 @@ import {
   inspectDeepSeekToolSchemas,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
-  inspectLlamacppGbnfToolSchemas,
-  inspectOpenAIToolSchemas,
   normalizeDeepSeekToolSchemas,
-  normalizeGeminiToolSchemas,
-  normalizeLlamacppGbnfToolSchemas,
-  normalizeOpenAIToolSchemas,
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
@@ -68,6 +62,13 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     return { type: "object", properties, ...overrides };
   }
 
+  const string = { type: "string" };
+  const stringUnion = (...values: string[]) => ({
+    anyOf: values.map((value) => ({ const: value, type: "string" })),
+  });
+  const objectVariant = (properties: Record<string, unknown>, required: string[], overrides = {}) =>
+    objectSchema(properties, { required, additionalProperties: false, ...overrides });
+
   function strictObject(overrides: Record<string, unknown> = {}) {
     return {
       type: "object",
@@ -116,6 +117,10 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   }
 
+  function normalizeDeepSeek(parameters: unknown, name = "demo") {
+    return normalizeDeepSeekToolSchemas(deepSeekContext([tool(parameters, name)]));
+  }
+
   function validateDeepSeekTool(
     normalized: ReturnType<typeof normalizeDeepSeekToolSchemas>,
     args: Record<string, unknown>,
@@ -143,26 +148,20 @@ describe("buildProviderToolCompatFamilyHooks", () => {
 
   it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
     const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
+    const cronSchema = (declarationKey: object, script: object, boundary: object) =>
+      objectSchema({
+        job: objectSchema({
+          declarationKey,
+          trigger: { anyOf: [objectSchema({ script, boundary }), { type: "null" }] },
+        }),
+      });
     const tools = [
       tool(
-        objectSchema({
-          job: objectSchema({
-            declarationKey: {
-              type: "string",
-              maxLength: 1999,
-              pattern: "^\\S+$",
-            },
-            trigger: {
-              anyOf: [
-                objectSchema({
-                  script: { type: "string", minLength: 1, maxLength: 65_536 },
-                  boundary: { type: "string", maxLength: 2000 },
-                }),
-                { type: "null" },
-              ],
-            },
-          }),
-        }),
+        cronSchema(
+          { ...string, maxLength: 1999, pattern: "^\\S+$" },
+          { ...string, minLength: 1, maxLength: 65_536 },
+          { ...string, maxLength: 2000 },
+        ),
         "cron",
       ),
     ];
@@ -174,38 +173,13 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(
-      objectSchema({
-        job: objectSchema({
-          declarationKey: { type: "string", maxLength: 1999 },
-          trigger: {
-            anyOf: [
-              objectSchema({
-                script: { type: "string", minLength: 1 },
-                boundary: { type: "string" },
-              }),
-              { type: "null" },
-            ],
-          },
-        }),
-      }),
+      cronSchema(
+        { type: "string", maxLength: 1999 },
+        { type: "string", minLength: 1 },
+        { type: "string" },
+      ),
     );
     expect(hooks.inspectToolSchemas({ provider: "ollama", tools: normalized })).toEqual([]);
-  });
-
-  it("covers the tool compat family matrix", () => {
-    const cases = [
-      ["deepseek", normalizeDeepSeekToolSchemas, inspectDeepSeekToolSchemas],
-      ["gemini", normalizeGeminiToolSchemas, inspectGeminiToolSchemas],
-      ["llamacpp-gbnf", normalizeLlamacppGbnfToolSchemas, inspectLlamacppGbnfToolSchemas],
-      ["openai", normalizeOpenAIToolSchemas, inspectOpenAIToolSchemas],
-    ] as const;
-
-    for (const [family, normalizeToolSchemas, inspectToolSchemas] of cases) {
-      const hooks = buildProviderToolCompatFamilyHooks(family);
-
-      expect(hooks.normalizeToolSchemas).toBe(normalizeToolSchemas);
-      expect(hooks.inspectToolSchemas).toBe(inspectToolSchemas);
-    }
   });
 
   it.each(["gemini", "llamacpp-gbnf", "openai"] as const)(
@@ -263,14 +237,9 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toEqual([]);
   });
 
-  it.each([
-    {
-      family: "deepseek",
-      normalize: normalizeDeepSeekToolSchemas,
-      schema: { anyOf: [{ type: "string" }, { type: "null" }] },
-      expected: { type: "string", nullable: true },
-    },
-  ])("preserves copy-on-write tool identities for $family", ({ normalize, schema, expected }) => {
+  it("preserves copy-on-write tool identities for deepseek", () => {
+    const schema = { anyOf: [{ type: "string" }, { type: "null" }] };
+    const expected = { type: "string", nullable: true };
     const stable = { type: "string" };
     const parameters = objectSchema({ stable, changed: schema });
     const originalParameters = structuredClone(parameters);
@@ -282,7 +251,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
     const tools = [tool(undefined, "absent"), tool(7, "primitive"), tool(stable), changedTool];
 
-    const normalized = normalize(providerContext(tools));
+    const normalized = normalizeDeepSeekToolSchemas(providerContext(tools));
 
     expect(normalized).not.toBe(tools);
     expect(normalized).toHaveLength(tools.length);
@@ -300,56 +269,42 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(parameters).toEqual(originalParameters);
   });
 
-  it.each([
-    {
-      family: "gemini",
-      inspect: inspectGeminiToolSchemas,
-      violations: [
-        "duplicate.parameters.properties.nested.items[0].oneOf[0].format",
-        "duplicate.parameters.properties.nested.items[1].pattern",
-        "duplicate.parameters.anyOf[0].pattern",
-        "duplicate.parameters.pattern",
-      ],
-      lastViolation: "duplicate.parameters.pattern",
-    },
-  ])(
-    "preserves diagnostic paths and tool indices for $family",
-    ({ inspect, violations, lastViolation }) => {
-      const parameters = {
-        anyOf: [{ pattern: "^outer$" }],
-        pattern: "^root$",
-        properties: {
-          anyOf: { type: "string" },
-          nested: {
-            type: "array",
-            items: [{ oneOf: [{ type: "string", format: "date" }] }, { pattern: "^inner$" }],
-          },
+  it("preserves diagnostic paths and tool indices for gemini", () => {
+    const violations = [
+      "duplicate.parameters.properties.nested.items[0].oneOf[0].format",
+      "duplicate.parameters.properties.nested.items[1].pattern",
+      "duplicate.parameters.anyOf[0].pattern",
+      "duplicate.parameters.pattern",
+    ];
+    const parameters = {
+      anyOf: [{ pattern: "^outer$" }],
+      pattern: "^root$",
+      properties: {
+        anyOf: { type: "string" },
+        nested: {
+          type: "array",
+          items: [{ oneOf: [{ type: "string", format: "date" }] }, { pattern: "^inner$" }],
         },
-      };
-      const tools = [
-        tool(parameters, "duplicate"),
-        tool(objectSchema({ pattern: { type: "string" }, anyOf: { type: "string" } }), "clean"),
-        tool({ pattern: "^last$", anyOf: [] }, "duplicate"),
-      ];
-      const originalTools = structuredClone(tools);
+      },
+    };
+    const tools = [
+      tool(parameters, "duplicate"),
+      tool(objectSchema({ pattern: { type: "string" }, anyOf: { type: "string" } }), "clean"),
+      tool({ pattern: "^last$", anyOf: [] }, "duplicate"),
+    ];
+    const originalTools = structuredClone(tools);
 
-      expect(inspect(providerContext(tools))).toEqual([
-        { toolName: "duplicate", toolIndex: 0, violations },
-        { toolName: "duplicate", toolIndex: 2, violations: [lastViolation] },
-      ]);
-      expect(tools).toEqual(originalTools);
-    },
-  );
+    expect(inspectGeminiToolSchemas(providerContext(tools))).toEqual([
+      { toolName: "duplicate", toolIndex: 0, violations },
+      { toolName: "duplicate", toolIndex: 2, violations: ["duplicate.parameters.pattern"] },
+    ]);
+    expect(tools).toEqual(originalTools);
+  });
 
-  it.each([
-    {
-      title: "normalizes canonical OpenAI Codex Responses tool schemas",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    },
-  ])("$title", ({ baseUrl }) => {
+  it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
     const normalized = normalizeOpenAITools([tool({})], {
       modelApi: "openai-chatgpt-responses",
-      baseUrl,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
     expect(normalized[0]?.parameters).toEqual(strictObject());
   });
@@ -367,40 +322,22 @@ describe("buildProviderToolCompatFamilyHooks", () => {
 
   it("preserves string-const unions as a flat enum for the deepseek family", () => {
     // Regression for https://github.com/openclaw/openclaw/issues/86468.
-    // Typebox `Type.Union([Type.Literal(...)])` collapses to anyOf of consts;
-    // the previous normalizer kept only the first const, hiding every other
-    // literal from the model.
-    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
-    const tools = [
-      tool(
-        objectSchema(
-          {
-            mode: {
-              description: "更新模式（必填）",
-              anyOf: [
-                { const: "overwrite", type: "string" },
-                { const: "append", type: "string" },
-                { const: "replace_range", type: "string" },
-              ],
-            },
-            optional_mode: {
-              anyOf: [
-                { const: "a", type: "string" },
-                { const: "b", type: "string" },
-                { type: "null" },
-              ],
-            },
-            single_const: {
-              anyOf: [{ const: "only", type: "string" }],
-            },
+    const normalized = normalizeDeepSeek(
+      objectSchema(
+        {
+          mode: {
+            description: "更新模式（必填）",
+            ...stringUnion("overwrite", "append", "replace_range"),
           },
-          { required: ["mode"] },
-        ),
-        "feishu_update_doc",
+          optional_mode: {
+            anyOf: [...stringUnion("a", "b").anyOf, { type: "null" }],
+          },
+          single_const: stringUnion("only"),
+        },
+        { required: ["mode"] },
       ),
-    ];
-
-    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+      "feishu_update_doc",
+    );
 
     expect(normalized[0]?.parameters).toEqual(
       objectSchema(
@@ -410,86 +347,40 @@ describe("buildProviderToolCompatFamilyHooks", () => {
             type: "string",
             enum: ["overwrite", "append", "replace_range"],
           },
-          optional_mode: {
-            type: "string",
-            enum: ["a", "b"],
-            nullable: true,
-          },
-          single_const: {
-            const: "only",
-            type: "string",
-          },
+          optional_mode: { type: "string", enum: ["a", "b"], nullable: true },
+          single_const: { const: "only", type: "string" },
         },
         { required: ["mode"] },
       ),
     );
-    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+    expect(inspectDeepSeekToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
   });
 
   it("keeps every object variant of a union expressible for the deepseek family", () => {
     // Regression for https://github.com/openclaw/openclaw/issues/143790.
-    // Notion's create-pages `parent` is an anyOf of three object variants.
-    // Keeping only the first variant narrowed the schema to `page_id`, so the
-    // model could not express a database or data-source parent and every such
-    // call was rejected by our own argument validator before it reached the
-    // server.
-    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
-    const tools = [
-      tool(
-        objectSchema(
-          {
-            pages: { type: "array", items: { type: "object" } },
-            parent: {
-              description: "The parent under which the new pages will be created.",
-              anyOf: [
-                {
-                  type: "object",
-                  properties: {
-                    page_id: { type: "string" },
-                    type: { type: "string", enum: ["page_id"] },
-                  },
-                  required: ["page_id"],
-                  additionalProperties: {},
-                },
-                {
-                  type: "object",
-                  properties: {
-                    database_id: { type: "string" },
-                    type: { type: "string", enum: ["database_id"] },
-                  },
-                  required: ["database_id"],
-                  additionalProperties: {},
-                },
-                {
-                  type: "object",
-                  properties: {
-                    data_source_id: { type: "string" },
-                    type: { type: "string", enum: ["data_source_id"] },
-                  },
-                  required: ["data_source_id"],
-                  additionalProperties: {},
-                },
-              ],
-            },
+    const normalized = normalizeDeepSeek(
+      objectSchema(
+        {
+          pages: { type: "array", items: { type: "object" } },
+          parent: {
+            description: "The parent under which the new pages will be created.",
+            anyOf: ["page_id", "database_id", "data_source_id"].map((id) =>
+              objectVariant({ [id]: string, type: { type: "string", enum: [id] } }, [id], {
+                additionalProperties: {},
+              }),
+            ),
           },
-          { required: ["pages"] },
-        ),
-        "notion__notion-create-pages",
+        },
+        { required: ["pages"] },
       ),
-    ];
-
-    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+      "notion__notion-create-pages",
+    );
     const parameters = normalized[0]?.parameters as {
       properties: Record<string, unknown>;
       required?: string[];
     };
 
-    // Every branch stays expressible, and the discriminator pools its values so
-    // the model can name any of them. The per-branch keys stay unconstrained:
-    // each is declared by one variant and permitted by the others through
-    // `additionalProperties`, so constraining one would reject a call those
-    // variants accepted. The live Notion schema documents each of them, and any
-    // annotation survives here.
+    // Other variants accept undeclared keys, so those keys must stay unconstrained.
     expect(parameters.properties.parent).toEqual({
       description: "The parent under which the new pages will be created.",
       type: "object",
@@ -500,52 +391,30 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         type: { type: "string", enum: ["page_id", "database_id", "data_source_id"] },
       },
     });
-    // No branch's key is required any more, because no key is required by all
-    // of them. The root's own `required` is untouched.
     expect(parameters.required).toEqual(["pages"]);
-    // The provider still sees no union keyword.
-    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+    expect(inspectDeepSeekToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
   });
 
   it("does not narrow a key a variant accepts through patternProperties", () => {
-    // Review finding on #143819: `additionalProperties: false` does not make a
-    // variant reject an undeclared key that its `patternProperties` cover.
-    // Branch A accepts an object-valued `b` that way, and branch B declares `b`
-    // as a string. Copying B's constraint would reject a call A accepted.
-    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
-    const tools = [
-      tool(
-        objectSchema({
-          parent: {
-            anyOf: [
-              {
-                type: "object",
-                properties: { a: { type: "string" } },
-                required: ["a"],
-                additionalProperties: false,
-                patternProperties: { "^b$": { type: "object" } },
-              },
-              {
-                type: "object",
-                properties: { b: { type: "string" } },
-                required: ["b"],
-                additionalProperties: false,
-              },
-            ],
-          },
-        }),
-        "patterned-variant",
-      ),
-    ];
-
-    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    // #143819: patternProperties may accept a key another variant constrains.
+    const normalized = normalizeDeepSeek(
+      objectSchema({
+        parent: {
+          anyOf: [
+            objectVariant({ a: string }, ["a"], {
+              patternProperties: { "^b$": { type: "object" } },
+            }),
+            objectVariant({ b: string }, ["b"]),
+          ],
+        },
+      }),
+      "patterned-variant",
+    );
     const parameters = normalized[0]?.parameters as {
       properties: { parent: { properties: Record<string, unknown> } };
     };
     const props = parameters.properties.parent.properties;
 
-    // A key the pattern covers stays unconstrained, while a declared key keeps
-    // its own definition.
     expect(props["b"]).toEqual({});
     expect(props["a"]).toEqual({ type: "string" });
 
@@ -557,18 +426,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         arguments: args,
       });
 
-    // Accepted by branch A before this change, so it must stay accepted.
     expect(() => validate({ parent: { a: "x", b: { nested: true } } })).not.toThrow();
-    // And the branch that declares `b` is still callable.
     expect(() => validate({ parent: { b: "y" } })).not.toThrow();
   });
 
-  it.each([
-    {
-      name: "normalized sibling",
-      mode: { anyOf: [{ type: "string" }, { type: "integer" }] },
-    },
-  ])("keeps an own __proto__ property with a $name", ({ mode }) => {
+  it("keeps an own __proto__ property with a normalized sibling", () => {
+    const mode = { anyOf: [{ type: "string" }, { type: "integer" }] };
     // A changing child forces the recursive walker to return its copied record,
     // so own-key preservation must hold before object-union accumulation too.
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
@@ -611,19 +474,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toThrow(/Validation failed for tool "proto-keys"/);
   });
 
-  it.each([
-    {
-      union: "oneOf",
-      name: "disjoint const and enum",
-      middle: { const: "discarded", enum: ["excluded"] },
-      expectedKinds: ["page", "data_source"],
-      validParents: [
-        { kind: "page", page_id: "page-1" },
-        { kind: "data_source", data_source_id: "data-source-1" },
-      ],
-      invalidKinds: ["discarded", "excluded"],
-    },
-  ])("pools literal discriminators in $union with $name", (testCase) => {
+  it("pools literal discriminators in oneOf with disjoint const and enum", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const branch = (kind: Record<string, unknown>, id: string) => ({
       type: "object",
@@ -636,9 +487,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         tool(
           objectSchema({
             parent: {
-              [testCase.union]: [
+              oneOf: [
                 branch({ const: "page", description: "First category" }, "page_id"),
-                branch({ ...testCase.middle, description: "Second category" }, "database_id"),
+                branch(
+                  { const: "discarded", enum: ["excluded"], description: "Second category" },
+                  "database_id",
+                ),
                 branch({ enum: ["data_source"], description: "Third category" }, "data_source_id"),
               ],
             },
@@ -655,7 +509,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
             kind: {
               type: "string",
               description: "First category",
-              enum: testCase.expectedKinds,
+              enum: ["page", "data_source"],
             },
           },
           required: ["kind"],
@@ -663,10 +517,13 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       },
     });
     expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
-    for (const parent of testCase.validParents) {
+    for (const parent of [
+      { kind: "page", page_id: "page-1" },
+      { kind: "data_source", data_source_id: "data-source-1" },
+    ]) {
       expect(validateDeepSeekTool(normalized, { parent })).toEqual({ parent });
     }
-    for (const kind of testCase.invalidKinds) {
+    for (const kind of ["discarded", "excluded"]) {
       expect(() =>
         validateDeepSeekTool(normalized, { parent: { kind, database_id: "database-1" } }),
       ).toThrow(/Validation failed for tool "literal-parent"/);

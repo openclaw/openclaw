@@ -1,10 +1,8 @@
 import { createServer } from "node:net";
-/**
- * Tests QA runtime command loading and private CLI gating.
- */
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import type { LiveTransportQaCliRegistrationOptions } from "./qa-runtime.js";
 import { restorePrivateQaCliEnv } from "./qa-runtime.test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
@@ -66,19 +64,29 @@ describe("plugin-sdk qa-runtime", () => {
     };
   }
 
-  function cancelTrackedFetchResponse(ok = true) {
-    let canceled = false;
+  async function dockerRuntime() {
+    const module = await import("./qa-runtime.js");
+    return module.createQaDockerRuntime({ auditContext: "qa-test" });
+  }
+
+  function registrationOptions(
+    run: LiveTransportQaCliRegistrationOptions["run"],
+  ): LiveTransportQaCliRegistrationOptions {
     return {
-      response: {
-        ok,
-        body: {
-          cancel: vi.fn(async () => {
-            canceled = true;
-          }),
-        },
-      },
-      wasCanceled: () => canceled,
+      commandName: "telegram",
+      defaultProviderMode: "mock-openai",
+      description: "Synthetic transport registration",
+      providerModeHelp: "Provider mode",
+      outputDirHelp: "Artifact directory",
+      scenarioHelp: "Run only the named scenario",
+      sutAccountHelp: "Temporary SUT account",
+      run,
     };
+  }
+
+  function cancelTrackedFetchResponse(ok = true) {
+    const cancel = vi.fn(async () => {});
+    return { response: { ok, body: { cancel } }, cancel };
   }
 
   it("stays cold until the runtime seam is used", async () => {
@@ -141,7 +149,7 @@ describe("plugin-sdk qa-runtime", () => {
 
     module
       .createLiveTransportQaCliRegistration({
-        commandName: "telegram",
+        ...registrationOptions(run),
         credentialFileHelp: "Private JSON credential file",
         credentialOptions: {
           sourceDescription: "Credential source for Telegram QA",
@@ -149,15 +157,10 @@ describe("plugin-sdk qa-runtime", () => {
         },
         defaultProviderMode: "live-frontier",
         description: "Run Telegram QA",
-        providerModeHelp: "Provider mode",
         listScenariosHelp: "List Telegram scenarios",
-        outputDirHelp: "Telegram output directory",
         profileHelp: "QA profile",
         failFastHelp: "Stop after first failure",
         allowFailuresHelp: "Allow failures",
-        scenarioHelp: "Run only the named scenario",
-        sutAccountHelp: "Temporary SUT account",
-        run,
       })
       .register(qa);
 
@@ -169,36 +172,25 @@ describe("plugin-sdk qa-runtime", () => {
       "node",
       "openclaw",
       "telegram",
-      "--repo-root",
-      "/tmp/repo",
-      "--output-dir",
-      ".artifacts/qa",
-      "--provider-mode",
-      "mock-openai",
-      "--model",
-      "primary",
-      "--alt-model",
-      "alternate",
-      "--scenario",
-      "alpha",
-      "--scenario",
-      "  ",
-      "--scenario",
-      "beta",
+      ...[
+        ["--repo-root", "/tmp/repo"],
+        ["--output-dir", ".artifacts/qa"],
+        ["--provider-mode", "mock-openai"],
+        ["--model", "primary"],
+        ["--alt-model", "alternate"],
+        ["--scenario", "alpha"],
+        ["--scenario", "  "],
+        ["--scenario", "beta"],
+        ["--profile", "fast"],
+        ["--sut-account", "sut-2"],
+        ["--credential-file", "/secure/telegram-qa.json"],
+        ["--credential-source", "convex"],
+        ["--credential-role", "maintainer"],
+      ].flat(),
       "--fast",
       "--allow-failures",
       "--list-scenarios",
-      "--profile",
-      "fast",
       "--fail-fast",
-      "--sut-account",
-      "sut-2",
-      "--credential-file",
-      "/secure/telegram-qa.json",
-      "--credential-source",
-      "convex",
-      "--credential-role",
-      "maintainer",
     ]);
 
     expect(run).toHaveBeenCalledWith({
@@ -225,25 +217,17 @@ describe("plugin-sdk qa-runtime", () => {
     const qa = new Command();
     const dispatchedScenarioIds: string[][] = [];
     module
-      .createLiveTransportQaCliRegistration({
-        commandName: "sample-transport",
-        defaultProviderMode: "mock-openai",
-        description: "Synthetic transport registration",
-        providerModeHelp: "Provider mode",
-        outputDirHelp: "Artifact directory",
-        scenarioHelp: "Run only the named scenario",
-        sutAccountHelp: "Temporary SUT account",
-        // Keep the callback inert: this checks real parsing without a provider or Gateway.
-        run: async (options) => {
+      .createLiveTransportQaCliRegistration(
+        registrationOptions(async (options) => {
           dispatchedScenarioIds.push(options.scenarioIds ?? []);
-        },
-      })
+        }),
+      )
       .register(qa);
 
     const previousExitCode = process.exitCode;
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
-      await qa.parseAsync(["node", "openclaw", "sample-transport", "--scenario", " \t "]);
+      await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", " \t "]);
 
       expect(stderrWrite).toHaveBeenCalledWith(
         "--scenario must name at least one non-empty scenario id.\n",
@@ -257,8 +241,7 @@ describe("plugin-sdk qa-runtime", () => {
   });
 
   it("shares Docker health parsing across array and jsonl compose output", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runtime = await dockerRuntime();
     const dockerPsOutputs = ['[{"Health":"starting"}]', '{"State":"running"}\n'];
     const runCommand = vi.fn(async () => ({
       stdout: dockerPsOutputs.shift() ?? '{"State":"running"}',
@@ -279,8 +262,7 @@ describe("plugin-sdk qa-runtime", () => {
   });
 
   it("cancels compose service health probe response bodies", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runtime = await dockerRuntime();
     const runCommand = vi.fn(async (_command: string, args: string[]) => {
       if (args.includes("ps")) {
         return { stdout: "qa-gateway-one\n", stderr: "" };
@@ -300,23 +282,17 @@ describe("plugin-sdk qa-runtime", () => {
         fetchImpl,
       ),
     ).resolves.toBe("http://172.18.0.4:18789/");
-    expect(probe.wasCanceled()).toBe(true);
+    expect(probe.cancel).toHaveBeenCalledOnce();
   });
 
   it("cancels the guarded default health response before stripping its body", async () => {
     const cancel = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel,
-      }),
-      { status: 503 },
-    );
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => response),
     );
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runtime = await dockerRuntime();
 
     await expect(runtime.fetchHealthUrl("http://127.0.0.1:18789/healthz")).resolves.toEqual({
       ok: false,
@@ -325,8 +301,7 @@ describe("plugin-sdk qa-runtime", () => {
   });
 
   it("cancels waitForHealth response bodies after each probe", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runtime = await dockerRuntime();
     const first = cancelTrackedFetchResponse(false);
     const second = cancelTrackedFetchResponse(true);
     const responses = [first.response, second.response];
@@ -341,13 +316,12 @@ describe("plugin-sdk qa-runtime", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(first.wasCanceled()).toBe(true);
-    expect(second.wasCanceled()).toBe(true);
+    expect(first.cancel).toHaveBeenCalledOnce();
+    expect(second.cancel).toHaveBeenCalledOnce();
   });
 
   it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
-    const module = await import("./qa-runtime.js");
-    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runtime = await dockerRuntime();
     let probeSignal: AbortSignal | undefined;
     const fetchImpl = vi.fn(
       async (_input: string, init?: Pick<RequestInit, "signal">) =>
