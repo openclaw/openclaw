@@ -28,7 +28,6 @@ import {
   runSqliteWorkerStoreOperation,
 } from "../infra/sqlite-worker-store.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   AgentDatabaseExecutionAdmissionClosedError,
   AgentDatabaseSchemaAdmissionChangedError,
@@ -111,7 +110,6 @@ export function createAgentDatabaseNativeGeneration(
   let readOpenRefused: (() => boolean) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let preparationPublished = false;
-  const pendingPreparations = new Set<Promise<void>>();
   const sharedPreparation = createSharedAgentDatabasePreparation(() => assertCurrent());
 
   // The actor retains this observer; keep it outside the opening caller's scope.
@@ -396,8 +394,8 @@ export function createAgentDatabaseNativeGeneration(
     source.assertCurrent();
     assertCallerCurrent?.();
     if (!opening) {
-      const physicalPreparation = createDeferredCore();
-      pendingPreparations.add(physicalPreparation.promise);
+      const finishPreparation = sharedPreparation.retain();
+      const finishNativeOpen = sharedPreparation.beginNativeOpen();
       opening = (async () => {
         retireReplacedAgentValidation(agentId, pathname, expectedIdentity);
         // Existing physical files share preparation. First-use creation retains its caller's claim.
@@ -451,6 +449,7 @@ export function createAgentDatabaseNativeGeneration(
             },
           );
           const store = openedStore;
+          finishNativeOpen();
           if (store && preparingShared && !nativeIdentity) {
             await inPreparation(() =>
               runSqliteWorkerStoreOperation(
@@ -518,8 +517,8 @@ export function createAgentDatabaseNativeGeneration(
         .finally(() => {
           openingAdmission = undefined;
           closedOpeningRefusal = undefined;
-          pendingPreparations.delete(physicalPreparation.promise);
-          physicalPreparation.resolve();
+          finishNativeOpen();
+          finishPreparation();
         });
     }
     const attempt = opening;
@@ -547,11 +546,10 @@ export function createAgentDatabaseNativeGeneration(
       signal?.throwIfAborted();
     };
     const wasPrepared = preparationPublished;
-    const preparing = wasPrepared ? undefined : createDeferredCore();
-    const publication = preparing ? sharedPreparation.follow(source) : undefined;
-    if (preparing) {
-      pendingPreparations.add(preparing.promise);
-    }
+    const finishPreparation = wasPrepared ? undefined : sharedPreparation.retain();
+    const publication = finishPreparation
+      ? sharedPreparation.follow(source, assertOperationCurrent)
+      : undefined;
     let preparedStore: Store;
     try {
       // Opening publishes registration before another caller can reuse this generation.
@@ -614,11 +612,8 @@ export function createAgentDatabaseNativeGeneration(
       }
       preparedStore = store;
     } finally {
-      if (preparing) {
-        pendingPreparations.delete(preparing.promise);
-        publication?.release();
-        preparing.resolve();
-      }
+      publication?.release();
+      finishPreparation?.();
     }
     return runSqliteWorkerStoreOperation(
       preparedStore,
@@ -640,17 +635,8 @@ export function createAgentDatabaseNativeGeneration(
       assertCurrent();
       return preparationPublished;
     },
-    getPendingPreparation() {
-      if (pendingPreparations.size === 0) {
-        return undefined;
-      }
-      // Discovery reports availability after attempts settle; failures stay with their callers.
-      return (async () => {
-        while (pendingPreparations.size > 0) {
-          await Promise.all(pendingPreparations);
-        }
-      })();
-    },
+    getPendingNativeOpen: sharedPreparation.getPendingNativeOpen,
+    getPendingPreparation: sharedPreparation.getPendingPreparation,
     captureClaim() {
       assertCurrent();
       const captured = nativeIdentity;
