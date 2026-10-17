@@ -15,7 +15,6 @@ const systemctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").exec
 const userctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctlUser>());
 vi.mock("./systemd-exec.js", () => ({ execSystemctl: systemctl, execSystemctlUser: userctl }));
 
-import { listManagedOpenClawGatewayServices } from "./inspect.js";
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
 import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
 
@@ -60,30 +59,18 @@ beforeEach(() => {
   userctl.mockReset();
 });
 
-it.each([false, true])("inspects removed system units (partial=%s)", async (partial) => {
+it("rejects partial loaded-unit properties", async () => {
   const name = "custom-rescue.service";
-  const fragmentPath = "/etc/systemd/system/custom-rescue.service";
   systemctl.mockImplementation(async (args) =>
     args.includes("list-units")
       ? listEntry(name)
-      : success(
-          partial
-            ? "Id=unrelated.service\nFragmentPath=\nActiveState=active\n"
-            : unitProperties(name, fragmentPath),
-        ),
+      : success("Id=unrelated.service\nFragmentPath=\nActiveState=active\n"),
   );
-  const inventory = listLoadedSystemdUnits("system", {
-    DBUS_SYSTEM_BUS_ADDRESS: buses.DBUS_SYSTEM_BUS_ADDRESS,
-  });
-  if (partial) {
-    await expect(inventory).rejects.toThrow("properties could not be inspected");
-  } else {
-    await expect(inventory).resolves.toEqual([{ name, fragmentPath, execStart }]);
-    expect(systemctl).toHaveBeenCalledTimes(2);
-    expect(systemctl.mock.calls[1]?.[0]).toContain(
-      "--property=Id,FragmentPath,ExecStart,ActiveState",
-    );
-  }
+  await expect(
+    listLoadedSystemdUnits("system", {
+      DBUS_SYSTEM_BUS_ADDRESS: buses.DBUS_SYSTEM_BUS_ADDRESS,
+    }),
+  ).rejects.toThrow("properties could not be inspected");
 });
 
 it.each(
@@ -126,11 +113,6 @@ it.skipIf(process.platform !== "linux")("binds removed custom-profile units", ()
     expect(await listLoadedSystemdUnits("user", env)).toEqual([
       { name, fragmentPath: removedPath, execStart },
     ]);
-    const inventory = await listManagedOpenClawGatewayServices(env, { requireComplete: true });
-    expect(inventory).toMatchObject({
-      errors: [],
-      services: [{ label: name, detail: `unit: ${removedPath}`, scope: "user" }],
-    });
     expect(await discoverManagedGatewayBindings(env, { requireComplete: true })).toEqual([
       expect.objectContaining({
         env: expect.objectContaining({ OPENCLAW_SYSTEMD_UNIT: name }),

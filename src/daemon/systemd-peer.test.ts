@@ -44,6 +44,7 @@ function expectBroker(address = env.DBUS_SESSION_BUS_ADDRESS) {
   expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(address, expect.any(Number));
 }
 function expectNoPeer() {
+  expect(openSystemdBroker).toHaveBeenCalledOnce();
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
   expect(closeBroker).toHaveBeenCalledOnce();
 }
@@ -105,9 +106,7 @@ it("does not admit another route when the authored broker is unavailable", async
 it("preserves unsettled transport probe cleanup instead of admitting a fallback", async () => {
   const failure = new CommandProcessCleanupError();
   vi.mocked(execFileUtf8).mockRejectedValueOnce(failure);
-  await expect(
-    admit({ ...env, DBUS_SESSION_BUS_ADDRESS: "unix:path=/custom/unsettled-bus" }),
-  ).rejects.toBe(failure);
+  await expect(admit()).rejects.toBe(failure);
   expect(openSystemdBroker).not.toHaveBeenCalled();
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
 });

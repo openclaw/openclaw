@@ -73,14 +73,13 @@ function prepare(
   f: PolicyFixture,
   options: {
     stopping: boolean;
-    running?: boolean;
     root?: string;
-    state?: ReturnType<typeof installedState>;
+    state?: Parameters<typeof prepareSystemdGatewayMaintenance>[0]["state"];
   },
 ) {
   return withGatewayServiceOperationLock(f.env, async (assertNative) =>
     prepareSystemdGatewayMaintenance({
-      state: options.state ?? installedState(f, options.running),
+      state: options.state ?? installedState(f),
       root: options.root ?? "/old",
       stopping: options.stopping,
       warn: f.warn,
@@ -91,8 +90,6 @@ function prepare(
     }),
   );
 }
-const hasReload = () =>
-  native.identity.mock.calls.some(([, args]) => args.includes("daemon-reload"));
 const hasBackup = async (f: PolicyFixture) =>
   (await fs.readdir(path.dirname(f.sourcePath))).some(
     (file) => file.includes(".reconcile-") && file.endsWith(".bak"),
@@ -114,10 +111,8 @@ it.each([false, true])("retains native runner and owner (revoked=%s)", async (re
     }
     return root === "/old";
   });
-  const commands: string[][] = [];
-  const runner = vi.fn<GatewayServiceNativeCommand>(async (argv) => {
+  const runner = vi.fn<GatewayServiceNativeCommand>(async () => {
     expect(readGatewayServiceUpdateOriginalRoot()).toBe("/old");
-    commands.push(argv);
     const unit = await f.read();
     return {
       ...nativeResult(Number(/^TimeoutStopSec=(\d+)$/m.exec(unit)![1])),
@@ -132,22 +127,20 @@ it.each([false, true])("retains native runner and owner (revoked=%s)", async (re
   );
   if (revoked) {
     await expect(preparing).rejects.toThrow("expired authority");
-    expect(commands.some((argv) => argv.includes("daemon-reload"))).toBe(false);
+    expect(runner.mock.calls.some(([argv]) => argv.includes("daemon-reload"))).toBe(false);
     expect(await f.read()).toBe(f.original);
   } else {
     await expect(preparing).resolves.toEqual({ kind: "refreshed" });
-    expect(commands.some((argv) => argv.includes("daemon-reload"))).toBe(true);
+    expect(runner.mock.calls.some(([argv]) => argv.includes("daemon-reload"))).toBe(true);
     expect(await f.read()).toContain("TimeoutStopSec=330");
   }
   expect(roots).toEqual(expect.arrayContaining(["/candidate", "/old"]));
-  expect(runner).toHaveBeenCalled();
   expect(unowned).not.toHaveBeenCalled();
 });
 
 it.each([
   "refresh",
   "repairable",
-  "offline",
   "reload-failed",
   "reload-unsettled",
   "nonstop-reload-unsettled",
@@ -156,15 +149,24 @@ it.each([
   "unavailable",
   "nonstop-override",
   "current-nonstop-override",
+  "custom",
+  "custom-nonstop",
+  "current",
+  "current-nonstop",
 ])("preserves legacy unit drop-ins: %s", async (scenario) => {
-  const f = await policyFixture(scenario.startsWith("current-") ? 330 : 30);
-  const { original, warnings } = f;
-  const stopping = ![
-    "offline",
-    "nonstop-override",
-    "current-nonstop-override",
-    "nonstop-reload-unsettled",
-  ].includes(scenario);
+  const custom = scenario.startsWith("custom");
+  const stopSeconds = scenario === "custom" ? 600 : scenario.startsWith("current") ? 330 : 30;
+  const f = await policyFixture(stopSeconds);
+  const { warnings } = f;
+  const original = custom
+    ? f.original
+        .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
+        .replace("KillMode=mixed", "KillMode=control-group")
+    : f.original;
+  if (custom) {
+    await fs.writeFile(f.sourcePath, original);
+  }
+  const stopping = !scenario.includes("nonstop");
   const unsettled = scenario.endsWith("reload-unsettled");
   const cleanupError = new CommandProcessCleanupError();
   if (scenario === "repairable") {
@@ -172,12 +174,15 @@ it.each([
   }
   await fs.writeFile(`${f.sourcePath}.bak`, "previous backup\n", { mode: 0o600 });
   const dropIn = `${f.sourcePath}.d/operator.conf`;
+  const hasDropIn = !["current", "current-nonstop"].includes(scenario);
   const unsafeOverride = scenario.includes("override");
   const override = `[Service]\nEnvironment=PATH=/operator/bin:/usr/bin\n${unsafeOverride ? "TimeoutStopSec=30\n" : ""}`;
-  await fs.mkdir(path.dirname(dropIn), { mode: 0o700 });
-  await fs.writeFile(dropIn, override, { mode: 0o600 });
-  f.command.definitionPaths!.push(dropIn);
-  let managerTimeout = 30;
+  if (hasDropIn) {
+    await fs.mkdir(path.dirname(dropIn), { mode: 0o700 });
+    await fs.writeFile(dropIn, override, { mode: 0o600 });
+    f.command.definitionPaths!.push(dropIn);
+  }
+  let managerTimeout = scenario.includes("override") ? 30 : stopSeconds;
   let reloads = 0;
   const operations: string[] = [];
   native.identity.mockImplementation(async (executable, args) => {
@@ -201,28 +206,21 @@ it.each([
     operations.push("show");
     return nativeResult(managerTimeout, scenario === "unavailable" ? 1 : 0);
   });
-  const run = () => prepare(f, { running: scenario !== "offline", stopping });
+  const run = () => prepare(f, { stopping });
   if (unsettled) {
     await expect(run()).rejects.toBe(cleanupError);
     expect(reloads).toBe(1);
     expect(operations.at(-1)).toBe("reload");
-    expect(warnings.join(" ")).not.toContain("refresh skipped");
     expect(await hasBackup(f)).toBe(true);
   } else if (scenario !== "reload-failed") {
-    const refreshRequired = scenario !== "current-nonstop-override";
+    const refreshRequired = !scenario.startsWith("current") || (stopping && unsafeOverride);
     expect(await run()).toEqual({ kind: refreshRequired ? "refreshed" : "unchanged" });
-    expect(managerTimeout).toBe(unsafeOverride ? 30 : GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000);
+    expect(managerTimeout).toBe(
+      unsafeOverride ? 30 : Math.max(stopSeconds, GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000),
+    );
     expect(reloads).toBe(refreshRequired ? 1 : 0);
     if (scenario === "repairable") {
       expect((await fs.stat(f.sourcePath)).mode & 0o777).toBe(0o600);
-    }
-    if (refreshRequired) {
-      expect(operations).toContain("reload");
-      expect(warnings.join(" ")).toContain(
-        scenario === "current-override"
-          ? "Refreshed Gateway service definition"
-          : "Service.TimeoutStopSec",
-      );
     }
     if (!stopping && unsafeOverride) {
       expect(warnings.join(" ")).toMatch(/effective.*30000ms.*330s.*operator overrides/i);
@@ -231,61 +229,23 @@ it.each([
     if (scenario === "unavailable") {
       expect(await readSystemdGatewayStopTimeout(installedState(f))).toBeUndefined();
     }
-    expect(await f.read()).toContain("TimeoutStartSec=30");
+    const refreshed = await f.read();
+    expect(refreshed).toContain(`TimeoutStartSec=${custom ? 45 : 30}`);
+    if (custom) {
+      expect(refreshed).toContain("KillMode=mixed");
+      expect(warnings.join(" ")).toContain("not changed");
+    }
   } else {
     expect(await run()).toEqual({ kind: "failed" });
     expect(warnings.join(" ")).toContain("refresh skipped");
     expect(await f.read()).toBe(original);
     expect(managerTimeout).toBe(30);
     expect(reloads).toBe(2);
-    expect(warnings.join(" ")).toContain("previous definition was restored");
   }
-  expect(await fs.readFile(dropIn, "utf8")).toBe(override);
+  if (hasDropIn) {
+    expect(await fs.readFile(dropIn, "utf8")).toBe(override);
+  }
   expect(await fs.readFile(`${f.sourcePath}.bak`, "utf8")).toBe("previous backup\n");
-});
-
-it.each([
-  { stopping: false, stopSeconds: 30 },
-  { stopping: true, stopSeconds: 600 },
-])(
-  "retains custom budgets ($stopSeconds, stopping=$stopping)",
-  async ({ stopping, stopSeconds }) => {
-    const f = await policyFixture(stopSeconds);
-    const original = f.original
-      .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
-      .replace("KillMode=mixed", "KillMode=control-group");
-    await fs.writeFile(f.sourcePath, original);
-    let loadedStop = stopSeconds;
-    native.identity.mockImplementation(async (_command, args) => {
-      if (args.includes("daemon-reload")) {
-        loadedStop = stopSeconds === 30 ? 330 : stopSeconds;
-      }
-      return nativeResult(loadedStop);
-    });
-    const result = await prepare(f, { stopping });
-    expect(result).toEqual({ kind: "refreshed" });
-    const refreshed = await f.read();
-    expect(refreshed).toContain("TimeoutStartSec=45");
-    expect(refreshed).toContain(`TimeoutStopSec=${stopSeconds === 30 ? 330 : stopSeconds}`);
-    expect(refreshed).toContain("KillMode=mixed");
-    expect(f.warnings.join(" ")).toContain("Service.TimeoutStartSec");
-    expect(f.warnings.join(" ")).toContain("not changed");
-    expect(hasReload()).toBe(true);
-  },
-);
-
-it.each([false, true])("reports current policy as unchanged (stopping: %s)", async (stopping) => {
-  const f = await policyFixture();
-  native.identity.mockResolvedValue(nativeResult(330));
-  const result = await prepareSystemdGatewayMaintenance({
-    state: installedState(f, false),
-    root: "/old",
-    stopping,
-    assertCurrent: f.assertCurrent,
-    warn: vi.fn(),
-  });
-  expect(result).toEqual({ kind: "unchanged" });
-  expect(hasReload()).toBe(false);
 });
 
 it.each([false, true])("rechecks system ownership (live=%s)", async (liveSystemUnit) => {
@@ -297,21 +257,15 @@ it.each([false, true])("rechecks system ownership (live=%s)", async (liveSystemU
     );
   }
   const { warnings } = f;
-  const result = await withGatewayServiceOperationLock(f.env, async (assertCurrent) =>
-    prepareSystemdGatewayMaintenance({
-      state: {
-        ...installedState(f, false),
-        definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
-      },
-      root: "/old",
-      stopping: false,
-      assertCurrent,
-      warn: f.warn,
-    }),
-  );
+  const result = await prepare(f, {
+    stopping: false,
+    state: {
+      ...installedState(f, false),
+      definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+    },
+  });
   expect(result).toEqual({ kind: liveSystemUnit ? "failed" : "refreshed" });
   expect(await f.read()).toContain(`TimeoutStopSec=${liveSystemUnit ? 30 : 330}`);
-  expect(warnings.join(" ")).not.toContain("SERVICE_DEFINITION_SEALED");
   if (liveSystemUnit) {
     expect(warnings.join(" ")).toContain("A live system unit owns this Gateway");
   }

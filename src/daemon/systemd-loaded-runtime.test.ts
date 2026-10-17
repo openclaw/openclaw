@@ -1,4 +1,3 @@
-// Update runtime observation must not load units while discovering their state.
 import * as fsSync from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
@@ -56,9 +55,8 @@ const stopped = {
 const readLoaded = (options: Parameters<typeof readSystemdServiceRuntime>[1] = {}) =>
   readSystemdServiceRuntime(env, { requireLoaded: true, ...options });
 const reply = (type: string, ...data: unknown[]) => success(JSON.stringify({ type, data }));
-function mockRuntime(values: Record<string, string | number | boolean>) {
+const mockRuntime = (values: Record<string, string | number | boolean>) =>
   busctl.mockImplementation(async (_env, args) => managerReply(args, values));
-}
 function mockCollected(
   options: {
     missing?: boolean;
@@ -106,16 +104,12 @@ function managerReply(args: string[], overrides: Record<string, unknown> = {}): 
   if (propertyIndex < 0) {
     throw new Error(`Unexpected manager query: ${args.join(" ")}`);
   }
-  return success(
-    args
-      .slice(propertyIndex + 1)
-      .map((name) =>
-        JSON.stringify(
-          name in overrides ? { ...properties[name], data: overrides[name] } : properties[name],
-        ),
-      )
-      .join("\n"),
-  );
+  const encode = (name: string) =>
+    JSON.stringify(
+      name in overrides ? { ...properties[name], data: overrides[name] } : properties[name],
+    );
+  const values = args.slice(propertyIndex + 1).map(encode);
+  return success(values.join("\n"));
 }
 
 beforeEach(() => {
@@ -315,11 +309,9 @@ it.each([
 it.each([false, true])("requires authority to load definitions (owned=%s)", async (owned) => {
   const assertCurrent = vi.fn();
   mockCollected({ missing: true });
-  const opts = {
-    requireLoaded: true,
-    ...(owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {}),
-  };
-  const runtime = await readSystemdServiceRuntime(env, opts);
+  const runtime = await readLoaded(
+    owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {},
+  );
   expect(runtime.status).toBe(owned ? "stopped" : "unknown");
   expect(runtime.missingUnit).not.toBe(true);
   if (owned) {

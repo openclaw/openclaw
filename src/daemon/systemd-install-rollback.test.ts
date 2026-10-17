@@ -154,11 +154,9 @@ it.each(["success", "failure", "interruption"] as const)(
       }
       return result(args[0] === "is-enabled" ? "enabled" : "");
     });
-    const installation = installSystemdService({
-      ...installArgs,
-      warn: (message) => warnings.push(message),
-    });
-    await expect(installation).rejects.toThrow("candidate failed");
+    await expect(
+      installSystemdService({ ...installArgs, warn: (message) => warnings.push(message) }),
+    ).rejects.toThrow("candidate failed");
     expect(await read(unit)).toBe(originals.get(unit));
     expect(inputPresentAtReload).toBe(true);
     if (reload === "success") {
