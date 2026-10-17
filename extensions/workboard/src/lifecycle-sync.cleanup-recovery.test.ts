@@ -73,15 +73,13 @@ async function createManagedCard(
   options: {
     managedPath?: string;
     status?: "blocked" | "running" | "review";
-    withExecutionAssociation?: boolean;
   } = {},
 ) {
   const status = options.status ?? "running";
-  const withExecutionAssociation = options.withExecutionAssociation !== false;
   return await store.create({
     title: "Recover managed worktree cleanup",
     status,
-    ...(withExecutionAssociation
+    ...(status !== "blocked"
       ? {
           sessionKey: SESSION_KEY,
           runId: RUN_ID,
@@ -116,10 +114,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
   it.each(["running", "blocked"] as const)(
     "cleans a %s worktree during the initial restart sweep",
     async (status) => {
-      const card = await createManagedCard({
-        status,
-        withExecutionAssociation: status === "running",
-      });
+      const card = await createManagedCard({ status });
       await restart();
       const readSessions = status === "blocked" ? vi.fn() : doneSessionSnapshot(card.updatedAt + 1);
       await start(readSessions);

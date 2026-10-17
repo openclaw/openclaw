@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import {
   lifecycleSession,
-  lifecycleSnapshot,
   serviceContext,
   type LifecycleSnapshot,
 } from "./lifecycle-sync-fixtures.test-support.js";
@@ -72,7 +71,7 @@ async function sweep({
   sessions,
   complete = true,
 }: Omit<LifecycleSnapshot, "complete"> & { complete?: boolean }) {
-  const readSessions = vi.fn().mockResolvedValue({ ...lifecycleSnapshot(...sessions), complete });
+  const readSessions = vi.fn().mockResolvedValue({ sessions, complete });
   const service = createWorkboardLifecycleService({
     store: interrupted.replacementStore,
     readSessions,
