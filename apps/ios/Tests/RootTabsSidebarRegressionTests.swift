@@ -1,5 +1,7 @@
 import Foundation
+import OpenClawChatUI
 import Testing
+@testable import OpenClaw
 
 struct RootTabsSidebarRegressionTests {
     @Test func `layout modes share one detail shell without conditional branches`() throws {
@@ -124,6 +126,24 @@ struct RootTabsSidebarRegressionTests {
         #expect(detailShell.contains("self.isSidebarDetailRootVisible = false"))
     }
 
+    @MainActor
+    @Test func `pinned sidebar layout retains child depth and never duplicates descendants`() throws {
+        let roster = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[
+          {"key":"parent","pinned":true},
+          {"key":"child","parentSessionKey":"parent"},
+          {"key":"other"}
+        ]}
+        """#.utf8))
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: roster.sessions, currentSessionKey: "parent", query: "")
+        let layout = RootSidebar.sessionLayout(sections)
+        #expect(layout.pinnedNodes.map(\.id) == ["parent"])
+        #expect(ChatSessionSidebarModel.rows(layout.pinnedNodes).map(\.id) == ["parent", "child"])
+        #expect(ChatSessionSidebarModel.rows(layout.pinnedNodes).map(\.depth) == [0, 1])
+        #expect(layout.sections.flatMap(\.nodes).map(\.id) == ["other"])
+    }
+
     @Test func `sidebar has one agent selector and one session inventory`() throws {
         let source = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
         let settings = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
@@ -178,7 +198,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
 
-        #expect(pages.contains("ForEach(pinnedSessionNodes)"))
         #expect(sessions.contains("section.id == \"recent\""))
         #expect(sessions.contains("String(localized: \"Sessions\")"))
         #expect(!sessions.contains("String(localized: \"Recent\")"))

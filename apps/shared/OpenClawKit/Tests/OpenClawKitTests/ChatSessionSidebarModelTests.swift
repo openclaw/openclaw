@@ -880,13 +880,50 @@ struct ChatSessionSidebarModelTests {
         #expect(keys(nodes) == ["a", "b"])
     }
 
-    @Test func `omitted gateway child roster excludes stale persisted parent metadata`() {
+    @Test func `parent metadata nests children without a redundant parent roster`() {
         let nodes = ChatSessionSidebarModel.tree(from: [
             self.entry(key: "parent"),
-            self.entry(key: "stale-child", parentSessionKey: "parent"),
+            self.entry(key: "child", parentSessionKey: "parent"),
         ])
 
-        #expect(nodes.map(\.id) == ["parent", "stale-child"])
+        #expect(nodes.map(\.id) == ["parent"])
+        #expect(nodes.first?.children.map(\.id) == ["child"])
+        #expect(ChatSessionSidebarModel.rows(nodes).map(\.depth) == [0, 1])
+    }
+
+    @Test func `uncategorized children inherit their grouped parents placement`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "parent", category: "Projects"),
+                self.entry(key: "child", parentSessionKey: "parent"),
+                self.entry(key: "grandchild", parentSessionKey: "child"),
+            ], currentSessionKey: "parent", groups: [.init(name: "Projects", position: 0)], query: "")
+        #expect(sections.map(\.id) == ["group:Projects"])
+        #expect(sections.first?.nodes.map(\.id) == ["parent"])
+        #expect(sections.first?.nodes.first?.children.first?.children.map(\.id) == ["grandchild"])
+    }
+
+    @Test func `child ancestry overrides a stale parent roster`() {
+        let nodes = ChatSessionSidebarModel.tree(from: [
+            self.entry(key: "old", childSessions: ["child"]),
+            self.entry(key: "new"),
+            self.entry(key: "child", parentSessionKey: "new", spawnedBy: "old"),
+        ])
+        #expect(nodes.map(\.id) == ["old", "new"])
+        #expect(nodes.first?.children.isEmpty == true)
+        #expect(nodes.last?.children.map(\.id) == ["child"])
+    }
+
+    @Test func `archived parents do not hide or adopt live children`() {
+        for current in ["parent", "child"] {
+            let sections = ChatSessionSidebarModel.sections(
+                sessions: [
+                    self.entry(key: "parent", archived: true, category: "Projects", childSessions: ["child"]),
+                    self.entry(key: "child", parentSessionKey: "parent"),
+                ], currentSessionKey: current, groups: [.init(name: "Projects", position: 0)], query: "")
+            #expect(sections.last?.nodes.map(\.id) == ["child"])
+            #expect(sections.flatMap(\.nodes).flatMap(\.children).isEmpty)
+        }
     }
 
     @Test func `orphaned parents remain visible as roots`() {
