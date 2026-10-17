@@ -9,6 +9,10 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -17,7 +21,7 @@ afterEach(() => {
 });
 
 describe("gateway restart handoff state migration", () => {
-  it("repairs fractional trace timestamps while doctor migrates version 2 to STRICT", () => {
+  it("repairs fractional trace timestamps while captured doctor migration advances version 2 to STRICT", async () => {
     const stateDir = tempDirs.make("openclaw-state-restart-handoff-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = openOpenClawStateDatabase(options).path;
@@ -25,6 +29,7 @@ describe("gateway restart handoff state migration", () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
+    addPreCutoverClientCredentialTablesForTest(legacy);
     const strictCreateSql = (
       legacy
         .prepare(
@@ -96,10 +101,15 @@ describe("gateway restart handoff state migration", () => {
       { kind: "subagent-operator-recovery-v25", path: databasePath },
       { kind: "session-state-head-layout-v26", path: databasePath },
       { kind: "state-write-indexes-v27", path: databasePath },
+      { kind: "local-client-credentials-v28", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+    expect(
+      await withStateMigrationBackupForTest(options, () =>
+        repairOpenClawStateDatabaseSchema(options),
+      ),
+    ).toEqual({
       changes: [
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",

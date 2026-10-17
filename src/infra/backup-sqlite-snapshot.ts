@@ -42,8 +42,8 @@ import {
   type BackupSqliteSourceGroup,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
-import { resolveClientCredentialStorePath } from "./client-credential-store.js";
 import { resolveAgentPortRoots } from "./database-engine/agent-port.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./database-engine/registry.js";

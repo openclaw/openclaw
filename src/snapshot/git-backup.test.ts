@@ -851,8 +851,10 @@ describe("Git-backed SQLite snapshots", () => {
           .all(),
       ).toEqual([]);
       expect(
-        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM device_auth_tokens").get(),
-      ).toEqual({ count: 0 });
+        restoredDatabase
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'device_auth_tokens'")
+          .all(),
+      ).toEqual([]);
       expect(
         restoredDatabase.prepare("SELECT COUNT(*) AS count FROM channel_pairing_requests").get(),
       ).toEqual({ count: 0 });

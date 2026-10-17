@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
+import { rebindRehearsalClientCredentials } from "../infra/client-credential-restore.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
@@ -85,6 +88,8 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-existing-schema-") };
   const pathname = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabase();
+  const sourceSharedFile = readClientCredentialFileIdentity(pathname);
+  assert(sourceSharedFile);
   const seedPath = `${pathname}.seed`;
   renameSync(pathname, seedPath);
   copyFileSync(seedPath, pathname);
@@ -100,7 +105,7 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
                 'synthetic-startup-checkpoint', 10, 20);
     `);
     mutate?.(db);
-    return { options: { env, path: pathname }, before: readSchemaState(db) };
+    return { options: { env, path: pathname }, before: readSchemaState(db), sourceSharedFile };
   } finally {
     db.close();
     // Model bytes from an earlier process, not a raw edit of this process's admitted inode.
@@ -599,7 +604,7 @@ describe("existing shared-state schema admission", () => {
   );
 
   it("writes node state and initializes its lazy store without taking over release repair", async () => {
-    const { options, before } = createExistingState((db) => {
+    const { options, before, sourceSharedFile } = createExistingState((db) => {
       db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
         UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
@@ -610,6 +615,12 @@ describe("existing shared-state schema admission", () => {
           (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes)
           VALUES ('retained', 'session', '/workspace', 1, 10, 20, 1, 0);
       `);
+    });
+
+    rebindRehearsalClientCredentials({
+      sourceSharedFile,
+      sharedPath: options.path,
+      localPath: resolveClientCredentialStorePath(options.env),
     });
 
     await withExistingOpenClawStateSchema(options, async () => {

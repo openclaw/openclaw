@@ -48,7 +48,6 @@ import {
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
-  prepareGatewayClientDeviceAuth,
   type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
@@ -678,29 +677,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         configPath: context.configPath,
       });
     }
-  }
-  try {
-    await prepareGatewayClientDeviceAuth(
-      {
-        url,
-        token,
-        password,
-        edgeAuthHeaders,
-        tlsFingerprint,
-        deviceIdentity,
-        deviceAuthScope,
-        sharedStateMode: opts.sharedStateMode,
-        preparedDeviceAuth: storedAuth ?? undefined,
-        approvalRuntimeToken: opts.approvalRuntimeToken,
-        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
-      },
-      opts.signal,
-    );
-  } catch (error) {
-    if (opts.signal?.aborted) {
-      throw createGatewayRequestAbortError(opts.method);
-    }
-    throw error;
   }
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.

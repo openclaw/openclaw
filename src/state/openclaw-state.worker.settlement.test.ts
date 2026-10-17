@@ -127,8 +127,9 @@ it.each(["removed", "replaced"] as const)(
             schemaPolicy: "existing",
           },
         },
-        { type: "deviceIdentity.load", input: { identityKey: "fixture" } },
+        { type: "machineState.write", input: { key: "fixture", value: "synthetic" } },
       ] as const) {
+        await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
         expect(() =>
           runWithSqliteWorkerStateContext(context, () => backend.execute(command)),
         ).toThrow(kind === "removed" ? /ENOENT/ : /identity changed/);

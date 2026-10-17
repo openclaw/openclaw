@@ -4,7 +4,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveDurableNodeEntrypoint } from "../daemon/npx-service-install.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { canReuseNodeHostDeviceToken } from "../node-host/gateway-auth.js";
 import { VERSION } from "../version.js";
@@ -92,7 +92,9 @@ export async function buildNodeInstallPlan(params: {
   });
   if (!params.gatewayAuthFromEnv) {
     const savedGateway = (await loadNodeHostConfig(params.env))?.gateway;
-    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: params.env }) : null;
+    const identity = savedGateway
+      ? await loadDeviceIdentityIfPresentAsync({ env: params.env })
+      : null;
     if (
       identity &&
       (await canReuseNodeHostDeviceToken({

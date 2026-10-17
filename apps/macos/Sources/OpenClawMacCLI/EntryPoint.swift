@@ -1,4 +1,7 @@
 import Foundation
+import OpenClawIPC
+import OpenClawKit
+import OpenClawNativeState
 
 enum RootCommandAction: Equatable {
     case usage
@@ -19,6 +22,30 @@ struct OpenClawMacCLI {
             context = try MacCLIContext(arguments: args)
         } catch {
             exitMacCLI(error, json: args.contains("--json"))
+        }
+        DeviceCredentialAccess.install { root, operation in
+            let directory = context.profile
+                .stateDirectoryURL(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+            let socket = directory.appendingPathComponent(MacControlCredentials.socketFilename)
+            guard FileManager.default.fileExists(atPath: socket.path) else {
+                return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+            }
+            var request = MacControlRequest(operation: "client.credentials")
+            request.credentialRoot = root.standardizedFileURL.path
+            request.credentialOperation = operation
+            var options = MacControlOptions(request: request, profile: context.profile)
+            options.launch = false
+            let data = try MacControlClient(options: options).send(request)
+            let response = try JSONDecoder().decode(MacControlResponse<ClientCredentialResult>.self, from: data)
+            if !response.ok, response.error?.code == "credential_root_unowned" {
+                return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+            }
+            guard response.ok, let result = response.result else {
+                throw response.error ?? MacControlError(
+                    code: "unavailable",
+                    message: "Use a compatible running app for local credentials.")
+            }
+            return result
         }
         switch resolveRootCommandAction(context.arguments) {
         case .usage:

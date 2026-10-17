@@ -16,6 +16,10 @@ import {
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const sessionColumns = [
   "source_account_id",
@@ -246,6 +250,7 @@ describe("schema 20 migration through shared-state owners", () => {
     template = current.path;
     await closeOpenClawStateDatabaseAsync();
     using db = new DatabaseSync(template);
+    addPreCutoverClientCredentialTablesForTest(db);
     db.exec(`DROP INDEX idx_meeting_transcript_sessions_source;
       DROP INDEX idx_meeting_transcript_sessions_account;
       DROP INDEX idx_meeting_transcript_sessions_agent;
@@ -277,7 +282,7 @@ describe("schema 20 migration through shared-state owners", () => {
   });
 
   it.each(["runtime", "doctor"] as const)(
-    "migrates retained rows through %s without rewriting canonical JSON",
+    "migrates retained rows through captured %s without rewriting canonical JSON",
     async (owner) => {
       const stateDir = directories.make(`state-v20-${owner}-`);
       const pathname = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
@@ -310,9 +315,12 @@ describe("schema 20 migration through shared-state owners", () => {
           insert.run(row.id, row.json, now, now, now);
         }
       }
-      if (owner === "doctor") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      }
+      await withStateMigrationBackupForTest(options, () => {
+        if (owner === "doctor") {
+          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        }
+        openOpenClawStateDatabase(options);
+      });
       const { db } = openOpenClawStateDatabase(options);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,

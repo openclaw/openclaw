@@ -17,7 +17,10 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import {
@@ -74,6 +77,12 @@ it.each([
       OPENCLAW_UPDATE_POST_CORE: undefined,
     })) {
       vi.stubEnv(key, value);
+    }
+    if (outcome === "redirect") {
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: serviceState },
+      });
+      closeOpenClawStateDatabaseForTest();
     }
     mockProcessPlatform(platform);
     mockSystemAccountHome();

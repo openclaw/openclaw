@@ -13,7 +13,7 @@ import {
 } from "./sqlite-file-generation.js";
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

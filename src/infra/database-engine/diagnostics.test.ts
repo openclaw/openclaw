@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
+import { addPreCutoverClientCredentialTablesForTest } from "../../state/openclaw-state-schema.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import type { PortDescriptor } from "./port-types.js";
@@ -82,8 +84,12 @@ describe("physical store diagnostics", () => {
   });
 
   it.each([
-    { version: 25, pending: 2, issue: "Schema migrations pending" },
-    { version: 28, pending: 0, issue: "newer than supported" },
+    {
+      version: 25,
+      pending: OPENCLAW_STATE_SCHEMA_VERSION - 25,
+      issue: "Schema migrations pending",
+    },
+    { version: OPENCLAW_STATE_SCHEMA_VERSION + 1, pending: 0, issue: "newer than supported" },
   ])(
     "preserves readable state schema $version when port admission refuses it",
     async ({ version, pending, issue }) => {
@@ -95,6 +101,9 @@ describe("physical store diagnostics", () => {
         const schemas = [input.descriptor, ...(input.descriptor.fragments ?? [])];
         for (const schema of schemas) {
           db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
+        }
+        if (version === 25) {
+          addPreCutoverClientCredentialTablesForTest(db);
         }
         db.exec(`PRAGMA user_version = ${version}`);
         db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
@@ -109,7 +118,7 @@ describe("physical store diagnostics", () => {
       expect(result.schema).toEqual({
         versioning: "versioned",
         version,
-        expectedVersion: 27,
+        expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
         pending,
       });
       expect(result.issues.join(" ")).toContain(issue);

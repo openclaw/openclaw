@@ -363,7 +363,9 @@ export async function writePersistedInstalledPluginIndex(
   assertWritableInstalledPluginIndexStoreOptions(options);
   const captured = {
     ...options,
-    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+    env: cloneEnvWithPlatformSemantics(
+      resolveInstalledPluginIndexStateDatabaseOptions(options).env ?? options.env ?? process.env,
+    ),
     filePath: resolveInstalledPluginIndexStorePath(options),
   };
   return await withPluginLifecycleLease(

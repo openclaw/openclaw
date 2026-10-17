@@ -276,7 +276,7 @@ describe("runNodeHost", () => {
     });
 
     it("offers the saved endpoint for resume only with a paired node credential", async () => {
-      mocks.loadDeviceIdentityIfPresent.mockReturnValue({
+      mocks.loadDeviceIdentityIfPresent.mockResolvedValue({
         deviceId: "device-test",
         publicKeyPem: "public-key-test",
         privateKeyPem: "private-key-test",
@@ -298,7 +298,7 @@ describe("runNodeHost", () => {
       };
 
       beforeEach(() => {
-        mocks.loadDeviceIdentityIfPresent.mockReturnValue({
+        mocks.loadDeviceIdentityIfPresent.mockResolvedValue({
           deviceId: "device-test",
           publicKeyPem: "public-key-test",
           privateKeyPem: "private-key-test",
@@ -341,7 +341,7 @@ describe("runNodeHost", () => {
       });
 
       it.each<[string, () => unknown, Partial<Parameters<typeof runNodeHost>[0]>]>([
-        ["missing identity", () => mocks.loadDeviceIdentityIfPresent.mockReturnValue(null), {}],
+        ["missing identity", () => mocks.loadDeviceIdentityIfPresent.mockResolvedValue(null), {}],
         ["missing token", () => mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null), {}],
         ["missing gateway", () => mocks.loadNodeHostConfig.mockResolvedValue(null), {}],
         [

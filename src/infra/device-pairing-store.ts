@@ -19,7 +19,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { sha256Base64Url } from "./crypto-digest.js";
-import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { resolveDeviceBootstrapTokenExpiresAtMs } from "./device-bootstrap.worker-types.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
@@ -349,7 +348,6 @@ export function persistDevicePairingStoreState(
   target: "pending" | "paired" | "both",
   options?: {
     clearApnsNodeIds?: readonly string[];
-    retiredNodeToken?: { deviceId: string; expectedToken: string };
   },
 ): void {
   runDevicePairingStoreMutation(baseDir, ({ db }) => {
@@ -371,9 +369,6 @@ export function persistDevicePairingStoreState(
     }
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
       clearApnsRegistrationFromDatabase(db, nodeId);
-    }
-    if (options?.retiredNodeToken) {
-      clearDeviceAuthTokenFromDatabase(db, { ...options.retiredNodeToken, role: "node" });
     }
     const paired = transactionPairedRecords(db);
     if (paired && pairedRows) {

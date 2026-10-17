@@ -1634,7 +1634,12 @@ describe("openclaw test instance", () => {
         context.skip();
       }
       const { instance, readAttempts } = await createFakeGateway(`${action},ready`);
-      const startup = instance.startGateway();
+      // Classification owns native exit and drained output, not startup deadline expiry.
+      context.signal.throwIfAborted();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const restoreClock = () => clock.mockRestore();
+      context.signal.addEventListener("abort", restoreClock, { once: true });
+      const startup = trackOperation(instance.startGateway());
       try {
         await expect(startup).rejects.toThrow("gateway exited before readiness");
       } catch (error) {
@@ -1644,6 +1649,10 @@ describe("openclaw test instance", () => {
           await startup.catch((startupError: unknown) => startupError),
         );
         throw error;
+      } finally {
+        restoreClock();
+        context.signal.removeEventListener("abort", restoreClock);
+        await Promise.allSettled([startup]);
       }
       expect(await readAttempts()).toHaveLength(1);
       expect(instance.logs()).not.toContain(RESTART_MARKER);

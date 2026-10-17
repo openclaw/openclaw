@@ -300,15 +300,15 @@ test("incognito operator RPCs treat identityless connections as owner-equivalent
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
     scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(dir, "admin-device.json"),
+    deviceIdentityPath: path.join(dir, "admin-device", "client", "credentials.sqlite"),
   });
   const reader = await openClient({
     scopes: ["operator.read"],
-    deviceIdentityPath: path.join(dir, "reader-device.json"),
+    deviceIdentityPath: path.join(dir, "reader-device", "client", "credentials.sqlite"),
   });
   const writer = await openClient({
     scopes: ["operator.write"],
-    deviceIdentityPath: path.join(dir, "writer-device.json"),
+    deviceIdentityPath: path.join(dir, "writer-device", "client", "credentials.sqlite"),
   });
   try {
     const created = await rpcReq<{ key?: string; sessionId?: string }>(

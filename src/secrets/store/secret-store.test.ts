@@ -485,7 +485,9 @@ describe("secret store", () => {
       const { DatabaseSync } = requireNodeSqlite();
       const initial = new DatabaseSync(database.path);
       // Encoding must be fixed before the canonical schema is created.
-      initial.exec(`PRAGMA encoding = '${encoding}'; CREATE TABLE fixture_encoding (value TEXT);`);
+      initial.exec(
+        `PRAGMA encoding = '${encoding}'; CREATE TABLE fixture_encoding (value TEXT); DROP TABLE fixture_encoding;`,
+      );
       initial.close();
       const { db } = openOpenClawStateDatabase(database);
       expect(db.prepare("PRAGMA encoding").get()).toEqual({ encoding });

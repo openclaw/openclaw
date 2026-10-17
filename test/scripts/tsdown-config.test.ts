@@ -25,6 +25,7 @@ import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worke
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import {
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -51,6 +52,11 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const workerBuildTargets = [
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  [
+    "client-credentials",
+    "worker/client-credential.worker",
+    "src/worker/worker-deploy-client-credentials.ts",
+  ],
   ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [
     "file-tool-planning",
@@ -663,6 +669,9 @@ describe("tsdown config", () => {
             (file) =>
               file === `${entry}.mjs` ||
               file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
+              Object.values(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).some(
+                (asset) => file === `worker/${asset}`,
+              ) ||
               (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
           ),
         ).toBe(true);

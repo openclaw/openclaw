@@ -66,6 +66,7 @@ const schemaMigrationDescriptions = {
   "task-run-indexes-v24": "retained task indexes -> ordered cron history and runtime/run lookup",
   "session-state-head-layout-v26": "session state heads -> primary-key table layout",
   "state-write-indexes-v27": "replay, skill usage, and lease writes -> smaller index maintenance",
+  "local-client-credentials-v28": "client credentials and native socket material -> local owner",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

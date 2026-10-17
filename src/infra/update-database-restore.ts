@@ -183,6 +183,13 @@ export async function restoreUpdateDatabaseBackup(params: {
           resolveOpenClawStateSqlitePath(params.env),
         );
         const shared = backup.databases.find((entry) => entry.path === sharedPath);
+        const { prepareUpdateClientCredentialRestore } =
+          await import("./client-credential-restore.js");
+        const restoreClientCredentials = prepareUpdateClientCredentialRestore({
+          backup,
+          env: params.env,
+        });
+        assertOwned();
         const sources = [...backup.databases];
         for (const entry of sources) {
           if (entry.engine !== "postgres") {
@@ -325,6 +332,8 @@ export async function restoreUpdateDatabaseBackup(params: {
           await output.publish();
           assertOwned();
         }
+        restoreClientCredentials?.();
+        assertOwned();
         return displaced;
       },
     );

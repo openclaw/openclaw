@@ -11,7 +11,10 @@ import {
 } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
@@ -107,6 +110,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: stateDir,
     };
+    openOpenClawStateDatabase({ env: stateEnv });
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
     seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
@@ -158,6 +162,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: stateDir,
     };
+    openOpenClawStateDatabase({ env: stateEnv });
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
     seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
@@ -210,6 +215,7 @@ describe("gateway-backed CLI process exit", () => {
         OPENCLAW_STATE_DIR: stateDir,
       };
       if (seeded) {
+        openOpenClawStateDatabase({ env: stateEnv });
         const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
         seedOriginDeviceToken({
           gatewayScope: gatewayOriginScope(gateway.url),

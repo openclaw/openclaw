@@ -14,6 +14,7 @@ import { createMockGatewayService, mockSystemAccountHome } from "../daemon/servi
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import { callGatewayCli } from "../gateway/call.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -477,9 +478,11 @@ async function runInstallationCase(params: {
         writerContext = await prepareWriterContext(configPath);
       }
       let pairedDeviceDatabasePath: string | undefined;
+      let pairedDeviceCredentialPath: string | undefined;
       if (params.stopFailsWithPairedDevice) {
         const identity = loadOrCreateDeviceIdentity();
         pairedDeviceDatabasePath = openOpenClawStateDatabase().path;
+        pairedDeviceCredentialPath = resolveClientCredentialStorePath(process.env);
         await storeDeviceAuthToken({
           deviceId: identity.deviceId,
           role: "operator",
@@ -489,7 +492,7 @@ async function runInstallationCase(params: {
         await closeOpenClawStateDatabaseAsync();
       }
       const authWorkerOpen = pairedDeviceDatabasePath
-        ? vi.spyOn(sqliteWorkerStores, "openSharedStateSqliteWorkerStore")
+        ? vi.spyOn(sqliteWorkerStores, "openSqliteWorkerStore")
         : undefined;
       const admission = beginDoctorMaintenance({
         root: mocks.activeRoot,
@@ -501,8 +504,12 @@ async function runInstallationCase(params: {
       });
       if (pairedDeviceDatabasePath && authWorkerOpen) {
         const openedAuthWorkers = () =>
-          authWorkerOpen.mock.settledResults.flatMap((result) =>
-            result.type === "fulfilled" && result.value ? [result.value] : [],
+          authWorkerOpen.mock.settledResults.flatMap((result, index) =>
+            result.type === "fulfilled" &&
+            result.value &&
+            authWorkerOpen.mock.calls[index]?.[0].databasePath === pairedDeviceCredentialPath
+              ? [result.value]
+              : [],
           );
         try {
           await expect(admission).rejects.toThrow("Synthetic native stop failure");

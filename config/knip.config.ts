@@ -477,6 +477,7 @@ const rootEntries = [
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
+  "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",

@@ -251,7 +251,7 @@ describe("doctor invalid config process exit", () => {
 
       expect(result, output).toMatchObject({ code: 0, signal: null });
       for (const message of [
-        "Imported legacy exec approvals into shared SQLite state.",
+        "Imported legacy exec approvals policy and local socket credentials.",
         "Exec approvals updated: removed 1 older generated approval",
         "Doctor complete.",
         "Merged agents.list[0].memorySearch",
@@ -663,11 +663,17 @@ describe("Doctor repair followed by gateway readiness", () => {
     const stateDatabaseUrl = resolveRuntimeWorkerUrl(
       cronOwnerHardeningEntrypoints.stateDatabase,
     ).href;
+    const identityStoreUrl = resolveRuntimeWorkerUrl({
+      currentModuleUrl: import.meta.url,
+      sourceWorkerName: "../infra/device-identity-store",
+      distWorkerPath: "infra/device-identity-store.js",
+    }).href;
     const script = `
       const path = await import("node:path");
       const { DatabaseSync } = await import("node:sqlite");
       const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
         await import(${JSON.stringify(stateDatabaseUrl)});
+      const { readStoredDeviceIdentityReadOnly } = await import(${JSON.stringify(identityStoreUrl)});
       openOpenClawStateDatabase({ env: process.env });
       closeOpenClawStateDatabase();
       const oldDatabase = new DatabaseSync(${JSON.stringify(databasePath)});
@@ -675,21 +681,20 @@ describe("Doctor repair followed by gateway readiness", () => {
       oldDatabase.close();
       const legacyIdentityPath = path.join(${JSON.stringify(stateDir)}, "identity", "device.json");
       fs.mkdirSync(path.dirname(legacyIdentityPath), { recursive: true });
-      fs.writeFileSync(legacyIdentityPath, JSON.stringify({
+      const legacyIdentityRaw = JSON.stringify({
         deviceId: "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
         publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
         privateKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
         createdAtMs: 1700000000000,
-      }));
+      });
+      fs.writeFileSync(legacyIdentityPath, legacyIdentityRaw);
       const { result, persisted } = await repair({
         doctorOnlyStateMigrations: true, repairPrefixedConfig: true,
       });
       const config = JSON.parse(persisted);
       const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
       const columns = repairedDatabase.prepare("PRAGMA table_info(apns_registrations)").all();
-      const identity = repairedDatabase
-        .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'")
-        .get();
+      const identity = readStoredDeviceIdentityReadOnly();
       const pluginState = repairedDatabase
         .prepare("SELECT value_json, created_at FROM plugin_state_entries WHERE plugin_id = 'discord' AND namespace = 'components' AND entry_key = 'interaction:1'")
         .get();
@@ -698,8 +703,8 @@ describe("Doctor repair followed by gateway readiness", () => {
       assert.equal(Object.hasOwn(config.meta ?? {}, "lastTouchedAt"), false);
       assert.equal(Object.hasOwn(config.agents?.defaults?.heartbeat ?? {}, "skipWhenBusy"), false);
       assert.equal(columns.some((column) => column.name === "relay_origin"), true);
-      assert.equal(identity?.device_id, "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c");
-      assert.equal(fs.existsSync(legacyIdentityPath), false);
+      assert.equal(identity?.deviceId, "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c");
+      assert.equal(fs.readFileSync(legacyIdentityPath, "utf8"), legacyIdentityRaw);
       assert.deepEqual({ ...pluginState }, { value_json: '{"ok":false}', created_at: 4_000 });
       console.log("__READY__");
     `;

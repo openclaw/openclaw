@@ -26,6 +26,10 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
@@ -57,6 +61,7 @@ describe("meeting transcript chronology migration", () => {
     template = path.join(directories.make("meeting-chronology-template-"), "openclaw.sqlite");
     using db = new DatabaseSync(template);
     db.exec(withLegacyStateWriteIndexes(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL)));
+    addPreCutoverClientCredentialTablesForTest(db);
     db.exec(`DROP INDEX idx_meeting_transcript_sessions_chronology;
       ALTER TABLE meeting_transcript_sessions DROP COLUMN started_at_ms;
       DROP TABLE secret_store_entries;
@@ -264,18 +269,25 @@ describe("meeting transcript chronology migration", () => {
       const migrationTables = [
         ...backupTables,
         "acp_replay_events",
+        "device_identities",
+        "device_auth_tokens",
+        "gateway_origin_device_tokens",
+        "exec_approvals_config",
         "session_state_heads",
         "skill_usage",
         "state_leases",
         "sqlite_stat1",
         "sqlite_stat4",
       ];
-      const { db } = await assertSqliteMigrationScopePreserved(scope, migrationTables, () => {
-        if (owner === "doctor") {
-          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        }
-        return openOpenClawStateDatabase(options);
-      });
+      await withStateMigrationBackupForTest(options, () =>
+        assertSqliteMigrationScopePreserved(scope, migrationTables, () => {
+          if (owner === "doctor") {
+            expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+          }
+          return openOpenClawStateDatabase(options);
+        }),
+      );
+      const { db } = openOpenClawStateDatabase(options);
       const expected = retainedStarts.toSorted((left, right) =>
         left.session_id.localeCompare(right.session_id),
       );

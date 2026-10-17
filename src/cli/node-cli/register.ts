@@ -137,6 +137,7 @@ export function registerNodeCli(program: Command) {
   node
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
+    .option("--identity <key>", "Identity key: primary, node, or shareExtension", "primary")
     .option("--json", "Output JSON", false)
     .action(runNodeIdentityShow);
 

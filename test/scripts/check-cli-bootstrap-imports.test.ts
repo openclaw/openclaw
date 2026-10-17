@@ -29,9 +29,12 @@ const {
 
 const tempRoots: string[] = [];
 const workerDeployArtifactNames = [
+  "client-credential.worker.mjs",
   "code-mode-node.worker.mjs",
   "file-tool-planning.worker.mjs",
   "file-tool-read.worker.mjs",
+  "fs-safe-darwin-arm64.node",
+  "fs-safe-darwin-x64.node",
   "gateway-state-owner-heartbeat.worker.mjs",
   "github-exec-launcher.mjs",
   "image-processor.worker.mjs",

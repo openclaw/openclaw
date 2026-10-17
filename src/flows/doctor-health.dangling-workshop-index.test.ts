@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-material.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
@@ -82,8 +84,14 @@ describe("Doctor state readability recovery", () => {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
       const { DatabaseSync } = requireNodeSqlite();
       const native = new DatabaseSync(databasePath);
+      const identity = generateStoredDeviceIdentity(1);
       try {
         seedNativeVersionZeroState(native, true);
+        native
+          .prepare(
+            "UPDATE device_identities SET device_id=?, public_key_pem=?, private_key_pem=? WHERE identity_key='node'",
+          )
+          .run(identity.deviceId, identity.publicKeyPem, identity.privateKeyPem);
       } finally {
         native.close();
       }
@@ -103,16 +111,22 @@ describe("Doctor state readability recovery", () => {
             .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
             .get(),
         ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-        expect(repaired.prepare("SELECT * FROM device_identities").all()).toEqual([
-          {
+        expect(
+          repaired.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
+        ).toBeUndefined();
+        expect(
+          runClientCredentialOperation(state.env, { kind: "identity.read", identity_key: "node" }),
+        ).toEqual({
+          kind: "identity",
+          identity: {
             identity_key: "node",
-            device_id: "native-device",
-            public_key_pem: "public",
-            private_key_pem: "private",
+            device_id: identity.deviceId,
+            public_key_pem: identity.publicKeyPem,
+            private_key_pem: identity.privateKeyPem,
             created_at_ms: 1,
             updated_at_ms: 1,
           },
-        ]);
+        });
         expect(
           repaired
             .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")

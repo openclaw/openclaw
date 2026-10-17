@@ -12,6 +12,10 @@ import {
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,6 +40,7 @@ function makePreStrictDatabaseWithoutColumns(params: {
 
   const { DatabaseSync } = requireNodeSqlite();
   const legacy = new DatabaseSync(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
   const strictCreateSql = (
     legacy
       .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -147,7 +152,7 @@ describe("first-use additive column STRICT migration", () => {
     }
   });
 
-  it("repairs device_bootstrap_tokens without setup_id while migrating to STRICT", () => {
+  it("repairs device_bootstrap_tokens without setup_id while migrating to STRICT", async () => {
     const stateDir = tempDirs.make("openclaw-state-first-use-column-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     makePreStrictDatabaseWithoutColumns({
@@ -167,7 +172,9 @@ describe("first-use additive column STRICT migration", () => {
 
     // Before the fix this returns a warning and applies nothing, which leaves the
     // whole repair rolled back and re-reports an unrelated audit-events migration.
-    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    await withStateMigrationBackupForTest(options, () => {
+      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    });
 
     const migrated = openOpenClawStateDatabase(options);
     expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
@@ -185,7 +192,7 @@ describe("first-use additive column STRICT migration", () => {
     ).toEqual([{ token_key: "bootstrap", token: "token-value", setup_id: null }]);
   });
 
-  it("repairs session_groups without the folder default columns", () => {
+  it("repairs session_groups without the folder default columns", async () => {
     const stateDir = tempDirs.make("openclaw-state-first-use-group-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     makePreStrictDatabaseWithoutColumns({
@@ -195,7 +202,9 @@ describe("first-use additive column STRICT migration", () => {
       columnNames: ["cwd", "worktree"],
     });
 
-    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    await withStateMigrationBackupForTest(options, () => {
+      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    });
 
     const migrated = openOpenClawStateDatabase(options);
     expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
@@ -214,7 +223,7 @@ describe("first-use additive column STRICT migration", () => {
     expect(columns).toContain("worktree");
   });
 
-  it("migrates on a writable cold open without a doctor repair", () => {
+  it("requires backup custody before migrating on a writable cold open", async () => {
     const stateDir = tempDirs.make("openclaw-state-first-use-cold-open-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     makePreStrictDatabaseWithoutColumns({
@@ -231,8 +240,8 @@ describe("first-use additive column STRICT migration", () => {
       },
     });
 
-    // The gateway upgrades the same database on a normal writable open, so that
-    // path has to clear the STRICT rebuild without doctor running first.
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/backed-up migration custody/);
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     const opened = openOpenClawStateDatabase(options);
     expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,

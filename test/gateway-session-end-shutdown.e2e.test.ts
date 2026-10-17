@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -93,6 +94,7 @@ describe("Gateway session-end shutdown", () => {
         config,
         env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
         stopTimeoutMs: 10_000,
+        gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       });
       instances.push(instance);
       await instance.startGateway();

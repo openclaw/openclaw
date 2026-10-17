@@ -41,7 +41,7 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 export const UpdateDatabaseBackupSchema = z.object({

@@ -74,6 +74,12 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   "subagent-operator-recovery-v25": [],
   "session-state-head-layout-v26": [],
   "state-write-indexes-v27": [],
+  "local-client-credentials-v28": [
+    "device_identities",
+    "device_auth_tokens",
+    "gateway_origin_device_tokens",
+    "exec_approvals_config",
+  ],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
@@ -454,6 +460,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 27) {
     migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28) {
+    migrations.push({ kind: "local-client-credentials-v28", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -15,9 +15,9 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import {
-  ensureExecApprovalsSnapshot,
-  loadExecApprovalsReadOnlyAsync,
-} from "../infra/exec-approvals-store.js";
+  ensureExecApprovalsSocket,
+  readExecApprovalsSocket,
+} from "../infra/exec-approvals-socket.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -270,11 +270,11 @@ function decodeDelegatedAuthority(
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
-  return (await loadExecApprovalsReadOnlyAsync()).socket?.token?.trim() || null;
+  return (await readExecApprovalsSocket())?.socket_token?.trim() || null;
 }
 
 async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {
-  const token = (await ensureExecApprovalsSnapshot()).file.socket?.token?.trim();
+  const token = (await ensureExecApprovalsSocket()).socket_token?.trim();
   if (!token) {
     throw new Error(
       "Unable to mint agent runtime identity token without local socket credentials.",

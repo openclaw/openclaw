@@ -74,7 +74,13 @@ afterAll(async () => {
 });
 
 async function openOperator(device: string, scopes = ["operator.write"]) {
-  const deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${device}.sqlite`);
+  const deviceIdentityPath = path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "test-device-identities",
+    device,
+    "client",
+    "credentials.sqlite",
+  );
   const ws = await harness.openWs();
   const hello = await connectOk(ws, {
     token: gatewayToken,
