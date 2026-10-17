@@ -139,7 +139,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-runtime-context.js";
-import type { RequesterOrigin } from "../requester-origin.js";
 import {
   createRestartRecoveryRequesterSource,
   readRestartRecoveryRequesterSource,
@@ -166,7 +165,10 @@ import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js"
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
-import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import {
+  createRecoveryRuntimeFixture,
+  runRecoveryCommandDuringStop,
+} from "./main-session-recovery-runtime.test-support.js";
 import * as recoveryStore from "./main-session-recovery-store.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -532,122 +534,6 @@ function getHarnessRecoveryFixture() {
     runningSessionEntry,
     gatewayParams,
   };
-}
-
-async function runRecoveryCommandDuringStop(params: {
-  entry: SessionEntry;
-  requesterOrigin: RequesterOrigin;
-  runId: string;
-  sessionKey: string;
-  storePath: string;
-  stateDir: string;
-  signal: AbortSignal;
-}): Promise<void> {
-  const [
-    { getAcpSessionManager },
-    { prepareAgentCommandExecutionIdentity },
-    { runEmbeddedAgentAttempt },
-  ] = await Promise.all([
-    import("../../acp/control-plane/manager.js"),
-    import("../agent-command-execution-identity.js"),
-    import("../command/run-embedded-attempt.js"),
-  ]);
-  const opts = {
-    message: "Resume the interrupted task.",
-    requesterOrigin: params.requesterOrigin,
-    abortSignal: params.signal,
-    mainRestartRecoveryAdmitted: true,
-    mainRestartRecoveryAttempt: params.entry.mainRestartRecovery!.chargedAttempts,
-    onActiveModelSelected: () => markGatewayRestartDraining("stop (SIGTERM)"),
-  };
-  const provider = "anthropic";
-  const model = "claude-sonnet-4-6";
-  const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const prepared: Parameters<typeof runEmbeddedAgentAttempt>[0]["prepared"] = {
-    opts,
-    cfg: {},
-    body: opts.message,
-    transcriptBody: opts.message,
-    configuredThinkingCatalog: [],
-    normalizedSpawned: {},
-    agentCfg: undefined,
-    thinkOverride: undefined,
-    thinkOnce: undefined,
-    verboseOverride: undefined,
-    timeoutMs: 10_000,
-    runTimeoutOverrideMs: undefined,
-    sessionId: params.entry.sessionId,
-    sessionEntry: params.entry,
-    sessionStore: { [params.sessionKey]: params.entry },
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    runId: params.runId,
-    isNewSession: false,
-    previousSessionId: undefined,
-    persistedThinking: undefined,
-    persistedVerbose: undefined,
-    sessionAgentId: "main",
-    outboundSession: undefined,
-    workspaceDir: params.stateDir,
-    cwd: undefined,
-    agentDir: path.join(params.stateDir, "agents", "main", "agent"),
-    pluginsEnabled: false,
-    manifestMetadataSnapshot: undefined,
-    modelManifestContext: { manifestPlugins: [] },
-    isSubagentLane: false,
-    acpManager: getAcpSessionManager(),
-    acpResolution: null,
-    runLease: undefined,
-  };
-  const admission = prepareAgentCommandExecutionIdentity({
-    opts,
-    prepared,
-    ingress: { kind: "system", boundary: "restart-recovery-test", state: "present" },
-    lifecycleGeneration,
-  });
-  try {
-    await runEmbeddedAgentAttempt({
-      prepared,
-      preparedRunAdmission: admission,
-      opts,
-      sessionEntry: params.entry,
-      lifecycleGeneration,
-      onLifecycleGenerationChanged: () => {},
-      suppressVisibleSessionEffects: false,
-      preserveUserFacingSessionModelState: false,
-      trackInternalModelRunTarget: () => {},
-      embeddedSessionState: {
-        sessionEntry: params.entry,
-        requestedThinkLevel: "off",
-        resolvedVerboseLevel: undefined,
-        skillsSnapshot: { prompt: "", skills: [] },
-        runContext: {},
-      },
-      modelSelection: {
-        sessionEntry: params.entry,
-        provider,
-        model,
-        requestedRouteResolution: "resolved",
-        defaultProvider: provider,
-        defaultModel: model,
-        configuredDefaultAuthProfileId: undefined,
-        providerForAuthProfileValidation: provider,
-        hasExplicitRunOverride: false,
-        storedProviderOverride: undefined,
-        storedModelOverride: undefined,
-        storedModelOverrideSource: undefined,
-        hasStoredAutoFallbackProvenance: false,
-        autoFallbackPrimaryProbe: undefined,
-        sessionEntryForAttempt: params.entry,
-        thinkingCatalog: [],
-        immutableThinkLevel: "off",
-        effectiveTurnThinkLevel: "off",
-        sessionFile: path.join(path.dirname(params.storePath), `${params.entry.sessionId}.jsonl`),
-      },
-    });
-  } finally {
-    await admission.finish();
-  }
 }
 
 describe("main-session-restart-recovery", () => {

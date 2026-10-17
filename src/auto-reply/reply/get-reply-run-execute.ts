@@ -407,7 +407,7 @@ export async function executePreparedReplyRun(
       ? (opts?.runId ?? crypto.randomUUID())
       : undefined;
   const channelRequester =
-    authorityRunId && messageProvider === "discord" && sessionCtx.SenderId
+    freshChannelCronAuthorityTurn && messageProvider === "discord" && sessionCtx.SenderId
       ? {
           version: 1 as const,
           channel: messageProvider,
@@ -424,17 +424,17 @@ export async function executePreparedReplyRun(
   const isCurrentChannelOwner = () =>
     channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
   // Capture the authenticated source, never the later drain runner's identity.
-  // The queue assigns a new run ID after the ingress capability has settled.
+  // Queued input resolves ownership at its new admission, including owner promotion.
   const createChannelCronAuthority =
-    !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
-      ? (runId: string) =>
+    !inheritedCronCreatorAuthorityCapability && freshChannelCronAuthorityTurn && messageProvider
+      ? (runId: string, isCurrentOwner = isCurrentChannelOwner) =>
           createCronCreatorAuthorityCapability(
             runId,
             { kind: "external", channel: messageProvider },
-            { source: "channel-owner", isCurrent: isCurrentChannelOwner },
+            { source: "channel-owner", isCurrent: isCurrentOwner },
             undefined,
             channelRequester,
-            { isCurrent: isCurrentChannelOwner, ...cronOwner },
+            { isCurrent: isCurrentOwner, ...cronOwner },
           )
       : undefined;
   const followupRun = {

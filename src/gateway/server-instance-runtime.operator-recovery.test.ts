@@ -5,6 +5,7 @@ import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compa
 import { markRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import { createRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
+import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -250,6 +251,108 @@ describe("typed restart recovery operator admission", () => {
       }, true);
     },
   );
+  it("resumes a retained channel requester after its child completion cohort is gone", async () => {
+    await withRecovery(async (fixture) => {
+      const { context, stateDir } = fixture;
+      const target = {
+        ...fixture.target,
+        sourceRunId: "announce:requester-settle:main:parent:completed-child:yield-1",
+      };
+      const requesterOrigin = {
+        sessionKey: "agent:main:slack:channel:original-requester",
+        messageProvider: "slack",
+        senderId: "original-channel-requester",
+      };
+      const entry = {
+        ...fixture.entry,
+        restartRecoveryDeliverySourceRunId: target.sourceRunId,
+        restartRecoveryOperatorSource: undefined,
+      };
+      await replaceSessionEntry(target, {
+        ...entry,
+        restartRecoveryRequesterSource: expectDefined(
+          createRestartRecoveryRequesterSource({ ...target, entry, requesterOrigin }),
+          "retained channel requester",
+        ),
+      });
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "user",
+          content: "Use the completed child's findings to finish my original request.",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_settle",
+            sourceSessionKey: "agent:main:subagent:completed-child",
+          },
+        },
+      });
+      await appendTranscriptMessage(target, {
+        message: { role: "assistant", content: [], stopReason: "aborted" },
+      });
+      const marked = await markRestartAbortedMainSessions({
+        resolveGatewayContext: () => context,
+        stateDir,
+        activeRuns: [
+          {
+            storePath: target.storePath,
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            sessionId: target.sessionId,
+            runId: target.recoveryRunId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+        isActiveRun: () => true,
+      });
+      expect(marked).toEqual({ marked: 1, skipped: 0 });
+      rotateAgentEventLifecycleGeneration();
+      expect(listSubagentRunsForRequester(target.sessionKey)).toEqual([]);
+      using runtime = createRuntime(() => context);
+      const finish = createDeferred();
+      let registration: ReturnType<typeof registerChatAbortController> | undefined;
+      let releaseTurn: (() => void) | undefined;
+      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+        const runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
+        registration = registerRecovery(target, runId, controllerInput);
+        io.emitStartOwner?.(runId, registration.entry);
+        registration.initializeTiming();
+        releaseTurn = await claimRpcSourceForTest(registration.entry);
+        expect(registration.markExecutionStarted()).toBe(true);
+        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+        io.emitExecutionStarted?.();
+        await finish.promise;
+        io.emitFinal([true, { runId, status: "ok" }, undefined]);
+      });
+      try {
+        const outcome = await recoverStore({
+          cfg: {},
+          storePath: target.storePath,
+          stateDir,
+          handledSessionKeys: new Set(),
+          expectedTarget: target,
+          gatewayRuntime: runtime.recovery,
+        });
+        expect(outcome).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+        expect(startTurn).toHaveBeenCalledOnce();
+        const principal = expectDefined(
+          startTurn.mock.calls[0]?.[0].principal,
+          "recovered principal",
+        );
+        expect(principal.internal?.agentToolCaller?.requesterOrigin).toEqual(requesterOrigin);
+        expect(principal.internal?.operatorRunAuthority).toBeUndefined();
+      } finally {
+        finish.resolve();
+        try {
+          await startTurn.mock.results.at(-1)?.value;
+        } finally {
+          releaseTurn?.();
+          registration?.cleanup();
+          await registration?.entry?.input.settlement.promise;
+        }
+      }
+    }, true);
+  });
+
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
     async (field) => {

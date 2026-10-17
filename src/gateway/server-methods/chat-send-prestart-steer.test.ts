@@ -31,10 +31,7 @@ import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
-import {
-  controlUiClient,
-  initializeRepository,
-} from "../server.sessions.create.projects.test-support.js";
+import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
 import {

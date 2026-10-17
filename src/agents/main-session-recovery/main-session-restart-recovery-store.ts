@@ -382,13 +382,21 @@ export async function recoverStore(params: {
         continue;
       }
 
-      // An admitted parent owns its input and operator source independently of
+      const requesterOrigin = expectedRecoverySourceRunId
+        ? readRestartRecoveryRequesterSource({
+            ...target,
+            entry,
+            sourceRunId: expectedRecoverySourceRunId,
+          })
+        : undefined;
+      // An admitted parent owns its input and retained source independently of
       // the child wake, whose membership and retry state may already have changed.
       // Gateway dispatch restores that exact source under current policy. Only
       // historical inputs without it still need the cohort failure settlement.
       if (
         !harnessCompletion &&
         !entry.restartRecoveryOperatorSource &&
+        !requesterOrigin &&
         entry.restartRecoverySourceIngress === "internal" &&
         expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
       ) {
@@ -467,13 +475,6 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
-      const requesterOrigin = expectedRecoverySourceRunId
-        ? readRestartRecoveryRequesterSource({
-            ...target,
-            entry,
-            sourceRunId: expectedRecoverySourceRunId,
-          })
-        : undefined;
       if (
         !recoverableHarnessCompletion &&
         !completionSource &&

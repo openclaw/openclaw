@@ -84,8 +84,11 @@ export type FollowupRunPayload = {
   prompt: string;
   /** Original admitted source; queued execution must not replace it with a backend run ID. */
   sourceTurnId?: string;
-  /** Fresh channel ingress only; recreate exact-run authority after queue admission. */
-  createChannelCronAuthority?: (runId: string) => CronCreatorAuthorityCapability | undefined;
+  /** Fresh channel ingress only; queued execution supplies its admitted owner check. */
+  createChannelCronAuthority?: (
+    runId: string,
+    isCurrentOwner?: () => boolean,
+  ) => CronCreatorAuthorityCapability | undefined;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /**

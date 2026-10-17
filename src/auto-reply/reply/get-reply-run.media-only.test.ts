@@ -1,7 +1,5 @@
 import {
-  executeFollowupTurnForTest,
-  createFollowupTurnTestTurn,
-  createFollowupTurnTestTypingController,
+  executeQueuedFollowupTurnForTest,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
@@ -91,7 +89,6 @@ import {
   createTelegramGroupSession,
   ownerParams,
 } from "./get-reply-run.test-support.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
@@ -385,6 +382,7 @@ vi.mock("./inbound-meta.js", () => ({
   buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
   formatActiveGoalContext: vi.fn().mockReturnValue(undefined),
+  refreshActiveGoalContext: (context: unknown) => context,
   resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
 }));
 
@@ -568,6 +566,8 @@ describe("runPreparedReply media-only handling", () => {
       "configured-owner",
       "configured-owner-revoked",
       "discord-owner-alias",
+      "discord-promoted-before-drain",
+      "owner-source-replaced",
       "without-source-factory",
       "maintenance-copy",
       "heartbeat",
@@ -582,14 +582,18 @@ describe("runPreparedReply media-only handling", () => {
       async (kind) => {
         resetFollowupTurnTestState();
         const key = `isolated-real-ingress-cron-${mode}-${kind}`;
-        const channel = kind === "discord-owner-alias" ? "discord" : "telegram";
-        const cfg = { commands: { ownerAllowFrom: [`${channel}:owner-1`] } };
+        const promoted = kind === "discord-promoted-before-drain";
+        const refreshOwner = promoted || kind === "owner-source-replaced";
+        const channel = kind === "discord-owner-alias" || promoted ? "discord" : "telegram";
+        const cfg = {
+          commands: { ownerAllowFrom: [`${channel}:${promoted ? "other" : "owner-1"}`] },
+        };
         setRuntimeConfigSnapshot(cfg);
-        let current = true;
-        let capturedOpts: InternalGetReplyOptions | undefined;
+        let current = !promoted;
+        let capturedOpts: ReplyRunParams["opts"];
         let scope: unknown;
         const scopes: unknown[] = [];
-        let queuedCapability: InternalGetReplyOptions["cronCreatorAuthorityCapability"];
+        let queuedCapability: NonNullable<ReplyRunParams["opts"]>["cronCreatorAuthorityCapability"];
         let executionError: unknown;
         const queuedSources: FollowupRun[] = [];
         const executedPrompts: string[] = [];
@@ -671,7 +675,7 @@ describe("runPreparedReply media-only handling", () => {
                                     version: 1,
                                     channel,
                                     accountId: "default",
-                                    senderId: "transport-alias",
+                                    senderId: promoted ? "owner-1" : "transport-alias",
                                   }
                                 : undefined,
                             );
@@ -705,7 +709,7 @@ describe("runPreparedReply media-only handling", () => {
         });
         const params = ownerParams();
         params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner";
+        params.command.senderIsOwner = kind !== "non-owner" && !promoted;
         const input = turn("list all automations", {
           ...createProviderSurface(channel),
           ChatType: "group",
@@ -753,26 +757,23 @@ describe("runPreparedReply media-only handling", () => {
           if (kind === "configured-owner-revoked") {
             setRuntimeConfigSnapshot({});
           }
+          if (refreshOwner) {
+            current = false;
+            setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [`${channel}:owner-1`] } });
+          }
           scheduleFollowupDrain(key, async (queued) => {
             try {
-              await executeFollowupTurnForTest({
-                turn: createFollowupTurnTestTurn({
-                  runId: `new-queued-execution-${mode}-${kind}-${completedRuns}`,
-                  queued,
-                  config: cfg,
-                }),
-                defaults: {
-                  typing: createFollowupTurnTestTypingController(),
-                  typingMode: "never",
-                  defaultModel: "claude",
-                  opts:
-                    kind === "foreign-defaults"
-                      ? { ...capturedOpts, runId: "unrelated-run" }
-                      : capturedOpts,
-                },
-                onToolResult: async () => {},
-                onCompactionNoticePayload: async () => {},
+              await executeQueuedFollowupTurnForTest(queued, {
+                runId: `new-queued-execution-${mode}-${kind}-${completedRuns}`,
+                admit: refreshOwner,
+                opts:
+                  kind === "foreign-defaults"
+                    ? { ...capturedOpts, runId: "unrelated-run" }
+                    : capturedOpts,
               });
+              if (refreshOwner) {
+                expect(queued.run.senderIsOwner).toBe(!promoted);
+              }
             } catch (error) {
               executionError = error;
             } finally {
@@ -810,7 +811,8 @@ describe("runPreparedReply media-only handling", () => {
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||
               kind === "configured-owner" ||
-              kind === "discord-owner-alias"
+              kind === "discord-owner-alias" ||
+              refreshOwner
               ? "gateway"
               : kind === "revoked-after-bind"
                 ? "revoked"
