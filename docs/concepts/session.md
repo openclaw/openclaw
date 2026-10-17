@@ -262,6 +262,9 @@ Startup discovery excludes archived sessions, recovery tombstones, and rows with
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
 reason, including when other sessions recover.
+The final pass over exhausted recovery targets prepares one session at a time,
+so a restart cannot flood database queues with background preparation. A failure
+for one target is logged without abandoning the remaining targets.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
