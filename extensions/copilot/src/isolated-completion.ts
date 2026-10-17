@@ -58,7 +58,7 @@ async function awaitWithinCompletionBoundary<T>(params: {
   if (signal?.aborted) {
     throw createCopilotAbortError(signal.reason);
   }
-  const remainingMs = params.boundary.deadlineMs - Date.now();
+  const remainingMs = params.boundary.deadlineMs - performance.now();
   if (remainingMs <= 0) {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
@@ -124,7 +124,7 @@ export async function runCopilotIsolatedCompletion(
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
-    deadlineMs: Date.now() + params.timeoutMs,
+    deadlineMs: performance.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };
   if (params.authorization.owner !== "host") {
