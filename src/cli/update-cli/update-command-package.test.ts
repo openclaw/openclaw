@@ -42,6 +42,7 @@ import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as doctorChild from "./update-command-doctor-child.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { updateGitInstall } from "./update-command-git.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -52,6 +53,29 @@ import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const activationHooks = {
+  validateCandidate: async () => [],
+  beforeActivate: async () => {},
+};
+const readManifest = async (root: string) =>
+  JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+const packageEnv = (base: string) => ({
+  OPENCLAW_STATE_DIR: path.join(base, "state"),
+  OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+});
+async function restorePackage(
+  transaction: PackageUpdateTransaction | undefined,
+  assertCurrent = () => {},
+) {
+  if (!transaction) {
+    return;
+  }
+  expect((await transaction.rollback(assertCurrent)).exitCode).toBe(0);
+  await expect(
+    transaction.complete({ activationVerified: false }, assertCurrent),
+  ).resolves.toBeUndefined();
+}
 
 async function createPackageInstallFixture(
   base: string,
@@ -103,9 +127,7 @@ async function createPackageInstallFixture(
   });
   const expectOriginalInstallation = async () => {
     expect(await fs.readFile(launcher, "utf8")).toBe("previous launcher\n");
-    expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version).toBe(
-      "1.0.0",
-    );
+    expect((await readManifest(root)).version).toBe("1.0.0");
   };
   const params = {
     root,
@@ -147,10 +169,7 @@ it.each(["guidance", "staging"])(
           termination: "exit",
         };
       });
-      const env = {
-        OPENCLAW_STATE_DIR: path.join(base, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
-      };
+      const env = packageEnv(base);
       const params = {
         ...defaults,
         tag: "2.0.0",
@@ -359,10 +378,7 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
       await fs.writeFile(runtimePath, `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`, {
         mode: 0o755,
       });
-      const env = {
-        OPENCLAW_STATE_DIR: path.join(base, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
-      };
+      const env = packageEnv(base);
       const installCommand = vi.mocked(processRunner.runCommandWithTimeout).getMockImplementation();
       assert(installCommand);
       vi.mocked(processRunner.runCommandWithTimeout).mockImplementation(async (argv, options) =>
@@ -404,8 +420,7 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
                     assertCurrent: fence.assertCurrent,
                   }),
                   assertCurrent: fence.assertCurrent,
-                  validateCandidate: async () => [],
-                  beforeActivate: async () => {},
+                  ...activationHooks,
                   onTransaction: (retained) => {
                     transaction = retained;
                   },
@@ -423,20 +438,11 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
                 runtime === "PATH" ? runtimePath : await fs.realpath(process.execPath),
               ),
             });
-            expect(
-              JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
-            ).toMatchObject({
-              version: "2.0.0",
-            });
+            expect(await readManifest(root)).toMatchObject({ version: "2.0.0" });
             expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
             assert(transaction);
           } finally {
-            if (transaction) {
-              expect((await transaction.rollback(fence.assertCurrent)).exitCode).toBe(0);
-              await expect(
-                transaction.complete({ activationVerified: false }, fence.assertCurrent),
-              ).resolves.toBeUndefined();
-            }
+            await restorePackage(transaction, fence.assertCurrent);
           }
           await expectOriginalInstallation();
           expect(readPackageActivationReceipt(root)).toMatchObject({ phase: "complete" });
@@ -471,9 +477,7 @@ it.each(["run", "close", "admitted"] as const)(
       try {
         expect(installedPrefixes).toHaveLength(1);
         expect(staged.root).not.toBe(root);
-        expect(
-          JSON.parse(await fs.readFile(path.join(staged.root, "package.json"), "utf8")).version,
-        ).toBe("1.0.0");
+        expect((await readManifest(staged.root)).version).toBe("1.0.0");
         await expectOriginalInstallation();
         if (action !== "close") {
           const runtimeIdentity = await fs.stat(path.join(staged.root, "dist", "index.js"));
@@ -624,9 +628,7 @@ it.each([
                 OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.14",
               },
             });
-            expect(
-              JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
-            ).toMatchObject({ version: "2026.5.14" });
+            expect(await readManifest(root)).toMatchObject({ version: "2026.5.14" });
           } else {
             throw new Error(`Unexpected package command: ${argv.join(" ")}`);
           }
@@ -648,16 +650,12 @@ it.each([
           installSpec: "openclaw@2026.5.14",
           installTarget: createNpmTarget(globalRoot),
           installEnv: {},
-          managedServiceEnv: {
-            OPENCLAW_STATE_DIR: path.join(base, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
-          },
+          managedServiceEnv: packageEnv(base),
           timeoutMs: 1000,
           workTimeoutMs,
           startedAt: Date.now(),
           progress: {},
-          validateCandidate: async () => [],
-          beforeActivate: async () => {},
+          ...activationHooks,
           onTransaction: (retained) => {
             transaction = retained;
           },
@@ -668,17 +666,7 @@ it.each([
           expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeoutMs });
         }
       } finally {
-        if (transaction) {
-          const assertCurrent = () => {};
-          // This test never starts a service; restore before retiring the retained package backup.
-          const rollback = await transaction.rollback(assertCurrent);
-          const retirement = await transaction.complete(
-            { activationVerified: false },
-            assertCurrent,
-          );
-          expect(rollback.exitCode).toBe(0);
-          expect(retirement).toBeUndefined();
-        }
+        await restorePackage(transaction);
       }
     });
   },
@@ -691,10 +679,7 @@ it("retains Doctor settlement warnings through the package activation result", a
       "2.0.0",
     );
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
-    const env = {
-      OPENCLAW_STATE_DIR: path.join(base, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
-    };
+    const env = packageEnv(base);
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
     const warning =
       "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
@@ -729,8 +714,7 @@ it("retains Doctor settlement warnings through the package activation result", a
         ...params,
         installEnv: env,
         managedServiceEnv: env,
-        validateCandidate: async () => [],
-        beforeActivate: async () => {},
+        ...activationHooks,
         getDoctorContext: () => ({
           runId: "doctor-settlement-transport",
           executorFence: { assertCurrent: () => {} },
@@ -755,10 +739,7 @@ it("retains Doctor settlement warnings through the package activation result", a
         warning,
       );
     } finally {
-      if (transaction) {
-        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
-        await transaction.complete({ activationVerified: false }, () => {});
-      }
+      await restorePackage(transaction);
     }
     await expectOriginalInstallation();
   });
@@ -778,10 +759,7 @@ it.each([
         expectOriginalInstallation,
       } = await createPackageInstallFixture(base, "2.0.0");
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
-      const env = {
-        OPENCLAW_STATE_DIR: path.join(base, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
-      };
+      const env = packageEnv(base);
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
       const receipt: UpdatePostInstallDoctorResult = {
         status: "error",
@@ -813,8 +791,7 @@ it.each([
             ...defaults,
             installEnv: env,
             managedServiceEnv: env,
-            validateCandidate: async () => [],
-            beforeActivate: async () => {},
+            ...activationHooks,
             onTransaction: (retained) => {
               transaction = retained;
             },
@@ -831,7 +808,7 @@ it.each([
           vi.spyOn(gitRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
             assert(opts.prepareGitExposure);
             await opts.prepareGitExposure(gitRoot, "a".repeat(40), env);
-            return { status: "ok", mode: "git", root: gitRoot, steps: [], durationMs: 0 };
+            return resultFixture(gitRoot, { mode: "git" });
           });
           vi.spyOn(packageUpdate, "prepareGitPackageExposure").mockImplementation(
             async (params) => {
@@ -909,11 +886,7 @@ it.each([
         assert(resultPath, "Doctor must write its receipt through the production callback");
         await expect(fs.access(resultPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
-        if (transaction) {
-          const rollback = await transaction.rollback(() => {});
-          expect(rollback.exitCode).toBe(0);
-          await transaction.complete({ activationVerified: false }, () => {});
-        }
+        await restorePackage(transaction);
       }
       await expectOriginalInstallation();
     });

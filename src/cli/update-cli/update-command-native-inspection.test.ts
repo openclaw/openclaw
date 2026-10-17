@@ -2,38 +2,32 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
 import { assertGatewayServiceUpdateCurrent } from "../../daemon/service-update-authority.js";
 import { readGatewayServiceState } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as processRunner from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { useExecutorFixture } from "./update-command-executor.test-support.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = useExecutorFixture("native-inspection-");
 let root: string;
 let serviceRoot: string;
 beforeEach(() => {
-  root = fs.realpathSync(dirs.make("native-inspection-"));
+  ({ root } = fixture());
   serviceRoot = path.join(root, "A");
   fs.mkdirSync(serviceRoot, { mode: 0o700 });
-  fs.mkdirSync(path.join(root, "control"), { mode: 0o700 });
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(path.join(root, "control"));
 });
-afterEach(() => vi.restoreAllMocks());
 
 it.skipIf(process.platform === "win32").each([true, false])(
   "joins native inspection children before parent-owned reads (command present: %s)",
   async (commandPresent) => {
     const runCommand = processRunner.runCommandWithTimeout;
-    let bound!: () => void;
-    const childBound = new Promise<void>((resolve) => {
-      bound = resolve;
-    });
+    const childBound = createDeferredCore();
     let nativeReads = 0;
     const runId = randomUUID();
     await withUpdateCommandExecutor(runId, async (executor) => {
@@ -45,7 +39,7 @@ it.skipIf(process.platform === "win32").each([true, false])(
           beforeInput(pid, spawnedArgv) {
             options.beforeInput?.(pid, spawnedArgv);
             expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
-            bound();
+            childBound.resolve();
           },
         });
       });
@@ -67,7 +61,7 @@ it.skipIf(process.platform === "win32").each([true, false])(
         hasInstalledDefinition: nativeRead,
         isLoaded: nativeRead,
         readRuntime: async () => {
-          await childBound;
+          await childBound.promise;
           assertGatewayServiceUpdateCurrent();
           return { status: "stopped", managerUid: 1001 };
         },
@@ -92,18 +86,15 @@ it.skipIf(process.platform === "win32").each([true, false])(
 );
 
 it("keeps ordinary status reads concurrent without retained native custody", async () => {
-  let runtimeStarted!: () => void;
-  const runtimeReady = new Promise<void>((resolve) => {
-    runtimeStarted = resolve;
-  });
+  const runtimeReady = createDeferredCore();
   const service = createMockGatewayService({
     readCommand: async () => ({ programArguments: ["node", "gateway"] }),
     isLoaded: async () => {
-      await runtimeReady;
+      await runtimeReady.promise;
       return true;
     },
     readRuntime: async () => {
-      runtimeStarted();
+      runtimeReady.resolve();
       return { status: "running" };
     },
   });

@@ -76,6 +76,30 @@ function preparePreview(
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
 }
+const preview = () => updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+function expectPreview(note: RegExp | string, targetVersion?: string) {
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      dryRun: true,
+      ...(targetVersion ? { targetVersion } : {}),
+      notes: expect.arrayContaining([
+        typeof note === "string" ? expect.stringContaining(note) : expect.stringMatching(note),
+      ]),
+    }),
+  );
+}
+function writeRunnablePackage(root: string, entry = 'import "./dist/index.js";\n') {
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), entry);
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "1.0.0",
+      type: "module",
+      bin: { openclaw: "openclaw.mjs" },
+    }),
+  );
+}
 
 describe.skipIf(process.platform === "win32")("package activation admission", () => {
   it.each(["prepared", "publishing", "publication-complete", "damaged candidate"] as const)(
@@ -107,16 +131,9 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       const previous = fs.readFileSync(path.join(f.anchor, "previous/dist/index.js"));
       const candidate = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
       const previewBefore = snapshot(fixtureRoot);
-      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+      await preview();
       expect(snapshot(fixtureRoot)).toEqual(previewBefore);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dryRun: true,
-          notes: expect.arrayContaining([
-            expect.stringMatching(/Would settle.*update can proceed/),
-          ]),
-        }),
-      );
+      expectPreview(/Would settle.*update can proceed/);
 
       await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
         discoveredRoot: f.packageRoot,
@@ -145,16 +162,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       const previousBytes = fs.readFileSync(retainedPrevious);
       if (live === "previous") {
         const previousRoot = path.join(f.anchor, "previous");
-        fs.writeFileSync(path.join(previousRoot, "openclaw.mjs"), 'import "./dist/index.js";\n');
-        fs.writeFileSync(
-          path.join(previousRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "1.0.0",
-            type: "module",
-            bin: { openclaw: "openclaw.mjs" },
-          }),
-        );
+        writeRunnablePackage(previousRoot);
         fs.renameSync(f.packageRoot, path.join(f.anchor, "candidate"));
         fs.renameSync(path.join(f.anchor, "previous"), f.packageRoot);
       } else if (live === "damaged candidate") {
@@ -172,9 +180,7 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
       const before = snapshot(fixtureRoot);
 
       if (live === "damaged candidate") {
-        await expect(
-          updateCommand({ dryRun: true, json: true, tag: "3.0.0" }),
-        ).rejects.toMatchObject({ code: 1 });
+        await expect(preview()).rejects.toMatchObject({ code: 1 });
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "update-recovery-pending" }),
         );
@@ -189,18 +195,10 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         return;
       }
 
-      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+      await preview();
 
       expect(snapshot(fixtureRoot)).toEqual(before);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dryRun: true,
-          targetVersion: "3.0.0",
-          notes: expect.arrayContaining([
-            expect.stringMatching(/Would settle.*update can proceed/),
-          ]),
-        }),
-      );
+      expectPreview(/Would settle.*update can proceed/, "3.0.0");
       const previousPostCore = process.env[POST_CORE_UPDATE_ENV];
       vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
       try {
@@ -231,29 +229,15 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
     await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
     await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
     fs.writeFileSync(resolvePackageActivationHelper(f.anchor), "retained helper");
-    fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "export {};\n");
-    fs.writeFileSync(
-      path.join(f.packageRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.0.0",
-        type: "module",
-        bin: { openclaw: "openclaw.mjs" },
-      }),
-    );
+    writeRunnablePackage(f.packageRoot, "export {};\n");
     fs.unlinkSync(f.launcher);
     fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
     preparePreview(f);
     const before = snapshot(fixtureRoot);
 
-    await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+    await preview();
 
     expect(snapshot(fixtureRoot)).toEqual(before);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dryRun: true,
-        notes: expect.arrayContaining([expect.stringContaining("publication-retired")]),
-      }),
-    );
+    expectPreview("publication-retired");
   });
 });

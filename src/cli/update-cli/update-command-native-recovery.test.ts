@@ -10,6 +10,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { resultFixture, verificationFixture } from "./update-command-fixtures.test-support.js";
 import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
@@ -235,15 +236,12 @@ it("retains the live update run while recovering a failed update before reportin
           { packageRoot: home, restartEnvironment: env, run },
           {
             mutationStarted: false,
-            result: {
+            result: resultFixture(home, {
               status: "error",
-              mode: "npm",
-              root: home,
               reason: "fixture-install-failed",
-              steps: [],
               durationMs: 1,
               recovery: { serviceRestartSafe: true, version: "1.0.0" },
-            },
+            }),
           },
         ),
       ).rejects.toMatchObject({
@@ -255,15 +253,9 @@ it("retains the live update run while recovering a failed update before reportin
       expect(observation).toHaveBeenCalledOnce();
       const recorded = getUpdateRun(runId, { env });
       expect(recorded?.verification).toEqual({
-        serviceRunning: true,
+        ...verificationFixture("1.0.0"),
         pid: 4242,
         port: 18789,
-        runningVersion: "1.0.0",
-        versionMatch: true,
-        pluginErrors: [],
-        channelsReady: true,
-        settled: true,
-        readyz: true,
         recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
       });
       expect(
