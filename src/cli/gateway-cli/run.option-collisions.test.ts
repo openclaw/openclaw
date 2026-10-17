@@ -89,6 +89,7 @@ const { normalizeStateDirEnv, pinConfigDir, pinRuntimePaths, detectRespawnSuperv
 const { loadGlobalRuntimeDotEnvFiles, refreshManagedProxy, loadShellEnvFallback } = mocks;
 const { clearShellEnvAppliedKeys, resolveShellEnvExpectedKeys } = mocks;
 const { shouldDeferShellEnvFallback, shouldEnableShellEnvFallback } = mocks;
+// mock-isolation: Record triage requests without running live diagnostics.
 vi.mock("../../commands/triage-failure.js", () => ({
   triageAfterFailure: mocks.triageAfterFailure,
 }));
@@ -166,6 +167,7 @@ const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_GATEWAY_PASSWORD",
 ]);
 
+// mock-isolation: Use the synthetic config snapshot without reading operator config.
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   readBestEffortConfig: () => readBestEffortConfig(),
@@ -205,10 +207,12 @@ vi.mock("../../infra/dotenv-global.js", () => ({
     },
 }));
 
+// mock-isolation: Keep shell environment discovery out of the CLI fixture.
 vi.mock("../../config/shell-env-expected-keys.js", () => ({
   resolveShellEnvExpectedKeys: mocks.resolveShellEnvExpectedKeys,
 }));
 
+// mock-isolation: Prevent login-shell execution in CLI option tests.
 vi.mock("../../infra/shell-env.js", () => ({
   clearShellEnvAppliedKeys: mocks.clearShellEnvAppliedKeys,
   loadShellEnvFallback: mocks.loadShellEnvFallback,
@@ -272,19 +276,23 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Record stale-process recovery without signaling processes.
 vi.mock("../../infra/restart-stale-pids.js", () => ({
   cleanStaleGatewayProcessesSync: mocks.cleanStaleGatewayProcessesSync,
 }));
 
+// mock-isolation: Control restart decisions without reading service history.
 vi.mock("../../daemon/restart-storm.js", () => ({
   warnAboutGatewayRestartStorm: mocks.warnAboutGatewayRestartStorm,
 }));
 
+// mock-isolation: Prevent real Gateway process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: mocks.findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList: (pids: number[]) => pids.join(", "),
 }));
 
+// mock-isolation: Record startup options without starting a Gateway.
 vi.mock("../../gateway/server.js", () => ({ startGatewayServer: mocks.startGatewayServer }));
 
 vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
@@ -292,10 +300,12 @@ vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
   parkCurrentLaunchAgentForMaintenance: mocks.parkCurrentLaunchAgentForMaintenance,
 }));
 
+// mock-isolation: Keep websocket logging state outside the CLI fixture.
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: mocks.setGatewayWsLogStyle,
 }));
 
+// mock-isolation: Keep verbose-mode changes local to the CLI fixture.
 vi.mock("../../globals.js", () => ({ setVerbose: (_enabled: boolean) => undefined }));
 
 vi.mock("../../infra/ports-inspect.js", () => ({
@@ -312,11 +322,13 @@ vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Capture console setup without changing process-wide logging.
 vi.mock("../../logging/console.js", () => ({
   setConsoleSubsystemFilter: mocks.setConsoleSubsystemFilter,
   setConsoleTimestampPrefix: () => undefined,
 }));
 
+// mock-isolation: Record bundle requests without writing diagnostic artifacts.
 vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
   writeDiagnosticStabilityBundleForFailureSync,
 }));
@@ -357,23 +369,28 @@ vi.mock("../command-format.js", () => ({
   formatCliCommand: (cmd: string) => cmd,
 }));
 
+// mock-isolation: Control terminal admission without reading the host TTY.
 vi.mock("../terminal-interactivity.js", () => ({
   isTerminalInteractive: mocks.isTerminalInteractive,
   NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE:
     "Refusing to kill the operator's running gateway service from a non-interactive shell. Use an isolated dev gateway (openclaw gateway run --dev, or --profile <name> with a free port) for testing.",
 }));
 
+// mock-isolation: Control repair prompts without modifying operator config.
 vi.mock("../invalid-config-recovery.js", () => ({
   offerInvalidConfigRecovery: mocks.offerInvalidConfigRecovery,
 }));
 
+// mock-isolation: Keep live port diagnostics outside CLI option tests.
 vi.mock("../ports.js", () => ({
   forceFreePortAndWait: mocks.forceFreePortAndWait,
   waitForPortBindable: mocks.waitForPortBindable,
 }));
 
+// mock-isolation: Record development setup without writing Gateway config.
 vi.mock("./dev.js", () => ({ ensureDevGatewayConfig: mocks.ensureDevGatewayConfig }));
 
+// mock-isolation: Control lifecycle callbacks without entering a live Gateway loop.
 vi.mock("./run-loop.js", () => ({ runGatewayLoop: mocks.runGatewayLoop }));
 
 describe("gateway run option collisions", () => {
@@ -1187,10 +1204,14 @@ describe("gateway run option collisions", () => {
     await expectExit(78);
 
     expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
-    expect(bootLifecycle.complete).toHaveBeenCalledWith(undefined, {
-      outcome: "startup_failed",
-      reason: "schema migration required",
-    });
+    expect(bootLifecycle.complete).toHaveBeenCalledWith(
+      undefined,
+      {
+        outcome: "startup_failed",
+        reason: "schema migration required",
+      },
+      process.env,
+    );
     expect(triageAfterFailure).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain(
       "state database schema migration required (audit-events-v2)",

@@ -54,9 +54,11 @@ vi.mock("../../runtime.js", async () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+// mock-isolation: Capture status options without probing a live Gateway.
 vi.mock("../../commands/gateway-status.js", () => ({
   gatewayStatusCommand: mocks.gatewayStatusCommand,
 }));
+// mock-isolation: Capture token-reveal routing without reading credentials.
 vi.mock("../../commands/gateway-auth-token.js", () => ({
   gatewayAuthTokenCommand: mocks.gatewayAuthTokenCommand,
 }));
@@ -78,6 +80,7 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
   addGatewayServiceCommands: () => undefined,
 }));
 
+// mock-isolation: Control health presentation without probing live services.
 vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
   formatHealthChannelLines: mocks.formatHealthChannelLines,
@@ -89,7 +92,9 @@ vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readSourceConfigBestEffort: async () => ({}),
 }));
 
+// mock-isolation: Prevent network discovery in CLI option tests.
 vi.mock("../../infra/bonjour-discovery.js", () => ({ discoverGatewayBeacons: async () => [] }));
+// mock-isolation: Prevent DNS discovery in CLI option tests.
 vi.mock("../../infra/widearea-dns.js", () => ({ resolveWideAreaDiscoveryDomain: () => undefined }));
 vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
@@ -113,6 +118,7 @@ vi.mock("../../utils/usage-format.js", () => ({
   formatUsd: () => "$0.00",
 }));
 
+// mock-isolation: Keep help rendering out of the CLI routing fixture.
 vi.mock("../help-format.js", () => ({ formatHelpExamples: () => "" }));
 
 vi.mock("../progress.js", () => ({
@@ -282,6 +288,7 @@ describe("gateway register option collisions", () => {
       "health",
       expect.objectContaining({ json: true }),
       undefined,
+      { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
     expect(loadGatewayHealthModule).not.toHaveBeenCalled();
     expect(loadHealthStyleModule).not.toHaveBeenCalled();

@@ -3,12 +3,16 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createEffect, createSignal } from "solid-js";
-import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -18,12 +22,11 @@ import { i18n } from "../../i18n/index.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
-import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
-import { sessionActivityListing } from "./session-activity-controller.test-support.ts";
 
 type TestActivityPage = ReturnType<typeof createActivityPage>;
 
@@ -35,16 +38,9 @@ function createActivityPage(context: ApplicationContext, initial?: RouteLocation
     return createComponent(ActivityPageView, { page });
   });
   flush();
-  const query = <T extends Element = HTMLElement>(selector: string) =>
-    mounted.container.querySelector<T>(selector);
-  const all = <T extends Element = HTMLElement>(selector: string) =>
-    Array.from(mounted.container.querySelectorAll<T>(selector));
   return {
+    context,
     container: mounted.container,
-    query,
-    all,
-    text: (selector: string) => query(selector)?.textContent,
-    labels: (selector: string) => all(selector).map((entry) => entry.textContent?.trim()),
     dispose: mounted.unmount,
     setRouteLocation(next: RouteLocation | undefined) {
       setLocation(next);
@@ -53,37 +49,80 @@ function createActivityPage(context: ApplicationContext, initial?: RouteLocation
   };
 }
 
+function inspectorGateway(client: GatewayBrowserClient) {
+  const source = gateway();
+  Object.assign(source.snapshot, {
+    client,
+    phase: "connected",
+    hello: {
+      ...activityHello(),
+      features: { methods: ["audit.run.inspect"], events: [] },
+    },
+  });
+  return source;
+}
+
 function previews(page: TestActivityPage) {
   flush();
-  return page.all(".activity-entry__preview").map((entry) => entry.textContent);
+  return [...page.container.querySelectorAll(".activity-entry__preview")].map(
+    (entry) => entry.textContent,
+  );
 }
 
 function expandFirst(page: TestActivityPage) {
   flush();
-  const row = page.query<HTMLDetailsElement>(".activity-entry")!;
+  const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
   row.open = true;
   row.dispatchEvent(new Event("toggle"));
   flush();
   return row;
 }
 
-const capabilities = new Map<
-  ApplicationContext["gateway"],
-  Pick<ApplicationContext, "sessions" | "agents">
->();
+function mountActivityPage(page: TestActivityPage) {
+  return page.container;
+}
+
+function gateway(): ApplicationContext["gateway"] {
+  const snapshot: ApplicationGatewaySnapshot = {
+    client: null,
+    phase: "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    hello: null,
+    assistantAgentId: null,
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
+  };
+  return {
+    snapshot,
+    eventLog: [],
+    eventLogRevision: 0,
+    subscribe: vi.fn(() => () => undefined),
+    subscribeEventLog: vi.fn(() => () => undefined),
+    subscribeEvents: vi.fn(() => () => undefined),
+  } as unknown as ApplicationContext["gateway"];
+}
+
+const activeGateways = new Set<ApplicationContext["gateway"]>();
+const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
+const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
 
 function activityContext(source: ApplicationContext["gateway"], basePath = ""): ApplicationContext {
-  let owners = capabilities.get(source);
-  if (!owners) {
-    owners = {
-      sessions: createTestSessionCapability(source),
-      agents: createAgentCapability(source),
-    };
-    capabilities.set(source, owners);
+  let sessions = activeSessions.get(source);
+  if (!sessions) {
+    sessions = createTestSessionCapability(source);
+    activeSessions.set(source, sessions);
+  }
+  let agents = activeAgents.get(source);
+  if (!agents) {
+    agents = createAgentCapability(source);
+    activeAgents.set(source, agents);
   }
   return {
     gateway: source,
-    ...owners,
+    sessions,
+    agents,
     basePath,
     resourceBasePath: "",
     replace: vi.fn(),
@@ -175,9 +214,12 @@ function activityGateway() {
       lastActiveSessionKey: "main",
     },
   });
+  activeGateways.add(store.gateway);
   activityContext(store.gateway);
   store.gateway.start();
-  store.current().request.mockImplementation(activityResponse);
+  store
+    .current()
+    .request.mockImplementation(async (method, params) => activityResponse(method, params));
   store.current().opts.onHello?.(activityHello());
   return store;
 }
@@ -186,61 +228,13 @@ async function bindActivity(
   source: ApplicationContext["gateway"],
   basePath = "",
 ): Promise<TestActivityPage> {
-  const page = createActivityPage(
-    activityContext(source, basePath),
-    activityRoute("?view=live", basePath),
-  );
+  const page = createActivityPage(activityContext(source, basePath), {
+    pathname: `${basePath}/activity`,
+    search: "?view=live",
+    hash: "",
+  });
   await syncActivityRoster(page);
   return page;
-}
-
-async function livePage(basePath = "") {
-  const store = activityGateway();
-  const page = await bindActivity(store.gateway, basePath);
-  return { ...store, page, container: page.container };
-}
-
-function activityRoute(search: string, basePath = ""): RouteLocation {
-  return { pathname: `${basePath}/activity`, search, hash: "" };
-}
-
-function unavailableInspection(): AuditRunInspectResult {
-  const missingEvidence = ["run.record"];
-  return {
-    schemaVersion: 1,
-    run: { runId: "run-1", status: "unknown" },
-    identity: { state: "unknown", reasonCode: "run_not_found", missingEvidence, remediation: [] },
-    decisionDisplays: [],
-    coverage: { state: "unknown", missingEvidence },
-  };
-}
-
-function setFilter(
-  element: HTMLInputElement | HTMLSelectElement,
-  value: string,
-  event: "input" | "change",
-) {
-  element.value = value;
-  element.dispatchEvent(new Event(event, { bubbles: true }));
-  flush();
-}
-
-const toolSelection = (tool: HTMLSelectElement) => [
-  tool.value,
-  tool.selectedOptions[0]?.textContent,
-];
-function required<T extends Element>(element: T | null | undefined): T {
-  assert(element, "Expected Activity control");
-  return element;
-}
-
-function inspectPage(request: GatewayRequestHandler, search = "?view=run&run=run-1") {
-  const { gateway: source, current } = activityGateway();
-  Object.assign(source.snapshot, {
-    hello: { ...activityHello(), features: { methods: ["audit.run.inspect"], events: [] } },
-  });
-  current().request.mockImplementation(async (...args) => request(...args));
-  return createActivityPage(activityContext(source), activityRoute(search));
 }
 
 function activityRoster(
@@ -249,10 +243,16 @@ function activityRoster(
     { key: "agent:other:work", kind: "direct", hasActiveRun: true },
   ],
 ): SessionsListResult {
-  return sessionActivityListing(sessions);
+  return {
+    ts: 1,
+    path: "",
+    count: sessions.length,
+    sessions,
+    defaults: { model: null, modelProvider: null, contextTokens: null },
+  };
 }
 
-async function activityResponse(method: string, params: unknown) {
+function activityResponse(method: string, params: unknown) {
   switch (method) {
     case "sessions.list":
       return activityRoster();
@@ -267,22 +267,17 @@ async function activityResponse(method: string, params: unknown) {
 
 async function syncActivityRoster(page: TestActivityPage) {
   await waitForSolid(() =>
-    expect(page.all(".activity-current-work__row").length).toBeGreaterThan(0),
+    expect(page.container.querySelectorAll(".activity-current-work__row").length).toBeGreaterThan(
+      0,
+    ),
   );
 }
 
-function toolEvent(
-  id: string,
-  sessionKey = "main",
-  name = "read",
-  runId = `run-${id}`,
-  ts?: number,
-) {
+function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
   return createGatewayEvent("session.tool", {
     stream: "tool",
     runId,
     sessionKey,
-    ts,
     data: {
       toolCallId: id,
       name,
@@ -294,506 +289,710 @@ function toolEvent(
 
 afterEach(async () => {
   cleanupSolid();
-  for (const [source, { sessions, agents }] of capabilities) {
+  for (const sessions of activeSessions.values()) {
     sessions.dispose();
+  }
+  for (const agents of activeAgents.values()) {
     agents.dispose();
+  }
+  for (const source of activeGateways) {
     source.stop();
   }
   // Credential changes start lazy cache cleanup; finish it before clearing the environment.
   await vi.dynamicImportSettled();
-  capabilities.clear();
+  activeGateways.clear();
+  activeSessions.clear();
+  activeAgents.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
   sessionStorage.clear();
 });
 
-it("renders localized summaries and timestamps across locale changes", async () => {
-  const previousLocale = i18n.getLocale();
-  onTestFinished(() => i18n.setLocale(previousLocale));
-  const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
-  const { page, current } = await livePage();
-  const now = vi.spyOn(Date, "now");
-  try {
-    for (const [index, updatedAt] of [
-      0,
-      timestamp,
-      Number.NaN,
-      Number.POSITIVE_INFINITY,
-      8_640_000_000_000_001,
-    ].entries()) {
-      now.mockReturnValue(updatedAt);
-      const id = `time-${index}`;
-      current().opts.onEvent?.(toolEvent(id, "main", "exec", id, updatedAt - 119_900));
+describe("ActivityPage gateway lifecycle", () => {
+  it("renders localized summaries and timestamps across locale changes", async () => {
+    const previousLocale = i18n.getLocale();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    const now = vi.spyOn(Date, "now");
+    try {
+      for (const [index, updatedAt] of [
+        0,
+        timestamp,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        8_640_000_000_000_001,
+      ].entries()) {
+        now.mockReturnValue(updatedAt);
+        current().opts.onEvent?.(
+          createGatewayEvent("session.tool", {
+            stream: "tool",
+            runId: `time-${index}`,
+            sessionKey: "main",
+            ts: updatedAt - 119_900,
+            data: {
+              toolCallId: `time-${index}`,
+              name: "exec",
+              phase: "result",
+              result: { text: "ok" },
+            },
+          }),
+        );
+      }
+    } finally {
+      now.mockRestore();
     }
-  } finally {
-    now.mockRestore();
-  }
-  const options: Intl.DateTimeFormatOptions = {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  };
-  for (const [locale, summary] of [
-    ["en", "0 arguments hidden"],
-    ["de", "0 Argumente ausgeblendet"],
-  ] as const) {
-    await i18n.setLocale(locale);
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    const container = page.container;
+    try {
+      for (const [locale, summary] of [
+        ["en", "0 arguments hidden"],
+        ["de", "0 Argumente ausgeblendet"],
+      ] as const) {
+        await i18n.setLocale(locale);
+        flush();
+        expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(summary);
+        expect(container.querySelector(".activity-entry__meta")?.textContent).toContain("2m");
+        expect(
+          Array.from(
+            container.querySelectorAll(".activity-entry__meta > span:first-child"),
+            (element) => element.textContent,
+          ),
+        ).toEqual([
+          new Date(0).toLocaleTimeString(locale, options),
+          new Date(timestamp).toLocaleTimeString(locale, options),
+          "",
+          "",
+          "",
+        ]);
+      }
+    } finally {
+      await i18n.setLocale(previousLocale);
+    }
+  });
+
+  it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
+    await i18n.setLocale("en");
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source, "/control");
+    current().opts.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
+    current().opts.onEvent?.(toolEvent("read"));
     flush();
-    expect(page.text(".activity-entry__text")?.trim()).toBe(summary);
-    expect(page.text(".activity-entry__meta")).toContain("2m");
+    const container = page.container;
+    const toolbar = container.querySelector(".activity-live-toolbar");
     expect(
-      page.all(".activity-entry__meta > span:first-child").map((element) => element.textContent),
-    ).toEqual([
-      new Date(0).toLocaleTimeString(locale, options),
-      new Date(timestamp).toLocaleTimeString(locale, options),
-      "",
-      "",
-      "",
-    ]);
-  }
-});
+      toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
+    ).toHaveLength(3);
+    expect(
+      toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
+    ).not.toBeNull();
+    const filterTrigger = toolbar?.querySelector<HTMLButtonElement>(
+      "#activity-live-filter-trigger",
+    );
+    expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
+    ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
+    filterTrigger?.click();
+    expect(document.activeElement).toBe(container.querySelector(".activity-live-filter-popover"));
 
-it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
-  await i18n.setLocale("en");
-  const { page, container, current } = await livePage("/control");
-  current().opts.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
-  current().opts.onEvent?.(toolEvent("read"));
-  flush();
-  const toolbar = container.querySelector(".activity-live-toolbar");
-  expect(toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]')).toHaveLength(
-    3,
-  );
-  expect(
-    toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
-  ).not.toBeNull();
-  const filterTrigger = toolbar?.querySelector<HTMLButtonElement>("#activity-live-filter-trigger");
-  expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
-  expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
-  expect(page.query(".activity-entry__run-link")?.getAttribute("href")).toBe(
-    "/control/activity?view=run&run=live%20run%3Aa%2Fb",
-  );
-  filterTrigger?.click();
-  expect(document.activeElement).toBe(page.query(".activity-live-filter-popover"));
-
-  const done = toolbar?.querySelectorAll<HTMLInputElement>(
-    '.activity-status-filter input[type="checkbox"]',
-  )[1];
-  for (const count of [0, 2]) {
+    const done = toolbar?.querySelectorAll<HTMLInputElement>(
+      '.activity-status-filter input[type="checkbox"]',
+    )[1];
     done?.click();
     flush();
-    expect(page.all(".activity-entry")).toHaveLength(count);
-  }
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
+    done?.click();
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
 
-  const follow = toolbar?.querySelector<HTMLInputElement>(
-    ".activity-live-autofollow input.settings-toggle__input",
-  );
-  for (const checked of [false, true]) {
+    const follow = toolbar?.querySelector<HTMLInputElement>(
+      ".activity-live-autofollow input.settings-toggle__input",
+    );
     follow?.click();
     flush();
-    expect(follow?.checked).toBe(checked);
-  }
-
-  const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
-    ".activity-page .settings-section__actions button",
-  );
-  for (const [button, open] of [
-    [expand, true],
-    [collapse, false],
-  ] as const) {
-    button?.click();
+    expect(follow?.checked).toBe(false);
+    follow?.click();
     flush();
-    expect(page.all<HTMLDetailsElement>(".activity-entry").map((row) => row.open)).toEqual([
-      open,
-      open,
+    expect(follow?.checked).toBe(true);
+
+    const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
+      ".activity-page .settings-section__actions button",
+    );
+    expand?.click();
+    flush();
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+        (row) => row.open,
+      ),
+    ).toEqual([true, true]);
+    collapse?.click();
+    flush();
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+        (row) => row.open,
+      ),
+    ).toEqual([false, false]);
+
+    const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
+    if (!search) {
+      throw new Error("Expected the live activity search input");
+    }
+    search.value = "no matching activity";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
+    search.value = "run";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    if (!tool) {
+      throw new Error("Expected the live activity tool filter");
+    }
+    tool.value = "read";
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["read"]);
+  });
+
+  it("retains the selected tool when Live entries change", async () => {
+    await i18n.setLocale("en");
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
+    current().opts.onEvent?.(toolEvent("read"));
+    flush();
+    const container = page.container;
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    if (!tool) {
+      throw new Error("Expected the live activity tool filter");
+    }
+    tool.value = "read";
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["read"]);
+
+    container.querySelector<HTMLButtonElement>(".activity-page button.danger")?.click();
+    current().opts.onEvent?.(toolEvent("read"));
+    flush();
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+
+    current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
+    tool.value = "";
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(tool?.value).toBe("");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+  });
+
+  it("renders selected answer candidates without tool-only facts", async () => {
+    await i18n.setLocale("en");
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(
+      createGatewayEvent("agent", {
+        stream: "item",
+        runId: "run-1",
+        sessionKey: "main",
+        data: {
+          kind: "answer_candidate",
+          itemId: "answer-1",
+          status: "selected",
+          progressText: "Final answer",
+        },
+      }),
+    );
+    flush();
+    const container = page.container;
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe(
+      "Answer candidate",
+    );
+    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
+      "Selected answer",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).toContain(
+      "Item: answer-1",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).not.toContain(
+      "arguments hidden",
+    );
+  });
+
+  it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
+    const page = createActivityPage(activityContext(gateway()), {
+      pathname: "/activity",
+      search: mode === "run" ? "?view=run" : "",
+      hash: "",
+    });
+    expect(page.container.querySelector(".activity-page")).toBeNull();
+    page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
+    expect(page.container.querySelector(".activity-page")).not.toBeNull();
+  });
+
+  it("starts empty on initial bind and source replacement", async () => {
+    const first = activityGateway();
+    const page = await bindActivity(first.gateway);
+    first.current().opts.onEvent?.(toolEvent("old"));
+    expect(previews(page)).toEqual(["old output"]);
+    page.dispose();
+    const next = activityGateway();
+    const replacement = await bindActivity(next.gateway);
+    expect(previews(replacement)).toEqual([]);
+  });
+
+  it("does not collect live events in sessions mode", async () => {
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(toolEvent("first"));
+    expandFirst(page);
+    page.setRouteLocation({ pathname: "/activity", search: "", hash: "" });
+    current().opts.onEvent?.(toolEvent("while-away"));
+    page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
+    await syncActivityRoster(page);
+    expect(previews(page)).toEqual(["first output"]);
+    expect(page.container.querySelector<HTMLDetailsElement>(".activity-entry")?.open).toBe(true);
+    current().opts.onEvent?.(toolEvent("returned"));
+    expect(previews(page)).toEqual(["first output", "returned output"]);
+  });
+
+  it("waits for route data before querying sessions on the first Gateway bind", () => {
+    const { gateway: source, current } = activityGateway();
+    const request = current().request.mockResolvedValue({
+      ts: 1,
+      path: "",
+      count: 0,
+      sessions: [],
+      defaults: { model: null, modelProvider: null, contextTokens: null },
+    });
+    request.mockClear();
+    const page = createActivityPage(activityContext(source));
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([]);
+
+    page.setRouteLocation({ pathname: "/activity", search: "?q=alpha", hash: "" });
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([
+      ["sessions.list", expect.objectContaining({ search: "alpha" }), expect.anything()],
     ]);
-  }
+  });
 
-  const search = required(toolbar?.querySelector<HTMLInputElement>('input[type="search"]'));
-  setFilter(search, "no matching activity", "input");
-  expect(page.all(".activity-entry")).toHaveLength(0);
-  setFilter(search, "run", "input");
-  expect(page.all(".activity-entry")).toHaveLength(2);
+  it("retires the mounted session's activity after an account change", async () => {
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(toolEvent("old"));
+    expect(previews(page)).toEqual(["old output"]);
+    expandFirst(page);
 
-  const tool = required(page.query<HTMLSelectElement>(".activity-live-filter-popover select"));
-  setFilter(tool, "read", "change");
-  expect(page.labels(".activity-entry__tool")).toEqual(["read"]);
-});
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().opts.onHello?.(activityHello("activity-owner-b"));
 
-it("retains the selected tool when Live entries change", async () => {
-  await i18n.setLocale("en");
-  const { page, current } = await livePage();
-  current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
-  current().opts.onEvent?.(toolEvent("read"));
-  flush();
-  const tool = required(page.query<HTMLSelectElement>(".activity-live-filter-popover select"));
-  setFilter(tool, "read", "change");
-  expect(toolSelection(tool)).toEqual(["read", "read"]);
-  expect(page.labels(".activity-entry__tool")).toEqual(["read"]);
+    expect(previews(page)).toEqual([]);
+    flush();
+    expect(page.container.querySelectorAll(".activity-entry[open]")).toHaveLength(0);
+    if (source.snapshot.phase !== "connected") {
+      current().request.mockImplementation(async (method, params) =>
+        activityResponse(method, params),
+      );
+      current().opts.onHello?.(activityHello());
+    }
+    await syncActivityRoster(page);
+    current().opts.onEvent?.(toolEvent("new"));
+    expect(previews(page)).toEqual(["new output"]);
+  });
 
-  page.query<HTMLButtonElement>(".activity-page button.danger")?.click();
-  current().opts.onEvent?.(toolEvent("read"));
-  flush();
-  expect(toolSelection(tool)).toEqual(["read", "read"]);
-  expect(page.all(".activity-entry")).toHaveLength(1);
+  it("keeps streamed previews and expansion across ordinary appends and reconnects", async () => {
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(toolEvent("first"));
+    const firstRow = expandFirst(page);
 
-  current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
-  setFilter(tool, "", "change");
-  expect(toolSelection(tool)).toEqual(["", "All tools"]);
-  expect(page.all(".activity-entry")).toHaveLength(2);
-});
-
-it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
-  const page = createActivityPage(
-    activityContext(createGatewayStoreTestStore().gateway),
-    activityRoute(mode === "run" ? "?view=run" : ""),
-  );
-  expect(page.query(".activity-page")).toBeNull();
-  page.setRouteLocation(activityRoute("?view=live"));
-  expect(page.query(".activity-page")).not.toBeNull();
-});
-
-it("does not collect live events in sessions mode", async () => {
-  const { page, current } = await livePage();
-  current().opts.onEvent?.(toolEvent("first"));
-  expandFirst(page);
-  page.setRouteLocation(activityRoute(""));
-  current().opts.onEvent?.(toolEvent("while-away"));
-  page.setRouteLocation(activityRoute("?view=live"));
-  await syncActivityRoster(page);
-  expect(previews(page)).toEqual(["first output"]);
-  expect(page.query<HTMLDetailsElement>(".activity-entry")?.open).toBe(true);
-  current().opts.onEvent?.(toolEvent("returned"));
-  expect(previews(page)).toEqual(["first output", "returned output"]);
-});
-
-it("waits for route data before querying sessions on the first Gateway bind", () => {
-  const { gateway: source, current } = activityGateway();
-  const request = current().request.mockResolvedValue(activityRoster([]));
-  request.mockClear();
-  const page = createActivityPage(activityContext(source));
-
-  expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([]);
-
-  page.setRouteLocation(activityRoute("?q=alpha"));
-
-  expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([
-    ["sessions.list", expect.objectContaining({ search: "alpha" }), expect.anything()],
-  ]);
-});
-
-it("retires the mounted session's activity after an account change", async () => {
-  const { gateway: source, page, current } = await livePage();
-  current().opts.onEvent?.(toolEvent("old"));
-  expect(previews(page)).toEqual(["old output"]);
-  expandFirst(page);
-
-  current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-  current().opts.onHello?.(activityHello("activity-owner-b"));
-
-  expect(previews(page)).toEqual([]);
-  flush();
-  expect(page.all(".activity-entry[open]")).toHaveLength(0);
-  if (source.snapshot.phase !== "connected") {
-    current().request.mockImplementation(activityResponse);
-    current().opts.onHello?.(activityHello());
-  }
-  await syncActivityRoster(page);
-  current().opts.onEvent?.(toolEvent("new"));
-  expect(previews(page)).toEqual(["new output"]);
-});
-
-it.each(["reconnect", "chat selection"])("preserves activity across %s changes", async (change) => {
-  const { gateway: source, page, current } = await livePage();
-  current().opts.onEvent?.(toolEvent("first"));
-  const firstRow = expandFirst(page);
-  if (change === "reconnect") {
     current().opts.onEvent?.(toolEvent("second"));
     source.connect();
     current().opts.onHello?.(activityHello());
-  } else {
-    source.setSessionKey("agent:other:work");
-  }
-  expect(previews(page)).toEqual(
-    change === "reconnect" ? ["first output", "second output"] : ["first output"],
+
+    expect(previews(page)).toEqual(["first output", "second output"]);
+    expect(firstRow.open).toBe(true);
+    expect(page.container.querySelector(".activity-entry")).toBe(firstRow);
+  });
+
+  it.each(["stop", "event"] as const)(
+    "retires the roster before an earlier reset observer triggers a reentrant %s",
+    async (action) => {
+      const { gateway: source, current } = activityGateway();
+      let retiring = false;
+      const unsubscribe = source.subscribeEventLog((events) => {
+        if (!retiring || events.length > 0) {
+          return;
+        }
+        retiring = false;
+        if (action === "stop") {
+          source.stop();
+        } else {
+          current().opts.onEvent?.(toolEvent("new-context"));
+        }
+      });
+      try {
+        const page = await bindActivity(source);
+        current().opts.onEvent?.(toolEvent("old"));
+        retiring = true;
+
+        source.connect({ gatewayUrl: "wss://other-activity.example.test" });
+
+        expect(previews(page)).toEqual([]);
+        if (action === "stop") {
+          expect(source.snapshot.phase).toBe("stopped");
+        }
+      } finally {
+        unsubscribe();
+      }
+    },
   );
-  expect(firstRow.open).toBe(true);
-  expect(page.query(".activity-entry")).toBe(firstRow);
-  if (change === "chat selection") {
+
+  it("starts each visit empty and ignores events received before opening", async () => {
+    const { gateway: source, current } = activityGateway();
+    current().opts.onEvent?.(toolEvent("before-open"));
+    const firstPage = await bindActivity(source);
+    expect(previews(firstPage)).toEqual([]);
+    current().opts.onEvent?.(toolEvent("first-visit"));
+    expect(previews(firstPage)).toEqual(["first-visit output"]);
+    expect(source.eventLog).toEqual([]);
+    firstPage.dispose();
+
+    current().opts.onEvent?.(toolEvent("while-away"));
+    const nextPage = await bindActivity(source);
+    expect(previews(nextPage)).toEqual([]);
+    current().opts.onEvent?.(toolEvent("next-visit"));
+    expect(previews(nextPage)).toEqual(["next-visit output"]);
+    expect(previews(nextPage)).not.toContain("first-visit output");
+  });
+
+  it("collects delivered answer candidates only from the mounted roster", async () => {
+    const { gateway: source, current } = activityGateway();
+    const roster = activityRoster([
+      { key: "main", kind: "direct", hasActiveRun: true },
+      { key: "agent:research:work", agentId: "research", kind: "direct", hasActiveRun: true },
+      { key: "global", agentId: "research", kind: "global", hasActiveRun: true },
+      { key: "unknown", agentId: "research", kind: "unknown", hasActiveRun: true },
+    ]);
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.list" ? roster : activityResponse(method, params),
+    );
+    const origins = [
+      { runId: "selected", sessionKey: "main" },
+      { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
+      { runId: "global", sessionKey: "global", agentId: "research" },
+      { runId: "unknown", sessionKey: "unknown", agentId: "research" },
+      { runId: "outside-roster", sessionKey: "agent:unrelated:work", agentId: "unrelated" },
+      { runId: "unscoped" },
+    ];
+    const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
+    const page = createActivityPage(activityContext(source), {
+      pathname: "/activity",
+      search: "?view=live",
+      hash: "",
+    });
+    try {
+      await syncActivityRoster(page);
+      await Promise.all(acquisitions.mock.results.map((result) => result.value));
+    } finally {
+      acquisitions.mockRestore();
+    }
+    for (const origin of origins) {
+      current().opts.onEvent?.(
+        createGatewayEvent("agent", {
+          ...origin,
+          stream: "item",
+          data: {
+            kind: "answer_candidate",
+            itemId: "shared-item",
+            status: "selected",
+            progressText: `${origin.runId} output`,
+          },
+        }),
+      );
+    }
+
+    flush();
+    expect(
+      [...page.container.querySelectorAll<HTMLAnchorElement>(".activity-entry__run-link")].map(
+        (link) => new URL(link.href).searchParams.get("run"),
+      ),
+    ).toEqual(["selected", "other", "global", "unknown"]);
+    expect(page.container.querySelectorAll(".activity-entry")).toHaveLength(4);
+    expect(current().request).toHaveBeenCalledWith(
+      "sessions.messages.subscribe",
+      { key: "unknown", agentId: "research", subscriptionId: expect.any(String) },
+      expect.anything(),
+    );
+  });
+
+  it("releases only its own shared leases while hidden and on unmount", async () => {
+    const { gateway: source, current } = activityGateway();
+    const sessions = activityContext(source).sessions;
+    const otherOwner = await sessions.subscribeMessages("main");
+    const pending = createDeferred<{ key: string }>();
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.messages.subscribe" ? pending.promise : activityResponse(method, params),
+    );
+    const page = await bindActivity(source);
+    const otherSession = sessions.subscribeMessages("agent:other:work");
+    current().request.mockClear();
+
+    globalThis.dispatchEvent(new Event("pagehide"));
+    current().opts.onEvent?.(toolEvent("hidden"));
+    pending.resolve({ key: "agent:other:work" });
+    await sessions.unsubscribeMessages(await otherSession);
+    const remainingOwner = await sessions.subscribeMessages("main");
+    const unsubscribedKeys = () =>
+      current()
+        .request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe")
+        .map(([, params]) => params);
+    expect(unsubscribedKeys()).not.toContainEqual(expect.objectContaining({ key: "main" }));
+    await sessions.unsubscribeMessages(remainingOwner);
+    await sessions.unsubscribeMessages(otherOwner);
+
+    expect(previews(page)).toEqual([]);
+    expect(unsubscribedKeys()).toEqual(
+      expect.arrayContaining([
+        { key: "main", subscriptionId: expect.any(String) },
+        { key: "agent:other:work", subscriptionId: expect.any(String) },
+      ]),
+    );
+    current().request.mockImplementation(async (method, params) =>
+      activityResponse(method, params),
+    );
+    globalThis.dispatchEvent(new Event("pageshow"));
+    current().opts.onEvent?.(toolEvent("visible"));
+    expect(previews(page)).toEqual(["visible output"]);
+    page.dispose();
+    current().opts.onEvent?.(toolEvent("unmounted"));
+    expect(page.container.isConnected).toBe(false);
+  });
+
+  it("retires the connection when a failed release would leave an orphaned observer", async () => {
+    const { gateway: source, current, clients } = activityGateway();
+    const page = await bindActivity(source);
+    const previous = current();
+    const previousIdentity = source.snapshot.client;
+    const retired = createDeferred();
+    const stop = source.subscribe((snapshot) => {
+      if (snapshot.client !== previousIdentity) {
+        retired.resolve();
+      }
+    });
+    previous.request.mockImplementation(async (method, params) => {
+      if (method === "sessions.messages.unsubscribe") {
+        throw new Error("unsubscribe unavailable");
+      }
+      return activityResponse(method, params);
+    });
+    try {
+      page.dispose();
+      await retired.promise;
+      expect(previous.stopped).toBe(1);
+      expect(current()).not.toBe(previous);
+      expect(clients).toHaveLength(2);
+    } finally {
+      stop();
+    }
+  });
+
+  it("shows a failed subscription and recovers through the rendered Retry action", async () => {
+    const { gateway: source, current } = activityGateway();
+    const pending = createDeferred<{ key: string }>();
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.messages.subscribe"
+        ? pending.promise
+        : method === "sessions.list"
+          ? activityRoster([{ key: "main", kind: "direct", hasActiveRun: true }])
+          : activityResponse(method, params),
+    );
+    const page = createActivityPage(activityContext(source), {
+      pathname: "/activity",
+      search: "?view=live",
+      hash: "",
+    });
+    const container = mountActivityPage(page);
+    await syncActivityRoster(page);
+    flush();
+    const sessions = activityContext(source).sessions;
+    const observer = sessions.subscribeMessages("main");
+
+    pending.reject(new Error("Activity subscription unavailable"));
+    await expect(observer).rejects.toThrow("Activity subscription unavailable");
+    flush();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Activity subscription unavailable");
+    const retry = alert?.querySelector("button");
+    expect(retry?.textContent?.trim()).toBe("Retry");
+    current().request.mockImplementation(async (method, params) =>
+      activityResponse(method, params),
+    );
+    retry?.click();
+    const recovered = await sessions.subscribeMessages("main");
+    current().opts.onEvent?.(toolEvent("recovered"));
+    flush();
+
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.textContent).toContain("recovered output");
+    await sessions.unsubscribeMessages(recovered);
+  });
+
+  it("preserves activity and Clear when the selected chat changes", async () => {
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(toolEvent("original"));
+    const originalRow = expandFirst(page);
+    source.setSessionKey("agent:other:work");
+
+    expect(previews(page)).toEqual(["original output"]);
+    expect(originalRow.open).toBe(true);
+    expect(page.container.querySelector(".activity-entry")).toBe(originalRow);
     current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
-    expect(previews(page)).toEqual(["first output", "other output"]);
-    const clear = page.query<HTMLButtonElement>(".activity-page button.danger");
+    expect(previews(page)).toEqual(["original output", "other output"]);
+
+    const container = mountActivityPage(page);
+    const clear = container.querySelector<HTMLButtonElement>(".activity-page button.danger");
     expect(clear?.textContent?.trim()).toBe("Clear");
     clear?.click();
     source.setSessionKey("main");
     expect(previews(page)).toEqual([]);
     current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
     expect(previews(page)).toEqual(["after-clear output"]);
-  }
-});
+  });
 
-it.each(["stop", "event"] as const)(
-  "retires the roster before an earlier reset observer triggers a reentrant %s",
-  async (action) => {
-    const { gateway: source, current } = activityGateway();
-    let retiring = false;
-    const unsubscribe = source.subscribeEventLog((events) => {
-      if (!retiring || events.length > 0) {
-        return;
-      }
-      retiring = false;
-      if (action === "stop") {
-        source.stop();
-      } else {
-        current().opts.onEvent?.(toolEvent("new-context"));
-      }
+  it("renders the safe-only inspection response through its route", async () => {
+    const result = {
+      schemaVersion: 1,
+      run: { runId: "run-1", status: "unknown" },
+      identity: {
+        state: "unknown",
+        reasonCode: "run_not_found",
+        missingEvidence: ["run.record"],
+        remediation: [],
+      },
+      decisionDisplays: [],
+      coverage: { state: "unknown", missingEvidence: ["run.record"] },
+    } satisfies AuditRunInspectResult;
+    const request = vi.fn(async () => result);
+    const client = createTestGatewayClient(request);
+    const activeGateway = inspectorGateway(client);
+    const page = createActivityPage(activityContext(activeGateway), {
+      pathname: "/activity",
+      search: "?view=run&run=run-1",
+      hash: "",
     });
-    onTestFinished(unsubscribe);
-    const page = await bindActivity(source);
-    current().opts.onEvent?.(toolEvent("old"));
-    retiring = true;
-
-    source.connect({ gatewayUrl: "wss://other-activity.example.test" });
-
-    expect(previews(page)).toEqual([]);
-    if (action === "stop") {
-      expect(source.snapshot.phase).toBe("stopped");
-    }
-  },
-);
-
-it("starts each visit empty and ignores events received before opening", async () => {
-  const { gateway: source, current } = activityGateway();
-  for (const visit of ["first", "next"]) {
-    current().opts.onEvent?.(toolEvent("before-open"));
-    const page = await bindActivity(source);
-    expect(previews(page)).toEqual([]);
-    current().opts.onEvent?.(toolEvent(visit));
-    expect(previews(page)).toEqual([`${visit} output`]);
-    expect(source.eventLog).toEqual([]);
-    page.dispose();
-  }
-});
-
-it("collects delivered answer candidates only from the mounted roster", async () => {
-  await i18n.setLocale("en");
-  const { gateway: source, current } = activityGateway();
-  const roster = activityRoster([
-    { key: "main", kind: "direct", hasActiveRun: true },
-    { key: "agent:research:work", agentId: "research", kind: "direct", hasActiveRun: true },
-    { key: "global", agentId: "research", kind: "global", hasActiveRun: true },
-    { key: "unknown", agentId: "research", kind: "unknown", hasActiveRun: true },
-  ]);
-  current().request.mockImplementation(async (method, params) =>
-    method === "sessions.list" ? roster : activityResponse(method, params),
-  );
-  const origins = [
-    { runId: "selected", sessionKey: "main" },
-    { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
-    { runId: "global", sessionKey: "global", agentId: "research" },
-    { runId: "unknown", sessionKey: "unknown", agentId: "research" },
-    { runId: "outside-roster", sessionKey: "agent:unrelated:work", agentId: "unrelated" },
-    { runId: "unscoped" },
-  ];
-  const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
-  onTestFinished(() => acquisitions.mockRestore());
-  const page = createActivityPage(activityContext(source), activityRoute("?view=live"));
-  await syncActivityRoster(page);
-  await Promise.all(acquisitions.mock.results.map((result) => result.value));
-  for (const origin of origins) {
-    current().opts.onEvent?.(
-      createGatewayEvent("agent", {
-        ...origin,
-        stream: "item",
-        data: {
-          kind: "answer_candidate",
-          itemId: "answer-1",
-          status: "selected",
-          progressText: `${origin.runId} output`,
-        },
-      }),
+    await waitForSolid(() =>
+      expect(page.container.querySelector(".run-inspector__result-state")?.textContent).toContain(
+        "run_not_found",
+      ),
     );
-  }
+    expect(request).toHaveBeenCalledWith(
+      "audit.run.inspect",
+      { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
 
-  flush();
-  expect(page.text(".activity-entry__tool")?.trim()).toBe("Answer candidate");
-  expect(page.text(".activity-entry__text")?.trim()).toBe("Selected answer");
-  expect(page.text(".activity-entry__facts")).toContain("Item: answer-1");
-  expect(page.text(".activity-entry__facts")).not.toContain("arguments hidden");
-  expect(
-    page
-      .all<HTMLAnchorElement>(".activity-entry__run-link")
-      .map((link) => new URL(link.href).searchParams.get("run")),
-  ).toEqual(["selected", "other", "global", "unknown"]);
-  expect(page.all(".activity-entry")).toHaveLength(4);
-  expect(current().request).toHaveBeenCalledWith(
-    "sessions.messages.subscribe",
-    { key: "unknown", agentId: "research", subscriptionId: expect.any(String) },
-    expect.anything(),
-  );
-});
+  it("retires a run inspector when route data disappears and excludes its late response", async () => {
+    const result = {
+      schemaVersion: 1,
+      run: { runId: "run-1", status: "unknown" },
+      identity: {
+        state: "unknown",
+        reasonCode: "run_not_found",
+        missingEvidence: ["run.record"],
+        remediation: [],
+      },
+      decisionDisplays: [],
+      coverage: { state: "unknown", missingEvidence: ["run.record"] },
+    } satisfies AuditRunInspectResult;
+    const pending = createDeferred<AuditRunInspectResult>();
+    const request = vi.fn(
+      (_method: string, _params: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
+    );
+    const client = createTestGatewayClient(request);
+    const activeGateway = inspectorGateway(client);
+    const page = createActivityPage(activityContext(activeGateway), {
+      pathname: "/activity",
+      search: "?view=run&run=run-1",
+      hash: "",
+    });
+    try {
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "audit.run.inspect",
+        { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
+        { signal: expect.any(AbortSignal) },
+      );
+      const signal = request.mock.calls[0]?.[2]?.signal;
+      expect(signal?.aborted).toBe(false);
+      expect(page.container.querySelector(".run-inspector__panel")).not.toBeNull();
 
-it("releases only its own shared leases while hidden and on unmount", async () => {
-  const { gateway: source, current } = activityGateway();
-  const sessions = activityContext(source).sessions;
-  const otherOwner = await sessions.subscribeMessages("main");
-  const pending = createDeferred<{ key: string }>();
-  current().request.mockImplementation(async (method, params) =>
-    method === "sessions.messages.subscribe" ? pending.promise : activityResponse(method, params),
-  );
-  const page = await bindActivity(source);
-  const otherSession = sessions.subscribeMessages("agent:other:work");
-  current().request.mockClear();
+      page.setRouteLocation(undefined);
 
-  globalThis.dispatchEvent(new Event("pagehide"));
-  current().opts.onEvent?.(toolEvent("hidden"));
-  pending.resolve({ key: "agent:other:work" });
-  await sessions.unsubscribeMessages(await otherSession);
-  const remainingOwner = await sessions.subscribeMessages("main");
-  const unsubscribedKeys = () =>
-    current()
-      .request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe")
-      .map(([, params]) => params);
-  expect(unsubscribedKeys()).not.toContainEqual(expect.objectContaining({ key: "main" }));
-  await sessions.unsubscribeMessages(remainingOwner);
-  await sessions.unsubscribeMessages(otherOwner);
-
-  expect(previews(page)).toEqual([]);
-  expect(unsubscribedKeys()).toEqual(
-    expect.arrayContaining([
-      { key: "main", subscriptionId: expect.any(String) },
-      { key: "agent:other:work", subscriptionId: expect.any(String) },
-    ]),
-  );
-  current().request.mockImplementation(activityResponse);
-  globalThis.dispatchEvent(new Event("pageshow"));
-  current().opts.onEvent?.(toolEvent("visible"));
-  expect(previews(page)).toEqual(["visible output"]);
-  page.dispose();
-  current().opts.onEvent?.(toolEvent("unmounted"));
-  expect(page.container.isConnected).toBe(false);
-});
-
-it("retires the connection when a failed release would leave an orphaned observer", async () => {
-  const { gateway: source, page, current, clients } = await livePage();
-  const previous = current();
-  const previousIdentity = source.snapshot.client;
-  const retired = createDeferred();
-  const stop = source.subscribe((snapshot) => {
-    if (snapshot.client !== previousIdentity) {
-      retired.resolve();
+      expect(signal?.aborted).toBe(true);
+      expect(page.container.querySelector(".run-inspector")).toBeNull();
+      pending.resolve(result);
+      await pending.promise;
+      flush();
+      expect(page.container.querySelector(".run-inspector")).toBeNull();
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      pending.resolve(result);
+      await pending.promise;
+      flush();
     }
   });
-  onTestFinished(stop);
-  previous.request.mockImplementation(async (method, params) => {
-    if (method === "sessions.messages.unsubscribe") {
-      throw new Error("unsubscribe unavailable");
-    }
-    return activityResponse(method, params);
+
+  it.each([
+    [
+      "UI Gateway request",
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "decision cursor is no longer retained",
+      }),
+      "restart",
+    ],
+    [
+      "non-invalid request",
+      new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "gateway unavailable" }),
+      "retry",
+    ],
+  ] as const)("classifies a %s cursor failure", async (_label, error, recovery) => {
+    const client = createTestGatewayClient(vi.fn(() => Promise.reject(error)));
+    const activeGateway = inspectorGateway(client);
+    const page = createActivityPage(activityContext(activeGateway), {
+      pathname: "/activity",
+      search: "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
+      hash: "",
+    });
+    await waitForSolid(() =>
+      expect(page.container.querySelector('[role="alert"] button')?.textContent).toBe(
+        recovery === "restart" ? "Restart inspection" : "Retry inspection",
+      ),
+    );
   });
-  page.dispose();
-  await retired.promise;
-  expect(previous.stopped).toBe(1);
-  expect(current()).not.toBe(previous);
-  expect(clients).toHaveLength(2);
-});
-
-it("shows a failed subscription and recovers through the rendered Retry action", async () => {
-  const { gateway: source, current } = activityGateway();
-  const pending = createDeferred<{ key: string }>();
-  current().request.mockImplementation(async (method, params) =>
-    method === "sessions.messages.subscribe"
-      ? pending.promise
-      : method === "sessions.list"
-        ? activityRoster([{ key: "main", kind: "direct", hasActiveRun: true }])
-        : activityResponse(method, params),
-  );
-  const page = createActivityPage(activityContext(source), activityRoute("?view=live"));
-  await syncActivityRoster(page);
-  flush();
-  const sessions = activityContext(source).sessions;
-  const observer = sessions.subscribeMessages("main");
-
-  pending.reject(new Error("Activity subscription unavailable"));
-  await expect(observer).rejects.toThrow("Activity subscription unavailable");
-  flush();
-
-  const alert = page.query('[role="alert"]');
-  expect(alert?.textContent).toContain("Activity subscription unavailable");
-  const retry = alert?.querySelector("button");
-  expect(retry?.textContent?.trim()).toBe("Retry");
-  current().request.mockImplementation(activityResponse);
-  retry?.click();
-  const recovered = await sessions.subscribeMessages("main");
-  current().opts.onEvent?.(toolEvent("recovered"));
-  flush();
-
-  expect(page.query('[role="alert"]')).toBeNull();
-  expect(page.container.textContent).toContain("recovered output");
-  await sessions.unsubscribeMessages(recovered);
-});
-
-it("renders the safe-only inspection response through its route", async () => {
-  const result = unavailableInspection();
-  const request = vi.fn(async () => result);
-  const page = inspectPage(request);
-  await waitForSolid(() =>
-    expect(page.text(".run-inspector__result-state")).toContain("run_not_found"),
-  );
-  expect(request).toHaveBeenCalledWith(
-    "audit.run.inspect",
-    { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
-    { signal: expect.any(AbortSignal) },
-  );
-});
-
-it("retires a run inspector when route data disappears and excludes its late response", async () => {
-  const result = unavailableInspection();
-  const pending = createDeferred<AuditRunInspectResult>();
-  const request = vi.fn(
-    (_method: string, _params: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
-  );
-  const page = inspectPage(request);
-  onTestFinished(async () => {
-    pending.resolve(result);
-    await pending.promise;
-    flush();
-  });
-  expect(request).toHaveBeenCalledExactlyOnceWith(
-    "audit.run.inspect",
-    { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
-    { signal: expect.any(AbortSignal) },
-  );
-  const signal = request.mock.calls[0]?.[2]?.signal;
-  expect(signal?.aborted).toBe(false);
-  expect(page.query(".run-inspector__panel")).not.toBeNull();
-
-  page.setRouteLocation(undefined);
-
-  expect(signal?.aborted).toBe(true);
-  expect(page.query(".run-inspector")).toBeNull();
-  pending.resolve(result);
-  await pending.promise;
-  flush();
-  expect(page.query(".run-inspector")).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-});
-
-it.each([
-  [
-    new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "decision cursor is no longer retained",
-    }),
-    "Restart inspection",
-  ],
-  [
-    new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "gateway unavailable" }),
-    "Retry inspection",
-  ],
-] as const)("classifies a %s cursor failure", async (error, recovery) => {
-  const page = inspectPage(
-    vi.fn(() => Promise.reject(error)),
-    "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
-  );
-  await waitForSolid(() => expect(page.text('[role="alert"] button')).toBe(recovery));
 });

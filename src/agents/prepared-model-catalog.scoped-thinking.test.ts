@@ -31,6 +31,7 @@ const releaseSnapshotMock = vi.fn();
 const augmentCatalogMock =
   vi.fn<(params: { snapshot: ModelCatalogSnapshot }) => Promise<ModelCatalogSnapshot>>();
 
+// mock-isolation: Keep harness discovery behind the controlled catalog fixture.
 vi.mock("./harness/model-catalog.js", () => ({
   augmentModelCatalogWithAgentHarness: (params: { snapshot: ModelCatalogSnapshot }) =>
     augmentCatalogMock(params),

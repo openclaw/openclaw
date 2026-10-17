@@ -24,6 +24,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
 }));
 
+// mock-isolation: Use fixed agent directories without ambient workspace discovery.
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => mocks.agentIds,
   resolveAgentDir: (_config: object, agentId: string, env?: NodeJS.ProcessEnv) =>
@@ -38,6 +39,7 @@ vi.mock("./agent-scope.js", () => ({
   tryResolveLegacyCompatibilityAgentId: () => "main",
 }));
 
+// mock-isolation: Control runtime leases and publication without starting catalog owners.
 vi.mock("./prepared-model-runtime.js", async () => {
   const { PreparedModelRuntimeOwnerNotPublishedError } =
     await import("./prepared-model-runtime.errors.js");
@@ -62,10 +64,12 @@ vi.mock("./prepared-model-runtime.js", async () => {
   };
 });
 
+// mock-isolation: Control full-catalog classification independently of runtime discovery.
 vi.mock("./prepared-model-runtime.full-catalog.js", () => ({
   isPreparedModelCatalogFull: mocks.isFullCatalog,
 }));
 
+// mock-isolation: Supply scoped catalog results without provider discovery.
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
   prepareScopedReadOnlyModelCatalog: mocks.prepareScopedCatalog,
 }));
