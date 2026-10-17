@@ -40,8 +40,13 @@ const {
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 type Socket = Awaited<ReturnType<typeof connectReadyBridge>>;
+type Bridge = ReturnType<typeof createNativeBridge>;
 const sentOfType = (socket: Socket, type: string) =>
   parseSent(socket).filter((event) => event.type === type);
+const outputsForCall = (socket: Socket, callId: string) =>
+  sentOfType(socket, "conversation.item.create").filter(
+    (event) => (event.item as { call_id?: string } | undefined)?.call_id === callId,
+  );
 const toolItem = (overrides: Record<string, unknown> = {}) => ({
   id: "item_tool_1",
   type: "function_call",
@@ -57,9 +62,16 @@ const completedResponse = (output: unknown[]) => ({
 });
 const numberedCalls = (length: number) =>
   Array.from({ length }, (_, index) => toolItem({ id: `item_${index}`, call_id: `call_${index}` }));
-async function connectToolBridge(overrides: Parameters<typeof createNativeBridge>[0] = {}) {
-  const bridge = createNativeBridge({ onToolCall: vi.fn(), ...overrides });
-  return { bridge, socket: await connectReadyBridge(bridge) };
+const submitWorkingResult = (bridge: Bridge) =>
+  bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+const submitDeliveredResult = (bridge: Bridge, callId = "call_1") =>
+  bridge.submitToolResult(callId, { status: "already_delivered" }, { suppressResponse: true });
+async function connectToolBridge({
+  onToolCall = vi.fn(),
+  ...overrides
+}: Parameters<typeof createNativeBridge>[0] = {}) {
+  const bridge = createNativeBridge({ onToolCall, ...overrides });
+  return { bridge, socket: await connectReadyBridge(bridge), onToolCall };
 }
 
 describe("OpenAI realtime voice bridge tools", () => {
@@ -67,8 +79,7 @@ describe("OpenAI realtime voice bridge tools", () => {
   afterEach(restoreTestEnvironment);
 
   it("executes tool calls only from successful response output", async () => {
-    const onToolCall = vi.fn();
-    const { socket } = await connectToolBridge({ onToolCall });
+    const { socket, onToolCall } = await connectToolBridge();
 
     emitServerEvent(socket, {
       type: "response.function_call_arguments.delta",
@@ -112,8 +123,7 @@ describe("OpenAI realtime voice bridge tools", () => {
   });
 
   it("ignores malformed and unfinished response output items", async () => {
-    const onToolCall = vi.fn();
-    const { socket } = await connectToolBridge({ onToolCall });
+    const { socket, onToolCall } = await connectToolBridge();
 
     emitServerEvent(
       socket,
@@ -132,8 +142,7 @@ describe("OpenAI realtime voice bridge tools", () => {
   });
 
   it("uses terminal response arguments for the shipped empty argument contract", async () => {
-    const onToolCall = vi.fn();
-    const { socket } = await connectToolBridge({ onToolCall });
+    const { socket, onToolCall } = await connectToolBridge();
 
     emitServerEvent(socket, completedResponse([toolItem({ arguments: "" })]));
 
@@ -150,10 +159,9 @@ describe("OpenAI realtime voice bridge tools", () => {
     { name: "JSON null", arguments: "null", reason: "non-object-json" },
     { name: "non-string arguments", arguments: { city: "Paris" }, reason: "invalid-json-type" },
   ])("rejects $name per call without ending the session", async ({ arguments: args, reason }) => {
-    const onToolCall = vi.fn();
     const onError = vi.fn();
     const onEvent = vi.fn();
-    const { socket } = await connectToolBridge({ onToolCall, onError, onEvent });
+    const { socket, onToolCall } = await connectToolBridge({ onError, onEvent });
     const completed = completedResponse([toolItem({ arguments: args })]);
 
     emitServerEvent(socket, { type: "response.created", response: { id: "response_1" } });
@@ -168,36 +176,26 @@ describe("OpenAI realtime voice bridge tools", () => {
       detail: `reason=${reason}`,
       itemId: "item_tool_1",
     });
-    expect(
-      sentOfType(socket, "conversation.item.create").filter(
-        (event) => (event.item as { call_id?: string } | undefined)?.call_id === "call_1",
-      ),
-    ).toHaveLength(1);
+    expect(outputsForCall(socket, "call_1")).toHaveLength(1);
   });
 
   it("rejects 256001-byte multibyte UTF-8 arguments", async () => {
-    const onToolCall = vi.fn();
     const onError = vi.fn();
-    const { socket } = await connectToolBridge({ onToolCall, onError });
+    const { socket, onToolCall } = await connectToolBridge({ onError });
     const rawArgs = `{"x":"${"é".repeat(127_996)}a"}`;
     expect(Buffer.byteLength(rawArgs, "utf8")).toBe(256_001);
 
     emitServerEvent(socket, completedResponse([toolItem({ arguments: rawArgs })]));
 
     expect(onToolCall).toHaveBeenCalledTimes(0);
-    expect(
-      sentOfType(socket, "conversation.item.create").some(
-        (event) => (event.item as { call_id?: string } | undefined)?.call_id === "call_1",
-      ),
-    ).toBe(true);
+    expect(outputsForCall(socket, "call_1")).not.toHaveLength(0);
     expect(onError).not.toHaveBeenCalled();
   });
 
   it("ends an extreme session before terminal tool-call ids become unbounded", async () => {
-    const onToolCall = vi.fn();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const { bridge, socket } = await connectToolBridge({ onToolCall, onError, onClose });
+    const { bridge, socket, onToolCall } = await connectToolBridge({ onError, onClose });
 
     emitServerEvent(socket, completedResponse(numberedCalls(1_025)));
 
@@ -250,11 +248,7 @@ describe("OpenAI realtime voice bridge tools", () => {
     const { bridge, socket } = await connectToolBridge({ onEvent });
     emitCompletedToolCalls(socket);
 
-    const working = bridge.submitToolResult(
-      "call_1",
-      { status: "working" },
-      { willContinue: true },
-    );
+    const working = submitWorkingResult(bridge);
 
     expect(parseSent(socket).slice(-1)).toEqual([
       expectedFunctionOutput("call_1", { status: "working" }),
@@ -296,11 +290,7 @@ describe("OpenAI realtime voice bridge tools", () => {
     const { bridge, socket } = await connectToolBridge();
     emitCompletedToolCalls(socket);
 
-    const submission = bridge.submitToolResult(
-      "call_1",
-      { status: "already_delivered" },
-      { suppressResponse: true },
-    );
+    const submission = submitDeliveredResult(bridge);
 
     expect(parseSent(socket).slice(-1)).toEqual([
       expectedFunctionOutput("call_1", { status: "already_delivered" }),
@@ -333,11 +323,7 @@ describe("OpenAI realtime voice bridge tools", () => {
     emitCompletedToolCalls(socket, ["call_1", "call_2"]);
 
     const first = bridge.submitToolResult("call_1", { text: "first" });
-    const second = bridge.submitToolResult(
-      "call_2",
-      { status: "already_delivered" },
-      { suppressResponse: true },
-    );
+    const second = submitDeliveredResult(bridge, "call_2");
     emitFunctionOutputAdded(socket, "call_1");
     emitFunctionOutputAdded(socket, "call_2");
     await Promise.all([first, second]);
@@ -350,11 +336,7 @@ describe("OpenAI realtime voice bridge tools", () => {
     const { bridge, socket } = await connectToolBridge({ onError });
 
     emitCompletedToolCalls(socket);
-    const working = bridge.submitToolResult(
-      "call_1",
-      { status: "working" },
-      { willContinue: true },
-    );
+    const working = submitWorkingResult(bridge);
     emitFunctionOutputAdded(socket, "call_1");
     await working;
     bridge.sendUserMessage?.("queue after tool result");

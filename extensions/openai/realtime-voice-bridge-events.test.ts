@@ -74,6 +74,15 @@ async function connectBridge(overrides: Parameters<typeof createNativeBridge>[0]
   const bridge = createNativeBridge(overrides);
   return { bridge, socket: await connectReadyBridge(bridge) };
 }
+function playbackSink(...items: [string, number][]) {
+  let playback = items.map(([itemId, audioEndMs]) => ({ itemId, audioEndMs }));
+  return {
+    getPlaybackState: () => playback,
+    onClearAudio: vi.fn(() => {
+      playback = [];
+    }),
+  };
+}
 
 describe("OpenAI realtime voice bridge events", () => {
   it("acknowledges A playback after B starts without PCM", async () => {
@@ -122,17 +131,10 @@ describe("OpenAI realtime voice bridge events", () => {
   afterEach(restoreTestEnvironment);
 
   it("truncates audible and queued native items using sink progress", async () => {
-    let playback = [
-      { itemId: "audible", audioEndMs: 620 },
-      { itemId: "queued", audioEndMs: 0 },
-    ];
     const onAudio = vi.fn();
     const { bridge, socket } = await connectBridge({
       onAudio,
-      getPlaybackState: () => playback,
-      onClearAudio: () => {
-        playback = [];
-      },
+      ...playbackSink(["audible", 620], ["queued", 0]),
     });
     for (const itemId of ["audible", "queued"]) {
       created(socket, itemId);
@@ -149,17 +151,8 @@ describe("OpenAI realtime voice bridge events", () => {
 
   it("keeps the echo guard relative to playback across a short prefix (50 ms of continuation)", async () => {
     const continuationMs = 50;
-    let playback = [
-      { itemId: "prefix", audioEndMs: 200 },
-      { itemId: "continuation", audioEndMs: continuationMs },
-    ];
-    const onClearAudio = vi.fn(() => {
-      playback = [];
-    });
-    const { bridge, socket } = await connectBridge({
-      getPlaybackState: () => playback,
-      onClearAudio,
-    });
+    const sink = playbackSink(["prefix", 200], ["continuation", continuationMs]);
+    const { bridge, socket } = await connectBridge(sink);
     created(socket, "one-response");
     for (const [itemId, bytes] of [
       ["prefix", 1_600],
@@ -168,7 +161,7 @@ describe("OpenAI realtime voice bridge events", () => {
       emitServerEvent(socket, audioDelta(itemId, bytes, "one-response"));
     }
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
-    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(sink.onClearAudio).toHaveBeenCalledTimes(1);
     expect(sentOfType(socket, "response.cancel")).toHaveLength(1);
     expectTruncations(socket, ["prefix", 200], ["continuation", continuationMs]);
     await bridge.close();
@@ -229,17 +222,10 @@ describe("OpenAI realtime voice bridge events", () => {
   });
 
   it("interrupts each playback item once when the response.cancel observer repeats control", async () => {
-    let playback = [
-      { itemId: "audible", audioEndMs: 620 },
-      { itemId: "queued", audioEndMs: 0 },
-    ];
+    const sink = playbackSink(["audible", 620], ["queued", 0]);
     let repeated = false;
-    const onClearAudio = vi.fn(() => {
-      playback = [];
-    });
     const { bridge, socket } = await connectBridge({
-      getPlaybackState: () => playback,
-      onClearAudio,
+      ...sink,
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "response.cancel" && !repeated) {
           repeated = true;
@@ -251,14 +237,13 @@ describe("OpenAI realtime voice bridge events", () => {
     bridge.handleBargeIn?.({ force: true });
     expect(sentOfType(socket, "response.cancel")).toHaveLength(1);
     expectTruncations(socket, ["audible", 620], ["queued", 0]);
-    expect(onClearAudio).toHaveBeenCalledOnce();
+    expect(sink.onClearAudio).toHaveBeenCalledOnce();
     await bridge.close();
   });
 
   it.each(["cancel", "close"])(
     "does not publish marks or late PCM after an audio callback requests %s",
     async (action) => {
-      let playback = [{ itemId: "current", audioEndMs: 0 }];
       const onMark = vi.fn();
       const onAudio = vi.fn(() => {
         if (action === "close") {
@@ -270,10 +255,7 @@ describe("OpenAI realtime voice bridge events", () => {
       const { bridge, socket } = await connectBridge({
         onAudio,
         onMark,
-        getPlaybackState: () => playback,
-        onClearAudio: () => {
-          playback = [];
-        },
+        ...playbackSink(["current", 0]),
       });
       created(socket, "current");
       const audio = audioDelta("current");

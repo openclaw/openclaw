@@ -36,47 +36,24 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
 });
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
-const {
-  createNativeBridge,
-  requireSocket,
-  beginBridgeConnection,
-  openSocket,
-  emitServerEvent,
-  createJsonResponse,
-  requireRecord,
-  requireNestedRecord,
-  expectRecordFields,
-  firstMockCall,
-  requireFetchRequest,
-  requireFetchInit,
-  requireFetchHeaders,
-  requireFetchJsonBody,
-  createTestJwt,
-  resetTestState,
-  restoreTestEnvironment,
-  mockRealtimeClientSecretResponse,
-  rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
-  createQuicksilverBrowserBrokerFixture,
-} = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
+const rt = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice browser authentication", () => {
   let provider: ReturnType<typeof buildOpenAIRealtimeVoiceProvider>;
   beforeEach(() => {
-    resetTestState();
+    rt.resetTestState();
     provider = buildOpenAIRealtimeVoiceProvider();
   });
-  afterEach(restoreTestEnvironment);
+  afterEach(rt.restoreTestEnvironment);
 
-  function browserSession(
-    request: Parameters<NonNullable<typeof provider.createBrowserSession>>[0],
-  ) {
+  function browserSession(req: Parameters<NonNullable<typeof provider.createBrowserSession>>[0]) {
     if (!provider.createBrowserSession) {
       throw new Error("expected OpenAI realtime provider to support browser sessions");
     }
-    return provider.createBrowserSession(request);
+    return provider.createBrowserSession(req);
   }
 
-  function authBridge(overrides: Parameters<typeof createNativeBridge>[0] = {}) {
+  function authBridge(overrides: Parameters<typeof rt.createNativeBridge>[0] = {}) {
     return provider.createBridge({
       providerConfig: {},
       onAudio: vi.fn(),
@@ -96,9 +73,9 @@ describe("OpenAI realtime voice browser authentication", () => {
 
     const connecting = bridge.connect();
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const socket = requireSocket();
-    openSocket(socket);
-    emitServerEvent(socket, { type: "session.updated" });
+    const socket = rt.requireSocket();
+    rt.openSocket(socket);
+    rt.emitServerEvent(socket, { type: "session.updated" });
     await connecting;
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
@@ -131,14 +108,13 @@ describe("OpenAI realtime voice browser authentication", () => {
 
   it("returns browser-safe OpenClaw attribution headers for native WebRTC offers", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    mockRealtimeClientSecretResponse({ expiresAt: 1_765_000_000 });
+    rt.mockRealtimeClientSecretResponse({ expiresAt: 1_765_000_000 });
     const session = await browserSession({
       providerConfig: { apiKey: "test-api-key-test" },
-      instructions: "Be concise.",
       voice: " Marin ",
     });
 
-    expectRecordFields(requireFetchRequest(), "fetch request", {
+    rt.expectRecordFields(rt.requireFetchRequest(), "fetch request", {
       url: "https://api.openai.com/v1/realtime/client_secrets",
       policy: {
         allowRfc2544BenchmarkRange: true,
@@ -146,17 +122,17 @@ describe("OpenAI realtime voice browser authentication", () => {
         hostnameAllowlist: ["api.openai.com"],
       },
     });
-    expectRecordFields(requireFetchInit(), "fetch init", { method: "POST" });
-    expectRecordFields(requireFetchHeaders(), "fetch headers", {
+    rt.expectRecordFields(rt.requireFetchInit(), "fetch init", { method: "POST" });
+    expect(rt.requireFetchHeaders()).toMatchObject({
       Authorization: "Bearer test-api-key-test",
       "Content-Type": "application/json",
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
-    const bodySession = requireRecord(requireFetchJsonBody().session, "fetch session");
+    const bodySession = rt.requireRecord(rt.requireFetchJsonBody().session, "fetch session");
     expect(bodySession.model).toBe("gpt-realtime-2.1");
-    expect(requireNestedRecord(bodySession, ["audio", "input"])).toEqual({
+    expect(rt.requireNestedRecord(bodySession, ["audio", "input"])).toEqual({
       noise_reduction: { type: "near_field" },
       turn_detection: {
         type: "server_vad",
@@ -165,9 +141,9 @@ describe("OpenAI realtime voice browser authentication", () => {
       },
       transcription: { model: "gpt-4o-mini-transcribe" },
     });
-    expect(requireNestedRecord(bodySession, ["audio", "output"])).toEqual({ voice: "marin" });
+    expect(rt.requireNestedRecord(bodySession, ["audio", "output"])).toEqual({ voice: "marin" });
     expect(bodySession).not.toHaveProperty("temperature");
-    expectRecordFields(session, "browser session", {
+    rt.expectRecordFields(session, "browser session", {
       provider: "openai",
       transport: "webrtc",
       clientSecret: "client-secret-123",
@@ -182,7 +158,7 @@ describe("OpenAI realtime voice browser authentication", () => {
 
   it("explains auth precedence when the selected API key is rejected", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse(
+      response: rt.createJsonResponse(
         { error: { message: "Incorrect API key provided: test-api-key-proj-***" } },
         { status: 401 },
       ),
@@ -195,53 +171,37 @@ describe("OpenAI realtime voice browser authentication", () => {
     );
   });
 
-  it("resolves keychain OPENAI_API_KEY refs before creating browser sessions", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_BROWSER_TEST");
-    execFileSyncMock.mockReturnValueOnce("test-api-key-browser-env\n");
-    mockRealtimeClientSecretResponse();
-    await browserSession({
-      providerConfig: {},
-      instructions: "Be concise.",
-    });
-
-    const [securityBinary, securityArgs, securityOptions] = firstMockCall(
-      execFileSyncMock,
-      "security keychain lookup",
-    );
-    expect([securityBinary, securityArgs]).toEqual([
-      "/usr/bin/security",
-      ["find-generic-password", "-s", "openclaw", "-a", "OPENAI_REALTIME_BROWSER_TEST", "-w"],
-    ]);
-    expectRecordFields(securityOptions, "security command options", {
-      encoding: "utf8",
-      timeout: 5000,
-    });
-    expectRecordFields(requireFetchHeaders(), "fetch headers", {
-      Authorization: "Bearer test-api-key-browser-env",
-    });
-  });
-
-  it("resolves and caches keychain OPENAI_API_KEY refs before creating bridges", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_BRIDGE_TEST");
-    execFileSyncMock.mockReturnValue("test-api-key-bridge-env\n");
-    const first = authBridge();
-    const second = authBridge();
-    void first.connect();
-    void second.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
-    await first.close();
-    await second.close();
-
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    for (const socket of FakeWebSocket.instances) {
-      expect(socket.args[1]).toMatchObject({
-        headers: { Authorization: "Bearer test-api-key-bridge-env" },
-      });
+  it.each(["browser", "bridge"])("resolves keychain refs for %s sessions", async (surface) => {
+    const account = `OPENAI_REALTIME_${surface.toUpperCase()}_TEST`;
+    const key = `test-api-key-${surface}-env`;
+    vi.stubEnv("OPENAI_API_KEY", `keychain:openclaw:${account}`);
+    execFileSyncMock.mockReturnValueOnce(`${key}\n`);
+    if (surface === "browser") {
+      rt.mockRealtimeClientSecretResponse();
+      await browserSession({ providerConfig: {} });
+      expect(rt.requireFetchHeaders()).toMatchObject({ Authorization: `Bearer ${key}` });
+    } else {
+      const [first, second] = [authBridge(), authBridge()];
+      void first.connect();
+      void second.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+      await first.close();
+      await second.close();
+      for (const socket of FakeWebSocket.instances) {
+        expect(socket.args[1]).toMatchObject({ headers: { Authorization: `Bearer ${key}` } });
+      }
     }
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    const [binary, args, options] = rt.firstMockCall(execFileSyncMock, "security keychain lookup");
+    expect([binary, args]).toEqual([
+      "/usr/bin/security",
+      ["find-generic-password", "-s", "openclaw", "-a", account, "-w"],
+    ]);
+    expect(options).toMatchObject({ encoding: "utf8", timeout: 5000 });
   });
 
   it("does not use GA OAuth fallback when a Platform credential source is unresolved", async () => {
-    const oauthToken = createTestJwt({
+    const oauthToken = rt.createTestJwt({
       "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
     });
     resolveProviderAuthProfileApiKeyMock.mockImplementation(
@@ -252,7 +212,7 @@ describe("OpenAI realtime voice browser authentication", () => {
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("api_key") === true,
     );
-    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
+    const { broker, createBrowserSession } = rt.createQuicksilverBrowserBrokerFixture();
     provider = buildOpenAIRealtimeVoiceProvider({ quicksilverBrowserSessionBroker: broker });
 
     await expect(
@@ -261,9 +221,7 @@ describe("OpenAI realtime voice browser authentication", () => {
         providerConfig: {},
         model: "gpt-realtime-2.1",
         agentId: "main",
-        workspaceDir: "/tmp/openclaw-agent-workspace",
-        initialItems: [],
-      } as never),
+      }),
     ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
     expect(createBrowserSession).not.toHaveBeenCalled();
     expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
@@ -272,11 +230,9 @@ describe("OpenAI realtime voice browser authentication", () => {
   });
 
   it("does not configure Azure realtime sessions without a Platform API key", async () => {
-    const cfg = { agents: { defaults: {} } } as never;
-
     expect(
       await provider.isConfiguredAsync?.({
-        cfg,
+        cfg: { agents: { defaults: {} } } as never,
         providerConfig: {
           azureEndpoint: "https://example.openai.azure.com",
           azureDeployment: "realtime",
@@ -290,7 +246,6 @@ describe("OpenAI realtime voice browser authentication", () => {
       browserSession({
         cfg: { agents: { defaults: {} } } as never,
         providerConfig: {},
-        instructions: "Be concise.",
       }),
     ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -313,18 +268,18 @@ describe("OpenAI realtime voice browser authentication", () => {
   it("treats pre-ready auth errors as a single startup failure", async () => {
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = createNativeBridge({ onError, onClose });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const bridge = rt.createNativeBridge({ onError, onClose });
+    const { connecting, socket } = rt.beginBridgeConnection(bridge);
 
-    openSocket(socket);
+    rt.openSocket(socket);
     const authError = {
       type: "error",
       error: { message: "Incorrect API key provided: test-api-key-proj-***" },
     };
-    emitServerEvent(socket, authError);
-    emitServerEvent(socket, authError);
+    rt.emitServerEvent(socket, authError);
+    rt.emitServerEvent(socket, authError);
 
-    await expect(connecting).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
+    await expect(connecting).rejects.toThrow(rt.rejectedKeyMessage);
     expect(onError).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(socket.closed).toBe(true);
@@ -332,34 +287,25 @@ describe("OpenAI realtime voice browser authentication", () => {
   });
 
   it.each([
-    ["structured direct", "structured", undefined, OPENAI_REALTIME_REJECTED_KEY_MESSAGE],
-    ["direct handshake", "handshake", undefined, OPENAI_REALTIME_REJECTED_KEY_MESSAGE],
+    ["structured", undefined],
+    ["handshake", undefined],
     [
-      "Azure handshake",
       "handshake",
       {
-        apiKey: "test-api-key-test",
         azureEndpoint: "https://example.openai.azure.com",
         azureDeployment: "realtime-prod",
       },
-      "Unexpected server response: 401",
     ],
-    [
-      "custom-endpoint handshake",
-      "handshake",
-      {
-        apiKey: "test-api-key-test",
-        azureEndpoint: "https://realtime-proxy.example.com",
-      },
-      "Unexpected server response: 401",
-    ],
-  ] as const)("handles %s errors", async (_name, event, providerConfig, expectedMessage) => {
-    const bridge = createNativeBridge(providerConfig ? { providerConfig } : {});
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    ["handshake", { azureEndpoint: "https://realtime-proxy.example.com" }],
+  ] as const)("handles %s errors for endpoint %j", async (event, endpoint) => {
+    const bridge = rt.createNativeBridge({
+      providerConfig: { apiKey: "test-api-key-test", ...endpoint },
+    });
+    const { connecting, socket } = rt.beginBridgeConnection(bridge);
 
     if (event === "structured") {
-      openSocket(socket);
-      emitServerEvent(socket, {
+      rt.openSocket(socket);
+      rt.emitServerEvent(socket, {
         type: "error",
         error: {
           type: "invalid_request_error",
@@ -371,7 +317,9 @@ describe("OpenAI realtime voice browser authentication", () => {
       socket.emit("error", new Error("Unexpected server response: 401"));
     }
 
-    await expect(connecting).rejects.toThrow(expectedMessage);
+    await expect(connecting).rejects.toThrow(
+      endpoint ? "Unexpected server response: 401" : rt.rejectedKeyMessage,
+    );
     expect(bridge.isConnected()).toBe(false);
   });
 });

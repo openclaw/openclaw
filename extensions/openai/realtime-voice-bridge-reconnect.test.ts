@@ -43,6 +43,7 @@ const {
   emitSessionUpdated,
   emitCompletedToolCalls,
   emitFunctionOutputAdded,
+  expectedFunctionOutput,
   connectReadyBridge,
   resetTestState,
   restoreTestEnvironment,
@@ -61,14 +62,16 @@ function expectLifecycle(type: string, detail: string, direction = "client") {
   expect(onEvent).toHaveBeenCalledWith({ direction, type, detail });
 }
 
+function expectNoEvent(type: string) {
+  expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type }));
+}
+
 function dropSocket(socket: Socket, reason = "transient drop") {
   socket.readyState = FakeWebSocket.CLOSED;
   socket.emit("close", 1006, Buffer.from(reason));
 }
 
-async function openRetry(socket: Socket) {
-  dropSocket(socket);
-  await vi.advanceTimersByTimeAsync(1000);
+function openRetry() {
   const retrySocket = requireSocket(1);
   openSocket(retrySocket);
   return retrySocket;
@@ -148,9 +151,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     await reconnecting;
 
     expect(onReady).toHaveBeenCalledTimes(2);
-    expect(onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.rotation.ready" }),
-    );
+    expectNoEvent("session.rotation.ready");
     expect(onError).not.toHaveBeenCalled();
 
     dropSocket(secondSocket, "ordinary drop");
@@ -171,40 +172,36 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(onClose).toHaveBeenLastCalledWith("completed");
   });
 
-  it("does not report reconnect readiness after cancellation during provider setup", async () => {
+  it.each([
+    ["does not report reconnect readiness after cancellation during provider setup", false],
+    ["lets cancellation win a queued reconnect startup error", true],
+  ] as const)("%s", async (_name, startupError) => {
     vi.useFakeTimers();
-    const bridge = createNativeBridge({ onClose, onError, onEvent });
-    const socket = await connectReadyBridge(bridge);
-
-    await openRetry(socket);
-
-    void bridge.close();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.reconnect.ready" }),
-    );
-    expect(onError).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
-  });
-
-  it("lets cancellation win a queued reconnect startup error", async () => {
-    vi.useFakeTimers();
-    const bridge = createNativeBridge({ onClose, onError });
-    const socket = await connectReadyBridge(bridge);
-
-    const retrySocket = await openRetry(socket);
-    emitServerEvent(retrySocket, {
-      type: "error",
-      error: { message: "queued retry startup failure" },
+    const bridge = createNativeBridge({
+      onClose,
+      onError,
+      onEvent: startupError ? undefined : onEvent,
     });
-
+    const socket = await connectReadyBridge(bridge);
+    dropSocket(socket);
+    await vi.advanceTimersByTimeAsync(1000);
+    const retrySocket = openRetry();
+    if (startupError) {
+      emitServerEvent(retrySocket, {
+        type: "error",
+        error: { message: "queued retry startup failure" },
+      });
+    }
     void bridge.close();
     await vi.advanceTimersByTimeAsync(0);
-
+    if (!startupError) {
+      expectNoEvent("session.reconnect.ready");
+    }
     expect(onError).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
-    expect(vi.getTimerCount()).toBe(0);
+    if (startupError) {
+      expect(vi.getTimerCount()).toBe(0);
+    }
   });
 
   it("reports one terminal error for malformed audio during reconnect setup", async () => {
@@ -212,7 +209,9 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const bridge = createNativeBridge({ onClose, onError, onEvent });
     const socket = await connectReadyBridge(bridge);
 
-    const retrySocket = await openRetry(socket);
+    dropSocket(socket);
+    await vi.advanceTimersByTimeAsync(1000);
+    const retrySocket = openRetry();
     emitServerEvent(retrySocket, {
       type: "response.output_audio.delta",
       item_id: "item_1",
@@ -224,9 +223,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
       new Error("OpenAI realtime stream returned malformed base64 audio data"),
     );
     expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
-    expect(onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.reconnect.ready" }),
-    );
+    expectNoEvent("session.reconnect.ready");
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -357,13 +354,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
 
     expect(onToolCall).toHaveBeenCalledTimes(2);
     expect(
-      parseSent(reconnectedSocket)
-        .filter(
-          (event) =>
-            event.type === "conversation.item.create" &&
-            (event.item as { call_id?: string } | undefined)?.call_id === "call_reused",
-        )
-        .map((event) => (event.item as { output?: string } | undefined)?.output),
-    ).toEqual([JSON.stringify({ text: "fresh" })]);
+      parseSent(reconnectedSocket).filter((event) => event.type === "conversation.item.create"),
+    ).toEqual([expectedFunctionOutput("call_reused", { text: "fresh" })]);
   });
 });

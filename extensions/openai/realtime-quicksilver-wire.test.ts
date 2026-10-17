@@ -28,38 +28,38 @@ function createCall(
   );
 }
 
-describe("GPT-Live session history", () => {
-  it.each([{ name: "UTF-8 without splitting emoji", text: "🦞".repeat(1_000), retained: 2 }])(
-    "bounds shared background including $name",
-    ({ text, retained }) => {
-      const initialItems = Array.from({ length: 20 }, (_, index) => ({
-        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-        text: `${index}:${text}`,
-      }));
-      const params = {
-        model: "gpt-live-test",
-        instructions: "Keep it brief.",
-        hostControlsInput: true,
-      };
-      const empty = buildOpenAIQuicksilverSession(params);
-      const session = buildOpenAIQuicksilverSession({ ...params, initialItems });
-      const background = session.instructions.slice(empty.instructions.length);
-      const records = background.match(
-        /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
-      )?.[1];
-      expect(records).toBeDefined();
-      expect(JSON.parse(records!)).toEqual(
-        initialItems.slice(-retained).map((item) => ({
-          role: item.role,
-          text: Array.from(item.text).slice(0, 800).join(""),
-        })),
-      );
-      expect(records).not.toContain("</shared_session_history>");
-      expect(Buffer.byteLength(background, "utf8")).toBeLessThanOrEqual(8_000);
-      expect(session).not.toHaveProperty("initial_items");
-      expect(buildOpenAIQuicksilverSession({ ...params, initialItems: [] })).toEqual(empty);
-    },
+function respond(body: string, init: ResponseInit) {
+  return vi.fn<typeof fetch>(async () => new Response(body, init));
+}
+
+it("bounds shared background UTF-8 without splitting emoji", () => {
+  const text = "🦞".repeat(1_000);
+  const initialItems = Array.from({ length: 20 }, (_, index) => ({
+    role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+    text: `${index}:${text}`,
+  }));
+  const params = {
+    model: "gpt-live-test",
+    instructions: "Keep it brief.",
+    hostControlsInput: true,
+  };
+  const empty = buildOpenAIQuicksilverSession(params);
+  const session = buildOpenAIQuicksilverSession({ ...params, initialItems });
+  const background = session.instructions.slice(empty.instructions.length);
+  const records = background.match(
+    /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
+  )?.[1];
+  expect(records).toBeDefined();
+  expect(JSON.parse(records!)).toEqual(
+    initialItems.slice(-2).map((item) => ({
+      role: item.role,
+      text: Array.from(item.text).slice(0, 800).join(""),
+    })),
   );
+  expect(records).not.toContain("</shared_session_history>");
+  expect(Buffer.byteLength(background, "utf8")).toBeLessThanOrEqual(8_000);
+  expect(session).not.toHaveProperty("initial_items");
+  expect(buildOpenAIQuicksilverSession({ ...params, initialItems: [] })).toEqual(empty);
 });
 
 describe("Realtime call creation", () => {
@@ -86,16 +86,14 @@ describe("Realtime call creation", () => {
         "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.",
     },
   ])("maps $name", async ({ status, body, message }) => {
-    const promise = createCall(vi.fn<typeof fetch>(async () => new Response(body, { status })));
+    const promise = createCall(respond(body, { status }));
     await expect(promise).rejects.toMatchObject({ message });
   });
 
   it("omits private provider detail from call creation errors", async () => {
     const model = "gpt-live-test-canary";
     const sensitiveDetail = "sensitive-route sensitive-session sensitive-transcript";
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () => new Response(`provider rejected ${model} ${sensitiveDetail}`, { status: 422 }),
-    );
+    const fetchImpl = respond(`provider rejected ${model} ${sensitiveDetail}`, { status: 422 });
     const promise = createCall(fetchImpl, { model });
 
     await expect(promise).rejects.toMatchObject({
@@ -125,40 +123,29 @@ describe("Realtime call creation", () => {
     { location: "http://[invalid", callId: "rtc_malformed_location_fallback" },
     { location: "/v1/live/not-a-call", callId: "rtc_invalid_path_fallback" },
   ])("falls back to openai-session-id for Location $location", async ({ location, callId }) => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response("v=answer\r\n", {
-          status: 201,
-          headers: {
-            Location: location,
-            "openai-session-id": callId,
-          },
-        }),
-    );
+    const fetchImpl = respond("v=answer\r\n", {
+      status: 201,
+      headers: {
+        Location: location,
+        "openai-session-id": callId,
+      },
+    });
 
     await expect(createCall(fetchImpl, { oauth: true })).resolves.toMatchObject({ callId });
   });
 
   it("rejects an empty SDP answer", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response("", {
-          status: 201,
-          headers: { Location: "/v1/live/rtc_empty_answer" },
-        }),
-    );
+    const fetchImpl = respond("", {
+      status: 201,
+      headers: { Location: "/v1/live/rtc_empty_answer" },
+    });
     await expect(createCall(fetchImpl, { oauth: true })).rejects.toMatchObject({
       message: "GPT-Live call creation returned an empty SDP answer",
     });
   });
 
   it("rejects an oversized streaming OpenAI Realtime SDP answer", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(`v=answer\r\n${"x".repeat(256 * 1024)}`, {
-          status: 201,
-        }),
-    );
+    const fetchImpl = respond(`v=answer\r\n${"x".repeat(256 * 1024)}`, { status: 201 });
 
     await expect(createCall(fetchImpl, { model: "gpt-realtime-2.1" })).rejects.toThrow(
       "OpenAI Realtime SDP answer: text response exceeds 262144 bytes",

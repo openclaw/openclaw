@@ -31,11 +31,8 @@ const {
 const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
 function projectionFixture(withBroker = false) {
-  const provider = buildOpenAIRealtimeVoiceProvider(
-    withBroker
-      ? { quicksilverBrowserSessionBroker: createQuicksilverBrowserBrokerFixture().broker }
-      : undefined,
-  );
+  const broker = withBroker ? createQuicksilverBrowserBrokerFixture().broker : undefined;
+  const provider = buildOpenAIRealtimeVoiceProvider({ quicksilverBrowserSessionBroker: broker });
   const api = readInternalRealtimeVoiceProviderApi(provider);
   return {
     provider,
@@ -48,8 +45,8 @@ function projectionFixture(withBroker = false) {
 }
 
 describe("OpenAI realtime public projection", () => {
-  beforeEach(() => resetTestState());
-  afterEach(() => restoreTestEnvironment());
+  beforeEach(resetTestState);
+  afterEach(restoreTestEnvironment);
 
   it("preserves native Talk for forced agent consult", () => {
     const config = { model: "gpt-live-1-codex", consultRouting: "force-agent-consult" };

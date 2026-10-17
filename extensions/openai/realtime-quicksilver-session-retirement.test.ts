@@ -97,10 +97,7 @@ describe("GA Realtime call retirement", () => {
     const nextLogger = { debug: vi.fn(), warn: vi.fn() };
     vi.stubGlobal(
       "fetch",
-      retirementFetch(
-        () => new Response(null, { status: 204 }),
-        () => callResponse("v=answer\r\n", "rtc_context"),
-      ),
+      retirementFetch(() => new Response(null, { status: 204 })),
     );
     const first = acquireBroker(
       { getConfig: originalConfig, logger: originalLogger },
@@ -318,16 +315,8 @@ describe("GA Realtime call retirement", () => {
     const retired = createDeferred<void>();
     const bridge = retirementBridge();
     vi.mocked(bridge.close).mockReturnValue(retired.promise);
-    const hangup = vi.fn();
-    const { realtime } = createBroker({
-      fetchImpl: retirementFetch(
-        () => {
-          hangup();
-          return new Response(null, { status: 204 });
-        },
-        () => callResponse("v=answer\r\n", "rtc_async_retirement"),
-      ),
-    });
+    const hangup = vi.fn(() => new Response(null, { status: 204 }));
+    const { realtime } = createBroker({ fetchImpl: retirementFetch(hangup) });
     try {
       const reservation = await reserveRetirementSession(realtime, () => bridge);
       await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
