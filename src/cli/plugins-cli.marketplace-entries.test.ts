@@ -357,7 +357,7 @@ describe("plugins marketplace list", () => {
       ok: true,
       sourceLabel: source,
       manifest: {
-        name: "Evil\u001b]0;pwned\u0007MKT_MARKER",
+        name: "Demo\u001b]0;INJECTED_TITLE\u0007MKT_MARKER",
         version: "1.0.0",
         plugins: [
           {
@@ -372,7 +372,7 @@ describe("plugins marketplace list", () => {
     await list(source, {});
 
     const raw = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(raw).not.toContain("Evil\u001b]0;pwned\u0007MKT_MARKER");
+    expect(raw).not.toContain("Demo\u001b]0;INJECTED_TITLE\u0007MKT_MARKER");
     expect(raw).not.toContain("plug\u001b]0;x\u0007PLUGIN_MARKER");
     expect(raw).not.toContain("desc\u001b]0;y\u0007DESC_MARKER");
     expect(raw).not.toContain("\u0007");
