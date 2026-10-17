@@ -32,6 +32,7 @@ import * as agentDb from "../state/openclaw-agent-db.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -88,6 +89,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
     await cleanup();
   }
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
   await agentDb.closeOpenClawAgentDatabasesAsync();
   agentDb.closeOpenClawAgentDatabasesForTest();

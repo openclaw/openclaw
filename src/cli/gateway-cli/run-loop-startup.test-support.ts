@@ -186,6 +186,10 @@ export function registerGatewayStartupFailureTests(
         const onRestartStartupFailure = vi.fn(async (error: unknown) => {
           triageStarted.resolve();
           expect(error).toBe(startupError);
+          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
+            retainSharedState: true,
+            reason: "gateway startup failed",
+          });
           return cleanup === "unavailable"
             ? undefined
             : cleanup === "repair-failed"
@@ -205,10 +209,6 @@ export function registerGatewayStartupFailureTests(
           stop = captureSignal("SIGTERM");
           restart();
           await Promise.race([loopSettled, triageStarted.promise]);
-          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
-            retainSharedState: true,
-            reason: "gateway startup failed",
-          });
           if (cleanup === "clean") {
             expect(onRestartStartupFailure).toHaveBeenCalledOnce();
             expect(loopRejected).not.toHaveBeenCalled();

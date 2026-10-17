@@ -108,7 +108,10 @@ describe("WizardSession", () => {
         if (kind === "prepared") {
           owner.setPreparedModelRef(modelRef);
         } else {
-          owner.setModelActivation({ modelRef, modelTarget: "utility" });
+          owner.setModelActivation({
+            modelRef,
+            ...(kind === "utility" ? { modelTarget: "utility" as const } : {}),
+          });
         }
         await prompter.note("Finishing setup");
       });
@@ -121,7 +124,12 @@ describe("WizardSession", () => {
         status: "done",
         ...(kind === "prepared"
           ? { preparedModelRef: modelRef }
-          : { modelActivation: { modelRef, modelTarget: "utility" } }),
+          : {
+              modelActivation: {
+                modelRef,
+                ...(kind === "utility" ? { modelTarget: "utility" } : {}),
+              },
+            }),
       });
     },
   );
