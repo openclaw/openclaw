@@ -31,7 +31,7 @@ function renderFile(
 function renderMiddle(lines: string[], maxChars: number) {
   return renderFile(
     {
-      content: `# AGENTS.md\n\n${"A".repeat(9000)}\n\n${lines.join("\n")}\n${"B".repeat(7000)}\ntail marker`,
+      content: `# AGENTS.md\n\n${"A".repeat(9000)}\n\n${lines.join("\n")}\n\n${"B".repeat(7000)}\ntail marker`,
     },
     { maxChars },
   );
