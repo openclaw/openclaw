@@ -13,7 +13,8 @@ vi.mock("./accounts.js", () => ({
   resolveGoogleChatAccount,
 }));
 
-vi.mock("./api.js", () => ({
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 }));
@@ -160,6 +161,8 @@ describe("googlechat message actions", () => {
 
   it("edits with the selected account and the resolved DM space", async () => {
     const account = buildAccount({ accountId: "work" });
+    const assertDirectAdapterHandoff = vi.fn();
+    const onPlatformSendDispatch = vi.fn(async () => {});
     resolveGoogleChatAccount.mockReturnValue(account);
     resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
     updateGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg.1" });
@@ -170,14 +173,22 @@ describe("googlechat message actions", () => {
       params: { to: "users/123", messageId: "spaces/AAA/messages/msg.1", message: "  corrected" },
       cfg: {},
       accountId: "work",
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
     });
 
     expect(resolveGoogleChatAccount).toHaveBeenCalledWith({ cfg: {}, accountId: "work" });
-    expect(resolveGoogleChatOutboundSpace).toHaveBeenCalledWith({ account, target: "users/123" });
+    expect(resolveGoogleChatOutboundSpace).toHaveBeenCalledWith({
+      account,
+      target: "users/123",
+      assertDirectAdapterHandoff,
+    });
     expect(updateGoogleChatMessage).toHaveBeenCalledWith({
       account,
       messageName: "spaces/AAA/messages/msg.1",
       text: "  corrected",
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
     });
     expectJsonResult(result, {
       ok: true,

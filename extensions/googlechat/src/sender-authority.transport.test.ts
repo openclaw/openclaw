@@ -94,6 +94,18 @@ async function send(route: SendRoute, hooks: SendHooks, to = "spaces/AAA", accou
   });
 }
 
+async function edit(hooks: SendHooks, to = "spaces/AAA") {
+  const { googlechatPlugin } = await import("../api.js");
+  return await googlechatPlugin.actions!.handleAction!({
+    action: "edit",
+    channel: "googlechat",
+    cfg,
+    accountId: "default",
+    params: { to, messageId: "spaces/AAA/messages/existing", message: "corrected" },
+    ...hooks,
+  });
+}
+
 async function withChatServer(
   handleRequest: (request: ObservedRequest, response: ServerResponse) => void,
   run: (requests: ObservedRequest[]) => Promise<void>,
@@ -214,6 +226,118 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
       expect(requests).toEqual([]);
     });
   });
+
+  it("edit stops after an awaited DM lookup without marking preparation as dispatch", async () => {
+    const authority = createAuthority();
+    const lookup = createDeferred<ServerResponse>();
+    const dispatch = vi.fn(async () => {});
+    await withChatServer(
+      (request, response) => {
+        if (request.method === "GET") {
+          lookup.resolve(response);
+        } else {
+          respondWithMessage(request, response);
+        }
+      },
+      async (requests) => {
+        const editing = edit(
+          { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
+          "users/alice@example.test",
+        ).catch((error: unknown) => error);
+        const response = await lookup.promise;
+        expect(dispatch).not.toHaveBeenCalled();
+        authority.revoke();
+        response.end(JSON.stringify({ name: "spaces/AAA" }));
+        expect(await editing).toBe(authority.error);
+        expect(requests.map(({ method }) => method)).toEqual(["GET"]);
+        expect(dispatch).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("edit blocks PATCH after revocation during token acquisition", async () => {
+    const authority = createAuthority();
+    const tokenStarted = createDeferred<void>();
+    const token = createDeferred<string>();
+    const dispatch = vi.fn(async () => {});
+    transport.token.mockImplementationOnce(() => {
+      tokenStarted.resolve();
+      return token.promise;
+    });
+    await withChatServer(respondWithMessage, async (requests) => {
+      const editing = edit({
+        assertDirectAdapterHandoff: authority.assert,
+        onPlatformSendDispatch: dispatch,
+      }).catch((error: unknown) => error);
+      await tokenStarted.promise;
+      authority.revoke();
+      token.resolve("test-default");
+      expect(await editing).toBe(authority.error);
+      expect(requests).toEqual([]);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("edit rechecks authority after the asynchronous dispatch callback", async () => {
+    const authority = createAuthority();
+    const dispatch = vi.fn(async () => {
+      await Promise.resolve();
+      authority.revoke();
+    });
+    await withChatServer(respondWithMessage, async (requests) => {
+      const outcome = await edit({
+        assertDirectAdapterHandoff: authority.assert,
+        onPlatformSendDispatch: dispatch,
+      }).catch((error: unknown) => error);
+      expect(outcome).toBe(authority.error);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(requests).toEqual([]);
+    });
+  });
+
+  it("edit blocks a redirected PATCH after authority is revoked", async () => {
+    const authority = createAuthority();
+    await withChatServer(
+      (request, response) => {
+        authority.revoke();
+        response.writeHead(307, { Location: `${request.path}&redirected=true` });
+        response.end();
+      },
+      async (requests) => {
+        const outcome = await edit({ assertDirectAdapterHandoff: authority.assert }).catch(
+          (error: unknown) => error,
+        );
+        expect(outcome).toBe(authority.error);
+        expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+          { method: "PATCH", path: "/v1/spaces/AAA/messages/existing?updateMask=text" },
+        ]);
+      },
+    );
+  });
+
+  it.each([403, 404])(
+    "edit dispatch does not turn provider rejection %s into acceptance",
+    async (status) => {
+      const authority = createAuthority();
+      const dispatch = vi.fn(async () => {});
+      await withChatServer(
+        (_request, response) => {
+          response.writeHead(status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "Edit denied" } }));
+        },
+        async (requests) => {
+          await expect(
+            edit({
+              assertDirectAdapterHandoff: authority.assert,
+              onPlatformSendDispatch: dispatch,
+            }),
+          ).rejects.toThrow(`Google Chat API ${status}`);
+          expect(dispatch).toHaveBeenCalledOnce();
+          expect(requests.map(({ method }) => method)).toEqual(["PATCH"]);
+        },
+      );
+    },
+  );
 
   it("blocks a redirected POST with only the synchronous handoff callback", async () => {
     const authority = createAuthority();

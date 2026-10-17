@@ -1,8 +1,9 @@
 import { generateKeyPairSync } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createTestRegistry,
   setActivePluginRegistry,
@@ -17,6 +18,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 const loopback = vi.hoisted(() => ({ baseUrl: "", editStatus: 200 }));
 const requests = vi.hoisted(() => [] as Array<{ method: string; path: string; body: string }>);
+const heldResponse = vi.hoisted(() => ({
+  path: "",
+  resolve: undefined as ((response: ServerResponse) => void) | undefined,
+  response: undefined as ServerResponse | undefined,
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -53,8 +59,22 @@ const FOLDED_SPACE = "spaces/aaqa1bc2def";
 const SESSION_KEY = `agent:main:googlechat:group:${FOLDED_SPACE}`;
 
 let server: Server;
+let existingMessage = {
+  name: `${CANONICAL_SPACE}/messages/proof-1`,
+  text: "original text",
+  cardsV2: [{ cardId: "preserved-card", card: { header: { title: "Existing card" } } }],
+  attachment: [{ name: "media/existing", contentName: "existing.txt" }],
+};
 
-afterEach(clearRuntimeConfigSnapshot);
+afterEach(() => {
+  if (heldResponse.response && !heldResponse.response.writableEnded) {
+    heldResponse.response.destroy();
+  }
+  heldResponse.path = "";
+  heldResponse.resolve = undefined;
+  heldResponse.response = undefined;
+  clearRuntimeConfigSnapshot();
+});
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -64,6 +84,13 @@ beforeAll(async () => {
     });
     request.on("end", () => {
       const path = request.url ?? "";
+      if (path === heldResponse.path && heldResponse.resolve) {
+        const resolve = heldResponse.resolve;
+        heldResponse.resolve = undefined;
+        heldResponse.response = response;
+        resolve(response);
+        return;
+      }
       if (path === "/token") {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
@@ -81,6 +108,12 @@ beforeAll(async () => {
         body: Buffer.concat(chunks).toString("utf8"),
       });
       if (request.method === "PATCH") {
+        if (loopback.editStatus === 200 && path === `/v1/${existingMessage.name}?updateMask=text`) {
+          existingMessage = {
+            ...existingMessage,
+            text: (JSON.parse(Buffer.concat(chunks).toString("utf8")) as { text: string }).text,
+          };
+        }
         response.writeHead(loopback.editStatus, { "content-type": "application/json" });
         response.end(
           JSON.stringify(
@@ -92,6 +125,14 @@ beforeAll(async () => {
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
+      if (request.method === "GET" && path === `/v1/${existingMessage.name}`) {
+        response.end(JSON.stringify(existingMessage));
+        return;
+      }
+      if (path.startsWith("/v1/spaces:findDirectMessage?")) {
+        response.end(JSON.stringify({ name: CANONICAL_SPACE, spaceType: "DIRECT_MESSAGE" }));
+        return;
+      }
       if (request.method === "POST" && path.includes("/messages")) {
         const space = path.replace(/^\/v1\//, "").replace(/\/messages.*$/, "");
         response.end(JSON.stringify({ name: `${space}/messages/proof-1` }));
@@ -114,8 +155,100 @@ afterAll(async () => {
     server.close(() => {
       resolve();
     });
+    server.closeAllConnections();
   });
 });
+
+async function withAdmittedEdit(
+  label: string,
+  currentTarget: string,
+  run: (fixture: {
+    edit: (params?: {
+      target?: string;
+      messageId?: string;
+      accountId?: string;
+    }) => Promise<unknown>;
+    revoke: () => void;
+  }) => Promise<void>,
+) {
+  await withOpenClawTestState({ prefix: `googlechat-edit-${label}-` }, async (state) => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    });
+    const serviceAccount = (accountId: string) =>
+      JSON.stringify({
+        type: "service_account",
+        client_email: `${label}-${accountId}@example.iam.gserviceaccount.com`,
+        private_key: privateKey,
+      });
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      tools: { message: { crossContext: { allowWithinProvider: true } } },
+      channels: {
+        googlechat: {
+          accounts: {
+            default: { serviceAccount: serviceAccount("default") },
+            work: { serviceAccount: serviceAccount("work") },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "googlechat", source: "test", origin: "bundled", plugin: googlechatPlugin },
+      ]),
+    );
+    const runId = `googlechat-edit-${label}`;
+    const sessionKey = `agent:main:googlechat:${currentTarget}`;
+    const chatType = currentTarget.startsWith("users/") ? "direct" : "group";
+    const capability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId,
+      sessionKey,
+      sessionId: "proof-session",
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "googlechat",
+        currentChatType: chatType,
+        currentChannelId: currentTarget,
+      },
+    });
+    try {
+      const tool = createOpenClawCodingTools({
+        config,
+        agentId: "main",
+        agentAccountId: "default",
+        runId,
+        sessionKey,
+        sessionId: "proof-session",
+        messageProvider: "googlechat",
+        messageTo: currentTarget,
+        currentChannelId: currentTarget,
+        chatType,
+        messageActionTurnCapability: capability,
+        workspaceDir: state.workspaceDir,
+      }).find((entry) => entry.name === "message");
+      expect(tool).toBeDefined();
+      requests.length = 0;
+      await run({
+        edit: (params = {}) =>
+          tool!.execute("edit-authority-proof", {
+            action: "edit",
+            target: currentTarget,
+            messageId: `${CANONICAL_SPACE}/messages/proof-1`,
+            message: "corrected reply",
+            ...params,
+          }),
+        revoke: () => revokeMessageActionTurnCapability(capability),
+      });
+    } finally {
+      revokeMessageActionTurnCapability(capability);
+    }
+  });
+}
 
 describe("session-derived Google Chat delivery", () => {
   it("sends and edits in the canonical mixed-case space recorded by the session", async () => {
@@ -267,4 +400,79 @@ describe("session-derived Google Chat delivery", () => {
       }
     });
   }, 60_000);
+
+  it("edits the admitted existing message without replacing its non-text content", async () => {
+    existingMessage.text = "original text";
+    const before = structuredClone(existingMessage);
+    await withAdmittedEdit("preserve-content", CANONICAL_SPACE, async ({ edit }) => {
+      await edit();
+      expect(requests.filter((entry) => entry.method !== "GET")).toEqual([
+        {
+          method: "PATCH",
+          path: `/v1/${before.name}?updateMask=text`,
+          body: JSON.stringify({ text: "corrected reply" }),
+        },
+      ]);
+      const readback = await fetch(`${loopback.baseUrl}/v1/${before.name}`);
+      expect(await readback.json()).toEqual({ ...before, text: "corrected reply" });
+    });
+  });
+
+  it("denies other-account through the host before provider mutation", async () => {
+    await withAdmittedEdit("other-account", CANONICAL_SPACE, async ({ edit }) => {
+      await expect(edit({ accountId: "work" })).rejects.toThrow(
+        "Explicit account does not match the trusted current account.",
+      );
+      expect(requests.filter((entry) => entry.method === "PATCH")).toEqual([]);
+    });
+  });
+
+  it.each([
+    {
+      label: "other-conversation",
+      params: { target: "spaces/OTHER", messageId: "spaces/OTHER/messages/proof-1" },
+    },
+  ])("denies $label through the host before provider mutation", async ({ label, params }) => {
+    await withAdmittedEdit(label, CANONICAL_SPACE, async ({ edit }) => {
+      await expect(edit(params)).rejects.toThrow("exact current conversation and account");
+      expect(requests.filter((entry) => entry.method === "PATCH")).toEqual([]);
+    });
+  });
+
+  it.each(["token", "lookup"] as const)(
+    "revoking the host turn during real %s preparation prevents PATCH",
+    async (phase) => {
+      const currentTarget = phase === "lookup" ? "users/123" : CANONICAL_SPACE;
+      await withAdmittedEdit(`revoke-${phase}`, currentTarget, async ({ edit, revoke }) => {
+        const arrived = createDeferred<ServerResponse>();
+        heldResponse.path =
+          phase === "token" ? "/token" : "/v1/spaces:findDirectMessage?name=users%2F123";
+        heldResponse.resolve = arrived.resolve;
+        const editing = edit().then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        const response = await Promise.race([
+          arrived.promise,
+          editing.then(() => {
+            throw new Error(`Edit settled before the ${phase} preparation barrier`);
+          }),
+        ]);
+        revoke();
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify(
+            phase === "token"
+              ? { access_token: "transport-proof-token", token_type: "Bearer", expires_in: 3600 }
+              : { name: CANONICAL_SPACE, spaceType: "DIRECT_MESSAGE" },
+          ),
+        );
+        const outcome = await editing;
+        expect(requests.filter((entry) => entry.method === "PATCH")).toEqual([]);
+        expect(outcome).toMatchObject({
+          error: { message: "message action turn capability is no longer active" },
+        });
+      });
+    },
+  );
 });

@@ -236,12 +236,14 @@ export async function sendGoogleChatMessage(
   return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
-export async function updateGoogleChatMessage(params: {
-  account: ResolvedGoogleChatAccount;
-  messageName: string;
-  text?: string;
-  cardsV2?: GoogleChatCardV2[];
-}): Promise<{ messageName?: string }> {
+export async function updateGoogleChatMessage(
+  params: GoogleChatRequestHooks & {
+    account: ResolvedGoogleChatAccount;
+    messageName: string;
+    text?: string;
+    cardsV2?: GoogleChatCardV2[];
+  },
+): Promise<{ messageName?: string }> {
   const { account, messageName, text, cardsV2 } = params;
   const updateMask = [
     ...(text !== undefined ? ["text"] : []),
@@ -251,10 +253,18 @@ export async function updateGoogleChatMessage(params: {
     throw new Error("Google Chat message update requires text or cardsV2.");
   }
   const url = `${CHAT_API_BASE}/${messageName}?updateMask=${updateMask.join(",")}`;
-  const result = await fetchJson<{ name?: string }>(account, url, {
-    method: "PATCH",
-    body: JSON.stringify({ text, cardsV2 }),
-  });
+  const result = await fetchJson<{ name?: string }>(
+    account,
+    url,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ text, cardsV2 }),
+    },
+    {
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
+    },
+  );
   return { messageName: result.name };
 }
 

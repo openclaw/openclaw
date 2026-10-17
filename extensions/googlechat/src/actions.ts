@@ -92,11 +92,21 @@ export async function handleGoogleChatAction({
         "messageId must be a Google Chat resource name: spaces/<space>/messages/<message>.",
       );
     }
-    const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+    const space = await resolveGoogleChatOutboundSpace({
+      account,
+      target: to,
+      assertDirectAdapterHandoff,
+    });
     if (match[1] !== space) {
       throw new Error("messageId must belong to the target Google Chat space");
     }
-    const updated = await updateGoogleChatMessage({ account, messageName, text });
+    const updated = await updateGoogleChatMessage({
+      account,
+      messageName,
+      text,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    });
     return jsonResult({ ok: true, to: space, ...updated });
   }
 
