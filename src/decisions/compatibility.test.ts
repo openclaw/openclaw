@@ -192,6 +192,10 @@ describe("explicit decision version conversion", () => {
       { ...v2Batch, state: { type: "json", value: "explicit JSON string" } },
       { state: list, questions: { q: { type: "sort" } } },
       { ...v2Batch, questions: { q: { type: "tags", criteria: { red: "red" } } } },
+      {
+        state: { type: "image", dataUri: "data:image/png;base64,AA==" },
+        questions: { q: { type: "box", instructions: "target" } },
+      },
     ];
     for (const input of inputs) {
       expect(decisionBatchV2ToV1(input)).toBeUndefined();

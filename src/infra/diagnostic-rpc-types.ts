@@ -9,6 +9,13 @@ type DiagnosticSessionsListRetentionFields = {
   estimatedBytes: number;
 };
 
+/** Process totals for per-connection session-event field-hash vectors. */
+export type DiagnosticSessionEventRetentionFields = {
+  type: "sessions.event.retention";
+  entries: number;
+  estimatedBytes: number;
+};
+
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
 
 type DiagnosticSessionsListBaselineRetiredFields = {
@@ -111,4 +118,5 @@ export type DiagnosticGatewayFields =
   | DiagnosticGatewayRpcFields
   | DiagnosticGatewayWsFields
   | DiagnosticSessionsListBaselineRetiredFields
-  | DiagnosticSessionsListRetentionFields;
+  | DiagnosticSessionsListRetentionFields
+  | DiagnosticSessionEventRetentionFields;

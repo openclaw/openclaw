@@ -580,7 +580,6 @@ describe("staged chat attachment pane handoff", () => {
     const host = document.createElement("div");
     host.append(...panes);
     return new ChatPageRetainedSessions(host, {
-      invalidate: () => {},
       context: () => context,
       presented: () => true,
       routeHref: () => window.location.href,

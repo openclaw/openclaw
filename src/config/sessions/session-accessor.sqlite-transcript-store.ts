@@ -94,6 +94,11 @@ export function appendTranscriptEventInTransaction(
   options: TranscriptAppendOptions = {},
   cursor: TranscriptAppendCursor = {},
 ): string | false {
+  const priorAssistant = !cursor.initialized
+    ? "unchanged"
+    : cursor.rowTranscript
+      ? cursor.rowTranscript.lastAssistantMessage
+      : "unknown";
   const persistedEvent =
     options.eventJson === undefined ? canonicalizeTranscriptEventMedia(event) : event;
   return withSqliteDatabaseWriteScope(
@@ -325,7 +330,7 @@ export function appendTranscriptEventInTransaction(
       }
       cursor.rowTranscript = projectionNeedsRebuild
         ? undefined
-        : projectSessionRowTranscriptFields(persistedEvent, serializedBytes, seq);
+        : projectSessionRowTranscriptFields(persistedEvent, serializedBytes, seq, priorAssistant);
       if (windowExists || windowUpdatedAt !== createdAt) {
         cursor.windowUpdatedAt = windowUpdatedAt;
       }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import {
@@ -35,47 +35,66 @@ import {
   runOnboardLocalDaemonSetup,
 } from "./onboard-non-interactive.test-helpers.js";
 import type { OnboardEnsureWorkspaceOptions } from "./onboard-non-interactive.test-helpers.js";
-import { logNonInteractiveOnboardingFailure } from "./onboard-non-interactive/local/output.js";
 
-describe("logNonInteractiveOnboardingFailure", () => {
-  const callerFix = "Fix: use the phase-specific recovery path.";
-  const failure = {
-    mode: "local" as const,
-    phase: "gateway-health",
-    message: "Gateway did not become reachable.",
-    detail: "connect ECONNREFUSED 127.0.0.1:18997",
-    hints: ["Phase-specific context.", callerFix],
-  };
+describe("onboard (non-interactive): gateway and remote auth", () => {
+  const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-");
 
-  it("uses a caller-supplied Fix hint in human and JSON output", () => {
-    const error = vi.fn();
-    logNonInteractiveOnboardingFailure({
-      ...failure,
-      opts: {},
-      runtime: { ...runtime, error },
-    });
-
-    const humanLines = String(error.mock.calls[0]?.[0]).split("\n");
-    expect(humanLines.filter((line) => line.startsWith("Fix:"))).toEqual([callerFix]);
-
-    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
-    logNonInteractiveOnboardingFailure({
-      ...failure,
-      opts: { json: true },
-      runtime: runtimeWithCapture,
-    });
-
-    const parsed = JSON.parse(readCapturedJson()) as { hints: string[] };
-    expect(parsed).toMatchObject({
-      ok: false,
-      error: { type: "cli_error", message: failure.message },
-      phase: failure.phase,
-      message: failure.message,
-    });
-    expect(parsed.hints.filter((hint) => hint.startsWith("Fix:"))).toEqual([callerFix]);
+  afterEach(async () => {
+    gatewayReachableState.mock = undefined;
+    const { resetSecretRedactionRegistryForTest } =
+      await import("../logging/secret-redaction-registry.test-support.js");
+    resetSecretRedactionRegistryForTest();
+    testConfigStore.clear();
+    capturedReplaceConfigFileCalls.length = 0;
+    configWritePluginLeaseDepths.length = 0;
+    vi.clearAllMocks();
   });
 
-  it("keeps container precedence on every recovery command in human and JSON output", () => {
+  it("uses the setup phase's Fix hint in human and JSON output", async () => {
+    for (const json of [false, true]) {
+      await withStateDir("state-phase-recovery-", async (stateDir) => {
+        gatewayReachableState.mock = vi.fn(async () => ({
+          ok: false,
+          detail: "connect ECONNREFUSED 127.0.0.1:18997",
+        }));
+        const output = vi.fn();
+        await expect(
+          runNonInteractiveSetup(
+            { ...createOnboardLocalDaemonOptions(stateDir), installDaemon: undefined, json },
+            {
+              ...runtime,
+              log: output,
+              error: output,
+              exit: () => {
+                throw new Error("exit:1");
+              },
+            },
+          ),
+        ).rejects.toThrow("exit:1");
+
+        const emitted = String(output.mock.calls.at(-1)?.[0]);
+        const hints = json
+          ? (JSON.parse(emitted) as { hints: string[] }).hints
+          : emitted.split("\n");
+        expect(hints.filter((hint) => hint.startsWith("Fix:"))).toEqual([
+          "Fix: start `openclaw gateway run`, re-run `openclaw onboard --install-daemon`, or use `openclaw onboard --skip-health`.",
+        ]);
+        if (json) {
+          expect(JSON.parse(emitted)).toMatchObject({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message: expect.stringContaining("Gateway did not become reachable"),
+            },
+            phase: "gateway-health",
+            classification: "not-listening",
+          });
+        }
+      });
+    }
+  });
+
+  it("keeps container precedence on every recovery command in human and JSON output", async () => {
     const { env, selector } = {
       env: { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: "preview" },
       selector: "--container preview",
@@ -141,44 +160,44 @@ describe("logNonInteractiveOnboardingFailure", () => {
       },
     ];
 
-    withEnv(env, () => {
+    await withEnvAsync(env, async () => {
       for (const { detail, diagnostics, commands } of cases) {
         for (const json of [false, true]) {
-          const output = vi.fn();
-          logNonInteractiveOnboardingFailure({
-            ...failure,
-            hints: undefined,
-            opts: { json },
-            runtime: { ...runtime, log: output, error: output },
-            detail,
-            diagnostics,
-          });
+          await withStateDir("state-container-recovery-", async (stateDir) => {
+            gatewayReachableState.mock = vi.fn(async () => ({ ok: false, detail }));
+            gatewayServiceMock.isLoaded.mockResolvedValueOnce(diagnostics?.service?.loaded ?? true);
+            gatewayServiceMock.readRuntime.mockResolvedValueOnce({
+              status: diagnostics?.service?.runtimeStatus ?? "running",
+              state: "active",
+              pid: 4242,
+            });
+            readLastGatewayErrorLineMock.mockResolvedValueOnce(diagnostics?.lastGatewayError ?? "");
+            const output = vi.fn();
+            await expect(
+              runNonInteractiveSetup(
+                { ...createOnboardLocalDaemonOptions(stateDir), json },
+                {
+                  ...runtime,
+                  log: output,
+                  error: output,
+                  exit: () => {
+                    throw new Error("exit:1");
+                  },
+                },
+              ),
+            ).rejects.toThrow("exit:1");
 
-          const emitted = String(output.mock.calls[0]?.[0]);
-          const hint = json
-            ? (JSON.parse(emitted) as { hints: string[] }).hints[0]
-            : emitted.split("\n").find((line) => line.startsWith("Fix:"));
-          for (const command of commands) {
-            expect(hint).toContain(`\`openclaw ${selector} ${command}\``);
-          }
+            const emitted = String(output.mock.calls.at(-1)?.[0]);
+            const hint = json
+              ? (JSON.parse(emitted) as { hints: string[] }).hints[0]
+              : emitted.split("\n").find((line) => line.startsWith("Fix:"));
+            for (const command of commands) {
+              expect(hint).toContain(`\`openclaw ${selector} ${command}\``);
+            }
+          });
         }
       }
     });
-  });
-});
-
-describe("onboard (non-interactive): gateway and remote auth", () => {
-  const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-");
-
-  afterEach(async () => {
-    gatewayReachableState.mock = undefined;
-    const { resetSecretRedactionRegistryForTest } =
-      await import("../logging/secret-redaction-registry.test-support.js");
-    resetSecretRedactionRegistryForTest();
-    testConfigStore.clear();
-    capturedReplaceConfigFileCalls.length = 0;
-    configWritePluginLeaseDepths.length = 0;
-    vi.clearAllMocks();
   });
 
   it("rejects invalid existing config without writes and reports JSON failure", async () => {

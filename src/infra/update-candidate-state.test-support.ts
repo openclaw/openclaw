@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -20,6 +20,24 @@ type Admission = Pick<
   Parameters<typeof snapshotUpdateCandidateState>[0],
   "pluginPlanPath" | "databaseInventory"
 >;
+
+/** Wake the inspection deadline without replacing native process-cleanup timers. */
+export function captureUpdateCandidateDeadline(): () => void {
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  return () => {
+    const index = timers.mock.calls.findLastIndex(
+      ([, delay]) => delay !== undefined && delay >= 300_000,
+    );
+    const call = timers.mock.calls[index];
+    const timer = timers.mock.results[index];
+    if (!call || timer?.type !== "return") {
+      throw new Error("Inspection allowance was not scheduled");
+    }
+    clearTimeout(timer.value);
+    const [callback, , ...args] = call;
+    callback(...args);
+  };
+}
 
 export async function materializeUpdateCandidateStateWorker(candidateRoot: string): Promise<void> {
   const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState);

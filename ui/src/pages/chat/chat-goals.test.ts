@@ -16,6 +16,8 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { projectChatErrors } from "./chat-error-projection.ts";
+import { createChatErrorState } from "./chat-error-state.ts";
 import { chatGoalOperations, chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -44,25 +46,28 @@ function loseAck(): never {
 }
 
 function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.update": loseAck }) {
-  const host = makeChatHost({
-    sessionKey: "agent:main:main",
-    currentSessionId: "session-a",
-    chatMessage: "Unrelated draft",
-    sessionsResult: {
-      ...createSessionsListResult(),
-      sessions: [
-        {
-          key: "agent:main:main",
-          agentId: "main",
-          sessionId: "session-a",
-          kind: "direct",
-          updatedAt: 2,
-          goal,
-        },
-      ],
-    },
-    requestHandlers,
-  });
+  const host = Object.assign(
+    createChatErrorState(),
+    makeChatHost({
+      sessionKey: "agent:main:main",
+      currentSessionId: "session-a",
+      chatMessage: "Unrelated draft",
+      sessionsResult: {
+        ...createSessionsListResult(),
+        sessions: [
+          {
+            key: "agent:main:main",
+            agentId: "main",
+            sessionId: "session-a",
+            kind: "direct",
+            updatedAt: 2,
+            goal,
+          },
+        ],
+      },
+      requestHandlers,
+    }),
+  );
   const sessions = host.sessions;
   const projectSessions = (state: typeof sessions.state) => {
     host.sessionsResult = state.result;
@@ -370,15 +375,25 @@ describe("Goal control requests", () => {
   it("never sends or carries a private edit across clients with no recovery owner", async () => {
     const host = goalHost();
     let renderedError: string | null | undefined;
-    host.requestUpdate = () => {
-      renderedError = host.chatError;
-    };
+    const dispose = createRoot((stop) => {
+      const errors = projectChatErrors(host);
+      createEffect(
+        () => errors.chatError,
+        (value) => {
+          renderedError = value;
+        },
+      );
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
     Object.defineProperty(host.client, "recoveryScope", { get: () => "" });
     await mutateChatGoal(host, {
       action: "edit",
       goalId: goal.id,
       objective: "Private account A edit",
     });
+    flush();
     const captured = chatGoalRecovery(host);
     expect
       .soft(renderedError)

@@ -8,7 +8,6 @@ import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ensureBoardViewElement } from "./board-session-surface.tsx";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import { sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import {
@@ -95,7 +94,7 @@ describe("dashboard default activation and personal layout persistence", () => {
   );
 
   it("relocates a visible full-width singleton in split and fullscreen views when a task menu exists", async () => {
-    await ensureBoardViewElement();
+    await import("../../components/board/board-view.ts");
     const { pane } = createDashboardHarness();
     const board = { ...pane.resolveBoardView(), activeTabId: "research" };
     const expanded = openDashboardPresentation({ columns: [] }, "expanded");
