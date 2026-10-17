@@ -21,6 +21,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
 });
 const sessionBus = "unix:path=/run/fixture/bus";
 const wallpaper = Buffer.from("fixture wallpaper");
+const setupScript = () =>
+  createCrabboxWorkerDesktopSetup("cbx_desktop_test", wallpaper.toString("base64"), "linux");
 const browserLauncherProof = String.raw`
 import ctypes, os, pathlib, shlex, shutil, signal, subprocess, sys
 
@@ -201,11 +203,7 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
       mode: 0o700,
     });
   }
-  const script = createCrabboxWorkerDesktopSetup(
-    "cbx_desktop_test",
-    wallpaper.toString("base64"),
-    "linux",
-  )
+  const script = setupScript()
     .replaceAll("/var/lib/crabbox/desktop.env", path.join(root, "desktop.env"))
     .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`)
     .replaceAll("/usr/local/bin/", `${bin}/`);
@@ -250,12 +248,7 @@ describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", 
     signal,
   }) => {
     const root = tempDirs.make("crabbox-browser-launch-");
-    const setup = createCrabboxWorkerDesktopSetup(
-      "cbx_browser_test",
-      wallpaper.toString("base64"),
-      "linux",
-    );
-    const launcher = setup.match(
+    const launcher = setupScript().match(
       /<<'WORKER_BROWSER_LAUNCHER_EOF'\n([\s\S]*?)\nWORKER_BROWSER_LAUNCHER_EOF/u,
     )?.[1];
     expect(launcher).toBeDefined();

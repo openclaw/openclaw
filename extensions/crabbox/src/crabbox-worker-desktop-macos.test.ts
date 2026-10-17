@@ -12,14 +12,14 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const leaseId = "cbx_macos_fixture";
 const wallpaper = Buffer.from("synthetic wallpaper");
-type Readiness =
-  | "wrong-account"
-  | "no-gui"
-  | "invalid-signature"
-  | "ad-hoc"
-  | "invalid-team"
-  | "authority-first-long"
-  | "team-first-long";
+const rejectedReadiness = [
+  ["wrong-account", "must run as its inspected macOS account"],
+  ["no-gui", "GUI session is unavailable"],
+  ["invalid-signature", "signature is invalid"],
+  ["ad-hoc", "needs a Developer ID Application signature"],
+  ["invalid-team", "signing team is missing"],
+] as const;
+type Readiness = (typeof rejectedReadiness)[number][0] | "authority-first-long" | "team-first-long";
 
 function desktopFixture(readiness: Readiness) {
   const root = tempDirs.make("crabbox-macos-desktop-");
@@ -210,15 +210,9 @@ describe("Crabbox macOS desktop descriptor", () => {
 });
 
 describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () => {
-  it.each<{ readiness: Readiness; error: string }>([
-    { readiness: "wrong-account", error: "must run as its inspected macOS account" },
-    { readiness: "no-gui", error: "GUI session is unavailable" },
-    { readiness: "invalid-signature", error: "signature is invalid" },
-    { readiness: "ad-hoc", error: "needs a Developer ID Application signature" },
-    { readiness: "invalid-team", error: "signing team is missing" },
-  ])(
-    "rejects $readiness before publishing credentials or desktop launchers",
-    ({ readiness, error }) => {
+  it.each(rejectedReadiness)(
+    "rejects %s before publishing credentials or desktop launchers",
+    (readiness, error) => {
       const fixture = desktopFixture(readiness);
       expect(fixture.result.error).toBeUndefined();
       expect(fixture.result.status, fixture.result.stderr).toBe(1);

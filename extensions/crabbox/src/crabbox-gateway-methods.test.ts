@@ -26,8 +26,28 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SELECTOR = "capture-fixture";
 const SETTINGS = { provider: "aws", class: "standard", ttl: "8h", idleTimeout: "45m" };
+const setup = {
+  setup: "true",
+  setupSecrets: { SYNTHETIC_SETUP_INPUT: { source: "store", provider: "default", id: "SETUP" } },
+};
+const profileCases = [
+  [
+    "classless",
+    { provider: "aws", ttl: "8h", idleTimeout: "45m" },
+    undefined,
+    "linux",
+    "off",
+    "machine class",
+  ],
+  ["disabled", { ...SETTINGS, warmImage: false }, "standard", "linux", "off", "Disabled"],
+  ["environment", { ...SETTINGS, ...setup }, "standard", "linux", "on", "default"],
+  ["explicit", { ...SETTINGS, ...setup, warmImage: true }, "standard", "linux", "on", "Explicitly"],
+  ["linux", SETTINGS, "standard", "linux", "on", "default"],
+  ["mac", { ...SETTINGS, target: "macos" }, "standard", "macos", "off", "Linux"],
+] as const;
 let api: ReturnType<typeof createApi>;
 let respond: ReturnType<typeof vi.fn>;
+let actions: ReturnType<typeof createActions>;
 
 beforeEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -35,6 +55,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-gateway-"));
   api = createApi();
   respond = vi.fn();
+  actions = createActions();
 });
 
 afterEach(async () => {
@@ -69,29 +90,15 @@ function record(): WarmProfileRecord {
 }
 
 function createApi() {
-  const profile = (settings: Record<string, unknown> = {}) => ({
-    provider: "crabbox",
-    settings: { ...SETTINGS, ...settings },
-  });
-  const setup = {
-    setup: "true",
-    setupSecrets: { SYNTHETIC_SETUP_INPUT: { source: "store", provider: "default", id: "SETUP" } },
-  };
   const testApi = createTestPluginApi({
     runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
     id: "crabbox",
     config: {
       cloudWorkers: {
         profiles: {
-          linux: profile(),
-          disabled: profile({ warmImage: false }),
-          environment: profile(setup),
-          explicit: profile({ ...setup, warmImage: true }),
-          classless: {
-            provider: "crabbox",
-            settings: { provider: "aws", ttl: "8h", idleTimeout: "45m" },
-          },
-          mac: profile({ target: "macos" }),
+          ...Object.fromEntries(
+            profileCases.map(([id, settings]) => [id, { provider: "crabbox", settings }]),
+          ),
           other: { provider: "fixture", settings: {} },
         },
       },
@@ -136,7 +143,6 @@ async function list(params: unknown = {}) {
 }
 
 async function mutate(
-  actions: CrabboxSnapshotActions,
   action: "pin" | "delete" | "rollback",
   params: unknown = { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: true } : {}) },
 ) {
@@ -148,7 +154,6 @@ describe("Crabbox snapshot mutations", () => {
   it.each(["pin", "delete"] as const)(
     "rejects malformed %s requests before calling the owner",
     async (action) => {
-      const actions = createActions();
       const valid =
         action === "pin"
           ? { checkpointId: "chk_fixture", pinned: true }
@@ -164,7 +169,7 @@ describe("Crabbox snapshot mutations", () => {
           ? [{ checkpointId: "chk_fixture" }, { checkpointId: "chk_fixture", pinned: "true" }]
           : [{ ...valid, pinned: true }]),
       ]) {
-        await mutate(actions, action, params);
+        await mutate(action, params);
         expectInvalid();
       }
       expect(actions[action]).not.toHaveBeenCalled();
@@ -172,7 +177,6 @@ describe("Crabbox snapshot mutations", () => {
   );
 
   it("uses current Crabbox profiles for deletion and preserves pending retirement", async () => {
-    const actions = createActions();
     actions.delete.mockResolvedValue({ status: "retiring" });
     api.config.cloudWorkers = {
       profiles: {
@@ -180,13 +184,12 @@ describe("Crabbox snapshot mutations", () => {
         other: { provider: "other", settings: {} },
       },
     };
-    await mutate(actions, "delete");
+    await mutate("delete");
     expect(actions.delete).toHaveBeenCalledWith("chk_fixture", [SETTINGS]);
     expect(respond).toHaveBeenCalledWith(true, { status: "retiring" });
   });
 
   it("maps owner refusals separately from storage failures", async () => {
-    const actions = createActions();
     for (const [error, code] of [
       [new CrabboxWarmImageRequestError("Unknown checkpoint"), "INVALID_REQUEST"],
       [new Error("Store unavailable"), "UNAVAILABLE"],
@@ -194,7 +197,7 @@ describe("Crabbox snapshot mutations", () => {
       actions.rollback.mockImplementation(() => {
         throw error;
       });
-      await mutate(actions, "rollback");
+      await mutate("rollback");
       expect(respond).toHaveBeenCalledWith(
         false,
         { error: error.message },
@@ -292,13 +295,10 @@ describe("Crabbox snapshots Gateway methods", () => {
     const image = (await listCrabboxWarmImages(crabboxState)).find(
       (entry) => entry.profileKey === "current",
     )!;
-    const actions: CrabboxSnapshotActions = {
-      pin: async () => image,
-      rollback: async () => image,
-      delete: async () => ({ status: "deleted" }),
-    };
+    actions.pin.mockResolvedValue(image);
+    actions.rollback.mockResolvedValue(image);
     for (const action of ["pin", "rollback"] as const) {
-      await mutate(actions, action);
+      await mutate(action);
       expect(respond).toHaveBeenCalledWith(true, summary);
     }
     expect(Object.keys(image.allocations)).toHaveLength(21);
@@ -306,16 +306,7 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it("uses current configured defaults without resolving secrets or including other providers", async () => {
     expect((await list()).profiles).toEqual(
-      (
-        [
-          ["classless", undefined, "linux", "off", "machine class"],
-          ["disabled", "standard", "linux", "off", "Disabled"],
-          ["environment", "standard", "linux", "on", "default"],
-          ["explicit", "standard", "linux", "on", "Explicitly"],
-          ["linux", "standard", "linux", "on", "default"],
-          ["mac", "standard", "macos", "off", "Linux"],
-        ] as const
-      ).map(([id, machineClass, os, warmImages, reason]) => ({
+      profileCases.map(([id, , machineClass, os, warmImages, reason]) => ({
         id,
         backend: "aws",
         machineClass,

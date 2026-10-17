@@ -80,22 +80,20 @@ function provision(
   return provider.provision(PROFILE, name, createProjectOptions([], undefined, prepared).options);
 }
 
-describe("Crabbox capture receipt", () => {
-  it.each([
-    ["pending", "pending"],
-    ["creating", "pending"],
-    ["available", "available"],
-    ["completed", "available"],
-    ["Succeeded", "available"],
-    ["ready", "available"],
-    ["ACTIVE", "pending"],
-  ])("parses native %s as %s without inventing availability", (native, state) => {
-    expect(parseCreatedCheckpoint(JSON.stringify(receipt("source", native)), "source")).toEqual({
-      checkpointId: CHECKPOINT_ID,
-      kind: "aws-ami",
-      captureEstablished: false,
-      state,
-    });
+it.each([
+  ["pending", "pending"],
+  ["creating", "pending"],
+  ["available", "available"],
+  ["completed", "available"],
+  ["Succeeded", "available"],
+  ["ready", "available"],
+  ["ACTIVE", "pending"],
+])("parses native %s as %s without inventing availability", (native, state) => {
+  expect(parseCreatedCheckpoint(JSON.stringify(receipt("source", native)), "source")).toEqual({
+    checkpointId: CHECKPOINT_ID,
+    kind: "aws-ami",
+    captureEstablished: false,
+    state,
   });
 });
 
