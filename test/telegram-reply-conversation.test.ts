@@ -35,6 +35,47 @@ const stored: SessionEntry = {
   }),
 };
 
+const target = (id?: number) =>
+  normalizeTelegramMessagingTarget(
+    buildTelegramRoutingTarget(-1001, id === undefined ? undefined : { scope: "forum", id }),
+  );
+const route = (to: string, topic: number, account = "work") => ({
+  OriginatingChannel: "telegram",
+  OriginatingTo: to,
+  AccountId: account,
+  MessageThreadId: topic,
+  ChatType: "group",
+});
+function entry(to: string, topic: number, overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    ...stored,
+    chatType: "group",
+    groupId: "-1001:topic:77",
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to, accountId: "work", threadId: topic },
+    }),
+    ...overrides,
+  };
+}
+function policy(topic: number, parentMention: boolean, topicMention: boolean) {
+  return {
+    channels: {
+      telegram: {
+        accounts: {
+          work: {
+            groups: {
+              "-1001": {
+                requireMention: parentMention,
+                topics: { [String(topic)]: { requireMention: topicMention } },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 describe("prepared reply conversation", () => {
   beforeEach(() => {
     setActivePluginRegistry(
@@ -51,26 +92,9 @@ describe("prepared reply conversation", () => {
   ])(
     "preserves Telegram's native topic policy for $name",
     ({ topic, account, mention, inherits }) => {
-      const target = (id: number) =>
-        normalizeTelegramMessagingTarget(buildTelegramRoutingTarget(-1001, { scope: "forum", id }));
-      const entry: SessionEntry = {
-        ...stored,
-        chatType: "group",
-        groupId: "-1001:topic:77",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", to: target(77), accountId: "work", threadId: 77 },
-        }),
-      };
       const conversation = prepareReplyConversation({
-        ctx: {
-          InternalTurnSource: "exec",
-          OriginatingChannel: "telegram",
-          OriginatingTo: target(topic),
-          AccountId: account,
-          MessageThreadId: topic,
-          ChatType: "group",
-        },
-        sessionEntry: entry,
+        ctx: { InternalTurnSource: "exec", ...route(target(topic), topic, account) },
+        sessionEntry: entry(target(77), 77),
       });
       expect(conversation.fields.OriginatingTo).toBe(`telegram:-1001:topic:${topic}`);
       expect(conversation.group.groupId).toBe(`-1001:topic:${topic}`);
@@ -80,17 +104,8 @@ describe("prepared reply conversation", () => {
           cfg: {
             channels: {
               telegram: {
+                ...policy(77, true, false).channels.telegram,
                 groups: { "*": { requireMention: true } },
-                accounts: {
-                  work: {
-                    groups: {
-                      "-1001": {
-                        requireMention: true,
-                        topics: { "77": { requireMention: false } },
-                      },
-                    },
-                  },
-                },
               },
             },
           },
@@ -102,95 +117,38 @@ describe("prepared reply conversation", () => {
     },
   );
 
-  it.each([
-    {
-      name: "split topic 88",
-      topic: 88,
-      parentMention: false,
-      topicMention: true,
-      storedTopic: 77,
-      storedGroupId: "-1001:topic:77",
-      liveRoute: true,
-      inherits: false,
-      sessionActivation: "always" as const,
-    },
-    {
-      name: "General topic 1",
-      topic: 1,
-      parentMention: true,
-      topicMention: false,
-      storedTopic: 77,
-      storedGroupId: "-1001:topic:77",
-      liveRoute: true,
-      inherits: false,
-      sessionActivation: "always" as const,
-    },
-    {
-      name: "matched bare topic 88",
-      topic: 88,
-      parentMention: false,
-      topicMention: true,
-      storedTopic: 88,
-      storedGroupId: "-1001",
-      liveRoute: true,
-      inherits: true,
-      sessionActivation: undefined,
-    },
-    {
-      name: "inherited bare General topic 1",
-      topic: 1,
-      parentMention: true,
-      topicMention: false,
-      storedTopic: 1,
-      storedGroupId: "-1001",
-      liveRoute: false,
-      inherits: true,
-      sessionActivation: undefined,
-    },
-    {
-      name: "inherited encoded topic with activation override",
-      topic: 77,
-      parentMention: false,
-      topicMention: true,
-      storedTopic: 77,
-      storedGroupId: "-1001:topic:77",
-      liveRoute: false,
-      inherits: true,
-      sessionActivation: "always" as const,
-    },
+  it.each<[string, number, boolean, number, string, boolean, boolean, "always" | undefined]>([
+    ["split topic 88", 88, false, 77, "-1001:topic:77", true, false, "always"],
+    ["General topic 1", 1, true, 77, "-1001:topic:77", true, false, "always"],
+    ["matched bare topic 88", 88, false, 88, "-1001", true, true, undefined],
+    ["inherited bare General topic 1", 1, true, 1, "-1001", false, true, undefined],
+    [
+      "inherited encoded topic with activation override",
+      77,
+      false,
+      77,
+      "-1001:topic:77",
+      false,
+      true,
+      "always",
+    ],
   ])(
-    "resolves Telegram topic policy from separate route metadata for $name",
-    async ({
+    "resolves Telegram topic policy from separate route metadata for %s",
+    async (
+      _name,
       topic,
       parentMention,
-      topicMention,
       storedTopic,
       storedGroupId,
       liveRoute,
       inherits,
       sessionActivation,
-    }) => {
-      const originatingTo = normalizeTelegramMessagingTarget(
-        buildTelegramRoutingTarget(-1001, topic === 1 ? { scope: "forum", id: topic } : undefined),
-      );
+    ) => {
+      const topicMention = !parentMention;
+      const originatingTo = target(topic === 1 ? topic : undefined);
       expect(originatingTo).toBe("telegram:-1001");
       const persistedTo = buildTelegramRoutingTarget(-1001, { scope: "forum", id: storedTopic });
-      const cfg = {
-        channels: {
-          telegram: {
-            accounts: {
-              work: {
-                groups: {
-                  "-1001": {
-                    requireMention: parentMention,
-                    topics: { [String(topic)]: { requireMention: topicMention } },
-                  },
-                },
-              },
-            },
-          },
-        },
-      };
+      const cfg = policy(topic, parentMention, topicMention);
       expect(resolveTelegramGroupRequireMention({ cfg, accountId: "work", groupId: "-1001" })).toBe(
         parentMention,
       );
@@ -201,34 +159,20 @@ describe("prepared reply conversation", () => {
           groupId: `-1001:topic:${topic}`,
         }),
       ).toBe(topicMention);
-      const entry: SessionEntry = {
-        ...stored,
-        chatType: "group",
+      const sessionEntry = entry(persistedTo, storedTopic, {
         groupId: storedGroupId,
         groupActivation: sessionActivation,
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: persistedTo,
-            accountId: "work",
-            threadId: storedTopic,
-          },
-        }),
-      };
+      });
       const metadata = inherits
         ? deriveSessionMetaPatch({
             ctx: {
               Provider: "telegram",
               From: `telegram:group:${storedGroupId}`,
-              OriginatingChannel: "telegram",
-              OriginatingTo: persistedTo,
-              AccountId: "work",
-              MessageThreadId: storedTopic,
-              ChatType: "group",
+              ...route(persistedTo, storedTopic),
               GroupSubject: stored.subject,
             },
             sessionKey: `agent:main:telegram:group:${storedGroupId}`,
-            existing: entry,
+            existing: sessionEntry,
           })
         : undefined;
       if (inherits) {
@@ -237,17 +181,9 @@ describe("prepared reply conversation", () => {
       const conversation = prepareReplyConversation({
         ctx: {
           InternalTurnSource: "exec",
-          ...(liveRoute
-            ? {
-                OriginatingChannel: "telegram",
-                OriginatingTo: originatingTo,
-                AccountId: "work",
-                MessageThreadId: topic,
-                ChatType: "group",
-              }
-            : {}),
+          ...(liveRoute ? route(originatingTo, topic) : {}),
         },
-        sessionEntry: { ...entry, ...metadata },
+        sessionEntry: { ...sessionEntry, ...metadata },
       });
       expect(conversation.fields.OriginatingTo).toBe(liveRoute ? originatingTo : persistedTo);
       expect(conversation.fields.MessageThreadId).toBe(topic);
@@ -280,30 +216,13 @@ describe("prepared reply conversation", () => {
     { name: "bare current and encoded stored", currentEncoded: false },
     { name: "encoded current and bare stored", currentEncoded: true },
   ])("preserves stored Telegram topic context for $name", ({ currentEncoded }) => {
-    const bare = normalizeTelegramMessagingTarget(buildTelegramRoutingTarget(-1001));
-    const encoded = normalizeTelegramMessagingTarget(
-      buildTelegramRoutingTarget(-1001, { scope: "forum", id: 77 }),
-    );
+    const bare = target();
+    const encoded = target(77);
     const currentTo = currentEncoded ? encoded : bare;
     const persistedTo = currentEncoded ? bare : encoded;
     const conversation = prepareReplyConversation({
-      ctx: {
-        InternalTurnSource: "exec",
-        OriginatingChannel: "telegram",
-        OriginatingTo: currentTo,
-        AccountId: "work",
-        MessageThreadId: 77,
-        ChatType: "group",
-      },
-      sessionEntry: {
-        ...stored,
-        subject: "Stored topic",
-        chatType: "group",
-        groupId: "-1001:topic:77",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", to: persistedTo, accountId: "work", threadId: 77 },
-        }),
-      },
+      ctx: { InternalTurnSource: "exec", ...route(currentTo, 77) },
+      sessionEntry: entry(persistedTo, 77, { subject: "Stored topic" }),
     });
     expect(conversation.fields.GroupSubject).toBe("Stored topic");
     expect(conversation.activation).toBe("always");

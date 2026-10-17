@@ -38,6 +38,120 @@ function createImmediateSerialThrottler(): TelegramApiTransformer {
   };
 }
 
+type TelegramPayload = {
+  text?: string;
+  action?: string;
+  chat_id?: string | number;
+  message_thread_id?: number;
+};
+
+function accept(response: ServerResponse, result: unknown = true) {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify({ ok: true, result }));
+}
+
+async function startApi(
+  stateDir: string,
+  prefix: string,
+  receive: (payload: TelegramPayload, response: ServerResponse) => void,
+) {
+  const sockets = new Set<Socket>();
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => receive(JSON.parse(Buffer.concat(chunks).toString("utf8")), response));
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const botToken = `123:${prefix}-${stateDir.split("/").at(-1)}`;
+  getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
+  const cfg: OpenClawConfig = {
+    channels: {
+      telegram: { botToken, apiRoot: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
+    },
+  };
+  return {
+    cfg,
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
+}
+
+async function createRecovery(
+  stateDir: string,
+  kind: "notice" | "typing",
+  cfg: OpenClawConfig,
+  plugin = telegramPlugin,
+) {
+  const scope = {
+    agentId: "main",
+    storePath: path.join(stateDir, "openclaw-agent.sqlite"),
+    sessionKey:
+      kind === "notice"
+        ? "agent:main:telegram:direct:123"
+        : "agent:main:telegram:group:-100123:topic:99",
+    sessionId: `${kind}-session`,
+    recoveryRunId: `${kind}-run`,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    deliveryContext: {
+      channel: "telegram",
+      to: kind === "notice" ? "123" : "-100123",
+      accountId: "default",
+      ...(kind === "typing" ? { threadId: 99 } : {}),
+    },
+  };
+  await replaceSessionEntry(
+    { storePath: scope.storePath, sessionKey: scope.sessionKey },
+    {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+      restartRecoveryDeliveryRunId: scope.recoveryRunId,
+      restartRecoveryDeliveryContext: scope.deliveryContext,
+    },
+  );
+  const snapshot = captureActivePluginRegistrySnapshot();
+  stageActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
+    null,
+    "default",
+  );
+  const settings = { currentCfg: cfg };
+  const runtime = createGatewayInstanceRuntime({
+    getContext: () =>
+      ({ deps: {}, getRuntimeConfig: () => settings.currentCfg }) as GatewayRequestContext,
+    getMethodRegistry: () => {
+      throw new Error(`${kind} must not use RPC`);
+    },
+    isDispatchAvailable: () => true,
+  });
+  return { scope, runtime, settings, restore: () => restoreActivePluginRegistrySnapshot(snapshot) };
+}
+
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+
+function beforeCompletion<T>(signal: Promise<T>, operation: Promise<unknown>, message: string) {
+  return Promise.race([
+    signal,
+    operation.then(() => {
+      throw new Error(message);
+    }),
+  ]);
+}
+
 // External HTTP and rate delays are substituted; Gateway ownership, Telegram's client, and the
 // serialized account queue remain real.
 describe("recovery notice final transport fence", () => {
@@ -55,7 +169,6 @@ describe("recovery notice final transport fence", () => {
       const preDispatch = createDeferredCore();
       const requests: string[] = [];
       const visible: string[] = [];
-      const sockets = new Set<Socket>();
       const blockerText = "Independent throttle predecessor";
       const productionPredicate =
         mode === "production allowed" ||
@@ -65,87 +178,30 @@ describe("recovery notice final transport fence", () => {
       const noticeText = productionPredicate
         ? "I'm continuing your interrupted request now (the gateway has just restarted).  Don't be concerned with the lack of typing; I am working behind the scenes and I'll send a message when I'm done!"
         : "Recovery resumed";
-      const accept = (response: ServerResponse, text: string) => {
+      const acceptMessage = (response: ServerResponse, text: string) => {
         visible.push(text);
-        response.setHeader("content-type", "application/json");
-        response.end(
-          JSON.stringify({
-            ok: true,
-            result: {
-              message_id: visible.length,
-              date: 1,
-              chat: { id: 123, type: "private", first_name: "Fixture" },
-              text,
-            },
-          }),
-        );
-      };
-      const server = createServer((request, response) => {
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => chunks.push(chunk));
-        request.on("end", () => {
-          const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { text?: string };
-          const text = payload.text ?? "";
-          requests.push(text);
-          if (text === blockerText) {
-            blocked.resolve(response);
-          } else {
-            accept(response, text);
-          }
+        accept(response, {
+          message_id: visible.length,
+          date: 1,
+          chat: { id: 123, type: "private", first_name: "Fixture" },
+          text,
         });
-      });
-      server.on("connection", (socket) => {
-        sockets.add(socket);
-        socket.on("close", () => sockets.delete(socket));
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const botToken = "123:notice-" + state.stateDir.split("/").at(-1);
-      const cfg: OpenClawConfig = {
-        channels: {
-          telegram: {
-            botToken,
-            apiRoot: "http://127.0.0.1:" + (server.address() as AddressInfo).port,
-          },
-        },
       };
-      getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
-      let currentCfg = cfg;
-      const sessionKey = "agent:main:telegram:direct:123";
-      const storePath = path.join(state.stateDir, "openclaw-agent.sqlite");
-      const scope = {
-        agentId: "main",
-        storePath,
-        sessionKey,
-        sessionId: "notice-session",
-        recoveryRunId: "notice-run",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        deliveryContext: { channel: "telegram", to: "123", accountId: "default" },
-      };
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-          restartRecoveryDeliveryRunId: scope.recoveryRunId,
-          restartRecoveryDeliveryContext: scope.deliveryContext,
-        },
-      );
-      const snapshot = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
-        null,
-        "default",
-      );
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () =>
-          ({ deps: {}, getRuntimeConfig: () => currentCfg }) as GatewayRequestContext,
-        getMethodRegistry: () => {
-          throw new Error("Notice must not use RPC");
-        },
-        isDispatchAvailable: () => true,
+      const api = await startApi(state.stateDir, "notice", (payload, response) => {
+        const text = payload.text ?? "";
+        requests.push(text);
+        if (text === blockerText) {
+          blocked.resolve(response);
+        } else {
+          acceptMessage(response, text);
+        }
       });
+      const { cfg } = api;
+      const { scope, runtime, settings, restore } = await createRecovery(
+        state.stateDir,
+        "notice",
+        cfg,
+      );
       const sendText = telegramOutbound.sendText;
       if (!sendText) {
         throw new Error("Missing Telegram sender");
@@ -156,12 +212,7 @@ describe("recovery notice final transport fence", () => {
       const blocker = sendText({ cfg, to: "123", accountId: "default", text: blockerText });
       let notice: Promise<{ result?: { suppressed: boolean }; error?: unknown }> | undefined;
       try {
-        held = await Promise.race([
-          blocked.promise,
-          blocker.then(() => {
-            throw new Error("Predecessor did not reach HTTP");
-          }),
-        ]);
+        held = await beforeCompletion(blocked.promise, blocker, "Predecessor did not reach HTTP");
         const observedSend: GatewayRecoveryRuntime["sendRecoveryNotice"] = (payload) =>
           runtime.recovery.sendRecoveryNotice({
             ...payload,
@@ -192,16 +243,13 @@ describe("recovery notice final transport fence", () => {
           (result) => ({ result: result ?? undefined }),
           (error: unknown) => ({ error }),
         );
-        await Promise.race([
+        await beforeCompletion(
           preDispatch.promise,
-          notice.then(() => {
-            throw new Error("Notice did not reach its pre-dispatch check");
-          }),
-        ]);
+          notice,
+          "Notice did not reach its pre-dispatch check",
+        );
         // Finish the synchronous pre-dispatch continuation before changing its owner.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(requests).toEqual([blockerText]);
         if (mode === "gateway closed") {
           runtime.close();
@@ -210,11 +258,11 @@ describe("recovery notice final transport fence", () => {
           policyCurrent = false;
         }
         if (mode === "runtime policy revoked") {
-          currentCfg = { ...cfg, session: { sendPolicy: { default: "deny" } } };
+          settings.currentCfg = { ...cfg, session: { sendPolicy: { default: "deny" } } };
         }
         if (mode === "automatic delivery revoked" || mode === "owner retired") {
           await replaceSessionEntry(
-            { storePath, sessionKey },
+            { storePath: scope.storePath, sessionKey: scope.sessionKey },
             {
               sessionId: scope.sessionId,
               updatedAt: Date.now(),
@@ -228,35 +276,28 @@ describe("recovery notice final transport fence", () => {
             },
           );
         }
-        accept(held, blockerText);
+        acceptMessage(held, blockerText);
         await blocker;
         const outcome = await notice;
-        if (mode === "allowed" || mode === "production allowed") {
+        const allowed = mode === "allowed" || mode === "production allowed";
+        if (allowed) {
           if (mode === "allowed") {
             expect(outcome).toEqual({ result: { suppressed: false } });
           }
-          expect(visible).toEqual([blockerText, noticeText]);
-          expect(requests).toEqual([blockerText, noticeText]);
-        } else {
-          if (!productionPredicate) {
-            expect(outcome.error).toBeDefined();
-          }
-          expect(visible).toEqual([blockerText]);
-          expect(requests).toEqual([blockerText]);
+        } else if (!productionPredicate) {
+          expect(outcome.error).toBeDefined();
         }
+        const expected = allowed ? [blockerText, noticeText] : [blockerText];
+        expect(visible).toEqual(expected);
+        expect(requests).toEqual(expected);
       } finally {
         if (held && !held.writableEnded) {
-          accept(held, blockerText);
+          acceptMessage(held, blockerText);
         }
         await Promise.allSettled([blocker, ...(notice ? [notice] : [])]);
         runtime.close();
-        restoreActivePluginRegistrySnapshot(snapshot);
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        restore();
+        await api.close();
       }
     });
   });
@@ -275,63 +316,19 @@ describe("recovery typing final transport fence", () => {
       const blocked = createDeferredCore<ServerResponse>();
       const started = createDeferredCore();
       const finished = createDeferredCore();
-      const requests: Array<{
-        action?: string;
-        chat_id?: string | number;
-        message_thread_id?: number;
-      }> = [];
-      const sockets = new Set<Socket>();
-      const server = createServer((request, response) => {
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => chunks.push(chunk));
-        request.on("end", () => {
-          const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          requests.push(payload);
-          if (requests.length === 1) {
-            blocked.resolve(response);
-          } else {
-            response.setHeader("content-type", "application/json");
-            response.end(JSON.stringify({ ok: true, result: true }));
-          }
-        });
+      const requests: TelegramPayload[] = [];
+      const api = await startApi(state.stateDir, "typing", (payload, response) => {
+        requests.push(payload);
+        if (requests.length === 1) {
+          blocked.resolve(response);
+        } else {
+          accept(response);
+        }
       });
-      server.on("connection", (socket) => {
-        sockets.add(socket);
-        socket.on("close", () => sockets.delete(socket));
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const botToken = "123:typing-" + state.stateDir.split("/").at(-1);
       const cfg: OpenClawConfig = {
+        ...api.cfg,
         agents: { defaults: { timeoutSeconds: 30 } },
-        channels: {
-          telegram: {
-            botToken,
-            apiRoot: "http://127.0.0.1:" + (server.address() as AddressInfo).port,
-          },
-        },
       };
-      getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
-      let currentCfg = cfg;
-      const scope = {
-        agentId: "main",
-        storePath: path.join(state.stateDir, "openclaw-agent.sqlite"),
-        sessionKey: "agent:main:telegram:group:-100123:topic:99",
-        sessionId: "typing-session",
-        recoveryRunId: "typing-run",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        deliveryContext: { channel: "telegram", to: "-100123", accountId: "default", threadId: 99 },
-      };
-      await replaceSessionEntry(
-        { storePath: scope.storePath, sessionKey: scope.sessionKey },
-        {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-          restartRecoveryDeliveryRunId: scope.recoveryRunId,
-          restartRecoveryDeliveryContext: scope.deliveryContext,
-        },
-      );
       const originalTyping = telegramPlugin.heartbeat?.sendTyping;
       if (!originalTyping) {
         throw new Error("Missing original Telegram typing hook");
@@ -350,29 +347,15 @@ describe("recovery typing final transport fence", () => {
           finished.resolve();
         }
       };
-      const snapshot = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: {
-              ...telegramPlugin,
-              heartbeat: { ...telegramPlugin.heartbeat, sendTypingGuarded: trackedTyping },
-            },
-          },
-        ]),
-        null,
-        "default",
-      );
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () =>
-          ({ deps: {}, getRuntimeConfig: () => currentCfg }) as GatewayRequestContext,
-        getMethodRegistry: () => {
-          throw new Error("Typing must not use RPC");
+      const { scope, runtime, settings, restore } = await createRecovery(
+        state.stateDir,
+        "typing",
+        cfg,
+        {
+          ...telegramPlugin,
+          heartbeat: { ...telegramPlugin.heartbeat, sendTypingGuarded: trackedTyping },
         },
-        isDispatchAvailable: () => true,
-      });
+      );
       const predecessor = Promise.resolve(
         originalTyping({ cfg, to: "-100123", accountId: "default", threadId: 1 }),
       );
@@ -382,12 +365,11 @@ describe("recovery typing final transport fence", () => {
         | Awaited<ReturnType<typeof prepareRestartRecoveryDeliveryCurrent>>
         | undefined;
       try {
-        held = await Promise.race([
+        held = await beforeCompletion(
           blocked.promise,
-          predecessor.then(() => {
-            throw new Error("Predecessor did not enter HTTP");
-          }),
-        ]);
+          predecessor,
+          "Predecessor did not enter HTTP",
+        );
         deliveryCurrent = await prepareRestartRecoveryDeliveryCurrent(scope);
         stop = runtime.recovery.startRecoveryTyping?.({
           ...scope.deliveryContext,
@@ -395,9 +377,7 @@ describe("recovery typing final transport fence", () => {
           isCurrent: deliveryCurrent.isCurrent,
         });
         await started.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(requests).toHaveLength(1);
         if (mode === "completed") {
           stop?.();
@@ -412,16 +392,15 @@ describe("recovery typing final transport fence", () => {
           );
         }
         if (mode === "runtime policy revoked") {
-          currentCfg = { ...cfg, session: { sendPolicy: { default: "deny" } } };
+          settings.currentCfg = { ...cfg, session: { sendPolicy: { default: "deny" } } };
         }
         if (mode === "typing disabled") {
-          currentCfg = {
+          settings.currentCfg = {
             ...cfg,
             agents: { defaults: { timeoutSeconds: 30, typingMode: "never" } },
           };
         }
-        held.setHeader("content-type", "application/json");
-        held.end(JSON.stringify({ ok: true, result: true }));
+        accept(held);
         await predecessor;
         await finished.promise;
         stop?.();
@@ -443,20 +422,14 @@ describe("recovery typing final transport fence", () => {
         }
       } finally {
         if (held && !held.writableEnded) {
-          held.setHeader("content-type", "application/json");
-          held.end(JSON.stringify({ ok: true, result: true }));
+          accept(held);
         }
         await predecessor.catch(() => {});
         stop?.();
         deliveryCurrent?.release();
         runtime.close();
-        restoreActivePluginRegistrySnapshot(snapshot);
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        restore();
+        await api.close();
       }
     });
   });

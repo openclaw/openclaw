@@ -44,34 +44,23 @@ function writeFile(targetPath: string, content: string): void {
   fs.writeFileSync(targetPath, content, "utf8");
 }
 
+function writeHomeFiles(home: string, files: Record<string, string>): void {
+  for (const [file, content] of Object.entries(files)) {
+    writeFile(path.join(home, file), content);
+  }
+}
+
+function expectHomeFiles(home: string, present: string[], absent: string[]): void {
+  for (const file of present) {
+    expect(fs.existsSync(path.join(home, file)), file).toBe(true);
+  }
+  for (const file of absent) {
+    expect(fs.existsSync(path.join(home, file)), file).toBe(false);
+  }
+}
+
 function createTempHome(): string {
   return makeTempDir(tempDirs, "openclaw-test-env-real-home-");
-}
-
-function requireRecord(
-  value: Record<string, unknown> | undefined,
-  label: string,
-): Record<string, unknown> {
-  if (!value) {
-    throw new Error(`expected copied ${label} config`);
-  }
-  return value;
-}
-
-function requireTelegramStreaming(
-  value:
-    | {
-        mode?: string;
-        chunkMode?: string;
-        block?: { enabled?: boolean };
-        preview?: { chunk?: { minChars?: number } };
-      }
-    | undefined,
-) {
-  if (!value) {
-    throw new Error("expected copied telegram streaming config");
-  }
-  return value;
 }
 
 afterEach(() => {
@@ -185,38 +174,14 @@ describe("installTestEnv", () => {
       `{
         // Preserve provider config, strip host-bound paths.
         agents: {
-          defaults: {
-            workspace: "/Users/peter/Projects",
-            agentDir: "/Users/peter/.openclaw/agents/main/agent",
-          },
-          entries: {
-            dev: {
-              workspace: "/Users/peter/dev-workspace",
-              agentDir: "/Users/peter/.openclaw/agents/dev/agent",
-            },
-          },
+          defaults: { workspace: "/Users/peter/Projects", agentDir: "/Users/peter/.openclaw/agents/main/agent" },
+          entries: { dev: { workspace: "/Users/peter/dev-workspace", agentDir: "/Users/peter/.openclaw/agents/dev/agent" } },
         },
-        models: {
-          providers: {
-            custom: { baseUrl: "https://example.test/v1" },
-          },
-        },
-        channels: {
-          telegram: {
-            streaming: {
-              mode: "block",
-              chunkMode: "newline",
-              block: {
-                enabled: true,
-              },
-              preview: {
-                chunk: {
-                  minChars: 120,
-                },
-              },
-            },
-          },
-        },
+        models: { providers: { custom: { baseUrl: "https://example.test/v1" } } },
+        channels: { telegram: { streaming: {
+          mode: "block", chunkMode: "newline", block: { enabled: true },
+          preview: { chunk: { minChars: 120 } },
+        } } },
       }`,
     );
     writeFile(path.join(openClawHome, ".openclaw", "credentials", "token.txt"), "secret\n");
@@ -261,44 +226,23 @@ describe("installTestEnv", () => {
         }),
       );
     });
-    writeFile(path.join(realHome, ".claude", ".credentials.json"), '{"accessToken":"token"}\n');
-    writeFile(path.join(realHome, ".claude", "projects", "old-session.jsonl"), "session\n");
+    writeHomeFiles(realHome, {
+      ".claude/.credentials.json": '{"accessToken":"token"}\n',
+      ".claude/projects/old-session.jsonl": "session\n",
+      ".codex/auth.json": '{"OPENAI_API_KEY":"token"}\n',
+      ".codex/config.toml": 'model = "gpt-5.4"\n',
+      ".codex/sessions/2026/02/26/rollout.jsonl": "session\n",
+      ".gemini/oauth_creds.json": '{"token":"gemini"}\n',
+      ".gemini/settings.json": '{"theme":"dark"}\n',
+      ".gemini/commands/Cache/review.toml": "prompt\n",
+      ".minimax/Cache/credentials.json": "minimax\n",
+      ".gemini/antigravity-browser-profile/Default/Cache/Cache_Data/blob": "cached-browser-bytes\n",
+      ".gemini/antigravity/browser_recordings/session.webm": "recording\n",
+      ".gemini/cli-browser-profile/Default/History": "browser-history\n",
+      ".gemini/GPUCache/data.bin": "gpu-cache\n",
+      ".gemini/Service Worker/CacheStorage/cache.bin": "worker-cache\n",
+    });
     fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });
-    writeFile(path.join(realHome, ".codex", "auth.json"), '{"OPENAI_API_KEY":"token"}\n');
-    writeFile(path.join(realHome, ".codex", "config.toml"), 'model = "gpt-5.4"\n');
-    writeFile(
-      path.join(realHome, ".codex", "sessions", "2026", "02", "26", "rollout.jsonl"),
-      "session\n",
-    );
-    writeFile(path.join(realHome, ".gemini", "oauth_creds.json"), '{"token":"gemini"}\n');
-    writeFile(path.join(realHome, ".gemini", "settings.json"), '{"theme":"dark"}\n');
-    writeFile(path.join(realHome, ".gemini", "commands", "Cache", "review.toml"), "prompt\n");
-    writeFile(path.join(realHome, ".minimax", "Cache", "credentials.json"), "minimax\n");
-    writeFile(
-      path.join(
-        realHome,
-        ".gemini",
-        "antigravity-browser-profile",
-        "Default",
-        "Cache",
-        "Cache_Data",
-        "blob",
-      ),
-      "cached-browser-bytes\n",
-    );
-    writeFile(
-      path.join(realHome, ".gemini", "antigravity", "browser_recordings", "session.webm"),
-      "recording\n",
-    );
-    writeFile(
-      path.join(realHome, ".gemini", "cli-browser-profile", "Default", "History"),
-      "browser-history\n",
-    );
-    writeFile(path.join(realHome, ".gemini", "GPUCache", "data.bin"), "gpu-cache\n");
-    writeFile(
-      path.join(realHome, ".gemini", "Service Worker", "CacheStorage", "cache.bin"),
-      "worker-cache\n",
-    );
 
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
@@ -325,55 +269,22 @@ describe("installTestEnv", () => {
     expect(process.env.TWILIO_AUTH_TOKEN).toBeUndefined();
 
     const copiedConfigPath = path.join(testEnv.tempHome, ".openclaw", "openclaw.json");
-    const copiedConfig = JSON.parse(fs.readFileSync(copiedConfigPath, "utf8")) as {
-      agents?: {
-        defaults?: Record<string, unknown>;
-        entries?: Record<string, Record<string, unknown>>;
-      };
-      models?: { providers?: Record<string, unknown> };
-      channels?: {
-        telegram?: {
-          streaming?: {
-            mode?: string;
-            chunkMode?: string;
-            block?: { enabled?: boolean };
-            preview?: { chunk?: { minChars?: number } };
-          };
-        };
-      };
-    };
-    const providers = requireRecord(copiedConfig.models?.providers, "model providers");
-    expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
-
-    const agentDefaults = requireRecord(copiedConfig.agents?.defaults, "agent defaults");
-    const agentConfig = requireRecord(copiedConfig.agents?.entries?.dev, "agent");
-    expect(agentDefaults.workspace).toBeUndefined();
-    expect(agentDefaults.agentDir).toBeUndefined();
-    expect(agentConfig.workspace).toBeUndefined();
-    expect(agentConfig.agentDir).toBeUndefined();
-
-    const telegramStreaming = requireTelegramStreaming(copiedConfig.channels?.telegram?.streaming);
-    expect(telegramStreaming).toEqual({
+    const copiedConfig: unknown = JSON.parse(fs.readFileSync(copiedConfigPath, "utf8"));
+    expect(copiedConfig).toHaveProperty("models.providers.custom", {
+      baseUrl: "https://example.test/v1",
+    });
+    for (const agentPath of ["agents.defaults", "agents.entries.dev"]) {
+      expect(copiedConfig).toHaveProperty(agentPath, expect.any(Object));
+      expect(copiedConfig).not.toHaveProperty(`${agentPath}.workspace`);
+      expect(copiedConfig).not.toHaveProperty(`${agentPath}.agentDir`);
+    }
+    expect(copiedConfig).toHaveProperty("channels.telegram.streaming", {
       mode: "block",
       chunkMode: "newline",
       block: { enabled: true },
       preview: { chunk: { minChars: 120 } },
     });
 
-    expect(
-      fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(
-          testEnv.tempHome,
-          ".openclaw",
-          "external-plugins",
-          "glueclaw",
-          "openclaw.plugin.json",
-        ),
-      ),
-    ).toBe(true);
     const stagedAgentDir = path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent");
     expect(inspectPersistedAuthProfileStoreRaw(stagedAgentDir)).toEqual({
       status: "readable",
@@ -383,36 +294,31 @@ describe("installTestEnv", () => {
       status: "readable",
       raw: liveAuthState,
     });
-    expect(fs.existsSync(path.join(stagedAgentDir, "auth-profiles.json"))).toBe(false);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", ".credentials.json"))).toBe(true);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "projects"))).toBe(false);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "settings.local.json"))).toBe(
-      false,
+    expectHomeFiles(
+      testEnv.tempHome,
+      [
+        ".openclaw/credentials/token.txt",
+        ".openclaw/external-plugins/glueclaw/openclaw.plugin.json",
+        ".claude/.credentials.json",
+        ".codex/auth.json",
+        ".codex/config.toml",
+        ".gemini/oauth_creds.json",
+        ".gemini/settings.json",
+        ".gemini/commands/Cache/review.toml",
+        ".minimax/Cache/credentials.json",
+      ],
+      [
+        ".openclaw/agents/main/agent/auth-profiles.json",
+        ".claude/projects",
+        ".claude/settings.local.json",
+        ".codex/sessions",
+        ".gemini/antigravity-browser-profile",
+        ".gemini/antigravity/browser_recordings",
+        ".gemini/cli-browser-profile",
+        ".gemini/GPUCache",
+        ".gemini/Service Worker/CacheStorage",
+      ],
     );
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "auth.json"))).toBe(true);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "config.toml"))).toBe(true);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "sessions"))).toBe(false);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "oauth_creds.json"))).toBe(true);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "settings.json"))).toBe(true);
-    expect(
-      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "commands", "Cache", "review.toml")),
-    ).toBe(true);
-    expect(
-      fs.existsSync(path.join(testEnv.tempHome, ".minimax", "Cache", "credentials.json")),
-    ).toBe(true);
-    expect(
-      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "antigravity-browser-profile")),
-    ).toBe(false);
-    expect(
-      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "antigravity", "browser_recordings")),
-    ).toBe(false);
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "cli-browser-profile"))).toBe(
-      false,
-    );
-    expect(fs.existsSync(path.join(testEnv.tempHome, ".gemini", "GPUCache"))).toBe(false);
-    expect(
-      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "Service Worker", "CacheStorage")),
-    ).toBe(false);
   });
 
   it("allows explicit live runs against the real HOME", () => {

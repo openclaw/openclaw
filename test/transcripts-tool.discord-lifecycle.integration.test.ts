@@ -80,6 +80,24 @@ defineDiscordVoiceTests(
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         });
         const source = { providerId: "discord-voice", accountId, guildId: "g1", channelId: "1001" };
+        const start = (sessionId: string) =>
+          expect(execute({ action: "start", sessionId, ...source })).resolves.toMatchObject({
+            details: { sessionId, providerId: "discord-voice", accountId },
+          });
+        const expectStatus = (sessionId?: string, finalized = false) =>
+          expect(execute({ action: "status" })).resolves.toMatchObject({
+            details: {
+              active: sessionId ? [expect.objectContaining({ sessionId })] : [],
+              ...(finalized ? { pendingFinalization: [] } : {}),
+            },
+          });
+        const texts = async (
+          session: Parameters<TranscriptsStore["readUtterancesForSession"]>[0],
+        ) => (await store.readUtterancesForSession(session)).map((utterance) => utterance.text);
+        const join = () =>
+          expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+            ok: true,
+          });
         const providerStop = vi.spyOn(discordVoiceTranscriptsSourceProvider, "stop");
         setDiscordTranscriptsVoiceManager({ accountId, manager });
         const finalizerReady = createDeferred();
@@ -120,20 +138,12 @@ defineDiscordVoiceTests(
           );
 
         try {
-          await expect(
-            execute({ action: "start", sessionId: "first", ...source }),
-          ).resolves.toMatchObject({
-            details: { sessionId: "first", providerId: "discord-voice", accountId },
-          });
+          await start("first");
           const record = (text: string) =>
             receiveRecordedSpeech(manager, text, getSessionEntry(manager), "u-speaker");
           await record("Keep the original historical note.");
 
-          await expect(
-            execute({ action: "start", sessionId: "second", ...source }),
-          ).resolves.toMatchObject({
-            details: { sessionId: "second", providerId: "discord-voice", accountId },
-          });
+          await start("second");
           if (scenario === "interleaved finalization") {
             await finalizerReady.promise;
           }
@@ -145,12 +155,8 @@ defineDiscordVoiceTests(
           const secondTexts = ["This belongs only to the replacement."];
           expect(first.source).toMatchObject(source);
           expect(second.source).toEqual(first.source);
-          expect(
-            (await store.readUtterancesForSession(first)).map((utterance) => utterance.text),
-          ).toEqual(["Keep the original historical note."]);
-          expect(
-            (await store.readUtterancesForSession(second)).map((utterance) => utterance.text),
-          ).toEqual(secondTexts);
+          expect(await texts(first)).toEqual(["Keep the original historical note."]);
+          expect(await texts(second)).toEqual(secondTexts);
           expectConnectedStatus(manager, "1001");
           expect(providerStop).not.toHaveBeenCalled();
 
@@ -176,15 +182,9 @@ defineDiscordVoiceTests(
           );
           expect.soft(providerStop).not.toHaveBeenCalled();
           expectConnectedStatus(manager, "1001");
-          await expect(execute({ action: "status" })).resolves.toMatchObject({
-            details: { active: [expect.objectContaining({ sessionId: "second" })] },
-          });
+          await expectStatus("second");
           if (terminal !== "manager destruction") {
-            await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject(
-              {
-                ok: true,
-              },
-            );
+            await join();
           }
           const provider =
             terminal === "manager destruction" ? undefined : lastRealtimeBridgeParams();
@@ -196,12 +196,7 @@ defineDiscordVoiceTests(
               "provider terminal callback",
             )(terminal === "error" ? "error" : "completed");
             expectConnectedStatus(manager, "1001");
-            await expect(execute({ action: "status" })).resolves.toMatchObject({
-              details: {
-                active: [expect.objectContaining({ sessionId: "second" })],
-                pendingFinalization: [],
-              },
-            });
+            await expectStatus("second", true);
             const ongoing = expectDefined(await store.readSession("second"), "ongoing capture");
             expect(ongoing.stoppedAt).toBeUndefined();
 
@@ -214,9 +209,7 @@ defineDiscordVoiceTests(
             recovered.onTranscript?.("user", recoveredText, true);
             await record(recoveredText);
             await vi.waitFor(async () => {
-              expect(
-                (await store.readUtterancesForSession(second)).map((utterance) => utterance.text),
-              ).toEqual(secondTexts);
+              expect(await texts(second)).toEqual(secondTexts);
             });
             expect(providerStop).not.toHaveBeenCalled();
             await expect(manager.leave({ guildId: "g1" })).resolves.toMatchObject({ ok: true });
@@ -224,15 +217,11 @@ defineDiscordVoiceTests(
             await manager.destroy();
           }
           expect(manager.status()).toEqual([]);
-          await expect(execute({ action: "status" })).resolves.toMatchObject({
-            details: { active: [expect.objectContaining({ sessionId: "second" })] },
-          });
+          await expectStatus("second");
           expect((await store.readSession("second"))?.stoppedAt).toBeUndefined();
           expect(providerStop).not.toHaveBeenCalled();
           await execute({ action: "stop", sessionId: "second" });
-          await expect(execute({ action: "status" })).resolves.toMatchObject({
-            details: { active: [], pendingFinalization: [] },
-          });
+          await expectStatus(undefined, true);
           expect(await store.readSession("second")).toMatchObject({
             stoppedAt: expect.any(String),
           });
@@ -240,14 +229,8 @@ defineDiscordVoiceTests(
 
           if (provider) {
             const stoppedSecond = expectDefined(await store.readSession("second"), "ended capture");
-            await expect(
-              execute({ action: "start", sessionId: "third", ...source }),
-            ).resolves.toMatchObject({
-              details: { sessionId: "third", providerId: "discord-voice", accountId },
-            });
-            await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject(
-              { ok: true },
-            );
+            await start("third");
+            await join();
             turn?.close();
             provider.onClose?.("error");
             provider.onReady?.();
@@ -255,20 +238,11 @@ defineDiscordVoiceTests(
             await execute({ action: "stop", sessionId: "second" });
             expect(providerStop).toHaveBeenCalledOnce();
             expectConnectedStatus(manager, "1001");
-            await expect(execute({ action: "status" })).resolves.toMatchObject({
-              details: {
-                active: [expect.objectContaining({ sessionId: "third" })],
-                pendingFinalization: [],
-              },
-            });
+            await expectStatus("third", true);
             expect(await store.readSession("second")).toMatchObject({
               stoppedAt: stoppedSecond.stoppedAt,
             });
-            expect(
-              (await store.readUtterancesForSession(stoppedSecond)).map(
-                (utterance) => utterance.text,
-              ),
-            ).toEqual(secondTexts);
+            expect(await texts(stoppedSecond)).toEqual(secondTexts);
             const third = expectDefined(await store.readSession("third"), "replacement capture");
             expect(await store.readUtterancesForSession(third)).toEqual([]);
           }
@@ -285,9 +259,7 @@ defineDiscordVoiceTests(
             }
             await manager.destroy();
             await vi.waitFor(async () => {
-              await expect(execute({ action: "status" })).resolves.toMatchObject({
-                details: { active: [], pendingFinalization: [] },
-              });
+              await expectStatus(undefined, true);
             });
           } finally {
             setDiscordTranscriptsVoiceManager({
