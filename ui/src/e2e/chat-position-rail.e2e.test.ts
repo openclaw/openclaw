@@ -6,18 +6,27 @@ import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  captureUiProof,
-  captureUiProofEnabled,
-  createChatFlowE2eSuite,
-  installMockGateway,
-} from "./chat-flow.test-support.ts";
+import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 const scrollTop = (locator: Locator) => locator.evaluate((element) => element.scrollTop);
 const readStyle = (locator: Locator, property: string) =>
   locator.evaluate((element, name) => getComputedStyle(element).getPropertyValue(name), property);
+const readStyles = (locator: Locator, properties: string[]) =>
+  locator.evaluateAll(
+    (elements, names) =>
+      elements.map((element) => {
+        const css = getComputedStyle(element);
+        return names.map((name) => css.getPropertyValue(name));
+      }),
+    properties,
+  );
+async function press(target: Page["keyboard"] | Locator, ...keys: string[]) {
+  for (const key of keys) {
+    await target.press(key);
+  }
+}
 const railCount = (rail: Locator) =>
   rail.evaluate((element) =>
     Number((element as HTMLElement).style.getPropertyValue("--chat-position-rail-count")),
@@ -63,9 +72,6 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 900, width: 1440 },
-          ...(captureUiProofEnabled
-            ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } } }
-            : {}),
         },
         async ({ page }) => {
           const pageErrors: string[] = [];
@@ -155,7 +161,6 @@ suite.define(() => {
           expect(await markerForIndex(239).getAttribute("aria-label")).toContain("240 of 240");
           expect(await preview.count()).toBe(0);
           expect(await rail.locator('[role="status"]').count()).toBe(0);
-          await captureUiProof(suite, page, "chat-position-rail", "idle.png");
 
           // Exercise the composite through real Tab navigation, including reentry.
           const focusedMarkerId = () =>
@@ -200,31 +205,24 @@ suite.define(() => {
           await expect.poll(() => rail.locator('[aria-current="true"]').count()).toBe(1);
           await transcript.focus();
           await tabIntoCurrentPosition();
-          await page.keyboard.press("Home");
-          await page.keyboard.press("ArrowDown");
+          await press(page.keyboard, "Home", "ArrowDown");
           await expect.poll(focusedMarkerId).toBe("position-rail-1");
           await expect.poll(() => preview.count()).toBe(1);
           await page.keyboard.press("ArrowUp");
           await expect.poll(focusedMarkerId).toBe("position-rail-0");
-          await captureUiProof(suite, page, "chat-position-rail", "keyboard-exploration.png");
           await expect.poll(() => rail.locator('[tabindex="0"]').count()).toBe(1);
           await page.keyboard.press("Tab");
           expect(await focusedMarkerId()).toBeNull();
           await transcript.focus();
           await tabIntoCurrentPosition();
-          await captureUiProof(suite, page, "chat-position-rail", "native-tab-reentry.png");
           await page.keyboard.press("Shift+Tab");
           await browserExpect(transcript).toBeFocused();
-          await page.keyboard.press("Tab");
-          await page.keyboard.press("Home");
-          await page.keyboard.press("Enter");
+          await press(page.keyboard, "Tab", "Home", "Enter");
           await expect.poll(() => scrollTop(transcript)).toBe(0);
           await page.keyboard.press("Escape");
           await browserExpect(transcript).toBeFocused();
           await expect.poll(() => preview.count()).toBe(0);
-          await page.keyboard.press("Tab");
-          await page.keyboard.press("End");
-          await page.keyboard.press(" ");
+          await press(page.keyboard, "Tab", "End", " ");
           await expect.poll(currentMarkerId).toBe("position-rail-239");
           await page.keyboard.press("Escape");
 
@@ -237,22 +235,13 @@ suite.define(() => {
               bottom: element.hasAttribute("data-overflow-bottom"),
             }));
           const currentIsVisible = () =>
-            scroller.evaluate((element) => {
-              const current = element
-                .querySelector('[aria-current="true"]')!
-                .getBoundingClientRect();
-              const viewport = element.getBoundingClientRect();
-              return current.top >= viewport.top && current.bottom <= viewport.bottom;
-            });
-          const strokeSizes = () =>
-            markers.evaluateAll((items) => [
-              ...new Set(
-                items.map((item) => {
-                  const style = getComputedStyle(item.querySelector(".chat-position-rail__tick")!);
-                  return `${style.width} × ${style.height}`;
-                }),
-              ),
-            ]);
+            fits(scroller.locator('[aria-current="true"]'), ".chat-position-rail__marks");
+          const ticks = markers.locator(".chat-position-rail__tick");
+          const strokeSizes = async () => [
+            ...new Set(
+              (await readStyles(ticks, ["width", "height"])).map((size) => size.join(" × ")),
+            ),
+          ];
           await page.mouse.move(700, 80);
           await expect.poll(strokeSizes).toEqual(["8px × 2px"]);
           const colors = await rail.evaluate((element) => {
@@ -316,7 +305,6 @@ suite.define(() => {
           await expect.poll(fades).toEqual({ top: true, bottom: true });
           await expect.poll(visibilityMatchesViewport).toBe(true);
           await expect.poll(currentIsVisible).toBe(true);
-          await captureUiProof(suite, page, "chat-position-rail", "stress-both-fades.png");
 
           // Crossing the midpoint can change the anchor while the visible cohort stays fixed.
           const crossingOffset = await transcript.evaluate((element) => {
@@ -402,14 +390,7 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.focus();
           await expect.poll(visibilityMatchesViewport).toBe(true);
-          const strokeColors = () =>
-            markers.evaluateAll((items) =>
-              items.map(
-                (item) =>
-                  getComputedStyle(item.querySelector(".chat-position-rail__tick")!)
-                    .backgroundColor,
-              ),
-            );
+          const strokeColors = async () => (await readStyles(ticks, ["background-color"])).flat();
           // The tick animates its background after visibility changes. Capture
           // each marker's target color, not a transient animation frame.
           const restingColors = await markers.evaluateAll((items) =>
@@ -417,22 +398,15 @@ suite.define(() => {
           );
           await markerForIndex(4).hover();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
-          const waveWidths = () =>
-            markers.evaluateAll((items) =>
-              items
-                .slice(0, 9)
-                .map((item) =>
-                  Number.parseFloat(
-                    getComputedStyle(item.querySelector(".chat-position-rail__tick")!).width,
-                  ),
-                ),
-            );
+          const waveWidths = async () =>
+            (await readStyles(ticks, ["width"]))
+              .slice(0, 9)
+              .map(([width]) => Number.parseFloat(width!));
           const expectedWave = [8, 12, 16, 24, 32, 24, 16, 12, 8];
           await expect.poll(waveWidths).toEqual(expectedWave);
           await expect
             .poll(strokeColors)
             .toEqual(restingColors.map((color, index) => (index === 4 ? colors.text : color)));
-          await captureUiProof(suite, page, "chat-position-rail", "scroll-follow-hover.png");
 
           const previewBounds = await preview.boundingBox();
           expect(previewBounds).not.toBeNull();
@@ -442,7 +416,6 @@ suite.define(() => {
             { steps: 20 },
           );
           expect(await preview.textContent()).toContain("Transcript checkpoint 4");
-          await captureUiProof(suite, page, "chat-position-rail", "hover-reading.png");
           await expect.poll(waveWidths).toEqual(expectedWave);
           await expect
             .poll(strokeColors)
@@ -486,26 +459,19 @@ suite.define(() => {
               .locator(`.chat-bubble[data-entry-id="position-rail-${index}"]`)
               .evaluate((element) => {
                 const overlay = getComputedStyle(element, "::after");
-                return {
-                  visible: overlay.content !== "none" && Number.parseFloat(overlay.opacity) > 0,
-                  animated: overlay.animationName !== "none",
-                  outline: getComputedStyle(element).outlineStyle,
-                };
+                return overlay.content !== "none" && Number.parseFloat(overlay.opacity) > 0;
               });
           const clickAndObserveFlash = async (index: number, animated: boolean) => {
             // Retain the transient paint in the renderer before a delayed host can miss it.
             const observation = await transcript.evaluateHandle(
               (element: HTMLElement, position) => {
+                const id = `position-rail-${position}`;
                 let clicked = false;
                 let animationStarted = false;
                 let paint: { visible: boolean; animated: boolean; outline: string } | null = null;
                 const sample = () => {
-                  if (!clicked) {
-                    return;
-                  }
-                  const bubble = element.querySelector(
-                    `.chat-bubble[data-entry-id="position-rail-${position}"]`,
-                  );
+                  const bubble =
+                    clicked && element.querySelector(`.chat-bubble[data-entry-id="${id}"]`);
                   if (!bubble) {
                     return;
                   }
@@ -531,7 +497,7 @@ suite.define(() => {
                     event.target instanceof Element &&
                     event.target
                       .closest("[data-position-marker-id]")
-                      ?.getAttribute("data-position-marker-id") === `position-rail-${position}`
+                      ?.getAttribute("data-position-marker-id") === id
                   ) {
                     clicked = true;
                   }
@@ -540,7 +506,7 @@ suite.define(() => {
                   if (
                     clicked &&
                     event.target instanceof Element &&
-                    event.target.getAttribute("data-entry-id") === `position-rail-${position}` &&
+                    event.target.getAttribute("data-entry-id") === id &&
                     event.pseudoElement === "::after"
                   ) {
                     animationStarted = true;
@@ -574,10 +540,7 @@ suite.define(() => {
               await expect
                 .poll(() => observation.evaluate((entry) => entry.read()))
                 .toEqual({ visible: true, animated, outline: "none" });
-              if (animated) {
-                await captureUiProof(suite, page, "chat-position-rail", `jump-flash-${index}.png`);
-              }
-              await expect.poll(async () => (await flashPaint(index)).visible).toBe(false);
+              await expect.poll(() => flashPaint(index)).toBe(false);
             } finally {
               try {
                 await observation.evaluate((entry) => entry.disconnect());
@@ -611,10 +574,8 @@ suite.define(() => {
 
           await page.setViewportSize({ height: 900, width: 900 });
           await markers.first().waitFor({ state: "hidden" });
-          await captureUiProof(suite, page, "chat-position-rail", "narrow-pane.png");
           await page.setViewportSize({ height: 844, width: 390 });
           await markers.first().waitFor({ state: "hidden" });
-          await captureUiProof(suite, page, "chat-position-rail", "mobile.png");
           await page.setViewportSize({ height: 900, width: 1440 });
           await markers.first().waitFor({ state: "visible" });
           await page.emulateMedia({ reducedMotion: "reduce" });
@@ -660,12 +621,6 @@ suite.define(() => {
               const marker = await markers.first().boundingBox();
               expect(inner!.x - (marker!.x + marker!.width)).toBeGreaterThanOrEqual(10);
             }
-            await captureUiProof(
-              suite,
-              page,
-              "chat-position-rail",
-              `saved-width-${width.replace("%", "percent")}.png`,
-            );
           }
           // A foreign-host commit can change the inner column while the pane's
           // own dimensions stay fixed. Exercise that existing event boundary.
@@ -691,8 +646,7 @@ suite.define(() => {
           await page.mouse.wheel(0, -100000);
           await expect.poll(() => scrollTop(transcript)).toBe(0);
           await transcript.focus();
-          await page.keyboard.press("Tab");
-          await page.keyboard.press("End");
+          await press(page.keyboard, "Tab", "End");
           const exploredMarker = markerForIndex(239);
           await expect.poll(focusedMarkerId).toBe("position-rail-239");
           const exploredTop = (await exploredMarker.boundingBox())!.y;
@@ -737,15 +691,10 @@ suite.define(() => {
             timestamp: (seq + 80) * 1_000,
             __openclaw: { id, seq: seq + 80, ...(runId ? { runId } : {}) },
           });
-          const longReply = Array.from(
-            { length: 18 },
-            (
-              _,
-              index,
-            ) => `Section ${index + 1}: The review preserves the original request, explains the evidence, and records the resulting decision. Each participant can check the source and understand the next step.
-
-`,
-          ).join("");
+          const longReply =
+            "The review preserves the request, explains the evidence, and records the decision. Each participant can check the source and understand the next step.\n\n".repeat(
+              22,
+            );
           await installMockGateway(page, {
             historyMessages: [
               ...Array.from({ length: 80 }, (_, index) => ({
@@ -788,17 +737,11 @@ suite.define(() => {
           expect(await marks.count()).toBeLessThan(84);
           const runMarker = thread.locator('[data-position-marker-id="run:review-run"]');
           await thread.locator('.chat-position-rail__marker[tabindex="0"]').focus();
-          await page.keyboard.press("End");
-          await page.keyboard.press("ArrowUp");
-          await page.keyboard.press("ArrowUp");
+          await press(page.keyboard, "End", "ArrowUp", "ArrowUp");
           await browserExpect(runMarker).toBeFocused();
           await runMarker.press("Enter");
           const first = thread.locator('.chat-bubble[data-entry-id="first"]');
-          await expect
-            .poll(() =>
-              first.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),
-            )
-            .toBe(true);
+          await browserExpect(first).toHaveClass(/\bchat-bubble--reply-target\b/);
           await expect
             .poll(async () =>
               (await thread.locator(".chat-position-rail__preview-copy").textContent())?.trim(),
@@ -823,8 +766,8 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          await expect.poll(() => runMarker.getAttribute("aria-current")).toBe("true");
-          await expect.poll(() => runMarker.getAttribute("data-visible")).toBe("");
+          await browserExpect(runMarker).toHaveAttribute("aria-current", "true");
+          await browserExpect(runMarker).toHaveAttribute("data-visible", "");
           expect(
             await thread.locator('.chat-position-rail__marker[aria-current="true"]').count(),
           ).toBe(1);
@@ -865,12 +808,6 @@ suite.define(() => {
           await expect.poll(() => runMarker.getAttribute("aria-current")).toBe("true");
           await expect.poll(markerFits).toBe(true);
           await composerInput.fill("");
-          await captureUiProof(
-            suite,
-            page,
-            "chat-position-rail",
-            `run-continuation-${colorScheme}.png`,
-          );
           await runMarker.press("Enter");
           await expect.poll(() => fits(first, ".chat-thread")).toBe(true);
         },

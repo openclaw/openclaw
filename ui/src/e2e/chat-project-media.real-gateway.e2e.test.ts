@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { saveMediaBuffer } from "../../../src/media/store.js";
@@ -20,7 +20,6 @@ import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
-const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const execFileAsync = promisify(execFile);
 let instance: OpenClawTestInstance | undefined;
 const suite = createControlUiE2eSuite({
@@ -44,9 +43,7 @@ const suite = createControlUiE2eSuite({
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
       await runQaGatewayFixture(
-        async () => {
-          throw error;
-        },
+        () => Promise.reject(error),
         () => owner.cleanup(),
       );
       throw error;
@@ -76,25 +73,17 @@ suite.define(() => {
     const projectRoot = owner.state.path("project");
     await mkdir(projectRoot, { recursive: true });
     await writeFile(path.join(projectRoot, "README.md"), "# Synthetic image preview project\n");
-    for (const args of [
-      ["init", "--initial-branch=main"],
-      ["add", "README.md"],
-      [
-        "-c",
-        "user.name=Image Proof",
-        "-c",
-        "user.email=proof@example.invalid",
-        "commit",
-        "-m",
-        "test: initialize synthetic project",
-      ],
-    ]) {
-      await execFileAsync("git", args, { cwd: projectRoot, env: owner.env });
-    }
-    const project = await call("projects.register", {
-      path: projectRoot,
-      name: "Image preview proof",
-    });
+    const git = (...args: string[]) =>
+      execFileAsync("git", args, {
+        cwd: projectRoot,
+        env: owner.env,
+      });
+    await git("init", "--initial-branch=main");
+    await git("add", "README.md");
+    await git("config", "user.name", "Proof");
+    await git("config", "user.email", "proof@example.invalid");
+    await git("commit", "-m", "init");
+    const project = await call("projects.register", { path: projectRoot, name: "Image proof" });
     const sessionKey = "agent:main:project-media-proof";
     const session = await call("sessions.create", {
       key: sessionKey,
@@ -113,7 +102,8 @@ suite.define(() => {
     const projectImage = path.join(worktree.path, ".openclaw", "tmp", "proof", "project.png");
     const outsideImage = owner.state.path("outside", "selected.png");
     const siblingImage = owner.state.path("outside", "unselected.png");
-    for (const target of [projectImage, outsideImage, siblingImage]) {
+    const images = [projectImage, outsideImage, siblingImage];
+    for (const target of images) {
       await mkdir(path.dirname(target), { recursive: true });
       await copyFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"), target);
     }
@@ -122,21 +112,11 @@ suite.define(() => {
         { agentId: "main", sessionKey, sessionId: String(session.sessionId), env: owner.env },
         { message },
       );
-    const introduction =
-      "Synthetic image preview proof. The project image belongs to this task's worktree.";
+    const introduction = "Synthetic project image preview.";
+    const imageText = [introduction, ...images.map((image) => `MEDIA:${image}`)].join("\n\n");
     await append({
       role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: [
-            introduction,
-            `MEDIA:${projectImage}`,
-            `MEDIA:${outsideImage}`,
-            `MEDIA:${siblingImage}`,
-          ].join("\n\n"),
-        },
-      ],
+      content: [{ type: "text", text: imageText }],
       timestamp: Date.now(),
     });
     const dashboard = await owner.cli(["dashboard", "--json"]);
@@ -150,38 +130,26 @@ suite.define(() => {
         viewport: { width: 1440, height: 1000 },
         serviceWorkers: "block",
         permissions: ["local-network-access"],
-        ...(captureEnabled
-          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 1000 } } }
-          : {}),
       },
       async ({ page }) => {
+        const cards = page.locator(".chat-assistant-attachment-card");
+        const allow = (root: Page | Locator = page) =>
+          root.getByRole("button", { name: "Allow image", exact: true });
         const decoded = async (image: Locator) =>
           (await image.count()) === 1
             ? image.evaluate((element) =>
                 element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
               )
             : 0;
-        const capture = async (name: string) => {
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(suite.artifactDir, name) });
-          }
-        };
         expect((await page.goto(url.toString()))?.status()).toBe(404);
         await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         await page.getByText(introduction, { exact: true }).waitFor();
         const projectPreview = page.locator('img.chat-message-image[src*="project.png"]');
         await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
-        await capture("01-project-workspace-ready.png");
-        const selected = page
-          .locator(".chat-assistant-attachment-card")
-          .filter({ has: page.getByText("selected.png", { exact: true }) });
-        const other = page
-          .locator(".chat-assistant-attachment-card")
-          .filter({ hasText: "unselected.png" });
-        await expect
-          .poll(() => page.getByRole("button", { name: "Allow image", exact: true }).count())
-          .toBe(2);
+        const selected = cards.filter({ has: page.getByText("selected.png", { exact: true }) });
+        const other = cards.filter({ hasText: "unselected.png" });
+        await expect.poll(() => allow().count()).toBe(2);
         const selectedTitle = selected.locator(".chat-assistant-attachment-card__title");
         await selectedTitle.hover();
         await expect.poll(() => tooltipTitleText(selectedTitle)).toContain(outsideImage);
@@ -189,16 +157,12 @@ suite.define(() => {
           .locator("openclaw-tooltip .tooltip-content")
           .filter({ hasText: outsideImage })
           .waitFor({ state: "visible" });
-        await capture("02-outside-path-and-allow.png");
-        await selected.getByRole("button", { name: "Allow image", exact: true }).click();
+        await allow(selected).click();
         const allowedPreview = page.locator(
           'img.chat-message-image[src*="selected.png"]:not([src*="unselected.png"])',
         );
         await expect.poll(() => decoded(allowedPreview)).toBeGreaterThan(0);
-        expect(await other.getByRole("button", { name: "Allow image", exact: true }).count()).toBe(
-          1,
-        );
-        await capture("03-selected-image-allowed.png");
+        expect(await allow(other).count()).toBe(1);
 
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const permissionTrigger = pane.locator('[data-chat-permission-select="true"]');
@@ -216,17 +180,11 @@ suite.define(() => {
             .poll(() => decoded(page.locator(`img.chat-message-image[src*="%2F${filename}"]`)))
             .toBeGreaterThan(0);
         }
-        expect(await page.getByRole("button", { name: "Allow image", exact: true }).count()).toBe(
-          0,
-        );
-        await capture("04-full-access-all-images.png");
+        expect(await allow().count()).toBe(0);
 
         await selectPermission("workspace");
         await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
-        await expect
-          .poll(() => page.getByRole("button", { name: "Allow image", exact: true }).count())
-          .toBe(2);
-        await capture("05-workspace-protection-restored.png");
+        await expect.poll(() => allow().count()).toBe(2);
 
         const filename = "café 雪 🦞.txt";
         const bytes = Buffer.from("café|雪|🦞\r\n139+241=380\r\n");
@@ -253,9 +211,7 @@ suite.define(() => {
         });
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        const fileCard = page
-          .locator(".chat-assistant-attachment-card")
-          .filter({ hasText: filename });
+        const fileCard = cards.filter({ hasText: filename });
         const downloadFile = async (link: Locator) => {
           // Focus keeps the action exposed while reloaded images move the card.
           await link.focus();

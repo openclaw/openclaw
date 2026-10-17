@@ -8,7 +8,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
-  captureUiProof,
   installMockGateway,
   scrollChatThreadToTop,
   waitForChatScrollIdle,
@@ -55,7 +54,6 @@ function readPositionRailGeometry(page: Page) {
     const bubble = message?.getBoundingClientRect();
     const distanceFromEnd = thread.scrollHeight - thread.clientHeight - thread.scrollTop;
     return {
-      activeId,
       atEnd: Math.abs(distanceFromEnd) <= 1,
       currentVisible: current?.hasAttribute("data-visible") ?? false,
       messageInViewport: Boolean(
@@ -66,38 +64,19 @@ function readPositionRailGeometry(page: Page) {
         marker.top >= viewport.top &&
         marker.bottom <= viewport.top + element.clientHeight,
       ),
-      distanceFromEnd,
-      transcript: {
-        scrollTop: thread.scrollTop,
-        clientHeight: thread.clientHeight,
-        scrollHeight: thread.scrollHeight,
-      },
-      rail: {
-        scrollTop: element.scrollTop,
-        clientHeight: element.clientHeight,
-        top: viewport.top,
-        bottom: viewport.bottom,
-      },
-      marker: marker?.toJSON() ?? null,
-      bubble: bubble?.toJSON() ?? null,
     };
   });
 }
 
 async function expectPositionRailAtEnd(page: Page) {
-  try {
-    await expect
-      .poll(() => readPositionRailGeometry(page))
-      .toMatchObject({
-        atEnd: true,
-        currentVisible: true,
-        messageInViewport: true,
-        markerInViewport: true,
-      });
-  } catch (error) {
-    console.error("[chat-position-rail] geometry", await readPositionRailGeometry(page));
-    throw error;
-  }
+  await expect
+    .poll(() => readPositionRailGeometry(page))
+    .toMatchObject({
+      atEnd: true,
+      currentVisible: true,
+      messageInViewport: true,
+      markerInViewport: true,
+    });
 }
 
 suite.define(() => {
@@ -148,7 +127,6 @@ suite.define(() => {
               }
             }, navigationFirst);
           await waitForChatScrollIdle(page);
-          await captureUiProof(suite, page, "rail-resize-navigation", "settled.png");
           await expectPositionRailAtEnd(page);
         },
       );
@@ -235,6 +213,7 @@ suite.define(() => {
               card.evaluate((element) => getComputedStyle(element, "::details-content").blockSize),
             )
             .toBe("0px");
+          const transcript = page.locator(".chat-thread");
           const track = page.locator(".chat-position-rail__track");
           const marks = page.locator(".chat-position-rail__marks");
           const composer = page.locator(".agent-chat__composer-shell");
@@ -247,12 +226,11 @@ suite.define(() => {
           const bounds = () =>
             track.evaluate((element) => element.getBoundingClientRect().toJSON());
           const collapsed = await bounds();
-          const transcriptBounds = (await page.locator(".chat-thread").boundingBox())!;
+          const transcriptBounds = (await transcript.boundingBox())!;
           expect(collapsed.left).toBeGreaterThanOrEqual(transcriptBounds.x);
           expect(collapsed.right).toBeLessThanOrEqual(transcriptBounds.x + transcriptBounds.width);
           const collapsedComposer = (await composer.boundingBox())!;
           if (count === 80 && direction === "ltr") {
-            const transcript = page.locator(".chat-thread");
             await transcript.hover();
             await page.mouse.wheel(0, -4);
             await expect
@@ -282,15 +260,15 @@ suite.define(() => {
               const tick = element.querySelectorAll(".chat-position-rail__tick")[index]!;
               const positions = [];
               for (let frame = 0; frame < 30; frame++) {
-                const transcript = element.closest<HTMLElement>(".chat-thread")!;
-                const style = getComputedStyle(transcript);
+                const reader = element.closest<HTMLElement>(".chat-thread")!;
+                const style = getComputedStyle(reader);
                 positions.push({
                   track: element.getBoundingClientRect().top,
                   tick: tick.getBoundingClientRect().top,
                   connected: element.isConnected,
                   display: getComputedStyle(element.closest(".chat-position-rail")!).display,
                   contentHeight:
-                    transcript.getBoundingClientRect().height -
+                    reader.getBoundingClientRect().height -
                     Number.parseFloat(style.paddingTop) -
                     Number.parseFloat(style.paddingBottom) -
                     Number.parseFloat(style.borderTopWidth) -
@@ -336,21 +314,19 @@ suite.define(() => {
           await detailsToggle.click();
           await details.waitFor({ state: "hidden" });
           const expandedHeight = (await marks.boundingBox())!.height;
-          const editor = page.locator(".agent-chat__composer-combobox textarea");
-          const beforeDraft = await editor.evaluate((element) => ({
+          const textarea = page.locator(".agent-chat__composer-combobox textarea");
+          const beforeDraft = await textarea.evaluate((element) => ({
             height: element.getBoundingClientRect().height,
             lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
           }));
           const beforeDraftComposer = (await composer.boundingBox())!.height;
-          const expandedDraft = Array.from(
-            { length: 6 },
-            (_, index) => `Review note ${index + 1}: keep navigation visible.`,
-          ).join("\n");
+          const expandedDraft =
+            "Review note: keep navigation visible.\n".repeat(5) + "Review note.";
           const textareaSamples = sampleAnchor();
-          await editor.fill(expandedDraft);
+          await textarea.fill(expandedDraft);
           // Measure the six-line draft itself, without the former docked-progress height.
           await expect
-            .poll(() => editor.evaluate((element) => element.getBoundingClientRect().height))
+            .poll(async () => (await textarea.boundingBox())!.height)
             .toBeGreaterThanOrEqual(beforeDraft.height + beforeDraft.lineHeight * 4);
           await expect
             .poll(async () => (await composer.boundingBox())!.height)
@@ -365,7 +341,6 @@ suite.define(() => {
             ).toBe(true);
           }
           if (count === 80 && direction === "ltr") {
-            const textarea = page.locator(".agent-chat__composer-combobox textarea");
             for (const coalesced of [false, true]) {
               if (coalesced) {
                 const expansionSamples = sampleAnchor();
@@ -399,12 +374,6 @@ suite.define(() => {
               await expect
                 .poll(() => page.locator(".chat-scroll-to-bottom").getAttribute("data-visible"))
                 .toBe("false");
-              await captureUiProof(
-                suite,
-                page,
-                "rail-goal-resize",
-                coalesced ? "coalesced.png" : "native.png",
-              );
               const cancelSamples = sampleAnchor();
               await textarea.press("Escape");
               await page.locator(".agent-chat__goal-mode").waitFor({ state: "hidden" });
@@ -493,7 +462,7 @@ suite.define(() => {
                   .height,
             ),
           ).toBe(true);
-          await page.locator(".chat-thread").focus();
+          await transcript.focus();
           await page.keyboard.press("Tab");
           await page.keyboard.press("Home");
           // Every entry remains reachable above the composer, including both ends.
@@ -536,7 +505,7 @@ suite.define(() => {
           await browserExpect(markers.last()).toBeFocused();
           await markers.last().press("Escape");
           if (count === 80 && direction === "ltr") {
-            await page.locator(".chat-thread").focus();
+            await transcript.focus();
             await page.keyboard.press("ControlOrMeta+f");
             await page.locator(".agent-chat__search-bar input").fill("Conversation checkpoint 80:");
             await expect.poll(() => markers.count()).toBe(1);
@@ -573,32 +542,29 @@ suite.define(() => {
           ),
         });
         await page.addInitScript(createControlUiMockSameOriginGatewayScript());
-        await page.addInitScript(
-          ({ key, sessionKey: seededSessionKey }) =>
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                sessionKey: seededSessionKey,
-                sidebarSessionLayouts: {
-                  [seededSessionKey]: {
-                    columns: [
-                      {
-                        id: "side-panel-column",
-                        side: "right",
-                        panels: [{ id: "workspace", slot: "workspace" }],
-                        activePanelId: "workspace",
-                        height: 700,
-                        width: 480,
-                      },
-                    ],
-                    dock: "bottom",
-                    open: true,
-                    expanded: false,
-                  },
+        const settings = {
+          sessionKey,
+          sidebarSessionLayouts: {
+            [sessionKey]: {
+              columns: [
+                {
+                  id: "side-panel-column",
+                  side: "right",
+                  panels: [{ id: "workspace", slot: "workspace" }],
+                  activePanelId: "workspace",
+                  height: 700,
+                  width: 480,
                 },
-              }),
-            ),
-          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), sessionKey },
+              ],
+              dock: "bottom",
+              open: true,
+              expanded: false,
+            },
+          },
+        };
+        await page.addInitScript(
+          ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), value: settings },
         );
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".sidebar-region--bottom.sidebar-region--open").waitFor();

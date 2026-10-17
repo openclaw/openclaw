@@ -1,11 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { CDPSession } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import {
-  captureUiProof,
-  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -84,17 +80,9 @@ suite.define(() => {
             await cycle();
           }
           const after = await focusListenerCounts(protocol, selector);
-          if (captureUiProofEnabled) {
-            await writeFile(
-              path.join(suite.artifactDir, `${completion}-listeners.json`),
-              `${JSON.stringify({ browser: suite.browser.version(), completion, cycles: 20, before, after, retainedTriggerConnected: await retainedTrigger.evaluate((element) => element.isConnected) }, null, 2)}\n`,
-            );
-          }
-          await captureUiProof(suite, page, "picker-focus", `${completion}-completed.png`);
           await trigger.click();
           await browserExpect(trigger).toHaveAttribute("aria-expanded", "true");
           await browserExpect(trigger).toBeFocused();
-          await captureUiProof(suite, page, "picker-focus", `${completion}-open.png`);
           await trigger.press("Shift");
           await browserExpect(trigger).toBeFocused();
           expect(after).toEqual(before);
@@ -136,11 +124,7 @@ suite.define(() => {
         );
       expect(backgrounds).toHaveLength(2);
       expect(backgrounds[0]).not.toBe(backgrounds[1]);
-      expect(
-        await menu.evaluate((element) =>
-          Number.parseFloat(getComputedStyle(element).transitionDuration),
-        ),
-      ).toBe(0);
+      await browserExpect(menu).toHaveCSS("transition-duration", "0s");
       await trigger.press("4");
       const patch = await gateway.waitForRequest("sessions.patch");
       expect(patch.params).toMatchObject({ permissionMode: "workspace" });
@@ -168,15 +152,9 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       const control = page.locator(".chat-composer-model-control");
 
-      for (const picker of [
-        {
-          popup: ".chat-controls__model-picker > [data-anchored-overlay]",
-          trigger: '[data-chat-model-select="true"]',
-        },
-        {
-          popup: ".chat-controls__effort-picker > [data-anchored-overlay]",
-          trigger: '[data-chat-thinking-select="true"]',
-        },
+      for (const [picker, select] of [
+        ["model", "model"],
+        ["effort", "thinking"],
       ]) {
         await page.emulateMedia({ reducedMotion: "no-preference" });
         await page.setViewportSize({ height: 900, width: 1280 });
@@ -187,8 +165,8 @@ suite.define(() => {
             top: "640px",
           });
         });
-        const trigger = control.locator(picker.trigger);
-        const popup = control.locator(picker.popup);
+        const trigger = control.locator(`[data-chat-${select}-select="true"]`);
+        const popup = control.locator(`.chat-controls__${picker}-picker > [data-anchored-overlay]`);
         await trigger.click();
         await expect
           .poll(async () => {
@@ -206,13 +184,13 @@ suite.define(() => {
             originY: Number.parseFloat(style.transformOrigin.split(" ")[1] ?? ""),
           };
         });
-        expect(topMotion?.animationName).toBe("chat-composer-picker-in");
-        expect(topMotion?.originY).toBeCloseTo(topMotion?.height ?? -1, 0);
+        expect(topMotion).toMatchObject({
+          animationName: "chat-composer-picker-in",
+          originY: expect.closeTo(topMotion.height, 0),
+        });
 
         await page.emulateMedia({ reducedMotion: "reduce" });
-        expect(await popup.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-          "none",
-        );
+        await browserExpect(popup).toHaveCSS("animation-name", "none");
 
         await page.setViewportSize({ height: 320, width: 1280 });
         await control.evaluate((element) => {

@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
+import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import {
-  captureUiProof,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -59,6 +59,20 @@ const referenceBounds = (references: Locator) =>
 const cardLinks = (card: Locator) =>
   card.locator("a").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
 const cardText = async (card: Locator) => (await card.textContent())?.replace(/\s+/gu, " ");
+async function personPage(page: Page, scenario: Parameters<typeof installMockGateway>[1] = {}) {
+  const gateway = await installMockGateway(page, { historyMessages, ...scenario });
+  await page.goto(suite.server.baseUrl + "chat");
+  const reference = page.locator(".markdown-person-reference");
+  const card = page.locator(".person-activity-hovercard[role=dialog]");
+  return {
+    gateway,
+    reference,
+    card,
+    heading: card.locator("h2"),
+    avatar: reference.locator(".markdown-person-reference__avatar"),
+    composer: page.locator(".agent-chat__composer-combobox textarea"),
+  };
+}
 
 suite.define(() => {
   it.each([
@@ -72,7 +86,7 @@ suite.define(() => {
         async ({ page }) => {
           const avatarRequests: string[] = [];
           await routeAvatars(page, avatarRequests);
-          const gateway = await installMockGateway(page, {
+          const { gateway, reference: references } = await personPage(page, {
             deferredMethods: ["users.list"],
             historyMessages: [
               {
@@ -87,8 +101,6 @@ suite.define(() => {
               },
             ],
           });
-          await page.goto(suite.server.baseUrl + "chat");
-          const references = page.locator(".markdown-person-reference");
           await expect.poll(() => references.count()).toBe(2);
           await page.evaluate(async ({ scale, font }) => {
             document.documentElement.style.setProperty("--control-ui-text-scale", String(scale));
@@ -109,7 +121,19 @@ suite.define(() => {
                   throw new Error("Expected a rendered mention label");
                 }
                 const box = avatar.getBoundingClientRect();
-                return box.top + box.height / 2 - (textBox.top + textBox.height / 2);
+                const css = getComputedStyle(element);
+                return {
+                  offset: box.top + box.height / 2 - (textBox.top + textBox.height / 2),
+                  width: box.width,
+                  height: box.height,
+                  size: Number.parseFloat(css.fontSize) + 2,
+                  line: Number.parseFloat(css.lineHeight),
+                  border: css.borderWidth,
+                  hidden: avatar.getAttribute("aria-hidden"),
+                  prefixWidth: element
+                    .querySelector(".markdown-person-reference__prefix")!
+                    .getBoundingClientRect().width,
+                };
               }),
             );
           await gateway.waitForRequest("users.list");
@@ -117,33 +141,36 @@ suite.define(() => {
           expect(await references.locator("img").count()).toBe(0);
           expect(avatarRequests).toEqual([]);
           const before = await referenceBounds(references);
-          await captureUiProof(suite, page, "mention-directory", `${viewport.width}-before.png`);
           await gateway.resolveDeferred("users.list", {
             profiles: [
               { ...profile, id: "profile-photo", displayName: "Photo Person", hasAvatar: true },
               { ...profile, id: "profile-missing", displayName: "Missing Person" },
             ],
           });
+          await browserExpect(
+            references.first().locator('[data-avatar-state="loaded"]'),
+          ).toHaveCount(1);
+          const image = references.first().locator("img");
           await expect
-            .poll(() => references.first().locator('[data-avatar-state="loaded"]').count())
-            .toBe(1);
-          await expect
-            .poll(() =>
-              references
-                .first()
-                .locator("img")
-                .evaluate((image: HTMLImageElement) => image.naturalWidth),
-            )
+            .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
             .toBeGreaterThan(0);
           expect(await references.nth(1).locator("img").count()).toBe(0);
           expect(avatarRequests.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
             "/api/users/profile-photo/avatar?v=2",
           ]);
           expect(await referenceBounds(references)).toEqual(before);
-          for (const offset of await geometry()) {
-            expect(Math.abs(offset)).toBeLessThanOrEqual(1);
+          for (const metrics of await geometry()) {
+            expect(metrics).toMatchObject({
+              width: metrics.size,
+              height: metrics.size,
+              border: "0px",
+              hidden: "true",
+              prefixWidth: 0,
+            });
+            expect(metrics.width).toBeGreaterThan(0);
+            expect(metrics.height).toBeLessThanOrEqual(metrics.line);
+            expect(Math.abs(metrics.offset)).toBeLessThanOrEqual(1);
           }
-          await captureUiProof(suite, page, "mention-directory", `${viewport.width}-after.png`);
           expect(await references.allTextContents()).toEqual([label, label]);
         },
       );
@@ -169,51 +196,43 @@ suite.define(() => {
           timeZone: "Europe/London",
           watchedSessions: [watched, "agent:private:hidden"],
         };
-        const gateway = await installMockGateway(page, {
-          historyMessages,
+        const row = (key: string, title: string, updatedAt = now) => ({
+          key,
+          label: title,
+          updatedAt,
+          kind: "direct",
+        });
+        const user = { id: person.id, identity: person.identity, name: person.name };
+        const { gateway, reference, card } = await personPage(page, {
           presenceUsers: [person],
           methodResponses: {
             "users.list": directory,
             "sessions.list": chatSessionListResponse([
-              { key: "agent:main:main", kind: "direct", label: "Card comparison", updatedAt: now },
+              row("agent:main:main", "Card comparison"),
               {
-                key: watched,
-                kind: "direct",
-                label: "Release checklist",
-                updatedAt: now - 60_000,
+                ...row(watched, "Release checklist", now - 60_000),
                 boardFace: "dashboard",
               },
               {
-                key: recent,
-                kind: "direct",
-                label: "Review launch notes",
-                updatedAt: now - 120_000,
+                ...row(recent, "Review launch notes", now - 120_000),
                 createdActor: { type: "human", id: person.id, identity: person.identity },
               },
               {
-                key: "agent:main:raw-id",
-                kind: "direct",
-                label: "Unqualified identity must not match",
-                updatedAt: now,
+                ...row("agent:main:raw-id", "Unqualified identity must not match"),
                 createdActor: { type: "human", id: person.id },
               },
             ]),
           },
         });
-        await page.goto(suite.server.baseUrl + "chat");
         await page.locator('[data-navigation-view="online"]').click();
         const sidebarPerson = page.locator('[data-online-user-id="profile-ada"]');
         await sidebarPerson.hover();
-        const card = page.locator(".person-activity-hovercard[role=dialog]");
         await card.getByRole("link", { name: /Release checklist/ }).waitFor();
         const sidebarText = await cardText(card);
         const sidebarLinks = await cardLinks(card);
-        await captureUiProof(suite, page, "person-card-parity", "sidebar.png");
         await page.keyboard.press("Escape");
-        const reference = page.locator(".markdown-person-reference");
         await reference.focus();
         await card.locator("h2").waitFor();
-        await captureUiProof(suite, page, "person-card-parity", "chat.png");
         expect(await cardText(card)).toBe(sidebarText);
         expect(await cardLinks(card)).toEqual(sidebarLinks);
         expect(await card.textContent()).not.toContain("Unqualified identity");
@@ -221,7 +240,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {
-              user: { id: person.id, identity: person.identity, name: person.name },
+              user,
               deviceFamily: "iPad",
               platform: "iPadOS",
               timeZone: "Europe/Paris",
@@ -238,14 +257,9 @@ suite.define(() => {
         await expect.poll(() => card.textContent()).toContain("Offline");
         expect(await card.textContent()).not.toContain("Viewing now");
         expect(await card.textContent()).toContain("Review launch notes");
-        expect(await reference.evaluate((node) => node === document.activeElement)).toBe(true);
+        await browserExpect(reference).toBeFocused();
         await gateway.emitGatewayEvent("presence", {
-          presence: [
-            {
-              user: { id: person.id, identity: person.identity, name: person.name },
-              watchedSessions: [watched],
-            },
-          ],
+          presence: [{ user, watchedSessions: [watched] }],
         });
         await card.getByRole("link", { name: /Release checklist/ }).click();
         await expect
@@ -268,16 +282,12 @@ suite.define(() => {
         async ({ page }) => {
           const avatarRequests: string[] = [];
           await routeAvatars(page, avatarRequests);
-          const gateway = await installMockGateway(page, {
-            historyMessages,
+          const { gateway, reference, avatar, card, heading, composer } = await personPage(page, {
             methodResponses: { "users.list": directory },
           });
-          await page.goto(suite.server.baseUrl + "chat");
           await page.locator(".chat-bubble").filter({ hasText: text }).waitFor();
-          const reference = page.locator(".markdown-person-reference");
           await reference.waitFor();
           expect(await reference.count()).toBe(1);
-          const avatar = reference.locator(".markdown-person-reference__avatar");
           await expect.poll(() => avatar.locator("img").count()).toBe(1);
           expect(
             await reference.evaluate((node) => {
@@ -291,40 +301,16 @@ suite.define(() => {
               return {
                 text: node.textContent,
                 copiedText,
-                border: getComputedStyle(node).borderWidth,
-                prefixWidth: node
-                  .querySelector(".markdown-person-reference__prefix")!
-                  .getBoundingClientRect().width,
-                avatarHidden: node
-                  .querySelector(".markdown-person-reference__avatar")!
-                  .getAttribute("aria-hidden"),
                 message: node.closest(".chat-bubble")!.getAttribute("data-message-text"),
               };
             }),
           ).toEqual({
             text: label,
             copiedText: label,
-            border: "0px",
-            prefixWidth: 0,
-            avatarHidden: "true",
             message: text,
           });
           const avatarPaths = () => avatarRequests.map((url) => new URL(url).pathname);
           expect(avatarPaths()).not.toContain("/api/users/profile-old/avatar");
-          const avatarSize = await avatar.boundingBox();
-          expect(avatarSize?.width).toBeGreaterThan(0);
-          expect(avatarSize?.width).toBe(avatarSize?.height);
-          expect(avatarSize!.width).toBe(
-            await reference.evaluate(
-              (node) => Number.parseFloat(getComputedStyle(node).fontSize) + 2,
-            ),
-          );
-          expect(avatarSize!.height).toBeLessThanOrEqual(
-            await reference.evaluate((node) =>
-              Number.parseFloat(getComputedStyle(node).lineHeight),
-            ),
-          );
-          await captureUiProof(suite, page, "person-references", input + "-message.png");
           expect(await gateway.getRequests("users.list")).toHaveLength(1);
           if (input === "keyboard") {
             await reference.focus();
@@ -333,32 +319,28 @@ suite.define(() => {
           } else {
             await reference.tap();
           }
-          const card = page.locator(".person-activity-hovercard[role=dialog]");
-          await card.locator("h2").waitFor();
-          expect(await card.locator("h2").textContent()).toBe("Ada Lovelace");
+          await browserExpect(heading).toHaveText("Ada Lovelace");
           const activity = card.getByRole("link", { name: "View activity" });
           expect(await activity.getAttribute("href")).toBe("/activity/profile-ada");
+          const image = card.locator("img");
           await expect
             .poll(() =>
-              card
-                .locator("img")
-                .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
+              image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
             )
             .toBe(true);
           expect(avatarPaths()).toContain("/api/users/profile-ada/avatar");
-          await captureUiProof(suite, page, "person-references", input + "-card.png");
           expect(await reference.getAttribute("aria-expanded")).toBe("true");
           expect(await gateway.getRequests("users.list")).toHaveLength(2);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           if (input === "keyboard") {
             await reference.press("Tab");
-            expect(await activity.evaluate((node) => node === document.activeElement)).toBe(true);
+            await browserExpect(activity).toBeFocused();
             await activity.press("Escape");
-            expect(await reference.evaluate((node) => node === document.activeElement)).toBe(true);
+            await browserExpect(reference).toBeFocused();
           } else if (input === "touch") {
             await reference.tap();
           } else {
-            await page.locator(".agent-chat__composer-combobox textarea").hover();
+            await composer.hover();
           }
           await card.waitFor({ state: "detached" });
           expect(await reference.getAttribute("aria-expanded")).toBe("false");
@@ -370,7 +352,7 @@ suite.define(() => {
             ),
           });
           await reference.click();
-          await expect.poll(() => card.locator("h2").textContent()).toBe("Ada Byron");
+          await browserExpect(heading).toHaveText("Ada Byron");
           expect(await reference.textContent()).toBe(label);
           await activity.click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-ada");
@@ -384,12 +366,9 @@ suite.define(() => {
     "retries a %s initial directory lookup when a person card opens",
     async (outcome) => {
       await suite.withPage({}, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          historyMessages,
+        const { gateway, reference, heading } = await personPage(page, {
           deferredMethods: ["users.list"],
         });
-        await page.goto(suite.server.baseUrl + "chat");
-        const reference = page.locator(".markdown-person-reference");
         await reference.waitFor();
         await gateway.waitForRequest("users.list");
         if (outcome === "failed") {
@@ -404,24 +383,18 @@ suite.define(() => {
         await reference.focus();
         await expect.poll(async () => (await gateway.getRequests("users.list")).length).toBe(2);
         await gateway.resolveDeferred("users.list", directory);
-        await expect
-          .poll(() => page.locator(".person-activity-hovercard h2").textContent())
-          .toBe("Ada Lovelace");
+        await browserExpect(heading).toHaveText("Ada Lovelace");
       });
     },
   );
 
   it("does not revive a dismissed or disconnected card when an old directory reply arrives", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages,
+      const { gateway, reference, card } = await personPage(page, {
         deferredMethods: ["users.list"],
       });
-      await page.goto(suite.server.baseUrl + "chat");
-      const reference = page.locator(".markdown-person-reference");
       await reference.focus();
       await gateway.waitForRequest("users.list");
-      const card = page.locator(".person-activity-hovercard");
       await card.waitFor();
       await reference.press("Escape");
       await gateway.resolveDeferred("users.list", directory);
@@ -450,12 +423,9 @@ suite.define(() => {
     async (response) => {
       await suite.withPage({}, async ({ page }) => {
         await page.route("**/api/users/**/avatar*", (route) => route.fulfill({ status: 404 }));
-        await installMockGateway(page, {
-          historyMessages,
+        const { reference, card, composer } = await personPage(page, {
           methodResponses: { "users.list": response },
         });
-        await page.goto(suite.server.baseUrl + "chat");
-        const reference = page.locator(".markdown-person-reference");
         const avatar = reference.locator(".markdown-person-reference__avatar.is-fallback");
         await avatar.waitFor();
         expect(await reference.textContent()).toBe(label);
@@ -464,11 +434,9 @@ suite.define(() => {
         );
         expect(await avatar.locator("img").isVisible()).toBe(false);
         await reference.focus();
-        const card = page.locator(".person-activity-hovercard");
         await expect.poll(() => card.textContent()).toContain("Could not load people");
-        expect(await card.locator("a").count()).toBe(0);
-        expect(await card.locator("openclaw-viewer-avatar").count()).toBe(0);
-        await page.locator(".agent-chat__composer-combobox textarea").click();
+        expect(await card.locator("a, openclaw-viewer-avatar").count()).toBe(0);
+        await composer.click();
         await card.waitFor({ state: "detached" });
       });
     },
