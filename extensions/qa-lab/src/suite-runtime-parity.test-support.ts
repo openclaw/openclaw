@@ -45,6 +45,9 @@ export function childResult(
 ) {
   return {
     ...artifactPaths,
+    evidencePath: `${outputDir}/qa-evidence.json`,
+    reportPath: `${outputDir}/qa-suite-report.md`,
+    summaryPath: `${outputDir}/qa-suite-summary.json`,
     outputDir,
     watchUrl: "http://127.0.0.1:43123",
     ...recordQaSuiteTestResults(

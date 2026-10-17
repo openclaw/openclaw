@@ -310,7 +310,7 @@ it.each([
     const payload = createAgentGate();
     const { cron } = createCron({
       runIsolatedAgentJob: vi.fn(payload.run),
-      onEvent: (event) => payload.onEvent(event),
+      onEvent: (event: CronEvent) => payload.onEvent(event),
     });
 
     try {
@@ -401,7 +401,7 @@ it.for([
     const options = {
       runIsolatedAgentJob,
       runCommandJob: capacity.runCommandJob,
-      onEvent: (event) => payload.onEvent(event),
+      onEvent: (event: CronEvent) => payload.onEvent(event),
     };
     let { cron } = createCron(options);
     let releaseBlockers: (() => Promise<void>) | undefined;
