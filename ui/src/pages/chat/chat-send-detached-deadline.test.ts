@@ -30,9 +30,7 @@ beforeEach(() => {
   // Exercise the real browser protocol without unrelated device-signing setup.
   vi.stubGlobal("crypto", { randomUUID });
   wsInstances.length = 0;
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
+  onTestFinished(() => vi.useRealTimers());
 });
 
 type RequestFrame = { id: string; method: string; params: Record<string, unknown> };
@@ -49,9 +47,7 @@ function makeClient(host: ChatHost) {
   return client;
 }
 function expectComposer(host: ChatHost, message: string, error: string | null) {
-  expect(host.chatMessage).toBe(message);
-  expect(host.chatError).toBe(error);
-  expect(host.chatRunId).toBe("active-run");
+  expect(host).toMatchObject({ chatMessage: message, chatError: error, chatRunId: "active-run" });
 }
 function respond(ws: MockWebSocket, id: string, payload: unknown) {
   ws.emitMessage({ type: "res", id, ok: true, payload });
@@ -162,25 +158,19 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
         : "Current context notice";
     expectComposer(host, draft, expectedError);
     if (change === "unchanged") {
-      expect(host.chatStream).toBe("Waiting for approval");
+      expect(host).toMatchObject({ chatStream: "Waiting for approval", chatQueue: [] });
       expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
       expect(getChatAttachmentBlob(host.chatAttachments[0]!)).toBe(bytes);
       expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(
         "data:application/pdf;base64,JVBERi0xLjQK",
       );
-      expect(host.chatQueue).toEqual([]);
     } else {
       expect(host.chatAttachments).toEqual([newerAttachment]);
       expect(getChatAttachmentBlob(newerAttachment)).toBe(newerBytes);
     }
     if (change === "navigation") {
       const saved = Object.values(host.chatComposerFallbackByScope);
-      expect(saved).toEqual([
-        expect.objectContaining({
-          message,
-          attachments: [expect.objectContaining({ id: attachment.id })],
-        }),
-      ]);
+      expect(saved).toMatchObject([{ message, attachments: [{ id: attachment.id }] }]);
       expect(getChatAttachmentBlob(saved[0]!.attachments[0]!)).toBe(bytes);
       expect(Object.keys(host.chatComposerFallbackByScope)[0]).toContain(originalSessionKey);
     } else {
@@ -195,8 +185,7 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
       await connect(client);
     }
     await resumeStoredChatOutboxes(host);
-    expect(host.chatMessage).toBe(draft);
-    expect(host.chatRunId).toBe("active-run");
+    expect(host).toMatchObject({ chatMessage: draft, chatRunId: "active-run" });
     if (change !== "unchanged") {
       expect(host.chatAttachments).toEqual([newerAttachment]);
     }

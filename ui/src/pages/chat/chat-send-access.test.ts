@@ -11,12 +11,7 @@ import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
-import {
-  findChatSendPayload,
-  findRequestPayload,
-  makeChatHost,
-  requestCalls,
-} from "./chat-host.test-support.ts";
+import { findChatSendPayload, makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -69,24 +64,22 @@ it.each([
         ? vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false)
         : undefined;
     await handleSendChat(host);
-    expect(host.chatMessage).toBe(message);
+    expect(host).toMatchObject({ chatMessage: message, chatQueue: [] });
     expect(host.chatAttachments).toEqual([attachment]);
     expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
     expect(host.chatReplyTarget).toEqual(replyTarget);
-    expect(host.chatQueue).toEqual([]);
     expect(host.request).not.toHaveBeenCalled();
     const error =
       hold === "session"
         ? "The active session is unavailable; refresh and try again."
         : earlierError;
-    expect(host.chatError).toBe(error);
-    expect(host.lastError).toBe(error ?? null);
+    expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
     if (hold === "recovery") {
       readiness!.mockReturnValue(true);
       await handleSendChat(host);
       expect(findChatSendPayload(host)).toMatchObject({
         message,
-        attachments: [expect.objectContaining({ fileName: "brief.pdf" })],
+        attachments: [{ fileName: "brief.pdf" }],
       });
     }
   },
@@ -114,8 +107,7 @@ it.each([true, false])(
       chatFollowUpMode: connected ? "steer" : "interrupt",
     });
     await handleSendChat(host);
-    expect(host.chatMessage).toBe("");
-    expect(host.chatAttachments).toEqual([]);
+    expect(host).toMatchObject({ chatMessage: "", chatAttachments: [] });
     expect(host.chatQueue).toMatchObject([{ text: "keep this later draft", sendAttempts: 0 }]);
     expect(host.chatQueue[0]).not.toHaveProperty("queueMode");
     const queuedId = host.chatQueue[0]!.sendRunId;
@@ -129,7 +121,7 @@ it.each([true, false])(
     expect(findChatSendPayload(host)).toMatchObject({
       message: "keep this later draft",
       idempotencyKey: queuedId,
-      attachments: [expect.objectContaining({ fileName: "brief.pdf" })],
+      attachments: [{ fileName: "brief.pdf" }],
     });
     expect(host.chatMessage).toBe("next unfinished draft");
   },
@@ -170,27 +162,20 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     host.chatMessage = "newer draft";
     settingsPatch.resolve(true);
     await send;
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-    // A connected unresolved owner cannot finish a Blob row's settings write.
-    // The stored interrupted-settings state remains paused until explicit retry.
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
     const sendState = hold === "recovery-scope" ? "failed" : "waiting-idle";
-    const retained = Object.values(
-      readStoredOutboxStore(
-        sessionStorage,
-        storageTargetForGateway(
-          host.settings?.gatewayUrl,
-          original.attachmentPayload?.recoveryScope,
-        ),
-      ).sessions,
-    ).flatMap((session) => session.queue ?? []);
+    const target = storageTargetForGateway(
+      host.settings?.gatewayUrl,
+      original.attachmentPayload?.recoveryScope,
+    );
+    const stored = readStoredOutboxStore(sessionStorage, target);
+    const retained = Object.values(stored.sessions).flatMap((session) => session.queue ?? []);
+    const expectedRow = { id: original.id, text: "later turn", sendAttempts: 0, sendState };
     expect(retained).toMatchObject([
       {
-        id: original.id,
+        ...expectedRow,
         sendRunId: original.sendRunId,
         attachmentPayload: original.attachmentPayload,
-        text: "later turn",
-        sendAttempts: 0,
-        sendState,
       },
     ]);
     if (hold === "send-access") {
@@ -204,9 +189,7 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
       readiness.mockReturnValue(true);
       chatOutboxOwner(host).syncHost(host);
     }
-    expect(host.chatQueue).toMatchObject([
-      { id: original.id, text: "later turn", sendAttempts: 0, sendState },
-    ]);
+    expect(host.chatQueue).toMatchObject([expectedRow]);
     expect(host.chatMessage).toBe("newer draft");
     expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
   },
@@ -249,16 +232,9 @@ it.each([true, false])(
       sendAttempts: 0,
       sendState: "waiting-idle" as const,
     };
-    expect(
-      chatOutboxOwner(host).admit(
-        host,
-        captureChatOutboxAdmission(host, "global", "writer"),
-        queued,
-      ),
-    ).toBe("admitted");
-
+    const admission = captureChatOutboxAdmission(host, "global", "writer");
+    expect(chatOutboxOwner(host).admit(host, admission, queued)).toBe("admitted");
     await resumeStoredChatOutboxes(host);
-
     if (blocked) {
       expect(host.request).not.toHaveBeenCalled();
       expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([queued]);
@@ -319,9 +295,7 @@ it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "c
 
     if (outcome === "equivalent alias" || outcome === "confirmed") {
       expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-      expect(findRequestPayload(host.request, "chat.send", "reset payload")).toMatchObject({
-        message: "/reset now",
-      });
+      expect(findChatSendPayload(host)).toMatchObject({ message: "/reset now" });
     } else {
       expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
       expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({

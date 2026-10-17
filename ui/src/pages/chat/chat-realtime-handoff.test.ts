@@ -24,32 +24,35 @@ const transports = vi.hoisted(() => ({
 
 vi.mock(import("./talk/transport.runtime.ts"), async (importOriginal) => ({
   ...(await importOriginal()),
-  createRealtimeTalkTransport: vi.fn(
-    (_session: unknown, context: RealtimeTalkTransportContext): RealtimeTalkTransport => {
-      transports.contexts.push(context);
-      return {
-        start: async () => "ready",
-        activate: () => transports.onActivated?.(),
-        stop: transports.stop,
-      };
-    },
-  ),
+  createRealtimeTalkTransport: (
+    _session: unknown,
+    context: RealtimeTalkTransportContext,
+  ): RealtimeTalkTransport => {
+    transports.contexts.push(context);
+    return {
+      start: async () => "ready",
+      activate: () => transports.onActivated?.(),
+      stop: transports.stop,
+    };
+  },
 }));
 
 useRealtimeTalkMicrophoneFixture();
 
 function fixture() {
-  const transcript = createDeferred();
-  const close = createDeferred();
-  const closeStarted = createDeferred();
-  const replacementStarted = createDeferred();
-  const replacementActive = createDeferred();
-  const transportStopped = createDeferred();
+  const gates = {
+    transcript: createDeferred(),
+    close: createDeferred(),
+    closeStarted: createDeferred(),
+    replacementStarted: createDeferred(),
+    replacementActive: createDeferred(),
+    transportStopped: createDeferred(),
+  };
   const speech = createDeferred<{ audioBase64: string; mimeType: string; provider: string }>();
-  transports.stop.mockImplementation(() => transportStopped.resolve());
+  transports.stop.mockImplementation(() => gates.transportStopped.resolve());
   transports.onActivated = () => {
     if (transports.contexts.length === 2) {
-      replacementActive.resolve();
+      gates.replacementActive.resolve();
     }
   };
   const saved: string[] = [];
@@ -62,7 +65,7 @@ function fixture() {
     if (method === "talk.client.create") {
       snapshots.push([...saved]);
       if (snapshots.length === 2) {
-        replacementStarted.resolve();
+        gates.replacementStarted.resolve();
       }
       return {
         provider: "openai",
@@ -72,12 +75,12 @@ function fixture() {
       };
     }
     if (method === "talk.client.transcript") {
-      await transcript.promise;
+      await gates.transcript.promise;
       saved.push(String(params?.text));
     }
     if (method === "talk.client.close") {
-      closeStarted.resolve();
-      await close.promise;
+      gates.closeStarted.resolve();
+      await gates.close.promise;
       saved.push("Provider final speech");
     }
     if (method === "tts.speak") {
@@ -105,17 +108,12 @@ function fixture() {
   let reading: Promise<void> | undefined;
   const current = () => state.realtimeTalk.snapshot;
   return {
+    ...gates,
     state,
     client,
     reader,
     calls,
     current,
-    transcript,
-    close,
-    closeStarted,
-    replacementStarted,
-    replacementActive,
-    transportStopped,
     request,
     snapshots,
     async start() {
@@ -130,8 +128,8 @@ function fixture() {
     async dispose() {
       reader.stop();
       speech.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
-      transcript.resolve();
-      close.resolve();
+      gates.transcript.resolve();
+      gates.close.resolve();
       await reading;
       const active = current().realtimeTalkSession;
       if (active) {

@@ -45,16 +45,32 @@ async function enteredBeforeSettling(entered: Promise<unknown>, sending: Promise
   ]);
 }
 
+const writePayload = outboxPayloadStore.writeOutboxPayload;
 function holdPayloadWrite(fail = false) {
-  const started = createDeferred();
+  const entered = createDeferred();
   const release = createDeferred();
-  const writePayload = outboxPayloadStore.writeOutboxPayload;
   vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementationOnce(async (...args) => {
-    started.resolve();
+    entered.resolve();
     await release.promise;
     return fail ? { status: "failed", reason: "unavailable" } : writePayload(...args);
   });
-  return { started, release };
+  return { entered, release };
+}
+
+async function duringAdmission(
+  host: ReturnType<typeof makeChatHost>,
+  fail: boolean,
+  change: () => void,
+) {
+  const gate = holdPayloadWrite(fail);
+  const sending = handleSendChat(host);
+  try {
+    await enteredBeforeSettling(gate.entered.promise, sending);
+    change();
+  } finally {
+    gate.release.resolve();
+    await sending;
+  }
 }
 
 async function expectPayload(
@@ -78,20 +94,12 @@ describe("chat attachment admission", () => {
         host.assistantAgentId = "main";
         host.agentsList = { defaultId: "main", mainKey: "main", scope: "global" };
       }
-      const entered = [createDeferred(), createDeferred()];
-      const releases = [createDeferred(), createDeferred()];
-      let writes = 0;
-      const writePayload = outboxPayloadStore.writeOutboxPayload;
-      vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementation(async (...args) => {
-        const index = writes++;
-        entered[index]?.resolve();
-        await releases[index]?.promise;
-        return writePayload(...args);
-      });
+      const firstGate = holdPayloadWrite();
+      const secondGate = holdPayloadWrite();
       const stale = handleSendChat(host);
       let current: ReturnType<typeof handleSendChat> | undefined;
       try {
-        await enteredBeforeSettling(entered[0]!.promise, stale);
+        await enteredBeforeSettling(firstGate.entered.promise, stale);
         if (changedOwner === "connection") {
           host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
         } else if (changedOwner === "selected agent") {
@@ -103,16 +111,17 @@ describe("chat attachment admission", () => {
         }
         host.chatMessage = "Current submission";
         current = handleSendChat(host);
-        await enteredBeforeSettling(entered[1]!.promise, current);
+        await enteredBeforeSettling(secondGate.entered.promise, current);
         if (changedOwner !== "same owner") {
           host.chatMessage = "Newer draft";
-          releases[1]!.resolve();
+          secondGate.release.resolve();
           await current;
           expect(host.chatMessage).toBe("Newer draft");
           expect(host.chatAttachments).toEqual([]);
         }
       } finally {
-        releases.forEach((release) => release.resolve());
+        firstGate.release.resolve();
+        secondGate.release.resolve();
         await Promise.all([stale, current]);
       }
       const queued = listStoredChatOutboxes(host)[0]?.queue ?? [];
@@ -158,10 +167,7 @@ describe("chat attachment admission", () => {
         host.chatMessage = "First prompt";
         host.chatAttachments = attachments;
       }
-      const { started, release } = holdPayloadWrite(outcome === "payload failure");
-      const sending = handleSendChat(host);
-      try {
-        await enteredBeforeSettling(started.promise, sending);
+      await duringAdmission(host, outcome === "payload failure", () => {
         host.chatMessage = "@Alex newer input";
         host.chatMentions = newerMentions;
         host.chatReplyTarget = newerReply;
@@ -183,10 +189,7 @@ describe("chat attachment admission", () => {
             write(key, value);
           });
         }
-      } finally {
-        release.resolve();
-        await sending;
-      }
+      });
       expect(host.chatMessage).toBe("@Alex newer input");
       expect(host.chatMentions).toEqual(newerMentions);
       expect(host.chatReplyTarget).toEqual(newerReply);
@@ -231,10 +234,7 @@ describe("chat attachment admission", () => {
         agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
         chatReplyTarget: replyTarget,
       });
-      const { started, release } = holdPayloadWrite();
-      const sending = handleSendChat(host);
-      try {
-        await enteredBeforeSettling(started.promise, sending);
+      await duringAdmission(host, false, () => {
         if (change === "defaults") {
           host.agentsList = { defaultId: "main", mainKey: "current", scope: "per-sender" };
         } else if (change === "route") {
@@ -251,10 +251,7 @@ describe("chat attachment admission", () => {
         if (change !== "reply") {
           host.chatMessage = "newer input";
         }
-      } finally {
-        release.resolve();
-        await sending;
-      }
+      });
       const expectedDraft = change === "reply" ? "original destination" : "newer input";
       expect(host.chatMessage).toBe(expectedDraft);
       expect(host.chatReplyTarget).toEqual(change === "reply" ? newerReply : replyTarget);
