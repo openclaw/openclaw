@@ -10,7 +10,7 @@ import {
   withRemoteHttpResponse,
   type EmbeddingBatchExecutionParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   assertOkOrThrowProviderError,
   createProviderOperationDeadline,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { hashText as digestText } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {

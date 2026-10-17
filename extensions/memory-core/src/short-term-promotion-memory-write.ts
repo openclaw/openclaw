@@ -6,8 +6,8 @@ import {
   resolvePathPrefixSync,
   writeFileWindowFully,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { hashText as hashMemoryContent } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
 

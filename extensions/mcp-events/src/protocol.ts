@@ -4,7 +4,7 @@ import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 
 /** OpenAI's webhook profile, not the experimental polling/streaming extensions. */

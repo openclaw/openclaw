@@ -1,4 +1,4 @@
-import { hashText as sha256Hex } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 

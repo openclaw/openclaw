@@ -13,7 +13,7 @@ import {
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
 import {

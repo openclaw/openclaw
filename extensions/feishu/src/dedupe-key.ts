@@ -1,4 +1,4 @@
-import { hashText as sha256Hex } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";

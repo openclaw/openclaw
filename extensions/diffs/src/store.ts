@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { hashText as hashToken } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as hashToken } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {

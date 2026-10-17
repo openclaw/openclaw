@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
-import { hashText as sha256Hex } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeAccountId, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";

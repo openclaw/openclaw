@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hashText as sha256Hex } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { hasSqliteWorkerOutcomeUnknown } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

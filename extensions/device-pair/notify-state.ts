@@ -1,4 +1,4 @@
-import { hashText as hashStoreKey } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as hashStoreKey } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE = "notify-subscribers";

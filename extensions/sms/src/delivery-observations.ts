@@ -1,4 +1,4 @@
-import { hashText as sha256Hex } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSmsRuntime } from "./runtime.js";
 import { resolveTwilioMessageSid } from "./twilio.js";

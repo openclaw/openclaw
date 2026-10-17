@@ -1,4 +1,4 @@
-import { hashText as sha256 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as sha256 } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ParityToolCallShape = {

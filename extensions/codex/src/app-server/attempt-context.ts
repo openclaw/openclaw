@@ -7,8 +7,8 @@ import {
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { hashText as sha256Text } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,

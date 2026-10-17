@@ -1,4 +1,4 @@
-import { hashText as digestText } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {

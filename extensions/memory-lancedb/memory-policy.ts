@@ -1,4 +1,4 @@
-import { hashText as captureFingerprint } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { sha256Hex as captureFingerprint } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord,
