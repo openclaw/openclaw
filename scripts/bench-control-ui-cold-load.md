@@ -21,9 +21,8 @@ explicitly:
 pnpm test ui/src/e2e/team-scale-cold-load.e2e.test.ts --maxWorkers=1
 ```
 
-The selected agent has 300 sessions with a 200-row first page, 30 pinned dashboards
-outside that page, 34 owners, 120 people, six agent identities, six UI plugins,
-240 transcript messages, and 12 inline widgets. Six catalog-host events and twelve
+The selected agent has 300 root sessions plus 54 children, 24 cron sessions and 12 system sessions, with a 200-row shared first page, 30 pinned dashboards, 34 owners, 120 people, six agent identities (one selected chip), seven UI plugins,
+240 transcript messages, 120 cron jobs across enabled, disabled, running and error states, and 12 inline widgets. Six catalog-host events and twelve
 full presence snapshots arrive individually. Catalog notifications exercise the data
 owner; the grouped agent roster does not display catalog rows. Widgets use the production sandbox
 host on a separate loopback listener. Plugins are small synthetic modules exercising
@@ -32,8 +31,9 @@ registration/loading, not replicas of any private plugin implementation.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
-`--sidebar-view` selects `sessions` (default, with All owners selected) or `online`.
+`--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
+Default reloads use one agent chip; explicit churn scenarios use the all-agent roster.
 The Online run also requires the saved sidebar view to survive the reload. If it
 returns to Sessions, the run fails instead of reporting Sessions measurements as
 Online measurements.
@@ -42,9 +42,10 @@ Online measurements.
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
 
-`--warm-reload --probe-dir /path/to/probes` explicitly flushes the selected transcript
-through its cache owner before each reload and verifies that session's persisted
-snapshot. The probe directory supplies `loaf-mutation.init.js` and
+Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
+(after unloading the app), local storage and session storage; the HTTP cache stays warm.
+
+`--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
 `ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,
 hello, live catch-up, enabled input, layout shifts, mutation batches, and retained
 row elements. Visibility and enabled-input milestones are DOM observations;
@@ -54,9 +55,7 @@ then collect separate traced runs for the storyboard and attribution.
 
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
-measure a large native IndexedDB restore. `snapshotSave` reports the persisted
-row count and UTF-8 bytes, synchronous serialization time, and total flush time
-for a save through the live cache owner before each reload.
+exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted row count.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels

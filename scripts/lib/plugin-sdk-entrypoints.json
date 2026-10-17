@@ -313,6 +313,7 @@
   "native-command-config-runtime",
   "native-command-registry",
   "provider-auth",
+  "provider-auth-markers",
   "provider-auth-aliases",
   "provider-oauth-runtime",
   "provider-auth-runtime",

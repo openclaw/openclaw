@@ -6,6 +6,7 @@ import {
   memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
@@ -244,21 +245,29 @@ export async function loadAgentPortDescriptor(
         };
       },
       transcript_events(row) {
-        if (row.event_zstd == null) {
-          return row;
+        let decoded = row;
+        if (row.event_zstd != null) {
+          if (!(row.event_zstd instanceof Uint8Array)) {
+            throw new DatabasePortDataError("Invalid compressed transcript payload");
+          }
+          decoded = {
+            ...row,
+            event_json: readTranscriptPayload({
+              event_json: null,
+              event_zstd: row.event_zstd,
+              event_utf8_bytes: Number(row.event_utf8_bytes),
+            }),
+            event_zstd: null,
+          };
         }
-        if (!(row.event_zstd instanceof Uint8Array)) {
-          throw new DatabasePortDataError("Invalid compressed transcript payload");
-        }
-        return {
-          ...row,
-          event_json: readTranscriptPayload({
-            event_json: null,
-            event_zstd: row.event_zstd,
-            event_utf8_bytes: Number(row.event_utf8_bytes),
-          }),
-          event_zstd: null,
-        };
+        // SQLite upgrades leave old predicates lazy; PostgreSQL reads stored facts.
+        // The port already holds this canonical payload, so no extra read is needed.
+        return decoded.navigation_type == null &&
+          decoded.navigation_valid !== 0 &&
+          decoded.navigation_valid !== 0n &&
+          typeof decoded.event_json === "string"
+          ? { ...decoded, ...deriveTranscriptPredicateFields(decoded.event_json) }
+          : decoded;
       },
     },
     inspectSqliteSource(db) {

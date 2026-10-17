@@ -38,6 +38,7 @@ import {
   transcriptEventModelNavigationSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
 } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
@@ -582,15 +583,15 @@ export function hasOversizedVisibleMessages(
   maxBytes: number,
   roles: readonly string[],
 ): boolean {
+  const validity = transcriptPredicateSql(projection.database.db, "navigation_valid", "event");
+  const role = transcriptPredicateSql(projection.database.db, "message_role", "event");
   return selectVisibleMessageRanges(projection, start, endExclusive).some((range) => {
     const row = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       selectMessageRows(projection.database, projection.resolved.sessionId, range)
-        .select(["active.event_seq", "event.navigation_valid"])
+        .select(validity.as("navigation_valid"))
         .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
-        .where((eb) =>
-          eb.or([eb("event.message_role", "in", roles), eb("event.navigation_valid", "=", 0)]),
-        )
+        .where((eb) => eb.or([eb(role, "in", roles), eb(validity, "=", 0)]))
         .limit(1),
     );
     assertTranscriptNavigationValid(row?.navigation_valid);

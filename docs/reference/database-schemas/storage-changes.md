@@ -29,24 +29,36 @@ implements the agent-store portion of the
 [accepted column-promotion design](https://github.com/openclaw/openclaw/issues/169254).
 The JSON remains canonical. Each writer derives its query columns in TypeScript
 and commits them with the JSON in one statement; the session actor reuses that
-derivation. Runtime predicates use columns. No trigger, second persistence owner,
-or read-time backfill is introduced.
+derivation. Session-node and outbox predicates use stored columns. SQLite
+transcript predicates use stored classifications when available and otherwise
+derive them in the existing SQL query before predicate filters, counts, and
+`LIMIT`. Reads do not persist these derived values.
 
-The versioned migration uses SQLite JSON functions only to classify existing rows
-and publishes both schema markers after the complete backfill. It preserves
+The versioned migration eagerly backfills session-node and existing outbox rows,
+but leaves transcript classification lazy. SQLite can still check retained rows
+while adding columns to STRICT tables. It publishes both schema markers after the
+required migration work. Classification preserves
 first-member lookups, legacy last-member transcript navigation, SQLite integer-cast
 semantics, malformed-row handling, payload bytes, and existing retention rules.
 Schema admission and Doctor remain the only migration owners. Optional outbox
-storage stays lazy. Added text and integer fields translate to PostgreSQL text
-with C collation and bigint; supporting engines share the schema version and
-must supply their equivalent forward migration.
+storage stays lazy.
+
+New transcript payload writes and canonical payload rewrites materialize the
+predicate fields; metadata-only updates and byte-preserving copies do not. There
+is no background convergence job or new schema version. Existing beta stores with
+materialized predicates remain valid. SQLite-to-PostgreSQL ports normalize
+unclassified transcript predicates from payloads already being transferred, so
+PostgreSQL reads stored columns. Added text and integer fields translate to
+PostgreSQL text with C collation and bigint; supporting engines share the schema
+version and must supply their equivalent forward migration.
 
 SQL projections that bound large payloads before transfer stay in SQL. Current
-writer-authority comparisons also retain their existing implementation rather
-than weakening a real effect boundary. The migration adds storage proportional
-to retained rows, and first-upgrade proof measures time per database and across
-many-agent hosts. Older binaries refuse the new schema; recovery restores a
-verified pre-migration backup and its matching binary.
+writer-authority comparisons retain their existing implementation. Lazy transcript
+classification removes that eager backfill from candidate-side migration; other
+upgrade work and later transcript queries can still scale with retained data.
+First-upgrade proof measures time per database and across many-agent hosts.
+Older binaries refuse the new schema; recovery restores a verified pre-migration
+backup and its matching binary.
 
 <a id="canonical-writer-validation" />
 

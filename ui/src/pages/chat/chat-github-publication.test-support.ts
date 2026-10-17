@@ -80,7 +80,8 @@ export function setup(initialOptions = options) {
       unbound: () => {},
     });
   let operation = create(scope);
-  let binding = operation.bind(changed);
+  let binding = operation.bind();
+  binding.subscribe(changed);
   binding.sync(scope);
   const controller = {
     view: () => binding.view(),
@@ -91,7 +92,8 @@ export function setup(initialOptions = options) {
         operation.reset();
         current = next;
         operation = create(next);
-        binding = operation.bind(changed);
+        binding = operation.bind();
+        binding.subscribe(changed);
       } else {
         current = next;
       }

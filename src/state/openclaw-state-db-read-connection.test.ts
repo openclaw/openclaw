@@ -28,6 +28,15 @@ vi.mock("../infra/sqlite-worker-identity.js", async () => ({
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: mocks.openPrivate,
 }));
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  // The fake handles close synchronously, independently of the host runtime.
+  getSqliteRuntimeCapabilities: () => ({
+    explicitSqliteCloseReleasesNativeResources: true,
+    decided: true,
+    reason: "synchronous fixture close",
+  }),
+}));
 vi.mock("../infra/sqlite-schema-facts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-schema-facts.js")>()),
   admitSqliteSchema: vi.fn(),

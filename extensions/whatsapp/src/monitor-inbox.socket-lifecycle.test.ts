@@ -72,6 +72,7 @@ async function primeCapturedReplyWithSuccessor(params: {
   shouldRetryDisconnect = false;
   const successorSock = {
     sendMessage: vi.fn(async () => ({ key: { id: params.acceptedMessageId } })),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
   };
   controllerContexts.set(DEFAULT_ACCOUNT_ID, {
     getActiveListener: () => null,
@@ -148,6 +149,7 @@ describe("web monitor inbox socket lifecycle", () => {
     const replacementSock = {
       sendMessage: createAcceptedSendMessageMock(),
       sendPresenceUpdate: vi.fn(async () => undefined),
+      fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     };
     socketRef.current = replacementSock as unknown as NonNullable<
       InboxMonitorOptions["socketRef"]
@@ -201,6 +203,7 @@ describe("web monitor inbox socket lifecycle", () => {
     const replacementSock = {
       sendMessage: createAcceptedSendMessageMock(),
       sendPresenceUpdate: vi.fn(async () => undefined),
+      fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     };
     socketRef.current = null;
     sleepWithAbortMock.mockImplementationOnce(async () => {

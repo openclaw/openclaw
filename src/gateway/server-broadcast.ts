@@ -37,7 +37,7 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
-import type { GatewayWsClient, PresenceDeliverySnapshot } from "./server/ws-types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
@@ -567,7 +567,7 @@ export function createGatewayBroadcaster(params: {
           : (frames.snapshot ??= frameBaseFor(payload));
       let frame: Buffer;
       let delivered: (() => void) | undefined;
-      let presenceSnapshot: PresenceDeliverySnapshot | undefined;
+      let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
@@ -603,14 +603,13 @@ export function createGatewayBroadcaster(params: {
           // Preserve source reads before checking the recipient's current authority.
           const projectedPayload = { ...presencePayload, presence: projectPresence(c) };
           if (acceptsPresenceDeltas(c) && opts?.stateVersion?.presence !== undefined) {
-            const prepared = preparePresenceDelivery(
+            presenceDelivery = preparePresenceDelivery(
               c,
               presencePayload.presence,
               projectedPayload.presence,
               opts.stateVersion.presence,
             );
-            payloadFragment = prepared.fragment;
-            presenceSnapshot = prepared.snapshot;
+            payloadFragment = presenceDelivery.fragment;
           } else {
             const reusable =
               Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
@@ -708,10 +707,15 @@ export function createGatewayBroadcaster(params: {
         delivered?.();
         state.socket.batchWrites?.();
         state.socket.send(frame, { binary: false }, sent);
-        if (presenceSnapshot && !state.retired) {
-          c.presenceSnapshot = presenceSnapshot;
+        if (presenceDelivery && !state.retired) {
+          c.presenceSnapshot = presenceDelivery.snapshot;
         }
-        state.socket.recordEventSent?.(event, frame.byteLength, sessionEventMetrics?.(c.connId));
+        state.socket.recordEventSent?.(
+          event,
+          frame.byteLength,
+          sessionEventMetrics?.(c.connId),
+          presenceDelivery?.mode ?? (presencePayload ? "legacy" : undefined),
+        );
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
       }

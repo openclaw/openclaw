@@ -94,6 +94,7 @@
     "tts",
     "web_fetch",
     "web_search",
+    "heartbeat_respond",
     "sessions_yield"
   ],
   "experimentalRawEvents": true,
@@ -256,24 +257,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 73060,
-    "roughTokens": 18265
+    "chars": 74553,
+    "roughTokens": 18639
   },
   "openClawDeveloperInstructions": {
-    "chars": 3194,
-    "roughTokens": 799
+    "chars": 3354,
+    "roughTokens": 839
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27570,
-    "roughTokens": 6893
+    "chars": 27730,
+    "roughTokens": 6933
   },
   "totalWithDynamicToolsJson": {
-    "chars": 100632,
-    "roughTokens": 25158
+    "chars": 102285,
+    "roughTokens": 25572
   },
   "userInputText": {
     "chars": 879,
@@ -486,7 +487,7 @@ Deferred searchable OpenClaw dynamic tools available: automations, gateway, node
 
 Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
+Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spawn_agent` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas. For new delegated work that needs OpenClaw tools, use `sessions_spawn` with `runtime="subagent"` from the start. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
@@ -602,6 +603,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "tts",
   "web_fetch",
   "web_search",
+  "heartbeat_respond",
   "sessions_yield"
 ]
 ```
@@ -752,6 +754,45 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "type": "object"
     },
     "name": "message",
+    "type": "function"
+  },
+  {
+    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "nextCheck": {
+          "type": "string"
+        },
+        "notificationText": {
+          "type": "string"
+        },
+        "notify": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+          "type": "string"
+        },
+        "priority": {
+          "enum": ["low", "normal", "high"],
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "scratch": {
+          "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": ["outcome", "notify", "summary"],
+      "type": "object"
+    },
+    "name": "heartbeat_respond",
     "type": "function"
   }
 ]

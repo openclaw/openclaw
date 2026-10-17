@@ -1,15 +1,17 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
+import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { acquireOpenClawStateLease } from "./openclaw-state-lease-acquisition.js";
 import { createOpenClawStateLeaseCleanup } from "./openclaw-state-lease-cleanup.js";
 import type {
@@ -43,6 +45,7 @@ import {
   releaseOpenClawStateLeaseBestEffort as releaseBestEffort,
   type OpenClawStateLeaseOwnerIdentity as LeaseIdentity,
 } from "./openclaw-state-lease-storage.js";
+import { renewOpenClawStateLeaseUnderWriteFence } from "./openclaw-state-lease-store.js";
 import { createOpenClawStateLeaseWorkerOwner } from "./openclaw-state-lease-worker-owner.js";
 import {
   acquireLease,
@@ -123,7 +126,7 @@ async function runStateLeaseOwnerInScope<T>(
     invocation.kind === "worker"
       ? new BigInt64Array(
           new SharedArrayBuffer(
-            (leaseHeartbeatState.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT,
+            (leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT,
           ),
         )
       : undefined;
@@ -590,6 +593,43 @@ async function runStateLeaseOwnerInScope<T>(
               }
             : {}),
           assertOwnedInTransaction: assertOperationOwned,
+          holdWriteFence(database) {
+            if (!workerHeartbeat || isPostgresSqlConnection(database)) {
+              return undefined;
+            }
+            if (!isManagedStateTransaction(database)) {
+              throw new Error("Lease write fence requires a managed state transaction");
+            }
+            const startedAt = Date.now();
+            const fence = workerHeartbeat.holdOwnerFence();
+            let expiresAt: number | undefined;
+            // Settlement callbacks retain the marker through the physical state
+            // COMMIT/ROLLBACK, including when this fence joins an outer transaction.
+            stageSqliteTransactionState(database, {
+              stage() {},
+              commit: () => fence.release(expiresAt),
+              rollback: () => fence.release(),
+            });
+            assertOperationOwned(database);
+            return {
+              renew() {
+                expiresAt = renewOpenClawStateLeaseUnderWriteFence(
+                  database,
+                  identity,
+                  acquiredAt,
+                  validated.leaseMs,
+                );
+                if (expiresAt === undefined) {
+                  throw createOpenClawStateLeaseLostError(validated);
+                }
+                fence.renewed(expiresAt);
+                const durationMs = Date.now() - startedAt;
+                return durationMs >= validated.leaseMs
+                  ? `${validated.leaseLabel}: state write fence held for ${durationMs} ms; renewed after the native commit.`
+                  : undefined;
+              },
+            };
+          },
         };
         workerOperations = createOpenClawStateLeaseWorkerOwner({
           lease,

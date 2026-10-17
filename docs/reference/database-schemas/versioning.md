@@ -626,9 +626,13 @@ but disables the new structured controls; upgrading can read retained receipts.
 
 The mutable JSON predicate projections require
 [agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns).
-Older writers must be fenced because they update canonical JSON without maintaining
-the promoted columns. The forward migration backfills every retained row once;
-NULL-only repair on reopen cannot make a downgrade and re-upgrade safe.
+The forward migration eagerly backfills session-node and existing outbox rows;
+SQLite transcript predicates remain lazy until a canonical payload write or rewrite
+materializes them. Existing beta stores with materialized predicates remain valid,
+and this lazy classification requires no schema bump. Older writers must still be
+fenced because they update canonical JSON without maintaining the promoted columns.
+Already-materialized values are trusted, so lazy fallback for unclassified rows
+cannot make a downgrade and re-upgrade safe.
 
 ### Schema bumps and older updaters
 
@@ -805,8 +809,11 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
-Historical migrations without a declared table scope and legacy transformed
-recovery archives retain full integrity checks.
+Historical migrations keep their full-file backup when no scoped backup is
+declared, while integrity admission uses the same quick-plus-affected-tables
+policy. Backup eligibility and integrity coverage are separate contracts.
+Legacy transformed recovery archives and automatic rollback images retain full
+integrity checks.
 The shared database accompanying agent
 migrations retains its full backup for registry and receipt recovery.
 

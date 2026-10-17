@@ -182,11 +182,20 @@ export async function hydrateChatHistory(
     const previousPagination = state.chatHistoryPagination;
     const previousSessionId = state.currentSessionId ?? null;
     const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
+    const previousHistoryState = readChatHistoryState(state, readChatHistoryCursor(state));
     // Preserve wire metadata before the display and roster owners derive their projections.
     const historyState =
       !(isHistoryCursor(response) && response.kind === "reset") && response.stateRevision
         ? {
-            stateRevision: response.stateRevision,
+            stateRevision: {
+              ...response.stateRevision,
+              commands: response.metadata
+                ? response.stateRevision.commands
+                : previousHistoryState?.stateRevision.commands,
+            },
+            commands: response.metadata
+              ? response.metadata.commands
+              : previousHistoryState?.commands,
             pendingInputs: response.pendingInputs,
             sessionInfo: response.sessionInfo,
           }

@@ -1470,6 +1470,7 @@ describe("doctor health contributions", () => {
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
+      integrityCheck: "quick",
       legacySessionSurfaces,
     });
   });

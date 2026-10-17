@@ -2,9 +2,9 @@ import { createEffect, createMemo, createSignal, flush, onCleanup, Show, untrack
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import { isCustodianPanelAvailable } from "../app/panel-availability.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
@@ -133,7 +133,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
     custodianAlertStore.present(item.action.alert);
-    if (canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")) {
+    if (isCustodianPanelAvailable(context.gateway)) {
       window.dispatchEvent(
         new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
       );

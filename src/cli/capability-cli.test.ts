@@ -1942,15 +1942,18 @@ describe("capability cli", () => {
       voiceCompatible: false,
     } as never);
 
-    const copyFile = fs.copyFile.bind(fs);
-    const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-      const [source, destination] = args;
-      if (source === sourcePath) {
-        const bytes = await fs.readFile(source);
-        await fs.writeFile(destination, bytes.subarray(0, 17));
+    const writeFile = fs.writeFile.bind(fs);
+    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const [destination, data] = args;
+      if (
+        typeof destination === "string" &&
+        destination.startsWith(outputDir) &&
+        Buffer.isBuffer(data)
+      ) {
+        await writeFile(destination, data.subarray(0, 17));
         throw new Error("injected TTS copy failure");
       }
-      await copyFile(...args);
+      await writeFile(...args);
     });
 
     try {
@@ -1970,8 +1973,31 @@ describe("capability cli", () => {
       }
       expect(await fs.readdir(outputDir)).toEqual(["speech.mp3"]);
     } finally {
-      copyFileSpy.mockRestore();
+      writeFileSpy.mockRestore();
     }
+  });
+
+  it("names TTS output after the audio format the provider returned", async () => {
+    const tempDir = tempDirs.make("openclaw-tts-output-ext-");
+    const sourcePath = path.join(tempDir, "source.wav");
+    const wav = Buffer.alloc(64);
+    wav.write("RIFF", 0, "ascii");
+    wav.writeUInt32LE(56, 4);
+    wav.write("WAVEfmt ", 8, "ascii");
+    await fs.writeFile(sourcePath, wav);
+    mocks.callGateway.mockResolvedValueOnce({
+      audioPath: sourcePath,
+      provider: "google",
+      outputFormat: "wav",
+      voiceCompatible: false,
+    } as never);
+
+    await convertTts("--gateway", "--output", path.join(tempDir, "speech.mp3"));
+
+    const written = path.join(tempDir, "speech.wav");
+    expect(firstJsonOutput()).toMatchObject({ outputs: [{ path: written, format: "wav" }] });
+    expect(await fs.readFile(written)).toEqual(wav);
+    await expect(fs.access(path.join(tempDir, "speech.mp3"))).rejects.toThrow();
   });
 
   registerEmbeddingCapabilityCliTests({

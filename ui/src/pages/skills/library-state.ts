@@ -141,9 +141,13 @@ export function createSkillLibrary(
       data.list = result;
       data.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
-      data.error = formatUiError(error);
+      if (gateway.isCurrent(connection)) {
+        data.error = formatUiError(error);
+      }
     } finally {
-      data.loading = false;
+      if (gateway.isCurrent(connection)) {
+        data.loading = false;
+      }
     }
   }
 

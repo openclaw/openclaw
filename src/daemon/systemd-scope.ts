@@ -16,6 +16,7 @@ import {
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv } from "./constants.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
@@ -228,7 +229,12 @@ export async function admitUserUnitActivationPastUnverifiableOwnership(
   const capability = await readSystemdDefinitionMutationCapability(env, {
     requireLoaded: true,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  }).catch(() => undefined);
+  }).catch((inspectionError: unknown) => {
+    if (hasCommandProcessCleanupError(inspectionError)) {
+      throw inspectionError;
+    }
+    return undefined;
+  });
   if (capability?.kind !== "writable") {
     throw error;
   }

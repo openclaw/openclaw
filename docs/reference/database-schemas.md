@@ -165,8 +165,10 @@ Admission lookups and established borrowers reuse those shared facts without
 checking the pathname again. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
-changes and publish new facts after successful DDL settlement. Doctor and explicit
-verification retain full checks, and observed corruption still revokes admission.
+changes and publish new facts after successful DDL settlement. Ordinary Doctor
+migrations and repairs default to quick integrity with full checks of affected
+tables. Explicit verification and recovery retain full checks, and observed
+corruption still revokes admission.
 Silent corruption with unchanged metadata is outside the seal's guarantee and
 is caught by normal SQLite access or the next full verification. See
 [clean-close seal and integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)

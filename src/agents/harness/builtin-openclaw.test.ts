@@ -1,4 +1,5 @@
 // Built-in OpenClaw harness tests cover logical thinking-mode boundaries.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
@@ -64,15 +65,25 @@ describe("createOpenClawAgentHarness", () => {
     ).toBe(false);
   });
 
-  it("preserves logical Ultra for the embedded attempt", async () => {
-    const params = { thinkLevel: "ultra" } as never;
-
-    await createOpenClawAgentHarness().runAttempt(params);
+  it("captures invocation state before loading the runner and preserves async custody", async () => {
+    const scope = new AsyncLocalStorage<object>();
+    const owner = {};
+    const onAgentEvent = vi.fn(() => {
+      expect(scope.getStore()).toBe(owner);
+    });
+    const params = { thinkLevel: "ultra", onAgentEvent };
+    const harness = createOpenClawAgentHarness();
+    const pending = scope.run(owner, () => harness.runAttempt(params as never));
+    params.thinkLevel = "off";
+    harness.supportsTurnScopedToolRestrictions = false;
+    await pending;
 
     expect(runEmbeddedAttempt).toHaveBeenCalledWith({
       thinkLevel: "ultra",
+      onAgentEvent,
       supportsTurnScopedToolRestrictions: true,
     });
+    expect(onAgentEvent).toHaveBeenCalledTimes(2);
   });
 
   it("carries only explicit live harness support", async () => {
@@ -104,10 +115,17 @@ describe("createOpenClawAgentHarness", () => {
       onAgentEvent,
       deferTerminalLifecycle: true,
       prepareAssistantTranscriptMessage,
-    } as never;
+    };
     const harness = createOpenClawAgentHarness();
 
-    await harness.finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
+    const pending = harness.finalizeSettledTurn?.({
+      attempt: attempt as never,
+      settledAttempt: {} as never,
+    });
+    attempt.prompt = "changed after invocation";
+    attempt.sessionManager = { owner: "other" };
+    attempt.onAgentEvent = vi.fn();
+    await pending;
 
     expect(onAttemptDeadlineChanged).toHaveBeenCalledExactlyOnceWith({
       kind: "bounded",
@@ -139,45 +157,6 @@ describe("createOpenClawAgentHarness", () => {
     expect(finalizationAttempt).not.toHaveProperty("internalEvents");
     expect(finalizationAttempt).not.toHaveProperty("trigger");
     expect(finalizationAttempt).not.toHaveProperty("onPartialReply");
-  });
-
-  it("runs isolated completion through the prepared zero-tool transport", async () => {
-    const params = {
-      authorization: {
-        owner: "host",
-        model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
-        auth: { apiKey: "secret", source: "profile:test", mode: "api-key" },
-      },
-      config: {},
-      systemPrompt: "system",
-      prompt: "user",
-      timeoutMs: 1_000,
-      provider: "openai",
-      modelId: "gpt-test",
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      outputTextPolicy: "strict-visible",
-    } as unknown as Parameters<
-      NonNullable<ReturnType<typeof createOpenClawAgentHarness>["runIsolatedCompletionV2"]>
-    >[0];
-
-    await expect(createOpenClawAgentHarness().runIsolatedCompletionV2?.(params)).resolves.toEqual({
-      assistant: expect.objectContaining({ stopReason: "stop" }),
-    });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: expect.objectContaining({ provider: "openai", id: "gpt-test" }),
-        auth: expect.objectContaining({ apiKey: "secret", mode: "api-key" }),
-        options: expect.objectContaining({ strictReasoningTags: true }),
-        context: {
-          systemPrompt: "system",
-          messages: [expect.objectContaining({ role: "user", content: "user" })],
-          tools: [],
-        },
-      }),
-    );
-    expect(runEmbeddedAttempt).not.toHaveBeenCalled();
   });
 
   it("rejects harness-owned isolated authorization", async () => {

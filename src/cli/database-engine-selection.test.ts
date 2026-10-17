@@ -92,6 +92,39 @@ describe("one-shot CLI engine selection", () => {
     );
   });
 
+  it.each([
+    { source: "root", code: "INVALID_CONFIG", heading: "Invalid config at" },
+    { source: "include", code: "INVALID_CONFIG", heading: "Invalid config at" },
+    {
+      source: "missing include",
+      code: "CONFIG_READ_FAILED",
+      heading: "Config could not be read at",
+    },
+  ])(
+    "preserves $source failure diagnostics before selecting storage",
+    async ({ source, code, heading }) => {
+      await withOpenClawTestState({ label: "cli-engine-invalid-source" }, async (state) => {
+        const raw = source === "root" ? "{ invalid config" : '{"$include":"included.json"}';
+        await fs.writeFile(state.configPath, raw);
+        if (source === "include") {
+          await fs.writeFile(state.statePath("included.json"), "{ invalid config");
+        }
+
+        await expect(
+          prepareCliDatabaseEngine(["node", "openclaw", "models", "list"]),
+        ).rejects.toMatchObject({
+          code,
+          message: expect.stringContaining(`${heading} ${state.configPath}:\n`),
+        });
+        expect(getDatabaseEngineSelection()).toBeUndefined();
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
+        await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
+    },
+  );
+
   it.each(
     [
       ["--help"],

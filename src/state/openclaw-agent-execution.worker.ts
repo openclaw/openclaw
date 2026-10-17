@@ -545,6 +545,9 @@ function openAgentDatabaseBackend(
     if (isSessionActorCommand(command)) {
       return expectDefined(actor, "Session actor command was not prepared").execute(command);
     }
+    if (command.type === "session.turn.prepare" && actor) {
+      return actor.prepareTurn(command.input);
+    }
     if (
       command.type === "database.domain.bind" ||
       command.type === "database.domain.publish" ||

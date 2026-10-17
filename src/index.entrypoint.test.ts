@@ -200,9 +200,7 @@ describe("legacy package executable entrypoint", () => {
       }
       handler(new Error("owned failure"), "uncaughtException");
       expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
-      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception", {
-        resumeStdinIfPaused: false,
-      });
+      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception");
     } finally {
       releaseOwner();
       for (const listener of process.listeners("uncaughtException")) {

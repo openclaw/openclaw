@@ -72,8 +72,12 @@ runtime-owned lock subtree by replacing its parent directory.
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
-workspace. The Gateway fetches with its host identity and preserves saved guest
-files, ignored guest data, and empty directories. The operation returns the exact
+workspace. The Gateway fetches with its host identity and prepares any missing
+file contents from the selected repository before offline merge and snapshot
+operations, including the ancestor versions needed to merge diverged branches.
+This also works when a partial clone already knows the base commit. A
+content-fetch failure leaves saved work available for retry. Refresh preserves
+saved guest files, ignored guest data, and empty directories. The operation returns the exact
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.

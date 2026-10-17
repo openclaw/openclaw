@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
+  assertServiceInspectionFallbackAllowed,
   sanitizeServiceInspectionError,
   ServiceInspectionError,
 } from "./service-inspection-error.js";
@@ -78,6 +79,9 @@ export async function readSystemdServiceRuntime(
     );
   }
   const timeoutMs = opts?.timeoutMs;
+  if (opts?.commandInspection?.kind === "unavailable") {
+    assertServiceInspectionFallbackAllowed(opts.commandInspection.error);
+  }
   let commandInspectionFailure =
     opts?.commandInspection?.kind === "unavailable"
       ? createServiceRuntimeInspectionFailure(
@@ -88,6 +92,7 @@ export async function readSystemdServiceRuntime(
     try {
       await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
+      assertServiceInspectionFallbackAllowed(err);
       return {
         ...commandInspectionFailure,
         status: "unknown",
@@ -104,6 +109,7 @@ export async function readSystemdServiceRuntime(
             (error: unknown) => ({ kind: "unavailable", error }) as const,
           ));
     if (inspection.kind === "unavailable") {
+      assertServiceInspectionFallbackAllowed(inspection.error);
       commandInspectionFailure = createServiceRuntimeInspectionFailure(
         sanitizeServiceInspectionError(inspection.error),
       );
