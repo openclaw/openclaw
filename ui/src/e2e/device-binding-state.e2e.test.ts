@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect } from "playwright/test";
 import { it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
@@ -22,16 +23,42 @@ const nodes = [
   },
 ];
 const makeConfig = (defaultBinding: string, agentBinding: string) => ({
-  tools: { exec: { node: defaultBinding } },
+  tools: { exec: defaultBinding ? { node: defaultBinding } : {} },
   agents: {
     ownership: "explicit",
     defaults: { systemAgent: { agentId: "main" } },
     entries: {
       main: {},
-      research: { name: "Research", tools: { exec: { node: agentBinding } } },
+      research: { name: "Research", tools: { exec: agentBinding ? { node: agentBinding } : {} } },
     },
   },
 });
+
+function configResponse(config: ReturnType<typeof makeConfig>, hash: string) {
+  return {
+    config,
+    sourceConfig: config,
+    hash,
+    issues: [],
+    raw: JSON.stringify(config),
+    valid: true,
+  };
+}
+
+async function bindingControls(page: Page) {
+  await page.goto(`${suite.server.baseUrl}settings/devices`);
+  const section = page.locator(".settings-section").filter({
+    has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
+  });
+  const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
+  const researchSelect = section
+    .locator(".settings-row")
+    .filter({
+      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+    })
+    .getByRole("combobox");
+  return { section, defaultSelect, researchSelect };
+}
 
 suite.define(() => {
   it.each([
@@ -54,28 +81,10 @@ suite.define(() => {
             ],
             methodResponses: {
               "node.list": { nodes },
-              "config.get": {
-                config,
-                sourceConfig: config,
-                runtimeConfig: config,
-                hash: "binding-fixture",
-                issues: [],
-                raw: JSON.stringify(config),
-                valid: true,
-              },
+              "config.get": { ...configResponse(config, "binding-fixture"), runtimeConfig: config },
             },
           });
-          await page.goto(`${suite.server.baseUrl}settings/devices`);
-          const section = page.locator(".settings-section").filter({
-            has: page.locator(".settings-section__heading", { hasText: "Exec node binding" }),
-          });
-          const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
-          const researchSelect = section
-            .locator(".settings-row")
-            .filter({
-              has: page.locator(".settings-row__title", { hasText: "Research (research)" }),
-            })
-            .getByRole("combobox");
+          const { section, defaultSelect, researchSelect } = await bindingControls(page);
           await expect(defaultSelect).toHaveValue(defaultBinding);
           await expect(researchSelect).toHaveValue(agentBinding);
           await expect(defaultSelect.locator("option:checked")).toBeEnabled();
@@ -102,14 +111,12 @@ suite.define(() => {
           await expect(defaultSelect).toBeEnabled();
           await expect(researchSelect).toBeEnabled();
           await capture("unavailable.png");
-          if (
-            (await defaultSelect.inputValue()) !== defaultBinding ||
-            (await researchSelect.inputValue()) !== agentBinding
-          ) {
-            throw new Error(
-              "BINDING_SELECTION_LOSS_133032: inventory refresh dropped a saved binding from the selected options",
-            );
-          }
+          expect(await defaultSelect.inputValue(), "BINDING_SELECTION_LOSS_133032").toBe(
+            defaultBinding,
+          );
+          expect(await researchSelect.inputValue(), "BINDING_SELECTION_LOSS_133032").toBe(
+            agentBinding,
+          );
           await expect(saveButton).toBeDisabled();
           await expect(defaultSelect).toHaveValue(defaultBinding);
           await expect(researchSelect).toHaveValue(agentBinding);
@@ -150,29 +157,10 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "node.list": { nodes },
-            "config.get": {
-              config,
-              sourceConfig: config,
-              raw: JSON.stringify(config),
-              hash: "binding-clear-fixture",
-              valid: true,
-              issues: [],
-            },
+            "config.get": configResponse(config, "binding-clear-fixture"),
           },
         });
-        await page.goto(`${suite.server.baseUrl}settings/devices`);
-        const section = page.locator(".settings-section").filter({
-          has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
-        });
-        const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
-        const researchSelect = section
-          .locator(".settings-row")
-          .filter({
-            has: page
-              .locator(".settings-row__title")
-              .getByText("Research (research)", { exact: true }),
-          })
-          .getByRole("combobox");
+        const { section, defaultSelect, researchSelect } = await bindingControls(page);
         await expect(defaultSelect).toHaveValue("default-node");
         await expect(researchSelect).toHaveValue("agent-node");
         await gateway.setMethodResponse("node.list", {
@@ -226,17 +214,7 @@ suite.define(() => {
         const clearedAgent = requireRecord(
           (await gateway.waitForRequest("config.set", { after: 1 })).params,
         );
-        expect(JSON.parse(String(clearedAgent.raw))).toEqual({
-          tools: { exec: {} },
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: {
-              main: {},
-              research: { name: "Research", tools: { exec: {} } },
-            },
-          },
-        });
+        expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
         await expect(indicator).toContainText("Saved");
         await expect(researchSelect).toHaveValue("__default__");

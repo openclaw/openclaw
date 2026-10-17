@@ -28,48 +28,17 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const readText = async (locator: Locator) =>
   expectDefined(await locator.textContent(), "UI text").trim();
 
-const cases = [
-  {
-    name: "fresh-mac",
-    touch: 0,
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-    legacy: false,
-    family: "Mac",
-    label: "macOS",
-  },
-  {
-    name: "fresh-ipad-touch",
-    touch: 5,
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-    legacy: false,
-    family: "iPad",
-    label: "iPadOS",
-  },
-  {
-    name: "fresh-ipad-agent",
-    touch: 0,
-    ua: "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
-    legacy: false,
-    family: "iPad",
-    label: "iPadOS",
-  },
-  {
-    name: "legacy-mac",
-    touch: 0,
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-    legacy: true,
-    family: "Mac",
-    label: "macOS",
-  },
-  {
-    name: "legacy-ipad",
-    touch: 5,
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-    legacy: true,
-    family: "iPad",
-    label: "iPadOS",
-  },
-];
+const macUa = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+const ipadUa = "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
+const cases = (
+  [
+    ["fresh-mac", 0, macUa, false, "Mac", "macOS"],
+    ["fresh-ipad-touch", 5, macUa, false, "iPad", "iPadOS"],
+    ["fresh-ipad-agent", 0, ipadUa, false, "iPad", "iPadOS"],
+    ["legacy-mac", 0, macUa, true, "Mac", "macOS"],
+    ["legacy-ipad", 5, macUa, true, "iPad", "iPadOS"],
+  ] as const
+).map(([name, touch, ua, legacy, family, label]) => ({ name, touch, ua, legacy, family, label }));
 let sourceBuildMetadata = "synthetic; use source revision and asset hash";
 const suite = createControlUiE2eSuite({
   name: "Control UI browser platform family with a real Gateway",
@@ -86,6 +55,15 @@ const suite = createControlUiE2eSuite({
     return startProductionControlUiE2eServer(out, "synthetic-platform-proof-build-id");
   },
 });
+const identityFacts = (row: ReturnType<typeof pairedFacts>) =>
+  row && {
+    deviceId: row.deviceId,
+    publicKey: row.publicKey,
+    approvedAtMs: row.approvedAtMs,
+    createdAtMs: row.createdAtMs,
+    roles: row.roles,
+    scopes: row.scopes,
+  };
 const pairedFacts = (row: PairedDevice | undefined) =>
   row && {
     deviceId: row.deviceId,
@@ -97,15 +75,8 @@ const pairedFacts = (row: PairedDevice | undefined) =>
     roles: row.roles,
     scopes: row.scopes,
   };
-const identityFacts = (row: PairedDevice | undefined) =>
-  row && {
-    deviceId: row.deviceId,
-    publicKey: row.publicKey,
-    approvedAtMs: row.approvedAtMs,
-    createdAtMs: row.createdAtMs,
-    roles: row.roles,
-    scopes: row.scopes,
-  };
+const writeProof = (name: string, value: unknown) =>
+  writeFile(path.join(suite.artifactDir, name), JSON.stringify(value, null, 2));
 
 suite.define(() => {
   it("keeps signed browser identities while rendering fresh and legacy Mac and iPad labels", async (context) => {
@@ -331,16 +302,7 @@ suite.define(() => {
                 ),
               ).toBe(true);
               if (item.legacy) {
-                expect(identityFacts(after)).toEqual(
-                  seeded && {
-                    deviceId: seeded.deviceId,
-                    publicKey: seeded.publicKey,
-                    approvedAtMs: seeded.approvedAtMs,
-                    createdAtMs: seeded.createdAtMs,
-                    roles: seeded.roles,
-                    scopes: seeded.scopes,
-                  },
-                );
+                expect(identityFacts(after)).toEqual(identityFacts(seeded));
                 expect(after?.deviceFamily).toBeUndefined();
               }
               const orphanRow = page.locator(".device-entry", {
@@ -363,10 +325,7 @@ suite.define(() => {
                 sourceBuildMetadata,
                 pendingCount: afterList.pending.length,
               });
-              await writeFile(
-                path.join(suite.artifactDir, "observations.json"),
-                JSON.stringify(observations, null, 2),
-              );
+              await writeProof("observations.json", observations);
               if (item === cases.at(-1)) {
                 await orphanRow.locator(".device-entry__menu-trigger").click();
                 await orphanRow.locator('[role="menuitem"][data-value="remove"]').click();
@@ -389,14 +348,10 @@ suite.define(() => {
                     .map((entry) => entry.deviceId)
                     .toSorted(),
                 );
-                await writeFile(
-                  path.join(suite.artifactDir, "removal.json"),
-                  JSON.stringify(
-                    { removed: orphan.deviceId, remaining: remaining.map(pairedFacts) },
-                    null,
-                    2,
-                  ),
-                );
+                await writeProof("removal.json", {
+                  removed: orphan.deviceId,
+                  remaining: remaining.map(pairedFacts),
+                });
                 const current = expectDefined(after, "current paired browser");
                 const pinRequest = await requestDevicePairing({
                   deviceId,
@@ -429,24 +384,16 @@ suite.define(() => {
                   "metadata approval request",
                 );
                 const retained = rejected.paired.find((entry) => entry.deviceId === deviceId);
-                expect(request.silent).toBe(false);
-                expect(request.deviceFamily).toBe("iPad");
+                expect(request).toMatchObject({ silent: false, deviceFamily: "iPad" });
                 expect(identityFacts(retained)).toEqual(identityFacts(pinned));
                 expect(retained?.deviceFamily).toBe("Mac");
                 expect(outcomes.slice(outcomeStart).every((result) => !result.ok)).toBe(true);
-                await writeFile(
-                  path.join(suite.artifactDir, "metadata-upgrade-rejection.json"),
-                  JSON.stringify(
-                    {
-                      pinned: pairedFacts(pinned),
-                      retained: pairedFacts(retained),
-                      pending: { silent: request.silent, deviceFamily: request.deviceFamily },
-                      outcomes: outcomes.slice(outcomeStart),
-                    },
-                    null,
-                    2,
-                  ),
-                );
+                await writeProof("metadata-upgrade-rejection.json", {
+                  pinned: pairedFacts(pinned),
+                  retained: pairedFacts(retained),
+                  pending: { silent: request.silent, deviceFamily: request.deviceFamily },
+                  outcomes: outcomes.slice(outcomeStart),
+                });
                 await rejectDevicePairing(request.requestId);
               }
             },

@@ -53,7 +53,11 @@ async function gatewayPhase(page: Page): Promise<string> {
   return evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase);
 }
 
-async function captureProof(page: Page, name: string, surface: Locator): Promise<void> {
+async function captureProof(
+  page: Page,
+  name: string,
+  surface = page.locator("#sidebar-issues-panel"),
+): Promise<void> {
   if (!proofDir) {
     return;
   }
@@ -72,6 +76,19 @@ async function createContext(viewport = { height: 900, width: 1280 }): Promise<B
     viewport,
   });
 }
+
+async function openPage(
+  options: Parameters<typeof installMockGateway>[1] = {},
+  route = "activity",
+  context?: BrowserContext,
+) {
+  const page = await (context ?? (await createContext())).newPage();
+  const gateway = await installMockGateway(page, { operatorScopes: LIMITED_SCOPES, ...options });
+  await page.goto(`${suite.server.baseUrl}${route}`);
+  return { page, gateway };
+}
+
+const alice = [{ self: true, id: "alice", name: "Alice" }];
 
 async function waitForAnimations(locator: Locator): Promise<void> {
   await locator.evaluate(async (element) => {
@@ -120,13 +137,7 @@ async function waitForPendingUpgradeItem(item: Locator) {
 
 suite.define(() => {
   it("moves limited access into the Inbox and persists its dismissal", async () => {
-    const desktopContext = await createContext();
-    const desktop = await desktopContext.newPage();
-    const gateway = await installMockGateway(desktop, {
-      operatorScopes: LIMITED_SCOPES,
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-    });
-    await desktop.goto(`${suite.server.baseUrl}activity`);
+    const { page: desktop, gateway } = await openPage({ presenceUsers: alice });
 
     expect(await desktop.locator(".scope-upgrade-status-trigger").count()).toBe(0);
     const desktopInbox = desktop.locator(".sidebar-issues-button");
@@ -157,9 +168,7 @@ suite.define(() => {
     await captureProof(desktop, "desktop-inbox-limited-access-dismissed-reload.png", reloadedPanel);
 
     const mobileContext = await createContext({ width: 390, height: 844 });
-    const mobile = await mobileContext.newPage();
-    await installMockGateway(mobile, { operatorScopes: LIMITED_SCOPES });
-    await mobile.goto(`${suite.server.baseUrl}activity`);
+    const { page: mobile } = await openPage({}, "activity", mobileContext);
 
     await mobile.locator(".topbar-search").waitFor();
     expect(await mobile.locator(".scope-upgrade-status-trigger").count()).toBe(0);
@@ -184,13 +193,14 @@ suite.define(() => {
 
   it("resurfaces when manual guidance becomes an actionable upgrade", async () => {
     const context = await createContext();
-    const guidancePage = await context.newPage();
-    await installMockGateway(guidancePage, {
-      featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
-      operatorScopes: LIMITED_SCOPES,
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-    });
-    await guidancePage.goto(`${suite.server.baseUrl}activity`);
+    const { page: guidancePage } = await openPage(
+      {
+        featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
+        presenceUsers: alice,
+      },
+      "activity",
+      context,
+    );
 
     const guidanceInbox = guidancePage.locator(".sidebar-issues-button");
     const guidanceItem = await openLimitedAccessItem(await openInbox(guidancePage));
@@ -199,12 +209,7 @@ suite.define(() => {
     await expect.poll(() => guidanceInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await guidancePage.close();
 
-    const availablePage = await context.newPage();
-    await installMockGateway(availablePage, {
-      operatorScopes: LIMITED_SCOPES,
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-    });
-    await availablePage.goto(`${suite.server.baseUrl}activity`);
+    const { page: availablePage } = await openPage({ presenceUsers: alice }, "activity", context);
 
     const availableInbox = availablePage.locator(".sidebar-issues-button");
     await expect.poll(() => availableInbox.getAttribute("aria-label")).toBe("1 inbox item");
@@ -214,12 +219,7 @@ suite.define(() => {
 
   it("resurfaces Request admin after a dismissed incident clears directly in Settings", async () => {
     const context = await createContext();
-    const dismissPage = await context.newPage();
-    await installMockGateway(dismissPage, {
-      operatorScopes: LIMITED_SCOPES,
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-    });
-    await dismissPage.goto(`${suite.server.baseUrl}activity`);
+    const { page: dismissPage } = await openPage({ presenceUsers: alice }, "activity", context);
     const dismissedItem = await openLimitedAccessItem(await openInbox(dismissPage));
     await dismissedItem.getByRole("button", { name: "Request admin" }).waitFor();
     await dismissedItem.getByRole("button", { name: "Dismiss Limited access" }).click();
@@ -228,22 +228,16 @@ suite.define(() => {
       .toBe("0 inbox items");
     await dismissPage.close();
 
-    const clearedPage = await context.newPage();
-    await installMockGateway(clearedPage, {
-      operatorScopes: FULL_SCOPES,
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-    });
-    await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
+    const { page: clearedPage } = await openPage(
+      { operatorScopes: FULL_SCOPES, presenceUsers: alice },
+      "settings/appearance",
+      context,
+    );
     await waitForControlUiSettingsTakeover(clearedPage);
     expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
     await clearedPage.close();
 
-    const recurrencePage = await context.newPage();
-    await installMockGateway(recurrencePage, {
-      operatorScopes: LIMITED_SCOPES,
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-    });
-    await recurrencePage.goto(`${suite.server.baseUrl}activity`);
+    const { page: recurrencePage } = await openPage({ presenceUsers: alice }, "activity", context);
 
     const inbox = recurrencePage.locator(".sidebar-issues-button");
     await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
@@ -252,16 +246,15 @@ suite.define(() => {
   });
 
   it("keeps a pending admin request while Inbox presenters change", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["device.scopes.waitUpgrade"],
-      operatorScopes: LIMITED_SCOPES,
-      methodResponses: {
-        "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
+    const { page, gateway } = await openPage(
+      {
+        deferredMethods: ["device.scopes.waitUpgrade"],
+        methodResponses: {
+          "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
+        },
       },
-    });
-    await page.goto(`${suite.server.baseUrl}new`);
+      "new",
+    );
 
     const item = await openLimitedAccessItem(await openInbox(page));
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
@@ -271,11 +264,7 @@ suite.define(() => {
     const wait = await gateway.waitForRequest("device.scopes.waitUpgrade");
     expect(wait.params).toEqual({ requestId: "upgrade-1" });
     await waitForPendingUpgradeItem(item);
-    await captureProof(
-      page,
-      "desktop-inbox-upgrade-pending.png",
-      page.locator("#sidebar-issues-panel"),
-    );
+    await captureProof(page, "desktop-inbox-upgrade-pending.png");
 
     await closeInbox(page);
     await page.locator('[data-navigation-view][aria-pressed="true"]').click();
@@ -329,17 +318,13 @@ suite.define(() => {
   });
 
   it("shows an administrator access request error once", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      operatorScopes: LIMITED_SCOPES,
+    const { page } = await openPage({
       methodResponses: {
         "device.scopes.requestUpgrade": {
           __mockError: { code: "INVALID_REQUEST", message: "missing scope: operator.read" },
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}activity`);
 
     const item = await openLimitedAccessItem(await openInbox(page));
     await item.getByRole("button", { name: "Request admin" }).click();
@@ -347,26 +332,18 @@ suite.define(() => {
     await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
 
     expect(await item.getByText(message, { exact: true }).count()).toBe(1);
-    await captureProof(
-      page,
-      "desktop-inbox-upgrade-error.png",
-      page.locator("#sidebar-issues-panel"),
-    );
+    await captureProof(page, "desktop-inbox-upgrade-error.png");
   });
 
   it.each(SCOPE_UPGRADE_METHODS)(
     "keeps role denials non-retryable at %s while transient errors can retry",
     async (method) => {
-      const context = await createContext();
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
+      const { page, gateway } = await openPage({
         deferredMethods: [method],
-        operatorScopes: LIMITED_SCOPES,
         methodResponses: {
           "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
         },
       });
-      await page.goto(`${suite.server.baseUrl}activity`);
       const item = await openLimitedAccessItem(await openInbox(page));
       await item.getByRole("button", { name: "Request admin" }).click();
       await gateway.waitForRequest(method);
@@ -378,7 +355,7 @@ suite.define(() => {
         .locator(".sidebar-issues-panel__body")
         .getByText(denial, { exact: false })
         .waitFor();
-      await captureProof(page, `${method}-role-denied.png`, page.locator("#sidebar-issues-panel"));
+      await captureProof(page, `${method}-role-denied.png`);
       expect(await item.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
 
@@ -398,11 +375,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
         .toBe(3);
       await waitForPendingUpgradeItem(item);
-      await captureProof(
-        page,
-        `${method}-retry-pending.png`,
-        page.locator("#sidebar-issues-panel"),
-      );
+      await captureProof(page, `${method}-retry-pending.png`);
       for (const status of ["rejected", "expired"] as const) {
         const requestCount = (await gateway.getRequests("device.scopes.requestUpgrade")).length;
         await gateway.resolveDeferred("device.scopes.waitUpgrade", {
@@ -423,17 +396,16 @@ suite.define(() => {
   it.each(SCOPE_UPGRADE_METHODS)(
     "shows manual repair guidance in Inbox when %s is not advertised",
     async (missingMethod) => {
-      const context = await createContext();
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          ...SCOPE_UPGRADE_METHODS.filter((method) => method !== missingMethod),
-        ],
-        operatorScopes: LIMITED_SCOPES,
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const { page, gateway } = await openPage(
+        {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            ...SCOPE_UPGRADE_METHODS.filter((method) => method !== missingMethod),
+          ],
+        },
+        "chat",
+      );
 
       const item = await openLimitedAccessItem(await openInbox(page));
       await item
@@ -446,13 +418,17 @@ suite.define(() => {
   );
 
   it("keeps Request admin in the onboarding header Inbox", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", ...SCOPE_UPGRADE_METHODS],
-      operatorScopes: LIMITED_SCOPES,
-    });
-    await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+    const { page } = await openPage(
+      {
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "openclaw.chat",
+          ...SCOPE_UPGRADE_METHODS,
+        ],
+      },
+      "custodian?onboarding=1",
+    );
 
     expect(
       await page.getByText("Update the Gateway to continue setup with OpenClaw.").count(),
@@ -464,11 +440,7 @@ suite.define(() => {
     expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
     const item = await openLimitedAccessItem(await openInbox(page));
     await item.getByRole("button", { name: "Request admin" }).waitFor();
-    await captureProof(
-      page,
-      "onboarding-header-inbox-limited-access.png",
-      page.locator("#sidebar-issues-panel"),
-    );
+    await captureProof(page, "onboarding-header-inbox-limited-access.png");
   });
 
   it("offers the admin upgrade without crypto.subtle", async () => {
@@ -523,10 +495,7 @@ suite.define(() => {
   });
 
   it("never adds a limited-access Inbox item for admin connections", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, { operatorScopes: FULL_SCOPES });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    const { page, gateway } = await openPage({ operatorScopes: FULL_SCOPES }, "chat");
     await page.locator("openclaw-app-shell").waitFor();
 
     expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);

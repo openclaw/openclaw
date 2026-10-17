@@ -79,29 +79,59 @@ async function selectGatewayOnNextLoad(
   );
 }
 
-async function openGatewayPage(params: {
-  appBaseUrl: string;
-  context: BrowserContext;
-  deviceToken: string;
-  gatewayUrl: string;
-  methodResponses?: Record<string, unknown>;
-  route?: string;
-  sharedToken?: string;
-}) {
-  const page = await params.context.newPage();
-  await selectGatewayOnNextLoad(page, params.appBaseUrl, params.gatewayUrl);
-  const gateway = await installMockGateway(page, {
-    deviceToken: params.deviceToken,
-    methodResponses: params.methodResponses,
-  });
-  const tokenFragment = params.sharedToken
-    ? `#token=${encodeURIComponent(params.sharedToken)}`
-    : "";
-  const response = await page.goto(`${params.appBaseUrl}${params.route ?? "chat"}${tokenFragment}`);
-  expect(response?.status()).toBe(200);
-  const connect = await gateway.waitForRequest("connect");
-  await page.locator("openclaw-app-shell").waitFor();
-  return { connect, gateway, page };
+function gatewayPages(context: BrowserContext) {
+  return async (
+    gatewayUrl: string,
+    deviceToken: string,
+    {
+      appBaseUrl = server.baseUrl,
+      methodResponses,
+      route = "chat",
+      sharedToken,
+    }: {
+      appBaseUrl?: string;
+      methodResponses?: Record<string, unknown>;
+      route?: string;
+      sharedToken?: string;
+    } = {},
+  ) => {
+    const page = await context.newPage();
+    await selectGatewayOnNextLoad(page, appBaseUrl, gatewayUrl);
+    const gateway = await installMockGateway(page, { deviceToken, methodResponses });
+    const tokenFragment = sharedToken ? `#token=${encodeURIComponent(sharedToken)}` : "";
+    const response = await page.goto(`${appBaseUrl}${route}${tokenFragment}`);
+    expect(response?.status()).toBe(200);
+    const connect = await gateway.waitForRequest("connect");
+    await page.locator("openclaw-app-shell").waitFor();
+    return { connect, gateway, page };
+  };
+}
+
+function storedToken(page: Page, gatewayUrl: string) {
+  return page.evaluate(
+    (key) => {
+      const raw = localStorage.getItem(key);
+      const store = raw ? (JSON.parse(raw) as { tokens?: Record<string, unknown> }) : undefined;
+      return store?.tokens?.operator;
+    },
+    `openclaw.device.auth.v1:${gatewayCredentialScope(gatewayUrl)}`,
+  );
+}
+
+async function expectForgotten(gateway: Awaited<ReturnType<typeof installMockGateway>>) {
+  await expect
+    .poll(async () => (await gateway.getRequests("connect")).length)
+    .toBeGreaterThanOrEqual(2);
+  const reconnect = await gateway.waitForRequest("connect");
+  expect(readConnectAuth(reconnect)?.token).toBeUndefined();
+  expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+}
+
+async function openForgetDialog(page: Page) {
+  await page.goto(`${server.baseUrl}settings/connection`);
+  const forget = page.getByRole("button", { name: "Forget this browser", exact: true });
+  await forget.waitFor({ state: "visible" });
+  return forget;
 }
 
 async function createContext(): Promise<BrowserContext> {
@@ -145,11 +175,8 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
 
   it("isolates device tokens across gateways, origins, and revocation", async () => {
     const context = await createContext();
-    const rositaSource = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: ROSITA_DEVICE_TOKEN,
-      gatewayUrl: ROSITA_GATEWAY_URL,
+    const open = gatewayPages(context);
+    const rositaSource = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN, {
       sharedToken: "shared-rosita",
     });
     expect(requireConnectAuth(rositaSource.connect)).toEqual({
@@ -158,11 +185,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       token: "shared-rosita",
     });
 
-    const wilfredSource = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: WILFRED_DEVICE_TOKEN,
-      gatewayUrl: WILFRED_GATEWAY_URL,
+    const wilfredSource = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN, {
       sharedToken: "shared-wilfred",
     });
     expect(requireConnectAuth(wilfredSource.connect)).toEqual({
@@ -171,11 +194,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       token: "shared-wilfred",
     });
 
-    const rositaReconnect = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: ROSITA_DEVICE_TOKEN,
-      gatewayUrl: ROSITA_GATEWAY_URL,
+    const rositaReconnect = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN, {
       route: "sessions",
     });
     expect(requireConnectAuth(rositaReconnect.connect)).toEqual({
@@ -184,12 +203,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     expect(await rositaReconnect.page.locator("openclaw-login-gate").count()).toBe(0);
     await captureProof(rositaReconnect.page, "rosita-reconnected.png");
 
-    const wilfredReconnect = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: WILFRED_DEVICE_TOKEN,
-      gatewayUrl: WILFRED_GATEWAY_URL,
-    });
+    const wilfredReconnect = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN);
     expect(requireConnectAuth(wilfredReconnect.connect)).toEqual({
       deviceToken: WILFRED_DEVICE_TOKEN,
     });
@@ -205,19 +219,12 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     }
 
     const otherOriginBaseUrl = server.baseUrl.replace("127.0.0.1", "localhost");
-    const otherOrigin = await openGatewayPage({
+    const otherOrigin = await open(ROSITA_GATEWAY_URL, "other-origin-device-token", {
       appBaseUrl: otherOriginBaseUrl,
-      context,
-      deviceToken: "other-origin-device-token",
-      gatewayUrl: ROSITA_GATEWAY_URL,
     });
     expect(readConnectAuth(otherOrigin.connect)).toBeUndefined();
 
-    const wilfredDevices = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: WILFRED_DEVICE_TOKEN,
-      gatewayUrl: WILFRED_GATEWAY_URL,
+    const wilfredDevices = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN, {
       methodResponses: {
         "device.pair.list": {
           paired: [
@@ -273,37 +280,14 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     await revokeConfirm.getByRole("button", { name: "Revoke", exact: true }).click();
     const revoke = await wilfredDevices.gateway.waitForRequest("device.token.revoke");
     expect(revoke.params).toEqual({ deviceId, role: "operator" });
-    const wilfredStoreKey =
-      `openclaw.device.auth.v1:` + gatewayCredentialScope(WILFRED_GATEWAY_URL);
-    await expect
-      .poll(() =>
-        wilfredDevices.page.evaluate((key) => {
-          const raw = localStorage.getItem(key);
-          if (!raw) {
-            return undefined;
-          }
-          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
-          return store.tokens?.operator;
-        }, wilfredStoreKey),
-      )
-      .toBeUndefined();
+    await expect.poll(() => storedToken(wilfredDevices.page, WILFRED_GATEWAY_URL)).toBeUndefined();
 
-    const rositaAfterRevoke = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: ROSITA_DEVICE_TOKEN,
-      gatewayUrl: ROSITA_GATEWAY_URL,
-    });
+    const rositaAfterRevoke = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN);
     expect(requireConnectAuth(rositaAfterRevoke.connect)).toEqual({
       deviceToken: ROSITA_DEVICE_TOKEN,
     });
 
-    const wilfredAfterRevoke = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: WILFRED_DEVICE_TOKEN,
-      gatewayUrl: WILFRED_GATEWAY_URL,
-    });
+    const wilfredAfterRevoke = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN);
     expect(readConnectAuth(wilfredAfterRevoke.connect)).toBeUndefined();
 
     // Rotation hands back the only copy of the new credential, so it is revealed in-page:
@@ -326,39 +310,19 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
 
   it("forgets this browser's stored credential from Gateway settings", async () => {
     const context = await createContext();
+    const open = gatewayPages(context);
     // Seed the stored device token through a shared-token first visit, then
     // close that page so its session token cannot mask credential selection.
-    const seed = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: ROSITA_DEVICE_TOKEN,
-      gatewayUrl: ROSITA_GATEWAY_URL,
+    const seed = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN, {
       sharedToken: "shared-rosita",
     });
     expect(requireConnectAuth(seed.connect).token).toBe("shared-rosita");
-    const storeKey = `openclaw.device.auth.v1:` + gatewayCredentialScope(ROSITA_GATEWAY_URL);
-    await expect
-      .poll(() =>
-        seed.page.evaluate((key) => {
-          const raw = localStorage.getItem(key);
-          if (!raw) {
-            return undefined;
-          }
-          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
-          return store.tokens?.operator;
-        }, storeKey),
-      )
-      .toBeDefined();
+    await expect.poll(() => storedToken(seed.page, ROSITA_GATEWAY_URL)).toBeDefined();
     await seed.page.close();
 
     // The fresh page has no shared token: this connect must ride the stored
     // device-token path, so post-forget selection cannot be masked.
-    const { gateway, page } = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: ROSITA_DEVICE_TOKEN,
-      gatewayUrl: ROSITA_GATEWAY_URL,
-    });
+    const { gateway, page } = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN);
     const storedConnect = await gateway.waitForRequest("connect");
     // Stored device credentials ride only auth.deviceToken; the shared token
     // slot stays empty so cached credentials never masquerade as explicit auth.
@@ -370,9 +334,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     );
     expect(identityBefore).not.toBeNull();
 
-    await page.goto(`${server.baseUrl}settings/connection`);
-    const forgetRow = page.getByRole("button", { name: "Forget this browser", exact: true });
-    await forgetRow.waitFor({ state: "visible" });
+    const forgetRow = await openForgetDialog(page);
     await captureProof(page, "gateway-settings-browser-sign-in.png");
     await forgetRow.click();
     const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
@@ -388,21 +350,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
 
     // The forget-triggered reconnect must offer no credential at all: with no
     // shared token in this tab, a surviving stored token would appear here.
-    await expect
-      .poll(() =>
-        page.evaluate(() => {
-          const mock = (
-            window as Window & {
-              openclawControlUiE2eGateway?: { requests: Array<{ method: string }> };
-            }
-          ).openclawControlUiE2eGateway;
-          return mock?.requests.filter((request) => request.method === "connect").length ?? 0;
-        }),
-      )
-      .toBeGreaterThanOrEqual(2);
-    const reconnect = await gateway.waitForRequest("connect");
-    expect(readConnectAuth(reconnect)?.token).toBeUndefined();
-    expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+    await expectForgotten(gateway);
     await captureProof(page, "after-forget-reconnect.png");
 
     // Token-only reset: the browser device identity survives.
@@ -416,52 +364,21 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     // Review P1 regression: shared auth outranks stored device auth, so the
     // same tab that signed in with #token=… must not resume the old session.
     const context = await createContext();
-    const { gateway, page } = await openGatewayPage({
-      appBaseUrl: server.baseUrl,
-      context,
-      deviceToken: WILFRED_DEVICE_TOKEN,
-      gatewayUrl: WILFRED_GATEWAY_URL,
+    const open = gatewayPages(context);
+    const { gateway, page } = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN, {
       sharedToken: "shared-wilfred",
     });
     const seededConnect = await gateway.waitForRequest("connect");
     expect(requireConnectAuth(seededConnect).token).toBe("shared-wilfred");
-    const storeKey = `openclaw.device.auth.v1:` + gatewayCredentialScope(WILFRED_GATEWAY_URL);
-    await expect
-      .poll(() =>
-        page.evaluate((key) => {
-          const raw = localStorage.getItem(key);
-          if (!raw) {
-            return undefined;
-          }
-          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
-          return store.tokens?.operator;
-        }, storeKey),
-      )
-      .toBeDefined();
+    await expect.poll(() => storedToken(page, WILFRED_GATEWAY_URL)).toBeDefined();
 
-    await page.goto(`${server.baseUrl}settings/connection`);
-    const forgetRow = page.getByRole("button", { name: "Forget this browser", exact: true });
-    await forgetRow.waitFor({ state: "visible" });
+    const forgetRow = await openForgetDialog(page);
     await forgetRow.click();
     const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
     await confirmButton.waitFor({ state: "visible" });
     await confirmButton.click();
 
-    await expect
-      .poll(() =>
-        page.evaluate(() => {
-          const mock = (
-            window as Window & {
-              openclawControlUiE2eGateway?: { requests: Array<{ method: string }> };
-            }
-          ).openclawControlUiE2eGateway;
-          return mock?.requests.filter((request) => request.method === "connect").length ?? 0;
-        }),
-      )
-      .toBeGreaterThanOrEqual(2);
-    const reconnect = await gateway.waitForRequest("connect");
-    expect(readConnectAuth(reconnect)?.token).toBeUndefined();
-    expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+    await expectForgotten(gateway);
 
     // The tab-scoped shared token is gone from session storage as well.
     const sessionToken = await page.evaluate(() => {

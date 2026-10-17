@@ -1,7 +1,3 @@
-// Control UI E2E: renaming a paired device alias from the Devices page against
-// a real in-process Gateway. Proves the save is a persisted Gateway write, not
-// a client-side effect: the alias survives a full page reload and a Gateway
-// restart, and reads back from the pairing store with the UI's own RPC.
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,8 +22,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-// Visual proof rides the behavioral scenario so every captured state is one the
-// assertions above it already proved, at whatever SHA the lane ran.
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function captureUiProof(page: Page, fileName: string, observed: Record<string, unknown>) {
@@ -69,7 +63,7 @@ function pairedDeviceProof(device: PairedDevice | undefined) {
   return { deviceId, operatorLabel, displayName, roles };
 }
 
-/** Confirm the gateway URL dialog. Required on first load; after a reload the UI remembers the confirmed URL and may not ask again. */
+// Reload remembers the confirmed URL and may not ask again.
 async function confirmGatewayUrl(page: Page, options: { required: boolean }) {
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
   await confirmation
@@ -88,6 +82,18 @@ function devicesPageUrl(gatewayPort: number) {
   const url = new URL("settings/devices", suite.server.baseUrl);
   url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${gatewayPort}`);
   return url.toString();
+}
+
+async function readPairing(deviceId: string) {
+  return (await listDevicePairing()).paired.find((device) => device.deviceId === deviceId);
+}
+
+async function waitForAlias(page: Page, reload = false) {
+  if (reload) {
+    await page.reload();
+    await confirmGatewayUrl(page, { required: false });
+  }
+  await page.locator(".device-entry .settings-row__title", { hasText: NEW_ALIAS }).waitFor();
 }
 
 suite.define(() => {
@@ -121,8 +127,6 @@ suite.define(() => {
       });
       state.applyEnv();
 
-      // Seed one approved operator pairing before the Gateway starts so the
-      // Devices page has a real persisted row to rename.
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../../../src/infra/device-identity.js");
       const identityPath = path.join(state.stateDir, `device-alias-proof.sqlite`);
@@ -142,12 +146,14 @@ suite.define(() => {
       });
 
       const { startGatewayServer } = await import("../../../src/gateway/server.js");
-      gateway = await startGatewayServer(port, {
-        auth: { mode: "none" },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      const startGateway = () =>
+        startGatewayServer(port, {
+          auth: { mode: "none" },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        });
+      gateway = await startGateway();
 
       await suite.withPage(
         {
@@ -197,55 +203,29 @@ suite.define(() => {
           expect(entered).toBe(NEW_ALIAS);
           await dialog.getByRole("button", { name: "Save" }).click();
 
-          await page
-            .locator(".device-entry .settings-row__title", { hasText: NEW_ALIAS })
-            .waitFor();
+          await waitForAlias(page);
 
-          // Independent readback from the pairing store: the rename must be a
-          // durable Gateway write, not a client-side label swap.
-          const stored = await listDevicePairing();
-          const paired = stored.paired.find((device) => device.deviceId === identity.deviceId);
-          expect(paired?.operatorLabel).toBe(NEW_ALIAS);
-          expect(paired?.displayName).toBe(DISPLAY_NAME);
+          // Independent readback proves a durable write, not a client-side label swap.
+          const paired = await readPairing(identity.deviceId);
+          expect(paired).toMatchObject({ operatorLabel: NEW_ALIAS, displayName: DISPLAY_NAME });
           await captureUiProof(page, "04-real-gateway-alias-applied.png", {
             stage: "alias applied and read back from the pairing store",
             paired: pairedDeviceProof(paired),
           });
 
-          // Full page reload: the UI must re-read the alias from the Gateway.
-          await page.reload();
-          await confirmGatewayUrl(page, { required: false });
-          await page
-            .locator(".device-entry .settings-row__title", { hasText: NEW_ALIAS })
-            .waitFor();
+          await waitForAlias(page, true);
           await captureUiProof(page, "05-real-gateway-alias-after-reload.png", {
             stage: "alias survives full page reload",
           });
 
-          // Stop and restart the Gateway server in this test process, then
-          // verify that both the browser and pairing store retain the alias.
           await gateway?.close({ reason: "device alias rename e2e restart" });
-          gateway = await startGatewayServer(port, {
-            auth: { mode: "none" },
-            bind: "loopback",
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          });
-          await page.reload();
-          await confirmGatewayUrl(page, { required: false });
-          await page
-            .locator(".device-entry .settings-row__title", { hasText: NEW_ALIAS })
-            .waitFor();
-          const afterRestart = await listDevicePairing();
-          expect(
-            afterRestart.paired.find((device) => device.deviceId === identity.deviceId)
-              ?.operatorLabel,
-          ).toBe(NEW_ALIAS);
+          gateway = await startGateway();
+          await waitForAlias(page, true);
+          const afterRestart = await readPairing(identity.deviceId);
+          expect(afterRestart?.operatorLabel).toBe(NEW_ALIAS);
           await captureUiProof(page, "06-real-gateway-alias-after-restart.png", {
             stage: "alias survives Gateway restart",
-            paired: pairedDeviceProof(
-              afterRestart.paired.find((device) => device.deviceId === identity.deviceId),
-            ),
+            paired: pairedDeviceProof(afterRestart),
           });
         },
       );

@@ -113,6 +113,26 @@ const suite = createControlUiE2eSuite({
   },
 });
 
+const writeProof = (name: string, value: unknown) =>
+  writeFile(path.join(suite.artifactDir, name), JSON.stringify(value, null, 2));
+
+function openDesktop(page: Page, baseUrl: string, source: string, control = false) {
+  return page.goto(
+    new URL(buildControlUiFocusPath({ kind: "desktop", source, control }), baseUrl).href,
+  );
+}
+
+async function sendDesktopPacket(page: Page, targetUrl: string, packet: number[]) {
+  await page.evaluate(
+    ({ socketUrl, bytes }) => {
+      const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
+        .desktopProofSockets;
+      sockets.find((socket) => socket.url === socketUrl)!.send(Uint8Array.from(bytes));
+    },
+    { socketUrl: targetUrl, bytes: packet },
+  );
+}
+
 async function framebuffer(canvas: Locator) {
   return await canvas.evaluate((element) => {
     const surface = element as HTMLCanvasElement;
@@ -430,35 +450,28 @@ suite.define(() => {
           try {
             await canvas.waitFor();
           } catch (error) {
-            await writeFile(
-              path.join(suite.artifactDir, "connection-diagnostics.json"),
-              JSON.stringify(
-                {
-                  panel: await panel.evaluate((element) => ({
-                    html: element.innerHTML,
-                    bounds: element.getBoundingClientRect().toJSON(),
-                    canvases: [...element.querySelectorAll("canvas")].map((surface) => ({
-                      width: surface.width,
-                      height: surface.height,
-                      bounds: surface.getBoundingClientRect().toJSON(),
-                    })),
-                  })),
-                  sockets: await page.evaluate(() =>
-                    (
-                      window as unknown as { desktopProofSockets: WebSocket[] }
-                    ).desktopProofSockets.map((socket) => ({
-                      path: new URL(socket.url).pathname,
-                      readyState: socket.readyState,
-                    })),
-                  ),
-                  pageErrors,
-                  pageEvents,
-                  observations,
-                },
-                null,
-                2,
+            await writeProof("connection-diagnostics.json", {
+              panel: await panel.evaluate((element) => ({
+                html: element.innerHTML,
+                bounds: element.getBoundingClientRect().toJSON(),
+                canvases: [...element.querySelectorAll("canvas")].map((surface) => ({
+                  width: surface.width,
+                  height: surface.height,
+                  bounds: surface.getBoundingClientRect().toJSON(),
+                })),
+              })),
+              sockets: await page.evaluate(() =>
+                (window as unknown as { desktopProofSockets: WebSocket[] }).desktopProofSockets.map(
+                  (socket) => ({
+                    path: new URL(socket.url).pathname,
+                    readyState: socket.readyState,
+                  }),
+                ),
               ),
-            );
+              pageErrors,
+              pageEvents,
+              observations,
+            });
             await captureControlUiE2eFailureDiagnostics(page, {
               error: error instanceof Error ? error : new Error(String(error)),
               label: "desktop-resize-connection",
@@ -499,49 +512,30 @@ suite.define(() => {
           }
           await Promise.all(assetReads);
           expect(assets.size).toBeGreaterThan(0);
-          await writeFile(
-            path.join(suite.artifactDir, "served-assets.json"),
-            JSON.stringify(Object.fromEntries(assets), null, 2),
-          );
+          await writeProof("served-assets.json", Object.fromEntries(assets));
 
           const verifyMatch = async (stage: string, target = canvas) => {
             const expected = await target.evaluate((element) => {
               const bounds = element.parentElement!.getBoundingClientRect();
               return { width: Math.floor(bounds.width), height: Math.floor(bounds.height) };
             });
-            await writeFile(
-              path.join(suite.artifactDir, `${stage}-geometry.json`),
-              JSON.stringify(
-                {
-                  stage,
-                  expected,
-                  guest: await guest!.geometry(),
-                  canvas: await framebuffer(target),
-                  matchOffered,
-                },
-                null,
-                2,
-              ),
-            );
-            await target.page().screenshot({ path: path.join(suite.artifactDir, `${stage}.png`) });
+            const capture = async () => {
+              await writeProof(`${stage}-geometry.json`, {
+                stage,
+                expected,
+                guest: await guest!.geometry(),
+                canvas: await framebuffer(target),
+                matchOffered,
+              });
+              await target
+                .page()
+                .screenshot({ path: path.join(suite.artifactDir, `${stage}.png`) });
+            };
+            await capture();
             await expect.poll(() => guest!.geometry()).toEqual(expected);
             await expect.poll(() => framebuffer(target)).toEqual(expected);
             samples.push({ stage, ...expected });
-            await writeFile(
-              path.join(suite.artifactDir, `${stage}-geometry.json`),
-              JSON.stringify(
-                {
-                  stage,
-                  expected,
-                  guest: await guest!.geometry(),
-                  canvas: await framebuffer(target),
-                  matchOffered,
-                },
-                null,
-                2,
-              ),
-            );
-            await target.page().screenshot({ path: path.join(suite.artifactDir, `${stage}.png`) });
+            await capture();
           };
           await verifyMatch("02-panel");
           expect(matchOffered).toBe(true);
@@ -574,15 +568,7 @@ suite.define(() => {
           });
           const observer = await observerContext.newPage();
           await captureDesktopSockets(observer);
-          await observer.goto(
-            new URL(
-              buildControlUiFocusPath({
-                kind: "desktop",
-                source: resizeSources.dynamic,
-              }),
-              baseUrl,
-            ).href,
-          );
+          await openDesktop(observer, baseUrl, resizeSources.dynamic);
           const observerPanel = observer.locator("openclaw-desktop-panel");
           const observerCanvas = observerPanel.locator("canvas");
           await expect.poll(() => framebuffer(observerCanvas)).toEqual(fitted);
@@ -601,14 +587,7 @@ suite.define(() => {
             return { socketUrl: sockets.at(-1)!.url, bytes: Array.from(packet) };
           });
           const resized = packetProbe.expectPacket(resizeAttempt.bytes);
-          await observer.evaluate(
-            ({ socketUrl, bytes }) => {
-              const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
-                .desktopProofSockets;
-              sockets.find((socket) => socket.url === socketUrl)!.send(Uint8Array.from(bytes));
-            },
-            { ...resizeAttempt, bytes: resized.bytes },
-          );
+          await sendDesktopPacket(observer, resizeAttempt.socketUrl, resized.bytes);
           expect(await resized.result).toBe(0);
           await resizeWindow(observer, 700, 700);
           expect(await guest.geometry()).toEqual(fitted);
@@ -768,14 +747,7 @@ suite.define(() => {
             return { socketUrl: socket.url, bytes: Array.from(packet) };
           });
           const inputProcessed = packetProbe.expectPacket(inputAttempt.bytes);
-          await page.evaluate(
-            ({ socketUrl, bytes }) => {
-              const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
-                .desktopProofSockets;
-              sockets.find((socket) => socket.url === socketUrl)!.send(Uint8Array.from(bytes));
-            },
-            { ...inputAttempt, bytes: inputProcessed.bytes },
-          );
+          await sendDesktopPacket(page, inputAttempt.socketUrl, inputProcessed.bytes);
           expect(await inputProcessed.result).toBe(0);
           expect(await guest.run(["cat", "/tmp/openclaw-desktop-resize-input"])).toBe("controller");
           expect(await panel.locator('option[value="match"]').count()).toBe(0);
@@ -783,16 +755,7 @@ suite.define(() => {
           await suite.closeBrowserContext(observerContext);
 
           for (const source of [resizeSources.fixed, resizeSources.unmanaged]) {
-            await page.goto(
-              new URL(
-                buildControlUiFocusPath({
-                  kind: "desktop",
-                  source,
-                  control: true,
-                }),
-                baseUrl,
-              ).href,
-            );
+            await openDesktop(page, baseUrl, source, true);
             const current = page.locator("openclaw-desktop-panel");
             const currentCanvas = current.locator("canvas");
             const geometry = await guest.geometry(source === resizeSources.fixed ? ":100" : ":99");
@@ -813,16 +776,7 @@ suite.define(() => {
           }
           let nodeDisconnectClosedViewer = false;
           if (node) {
-            await page.goto(
-              new URL(
-                buildControlUiFocusPath({
-                  kind: "desktop",
-                  source: resizeSources.dynamic,
-                  control: true,
-                }),
-                baseUrl,
-              ).href,
-            );
+            await openDesktop(page, baseUrl, resizeSources.dynamic, true);
             await expect.poll(() => framebuffer(canvas)).toEqual(await guest.geometry());
             const socketUrl = await page.evaluate(
               () =>
@@ -856,40 +810,33 @@ suite.define(() => {
           }
           await Promise.all(assetReads);
           expect(assets.size).toBeGreaterThan(0);
-          await writeFile(
-            path.join(suite.artifactDir, "resize-proof.json"),
-            JSON.stringify(
-              {
-                provenance: fixture.provenance,
-                provisioning:
-                  "fixture provider and durable worker records; production Gateway observation, worker carrier, registry, and RFB filter",
-                instrumentation:
-                  "transparent real endpoint tap: same-connection framebuffer markers bracket each forbidden packet in one WebSocket message",
-                gateway: { execution: "built-process", readiness: "readyz", minimal: false },
-                carrier: fixture.carrier,
-                node: nodeDeviceId
-                  ? {
-                      deviceId: nodeDeviceId,
-                      admission:
-                        "real device/node approval and connected paired session-host inventory",
-                      passwordAbsentFromObserve: true,
-                      disconnectClosedViewer: nodeDisconnectClosedViewer,
-                    }
-                  : null,
-                viewports: "native desktop windows; viewport-emulated mobile, not a physical phone",
-                observer: {
-                  evidence: "endpoint-marker-brackets",
-                  keyboardForwardedBytes: 0,
-                  resizeForwardedBytes: 0,
-                },
-                assets: Object.fromEntries(assets),
-                samples,
-                pixels: { distinctSampledColors: colorCount },
-              },
-              null,
-              2,
-            ),
-          );
+          await writeProof("resize-proof.json", {
+            provenance: fixture.provenance,
+            provisioning:
+              "fixture provider and durable worker records; production Gateway observation, worker carrier, registry, and RFB filter",
+            instrumentation:
+              "transparent real endpoint tap: same-connection framebuffer markers bracket each forbidden packet in one WebSocket message",
+            gateway: { execution: "built-process", readiness: "readyz", minimal: false },
+            carrier: fixture.carrier,
+            node: nodeDeviceId
+              ? {
+                  deviceId: nodeDeviceId,
+                  admission:
+                    "real device/node approval and connected paired session-host inventory",
+                  passwordAbsentFromObserve: true,
+                  disconnectClosedViewer: nodeDisconnectClosedViewer,
+                }
+              : null,
+            viewports: "native desktop windows; viewport-emulated mobile, not a physical phone",
+            observer: {
+              evidence: "endpoint-marker-brackets",
+              keyboardForwardedBytes: 0,
+              resizeForwardedBytes: 0,
+            },
+            assets: Object.fromEntries(assets),
+            samples,
+            pixels: { distinctSampledColors: colorCount },
+          });
         },
         close: async () => {
           const results = await Promise.allSettled([
