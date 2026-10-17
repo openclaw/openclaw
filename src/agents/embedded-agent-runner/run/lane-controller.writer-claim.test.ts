@@ -34,7 +34,7 @@ import { log } from "../logger.js";
 import { setActiveEmbeddedRun } from "../runs.js";
 import { testing as runsTesting } from "../runs.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
@@ -42,6 +42,7 @@ const fixture = useTempSessionsFixture("lane-writer-claim-");
 const sessionId = "writer-session";
 const sessionKey = "agent:main:writer-session";
 const lifecycleRevision = "writer-revision";
+const sessionRevision = { lifecycleRevision, sessionId };
 
 const completedResult: EmbeddedAgentRunResult = { meta: { durationMs: 0 } };
 
@@ -74,28 +75,18 @@ function createController(
   onSessionWriterClaimed?: (entry: InternalSessionEntry) => void,
   overrides: Partial<RunEmbeddedAgentParams> = {},
 ) {
-  let params = writerParams(overrides);
-  const generation = getAgentEventLifecycleGeneration();
-  const controller = createEmbeddedRunLaneController({
-    getLifecycleGeneration: () => generation,
-    getParams: () => params,
+  return createLaneControllerFixture(writerParams(overrides), {
+    configureRuntime: false,
     globalLane: "writer-global",
-    initialQueuedLifecycleGeneration: generation,
     sessionLane: "writer-session",
-    setLifecycleGeneration: () => {},
-    setParams: (next) => {
-      params = next;
-    },
     onSessionWriterClaimed,
   });
-  return { controller, getParams: () => params };
 }
 
 async function seedWriter(runId = "run-a", extra: Partial<InternalSessionEntry> = {}) {
   await replaceSessionEntry(scope(), {
     activeWriterRunId: runId,
-    lifecycleRevision,
-    sessionId,
+    ...sessionRevision,
     updatedAt: 1,
     ...extra,
   } as InternalSessionEntry);
@@ -135,31 +126,25 @@ function observeLifecycle(runId: string) {
   return events;
 }
 
-function staleManager(runId: string) {
-  return SessionManager.open(
-    {
-      ...scope(),
-      sessionId,
-      expectedLifecycleRevision: lifecycleRevision,
-      expectedWriterRunId: runId,
-    },
-    "/tmp",
-  );
-}
-
-async function expectStaleAppend(runId: string, manager: ReturnType<typeof staleManager>) {
-  expect(() => manager.appendMessage(assistantMessage("late model output"))).toThrow(
-    SessionTranscriptWriterClaimReboundError,
-  );
-  expect(
-    await appendExactAssistantMessageToSessionTranscript({
-      ...scope(),
-      expectedLifecycleRevision: lifecycleRevision,
-      expectedSessionId: sessionId,
-      expectedWriterRunId: runId,
-      message: assistantMessage("late output"),
-    }),
-  ).toMatchObject({ ok: false, code: "session-rebound" });
+function captureStaleWriter(runId: string) {
+  const fence = {
+    ...scope(),
+    expectedLifecycleRevision: lifecycleRevision,
+    expectedWriterRunId: runId,
+  };
+  const manager = SessionManager.open({ ...fence, sessionId }, "/tmp");
+  return async () => {
+    expect(() => manager.appendMessage(assistantMessage("late model output"))).toThrow(
+      SessionTranscriptWriterClaimReboundError,
+    );
+    expect(
+      await appendExactAssistantMessageToSessionTranscript({
+        ...fence,
+        expectedSessionId: sessionId,
+        message: assistantMessage("late output"),
+      }),
+    ).toMatchObject({ ok: false, code: "session-rebound" });
+  };
 }
 
 describe("embedded run durable writer admission", () => {
@@ -191,7 +176,7 @@ describe("embedded run durable writer admission", () => {
       sessionId,
       sessionKey,
     });
-    const manager = staleManager("run-a");
+    const assertStaleWriter = captureStaleWriter("run-a");
     let supersededOutcome: AgentRunTerminalOutcome | undefined;
     onTestFinished(
       onAgentEvent((event) => {
@@ -218,8 +203,7 @@ describe("embedded run durable writer admission", () => {
       controller.enqueueGlobal(async () => {
         expect(admittedEntry).toMatchObject({
           activeWriterRunId: "run-b",
-          lifecycleRevision,
-          sessionId,
+          ...sessionRevision,
         });
         return completedResult;
       }),
@@ -235,15 +219,14 @@ describe("embedded run durable writer admission", () => {
     });
     expect(readEntry()).toMatchObject({
       activeWriterRunId: "run-b",
-      lifecycleRevision,
-      sessionId,
+      ...sessionRevision,
       updatedAt: 1,
     });
     expect(getParams().sessionTarget).toMatchObject({
       expectedLifecycleRevision: lifecycleRevision,
       expectedWriterRunId: "run-b",
     });
-    await expectStaleAppend("run-a", manager);
+    await assertStaleWriter();
   });
 
   it("silently replaces a stopped prior writer while keeping stale transcript writes fenced", async () => {
@@ -251,14 +234,14 @@ describe("embedded run durable writer admission", () => {
     const cancel = vi.fn();
     installWriter("run-stopped", cancel, true);
     const events = observeLifecycle("run-stopped");
-    const manager = staleManager("run-stopped");
+    const assertStaleWriter = captureStaleWriter("run-stopped");
 
     await claimAgentSessionWriter(writerParams({ prompt: "next turn", runId: "run-next" }));
 
     expect(cancel).not.toHaveBeenCalled();
     expect(events).toEqual([]);
     expect(readEntry()).toMatchObject({ activeWriterRunId: "run-next", updatedAt: 1 });
-    await expectStaleAppend("run-stopped", manager);
+    await assertStaleWriter();
   });
 
   it.each([false, true])(
@@ -271,8 +254,7 @@ describe("embedded run durable writer admission", () => {
         sourceRunId: "announce:completion",
         requesterSessionKey: sessionKey,
         requesterAgentId: "main",
-        sessionId,
-        lifecycleRevision,
+        ...sessionRevision,
       };
       await seedWriter("run-a", {
         restartRecoveryHarnessCompletion: claim,
