@@ -1,30 +1,28 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { polledCount } from "./chat-presentation.test-support.ts";
+import { polledCount, polledFocus } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI emoji entry" });
 
 suite.define(() => {
+  const chat = { route: "chat", selector: ".agent-chat__composer-combobox > textarea" };
+  const desktop = { viewport: { width: 1280, height: 800 }, prefix: "Nice " };
   it.each([
     {
       name: "Chat",
-      route: "chat",
-      selector: ".agent-chat__composer-combobox > textarea",
-      viewport: { width: 1280, height: 800 },
-      prefix: "Nice ",
+      ...chat,
+      ...desktop,
     },
     {
       name: "New Session",
       route: "new?agent=main",
       selector: ".new-session-page__message",
-      viewport: { width: 1280, height: 800 },
-      prefix: "Nice ",
+      ...desktop,
     },
     {
       name: "narrow multiline Chat",
-      route: "chat",
-      selector: ".agent-chat__composer-combobox > textarea",
+      ...chat,
       viewport: { width: 390, height: 760 },
       prefix: "A short first line.\nNice ",
     },
@@ -109,22 +107,16 @@ suite.define(() => {
                 .some((name) => name.trim() === anchorName),
             );
           });
+        const anchorConnected = () =>
+          anchor.evaluate((element) => element instanceof Element && element.isConnected);
         await composer.press("ArrowDown");
         await composer.press("ArrowUp");
-        expect(
-          await anchor.evaluate((element) => element instanceof Element && element.isConnected),
-        ).toBe(true);
+        expect(await anchorConnected()).toBe(true);
         await composer.press("Tab");
         await expect.poll(() => composer.inputValue()).toBe(`${prefix}😄`);
-        await expect
-          .poll(() => composer.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await polledFocus(composer).toBe(true);
         await polledCount(menu).toBe(0);
-        await expect
-          .poll(() =>
-            anchor.evaluate((element) => element instanceof Element && element.isConnected),
-          )
-          .toBe(false);
+        await expect.poll(anchorConnected).toBe(false);
         await anchor.dispose();
 
         await composer.fill("Nice ");

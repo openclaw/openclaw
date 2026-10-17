@@ -1,7 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
-  captureUiProof,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -10,10 +9,26 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const sessionFixture = (id: string, at = 1_000, runId?: string) => ({
+  key: `agent:main:dashboard:${id}`,
+  sessionId: `${id}-session`,
+  kind: "direct",
+  label: id,
+  status: runId ? "running" : "done",
+  updatedAt: at,
+  ...(runId ? { hasActiveRun: true, activeRunIds: [runId] } : {}),
+});
+const makePending = (id: string, runId: string, at: number, state: string, message: unknown) => ({
+  id,
+  runId,
+  acceptedAt: at,
+  state,
+  message,
+});
 
 async function openHistory(
   page: Page,
-  session: NonNullable<Parameters<typeof chatSessionListResponse>[0]>[number],
+  session: ReturnType<typeof sessionFixture>,
   history: unknown,
 ) {
   const gateway = await installMockGateway(page, {
@@ -34,16 +49,8 @@ async function openHistory(
 suite.define(() => {
   it("keeps interrupted agent updates distinct from unsent human messages", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const sessionKey = "agent:main:dashboard:agent-update-proof";
-      const sessionId = "agent-update-proof-session";
-      const session = {
-        key: sessionKey,
-        sessionId,
-        kind: "direct",
-        label: "Mobile layout",
-        status: "done",
-        updatedAt: 1_000,
-      };
+      const session = sessionFixture("agent-update-proof");
+      const { sessionId } = session;
       const update = {
         role: "user",
         content: "Verification passed on phone and desktop. Ready to land.",
@@ -60,12 +67,6 @@ suite.define(() => {
         "Agent updates not retried after restart: current session permissions do not allow automatic delivery.";
       const history = {
         messages: [
-          { role: "user", content: "Please apply the mobile layout changes.", timestamp: 100 },
-          {
-            role: "assistant",
-            content: "The mobile layout changes are ready. Waiting for the verification update.",
-            timestamp: 200,
-          },
           {
             role: "user",
             content: "[System] Continue the interrupted turn.",
@@ -85,34 +86,17 @@ suite.define(() => {
         sessionInfo: session,
         pendingInputs: {
           items: [
-            {
-              id: "queued-update",
-              runId: "queued-verification-update",
-              acceptedAt: 900,
-              state: "queued",
-              message: {
-                ...update,
-                content: "The desktop checks passed.",
-                __openclaw: { id: "pending:queued-update" },
-              },
-            },
-            {
-              id: "agent-update",
-              runId: "verification-update",
-              acceptedAt: 1_000,
-              state: "interrupted",
-              message: update,
-            },
+            makePending("queued-update", "queued-verification-update", 900, "queued", {
+              ...update,
+              content: "The desktop checks passed.",
+              __openclaw: { id: "pending:queued-update" },
+            }),
+            makePending("agent-update", "verification-update", 1_000, "interrupted", update),
           ],
           total: 2,
         },
       };
       const gateway = await openHistory(page, session, history);
-      await page
-        .getByText("The mobile layout changes are ready. Waiting for the verification update.", {
-          exact: true,
-        })
-        .waitFor();
       const expectRecoveredUpdate = async () => {
         await page
           .locator(".chat-system-events__summary", { hasText: "Updates not delivered" })
@@ -134,7 +118,6 @@ suite.define(() => {
       };
       await expectRecoveredUpdate();
       expect(await page.getByText(/copy it and send again/u).count()).toBe(0);
-      await captureUiProof(suite, page, "agent-update-recovery", "retained-update.png");
       await page.reload();
       await expectRecoveredUpdate();
     });
@@ -142,22 +125,12 @@ suite.define(() => {
 
   it("shows another client's accepted follow-up during an active turn and promotes it once", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const sessionKey = "agent:main:dashboard:external-input-proof";
-      const sessionId = "external-input-proof-session";
       const runId = "active-synthetic-run";
       const startedAt = Date.now() - 10_000;
       const liveText = "Checking the current build. The active task is still running.";
       const followup = "After this task finishes, verify the new concurrency default.";
-      const session = {
-        key: sessionKey,
-        sessionId,
-        kind: "direct",
-        label: "Operations coordination",
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: [runId],
-        updatedAt: startedAt,
-      };
+      const session = sessionFixture("external-input-proof", startedAt, runId);
+      const { key: sessionKey, sessionId } = session;
       const initial = {
         role: "user",
         content: "Check the current build and report the result.",
@@ -192,18 +165,17 @@ suite.define(() => {
         timestamp: startedAt + 500,
         __openclaw: { id: "pending:external-input", transport: { clients: [source] } },
       };
-      const pending = {
-        id: "external-input",
-        runId: "external-follow-up",
-        acceptedAt: pendingMessage.timestamp,
-        state: "queued",
-        message: pendingMessage,
-      };
+      const pending = makePending(
+        "external-input",
+        "external-follow-up",
+        pendingMessage.timestamp,
+        "queued",
+        pendingMessage,
+      );
       await gateway.setMethodResponse("chat.history", {
         ...history,
         pendingInputs: { items: [pending], total: 1 },
       });
-      await captureUiProof(suite, page, "external-pending-input", "01-before.png");
       const readsBefore = (await gateway.getRequests("chat.history")).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey,
@@ -217,7 +189,6 @@ suite.define(() => {
         .toBeGreaterThan(readsBefore);
       await expect.poll(() => page.getByText(followup, { exact: true }).count()).toBe(1);
       const externalGroup = page.locator(".chat-group.user", { hasText: followup });
-      await captureUiProof(suite, page, "external-pending-input", "02-after.png");
       await externalGroup.getByText("via CLI (Release helper)", { exact: true }).waitFor();
       expect(
         await externalGroup.locator(".chat-sender-name, .chat-avatar, .chat-author-avatar").count(),
@@ -257,7 +228,6 @@ suite.define(() => {
         "via CLI (Release helper)",
       );
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await captureUiProof(suite, page, "external-pending-input", "03-promoted.png");
     });
   });
 });

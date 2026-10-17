@@ -1,10 +1,10 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page, Locator } from "playwright";
 import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   exactButton,
+  polledClipboard,
   polledCount,
   polledText,
   polledVisible,
@@ -12,21 +12,24 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI chat error details" });
-
-async function captureDiagnosticProof(page: Page, name: string) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({
-      path: path.join(suite.artifactDir, `${name}.png`),
-      fullPage: false,
-      animations: "disabled",
-    });
-  }
-}
+const sessionKey = "agent:main:main";
 
 const diagnosticContext = {
   viewport: { height: 900, width: 1280 },
   permissions: ["clipboard-read", "clipboard-write"],
 };
+
+async function sendPrompt(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  prompt: string,
+) {
+  await page.locator(".agent-chat__input textarea").fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  const { params } = await gateway.waitForRequest("chat.send");
+  assert(isRecord(params) && typeof params.idempotencyKey === "string");
+  return { params, runId: params.idempotencyKey };
+}
 
 async function expectMobileFit(page: Page, alert: Locator) {
   await page.setViewportSize({ width: 393, height: 852 });
@@ -51,15 +54,10 @@ suite.define(() => {
     "shows a %s diagnostic when only the terminal session update arrives",
     async (status) => {
       await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
-        const sessionKey = "agent:main:main";
         const diagnostic = "The configured model is unavailable. Select another model and retry.";
         const gateway = await installMockGateway(page, { sessionKey });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.locator(".agent-chat__input textarea").fill("Review the project");
-        await page.getByRole("button", { name: "Send message" }).click();
-        const send = await gateway.waitForRequest("chat.send");
-        assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
-        const runId = send.params.idempotencyKey;
+        const { runId } = await sendPrompt(page, gateway, "Review the project");
         await page.getByRole("button", { name: "Stop generating" }).waitFor();
         const row = {
           key: sessionKey,
@@ -89,7 +87,6 @@ suite.define(() => {
           session: row,
         });
         await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
-        await captureDiagnosticProof(page, `run-error-session-${status}`);
         const alert = page.locator(".chat-error");
         await polledText(alert).toContain(diagnostic);
         expect(await exactButton(alert, "Copy error").count()).toBe(1);
@@ -103,7 +100,6 @@ suite.define(() => {
 
   it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
-      const sessionKey = "agent:main:main";
       const prompt = "Continue reviewing the example project";
       const diagnostic = `DispatchSessionRefreshRequiredError: Session "${sessionKey}" changed while starting work. Retry.`;
       const recovery =
@@ -111,11 +107,7 @@ suite.define(() => {
       const errorMessage = `${recovery}\n\n${diagnostic}`;
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.locator(".agent-chat__input textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const send = await gateway.waitForRequest("chat.send");
-      assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
-      const runId = send.params.idempotencyKey;
+      const { runId } = await sendPrompt(page, gateway, prompt);
       await gateway.setHistoryMessages([
         {
           role: "user",
@@ -135,7 +127,6 @@ suite.define(() => {
       });
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      await captureDiagnosticProof(page, "session-change-collapsed");
       expect(await alert.locator("summary strong").textContent()).toBe(
         "Couldn't finish this reply. Check the conversation before trying again.",
       );
@@ -145,14 +136,9 @@ suite.define(() => {
       await polledVisible(details).toBe(true);
       expect(await details.textContent()).toBe(`Error: ${errorMessage}`);
       await exactButton(alert, "Copy error").click();
-      await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toBe(`Error: ${errorMessage}`);
-      await captureDiagnosticProof(page, "session-change-expanded");
+      await polledClipboard(page).toBe(`Error: ${errorMessage}`);
       await expectMobileFit(page, alert);
-      await captureDiagnosticProof(page, "session-change-mobile");
       await alert.locator("summary").click();
-      await captureDiagnosticProof(page, "session-change-mobile-collapsed");
       const input = page.locator(".agent-chat__input textarea");
       await input.fill("A newer draft stays here");
       const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -168,7 +154,6 @@ suite.define(() => {
     "keeps diagnostic paths and lets the operator expand and copy a complete failed run from %s",
     async (source) => {
       await suite.withPage(diagnosticContext, async ({ page }) => {
-        const sessionKey = "agent:main:main";
         const skillPath =
           "/home/operator/.openclaw/projects/0123456789abcdef/example/.agents/skills/review";
         const diagnostic = `Failed to prepare skill resources: skill="review" root="${skillPath}" error=Skill trees cannot contain links or special files: path="CLAUDE.md" kind=symlink. | INVALID_BUNDLE.\npassword=synthetic-password`;
@@ -200,11 +185,8 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         if (source === "live") {
-          await page.locator(".agent-chat__input textarea").fill("Inspect the project skills");
-          await page.getByRole("button", { name: "Send message" }).click();
-          const send = await gateway.waitForRequest("chat.send");
-          expect(send.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
-          const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+          const { params, runId } = await sendPrompt(page, gateway, "Inspect the project skills");
+          expect(params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,
@@ -216,29 +198,23 @@ suite.define(() => {
         }
         const alert = page.locator(".chat-error");
         await alert.waitFor();
-        await captureDiagnosticProof(page, `run-error-${source}-collapsed`);
         const summary = alert.locator("summary");
         expect(await summary.count()).toBe(1);
-        expect(await summary.textContent()).toContain(
-          "Check the conversation before trying again.",
-        );
-        expect(await summary.textContent()).not.toContain(skillPath);
-        expect(await summary.textContent()).not.toContain("INVALID_BUNDLE");
+        const summaryText = await summary.textContent();
+        expect(summaryText).toContain("Check the conversation before trying again.");
+        expect(summaryText).not.toContain(skillPath);
+        expect(summaryText).not.toContain("INVALID_BUNDLE");
         expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
         await summary.focus();
         await summary.press("Enter");
         const details = alert.getByLabel("Error details", { exact: true });
         await polledVisible(details).toBe(true);
-        await captureDiagnosticProof(page, `run-error-${source}-expanded`);
         expect(await details.textContent()).toBe(safeDiagnostic);
         const copy = exactButton(alert, "Copy error");
         await copy.click();
-        await expect
-          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-          .toBe(safeDiagnostic);
+        await polledClipboard(page).toBe(safeDiagnostic);
         expect(await details.isVisible()).toBe(true);
         await expectMobileFit(page, alert);
-        await captureDiagnosticProof(page, `run-error-${source}-mobile`);
         await summary.press("Enter");
         await polledVisible(details).toBe(false);
       });

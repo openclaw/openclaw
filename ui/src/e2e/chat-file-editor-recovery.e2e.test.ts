@@ -1,17 +1,14 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { exactButton, settlePanel, twoFrames } from "./chat-presentation.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import { exactButton, twoFrames } from "./chat-presentation.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "File editor recovery" });
 
-const editorContext = () => ({
-  viewport: { width: 1280, height: 900 },
-  recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
-});
+const editorContext = { viewport: { width: 1280, height: 900 } };
 const fileEditorRequest = controlUiE2eBuiltModuleRequest(
   "ui/src/pages/chat/components/file-editor-view.ts",
 );
@@ -39,11 +36,7 @@ async function replaceEditor(page: Page, body: (url: string) => string) {
 async function openFilePreview(page: Page) {
   await installMockGateway(page, {
     historyMessages: [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Review `notes.txt` and `other.txt`." }],
-        timestamp: 1,
-      },
+      chatMessage("assistant", "Review `notes.txt` and `other.txt`.", { timestamp: 1 }),
     ],
     methodResponses: {
       "sessions.files.get": {
@@ -72,7 +65,7 @@ async function openFilePreview(page: Page) {
 
 suite.define(() => {
   it("keeps initialization failures terminal until an explicit retry", async () => {
-    await suite.withPage(editorContext(), async ({ page }) => {
+    await suite.withPage(editorContext, async ({ page }) => {
       await replaceEditor(
         page,
         (url) => `import { createFileEditorView as create } from ${JSON.stringify(url)};
@@ -87,8 +80,6 @@ suite.define(() => {
       await page.waitForFunction(
         () => document.querySelector(".lazy-view-error") || (window.editorInitAttempts ?? 0) >= 3,
       );
-      await settlePanel(page);
-      await page.screenshot({ path: path.join(suite.artifactDir, "initialization-result.png") });
       expect(await page.locator(".lazy-view-error").count()).toBe(1);
       expect(await page.locator(".lazy-view-error").textContent()).toContain(
         "Synthetic editor initialization failed",
@@ -111,7 +102,7 @@ suite.define(() => {
     });
   });
   it("reloads a missing editor chunk only after the gateway becomes reachable", async () => {
-    await suite.withPage(editorContext(), async ({ page }) => {
+    await suite.withPage(editorContext, async ({ page }) => {
       let reachable = false;
       let chunkRequests = 0;
       let documentProbes = 0;
@@ -139,8 +130,6 @@ suite.define(() => {
       await expect.poll(() => documentProbes).toBe(1);
       expect(chunkRequests).toBe(1);
       expect(errors).toEqual([]);
-      await settlePanel(page);
-      await page.screenshot({ path: path.join(suite.artifactDir, "missing-chunk-error.png") });
       reachable = true;
       const navigation = page.waitForEvent("framenavigated", (frame) => frame === page.mainFrame());
       await exactButton(failure, "Reload").click();
@@ -153,17 +142,13 @@ suite.define(() => {
       expect(chunkRequests).toBe(2);
       expect(documentProbes).toBe(2);
       expect(errors).toEqual([]);
-      await settlePanel(page);
-      await page.screenshot({
-        path: path.join(suite.artifactDir, "missing-chunk-recovered.png"),
-      });
     });
   });
 
   it.each(["raw", "file", "close"] as const)(
     "keeps a late initialization failure scoped after selecting %s",
     async (selection) => {
-      await suite.withPage(editorContext(), async ({ page }) => {
+      await suite.withPage(editorContext, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         await replaceEditor(
