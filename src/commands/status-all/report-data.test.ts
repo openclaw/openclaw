@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Database inspection is covered at its owner, not by unrelated local diagnostics.
-vi.mock("../status-database-engines.js", () => ({
+vi.mock("../status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../status-database-engines.js")>()),
   resolveStatusDatabaseEngines: async () => ({ source: "admitted", stores: [] }),
 }));
 

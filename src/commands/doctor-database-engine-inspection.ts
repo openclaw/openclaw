@@ -9,9 +9,9 @@ import {
   inspectDatabaseStore,
   type DatabaseStoreDiagnostic,
 } from "../infra/database-engine/diagnostics.js";
+import { listLocalDatabaseDiagnosticStores } from "../infra/database-engine/local-diagnostics.js";
 import type { BackupEngine } from "../infra/database-engine/physical-store.js";
 import { databasePortProviders } from "../infra/database-engine/port-provider.js";
-import { listLocalDatabaseDiagnosticStores } from "../infra/database-engine/registry.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { resolveStatePortRoots } from "../infra/database-engine/state-port.js";
 import type {

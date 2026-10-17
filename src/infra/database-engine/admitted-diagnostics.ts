@@ -5,9 +5,9 @@ import {
 } from "../sqlite-database-admission.js";
 import { schemaAdmission } from "../sqlite-schema-admission.js";
 import type { DatabaseStoreDiagnostic } from "./diagnostics.js";
+import { listLocalDatabaseDiagnosticStores } from "./local-diagnostics.js";
 import { getPostgresPhysicalFactsForPath } from "./physical-facts.js";
 import { databasePortProviders } from "./port-provider.js";
-import { listLocalDatabaseDiagnosticStores } from "./registry.js";
 import { describeDatabaseEngineSelection } from "./report.js";
 
 function unknownStore(
