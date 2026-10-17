@@ -191,7 +191,7 @@ export async function loadModelCatalog(
         modelCatalogKey(params)
     ) {
       await subscribeToSharedRequest(
-        { promise: snapshot.promise, subscribers: new Set() },
+        { promise: snapshot.promise, subscribers: new Set<object>() },
         {},
         signal,
       );
