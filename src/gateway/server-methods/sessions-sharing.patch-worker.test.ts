@@ -10,6 +10,7 @@ import {
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as lifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -94,18 +95,15 @@ it("publishes sharing changes without caller-thread SQLite", () =>
     try {
       for (const visibility of ["draft", "shared"]) {
         const response = await f.call("visibility", { visibility });
-        expect(response).toHaveBeenCalledWith(
-          true,
-          { ok: true, sessionKey: f.scope.sessionKey, visibility },
-          undefined,
-        );
+        const expected = { ok: true, sessionKey: f.scope.sessionKey, visibility };
+        expect(response).toHaveBeenCalledWith(true, expected, undefined);
         expect((await readSessionMembersInWorker(f.scope)).entry?.visibility).toBe(visibility);
       }
       let shareId: string | undefined;
       for (const enabled of [true, true, false]) {
         const response = await f.call("publicShare", { enabled });
-        expect(response.mock.calls[0]?.[0]).toBe(true);
-        const result = response.mock.calls[0]?.[1];
+        const [ok, result] = response.mock.calls[0]!;
+        expect(ok).toBe(true);
         const stored = (await readSessionMembersInWorker(f.scope)).entry?.publicShare;
         if (enabled) {
           expect(stored?.id).toEqual(expect.any(String));
@@ -140,28 +138,23 @@ it.each([
   (action, revoked) =>
     withFixture(async (f) => {
       const before = await readSessionMembersInWorker(f.scope);
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let reachedCommit = false;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.publication) &&
-              request.facts.publication.kind === "session-entry-patch-committed"
-            ) {
-              reachedCommit = true;
-              if (revoked === "caller") {
-                f.client.invalidated = true;
-              } else {
-                const cfg = f.context.getRuntimeConfig();
-                cfg.session = { ...cfg.session, sharing: { drafts: false } };
-              }
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-entry-patch-committed"
+        ) {
+          reachedCommit = true;
+          if (revoked === "caller") {
+            f.client.invalidated = true;
+          } else {
+            f.context.getRuntimeConfig().session = { sharing: { drafts: false } };
+          }
+        }
+        admit(request, grant);
+      });
       await expect(f.call(action)).rejects.toThrow();
       expect(reachedCommit).toBe(true);
       expect(await readSessionMembersInWorker(f.scope)).toEqual(before);
@@ -201,12 +194,12 @@ it.each(["caller", "revoked grant", "deleted row", "replaced generation"] as con
         },
       );
       const respond = vi.fn<RespondFn>();
-      const refusal =
-        revoked === "revoked grant"
-          ? "session publication changed before sharing response"
-          : revoked === "deleted row" || revoked === "replaced generation"
-            ? "Session access facts are unavailable"
-            : "session ownership changed before sharing mutation";
+      const refusal = {
+        caller: "session ownership changed before sharing mutation",
+        "revoked grant": "session publication changed before sharing response",
+        "deleted row": "Session access facts are unavailable",
+        "replaced generation": "Session access facts are unavailable",
+      }[revoked];
       await expect(f.call("publicShare", undefined, respond)).rejects.toThrow(refusal);
       expect(acknowledgedShareId).toEqual(expect.any(String));
       expect(respond).not.toHaveBeenCalled();
@@ -231,24 +224,18 @@ it.each(["visibility", "publicShare"] as const)(
   (action) =>
     withFixture(async (f) => {
       const patch = entryPatch.patchSessionEntryInWorker;
-      let changed = false;
       vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) =>
         patch({
           ...params,
           async prepare(snapshot) {
             const prepared = await params.prepare(snapshot);
-            const current = loadSessionEntry(f.scope)!;
-            replaceSessionEntrySync(f.scope, {
-              ...current,
-              sessionId: "replacement-session",
-            });
-            changed = true;
+            const replacement = { ...loadSessionEntry(f.scope)!, sessionId: "replacement-session" };
+            replaceSessionEntrySync(f.scope, replacement);
             return prepared;
           },
         }),
       );
       await expect(f.call(action)).rejects.toThrow();
-      expect(changed).toBe(true);
       const entry = loadSessionEntry(f.scope);
       expect(entry).toMatchObject({
         sessionId: "replacement-session",

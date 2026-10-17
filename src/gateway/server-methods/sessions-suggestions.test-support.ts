@@ -85,6 +85,16 @@ export async function call(
   return { responses, context: requestContext };
 }
 
+export function requests(
+  key: string,
+  requester: Parameters<typeof call>[2],
+  requestContext = context(),
+  scope: Record<string, unknown> = {},
+) {
+  return (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+    call(method, { sessionKey: key, ...scope, ...params }, requester, requestContext);
+}
+
 export function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): string {
   const payload = result.responses[0]?.[1] as { suggestion?: { id?: string } } | undefined;
   if (!payload?.suggestion?.id) {

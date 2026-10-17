@@ -26,6 +26,7 @@ import {
   client,
   context,
   registerSessionSuggestionTestLifecycle,
+  requests,
   responseSuggestionId,
   sessionKey,
   upsertDefaultSuggestionSession as seedSession,
@@ -37,13 +38,10 @@ const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
 beforeEach(() => mocks.afterSuggestionClaim.mockReset());
 
-async function addSuggestion(text: string, author = client("alice", "Alice")) {
-  return responseSuggestionId(await add(text, author));
-}
-
-function add(text: string, author = client("alice", "Alice")) {
-  return call("session.suggestions.add", { sessionKey, text }, author);
-}
+const add = (text: string, author = client("alice", "Alice")) =>
+  call("session.suggestions.add", { sessionKey, text }, author);
+const addSuggestion = async (text: string, author = client("alice", "Alice")) =>
+  responseSuggestionId(await add(text, author));
 
 function resolveSuggestion(
   id: string,
@@ -86,23 +84,6 @@ function expectFailure(result: Awaited<ReturnType<typeof call>>, message: string
     undefined,
     { message: typeof message === "string" ? message : expect.stringMatching(message) },
   ]);
-}
-
-function expectSessionChanged(
-  result: Awaited<ReturnType<typeof call>>,
-  broadcast: ReturnType<typeof vi.fn>,
-) {
-  expect(result.responses).toHaveLength(1);
-  expect(result.responses[0]).toMatchObject([
-    false,
-    undefined,
-    {
-      code: "UNAVAILABLE",
-      retryable: false,
-      details: { code: "SESSION_SUGGESTION_SESSION_CHANGED", sessionKey },
-    },
-  ]);
-  expect(broadcast).not.toHaveBeenCalled();
 }
 
 it.each([
@@ -318,22 +299,11 @@ it("rejects archived suggestion creation and non-dismiss resolutions", () =>
       },
     );
     const owner = client("owner", "Owner");
+    const request = requests(archivedKey, owner);
     const resolve = (resolution: string) =>
-      call(
-        "session.suggestions.resolve",
-        {
-          sessionKey: archivedKey,
-          id: "archived-suggestion",
-          resolution,
-        },
-        owner,
-      );
+      request("session.suggestions.resolve", { id: "archived-suggestion", resolution });
 
-    const rejectedAdd = await call(
-      "session.suggestions.add",
-      { sessionKey: archivedKey, text: "new archived work" },
-      owner,
-    );
+    const rejectedAdd = await request("session.suggestions.add", { text: "new archived work" });
     expectFailure(rejectedAdd, /is archived/);
 
     for (const resolution of ["send", "queue", "edit"] as const) {
@@ -512,16 +482,27 @@ it.each(["dispatch", "claim", "release", "finalize", "release-unexpected"] as co
         dispatched.resolve();
       }
       const result = await pending;
-      if (phase === "release-unexpected") {
-        expect(result.responses).toHaveLength(1);
-        expect(result.responses[0]?.[2]).toMatchObject({
-          code: "UNAVAILABLE",
-          message: "release storage failed",
-          retryable: true,
-          retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-        });
-      } else {
-        expectSessionChanged(result, broadcast);
+      expect(result.responses).toMatchObject([
+        [
+          false,
+          undefined,
+          {
+            code: "UNAVAILABLE",
+            ...(phase === "release-unexpected"
+              ? {
+                  message: "release storage failed",
+                  retryable: true,
+                  retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+                }
+              : {
+                  retryable: false,
+                  details: { code: "SESSION_SUGGESTION_SESSION_CHANGED", sessionKey },
+                }),
+          },
+        ],
+      ]);
+      if (phase !== "release-unexpected") {
+        expect(broadcast).not.toHaveBeenCalled();
       }
     }),
 );

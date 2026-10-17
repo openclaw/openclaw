@@ -46,6 +46,7 @@ import {
   client,
   context,
   registerSessionSuggestionTestLifecycle,
+  requests,
   responseSuggestionId,
   sessionKey,
   upsertDefaultSuggestionSession,
@@ -77,27 +78,25 @@ function roleConfig(
   };
 }
 
-function requests(
-  key: string,
-  requester: Parameters<typeof call>[2],
-  requestContext = context(),
-  scope: Record<string, unknown> = {},
+async function seedIdeas(
+  authors: Record<string, string>,
+  entry: Parameters<typeof upsertDefaultSuggestionSession>[0] = {},
+  key = sessionKey,
 ) {
-  return (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
-    call(method, { sessionKey: key, ...scope, ...params }, requester, requestContext);
+  await upsertDefaultSuggestionSession(entry, key);
+  for (const [id, authorId] of Object.entries(authors)) {
+    await addSessionSuggestionInWorker(
+      { agentId: "main", sessionKey: key },
+      { id, authorId, text: id, expectedSessionId: entry.sessionId },
+    );
+  }
 }
 
 it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
   "rechecks %s after a delayed suggestion list reply",
   (change) =>
     withState(async () => {
-      await upsertDefaultSuggestionSession();
-      for (const authorId of ["alice", "bob"]) {
-        await addSessionSuggestionInWorker(
-          { agentId: "main", sessionKey },
-          { id: authorId, authorId, text: authorId },
-        );
-      }
+      await seedIdeas({ alice: "alice", bob: "bob" });
       let committed = roleConfig(change === "membership" ? "view" : "write");
       setRuntimeConfigSnapshot(committed);
       if (change === "membership") {
@@ -160,12 +159,11 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
           await expect(pending).rejects.toThrow(/unavailable/);
         } else {
           const result = await pending;
-          expect(result.responses).toHaveLength(1);
-          expect(result.responses[0]).toMatchObject(
+          expect(result.responses).toMatchObject([
             change === "policy" || change === "membership"
               ? [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }]
               : [false, undefined, { code: "FORBIDDEN" }],
-          );
+          ]);
         }
       } finally {
         release.resolve();
@@ -184,24 +182,13 @@ it("retains committed suggestion visibility through a tentative role relaxation"
     let committed = roleConfig("view", ["operator.sessions.read"]);
     await state.writeConfig(runtime);
     setRuntimeConfigSnapshot(runtime);
-    await upsertDefaultSuggestionSession({
-      sessionId: "policy-suggestions",
-      createdActor: { type: "human", source: "profile", id: owner.id },
-    });
-    for (const [id, authorId] of [
-      ["own-idea", reader.id],
-      ["other-idea", owner.id],
-    ] as const) {
-      await addSessionSuggestionInWorker(
-        { agentId: "main", sessionKey },
-        {
-          id,
-          authorId,
-          text: id,
-          expectedSessionId: "policy-suggestions",
-        },
-      );
-    }
+    await seedIdeas(
+      { "own-idea": reader.id, "other-idea": owner.id },
+      {
+        sessionId: "policy-suggestions",
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      },
+    );
     const requestContext = createDirectChatContext({
       getRuntimeConfig: () => runtime,
       getCommittedRuntimeConfig: () => committed,
@@ -293,8 +280,8 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
       : "agent:main:draft-suggestions";
     const sessionId = `session-${mode}`;
     const id = `${mode}-suggestion`;
-    const text = "private suggestion";
-    await upsertDefaultSuggestionSession(
+    await seedIdeas(
+      { [id]: incognito ? "owner" : "member" },
       {
         sessionId,
         visibility: incognito ? "suggest" : "draft",
@@ -308,10 +295,6 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
         { identityId: "member", addedBy: "owner", expectedSessionId: sessionId },
       );
     }
-    await addSessionSuggestionInWorker(
-      { agentId: "main", sessionKey: key },
-      { id, authorId: incognito ? "owner" : "member", text, expectedSessionId: sessionId },
-    );
     const request = requests(
       key,
       incognito ? client("owner", "Owner") : client("member", "Member"),
@@ -347,7 +330,7 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
         key,
         client(role, role, role === "admin"),
       )("session.suggestions.list");
-      expect(listed.responses[0]?.[1]).toMatchObject({ role, suggestions: [{ id, text }] });
+      expect(listed.responses[0]?.[1]).toMatchObject({ role, suggestions: [{ id, text: id }] });
     }
     if (!incognito) {
       return;
@@ -358,17 +341,13 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
     }));
     const broadcast = vi.fn();
     const adminRequest = requests(key, client("admin", "Admin", true), context(broadcast));
-    const typeDraft = (preview: string) =>
-      adminRequest("session.typing", { sessionId, typing: true, preview });
-    expect((await typeDraft("first private draft")).responses[0]?.[1]).toEqual({
-      ok: true,
-      broadcast: true,
-    });
+    const typeDraft = async (preview: string, sent: boolean) => {
+      const result = await adminRequest("session.typing", { sessionId, typing: true, preview });
+      expect(result.responses[0]?.[1]).toEqual({ ok: true, broadcast: sent });
+    };
+    await typeDraft("first private draft", true);
     await vi.advanceTimersByTimeAsync(100);
-    expect((await typeDraft("latest private draft")).responses[0]?.[1]).toEqual({
-      ok: true,
-      broadcast: false,
-    });
+    await typeDraft("latest private draft", false);
     await vi.advanceTimersByTimeAsync(150);
     expect(broadcast).toHaveBeenCalledTimes(2);
     expect(broadcast.mock.lastCall?.[1]).toMatchObject({
@@ -451,7 +430,6 @@ it.each([
       () => [{ key, agentId }],
       (read) => {
         const row = read.describe({ key, agentId });
-        expect(row).toBeDefined();
         if (!row) {
           throw new Error("expected the original suggestion row");
         }
@@ -501,26 +479,13 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
           scheduled.restore();
         }
       })();
-      const periodic = scheduled.periodic;
       const originalEntry = {
         sessionId: "provider-review-suggestion",
         lifecycleRevision: "provider-review-generation",
       };
-      await upsertSessionEntryCore(scope, {
-        ...originalEntry,
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: "owner" },
-        visibility: "suggest",
-      });
-      const options = { ...scope, path: database.path };
       const id = "queued-provider-review-suggestion";
-      if (action !== "add") {
-        await addSessionSuggestionInWorker(scope, {
-          id,
-          authorId: "owner",
-          text: "Synthetic suggestion",
-        });
-      }
+      await seedIdeas(action === "add" ? {} : { [id]: "owner" }, originalEntry);
+      const options = { ...scope, path: database.path };
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
       await initializeSessionReadContext(requestContext);
@@ -560,7 +525,7 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
           });
         try {
           // A real maintenance writer must not release the review-specific queue barrier.
-          maintenance = Promise.resolve(periodic());
+          maintenance = Promise.resolve(scheduled.periodic());
           review = reviewScope.run(true, () =>
             compareSessionProviderReview(
               {
