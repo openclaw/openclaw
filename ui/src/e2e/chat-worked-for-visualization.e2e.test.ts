@@ -28,6 +28,10 @@ const suite = createControlUiE2eSuite({
   name: "Control UI completed work visualizations",
   startServerBeforeBrowser: true,
 });
+const visualHtml = `<!doctype html><style>
+  body{margin:0;font:14px system-ui;background:#132332;color:#eaf5ff}
+  figure{box-sizing:border-box;height:180px;margin:0;padding:24px}
+</style><figure aria-label="Release confidence by platform">Release confidence · synthetic visual output</figure>`;
 
 const chatMessage = <T>(role: string, content: T, timestamp: number) => ({
   role,
@@ -148,11 +152,7 @@ suite.define(() => {
           await installMockGateway(page, {
             sessionKey,
             methodResponses: {
-              "canvas.document.view": canvasView(`<!doctype html>
-              <style>body { margin: 0; padding: 24px; background: #132332; color: #eaf5ff; font: 16px system-ui; }
-              div { margin-top: 18px; padding: 18px; background: #254c65; border-radius: 8px; }</style>
-              <h2>Release confidence</h2><p>First output · inline widget</p>
-              <div>Gateway 92% &nbsp; Control UI 84% &nbsp; Mobile 68%</div>`),
+              "canvas.document.view": canvasView(visualHtml),
             },
             historyMessages: projectChatDisplayMessages(
               history.map((message, index) =>
@@ -219,20 +219,12 @@ suite.define(() => {
       await page.addInitScript(() => {
         const NativeResizeObserver = window.ResizeObserver;
         let paused = false;
-        Object.defineProperties(window, {
-          pauseTranscriptResizeObservers: {
-            configurable: true,
-            value: () => {
-              paused = true;
-            },
-          },
-          resumeTranscriptResizeObservers: {
-            configurable: true,
-            value: () => {
-              paused = false;
-            },
-          },
-        });
+        window.pauseTranscriptResizeObservers = () => {
+          paused = true;
+        };
+        window.resumeTranscriptResizeObservers = () => {
+          paused = false;
+        };
         window.ResizeObserver = class PausableResizeObserver extends NativeResizeObserver {
           constructor(callback: ResizeObserverCallback) {
             super((entries, observer) => {
@@ -243,27 +235,9 @@ suite.define(() => {
           }
         };
       });
-      const documentHtml = `<!doctype html>
-            <style>
-              * { box-sizing: border-box; }
-              html, body { margin: 0; min-height: 100%; background: #0d1017; color: #f4f6fa; font: 14px system-ui; }
-              figure { margin: 0; padding: 20px 22px; }
-              figcaption { margin-bottom: 16px; font-size: 13px; font-weight: 650; letter-spacing: .02em; }
-              .row { display: grid; grid-template-columns: 72px 1fr 36px; align-items: center; gap: 10px; margin-top: 11px; }
-              .label, .value { color: #b8c0cc; font-size: 12px; }
-              .value { text-align: right; font-variant-numeric: tabular-nums; }
-              .track { height: 10px; overflow: hidden; border-radius: 4px; background: #252b36; }
-              .bar { height: 100%; border-radius: 4px; background: #76b7ff; }
-            </style>
-            <figure aria-label="Release confidence by platform">
-              <figcaption>Release confidence</figcaption>
-              <div class="row"><span class="label">Gateway</span><div class="track"><div class="bar" style="width:92%"></div></div><span class="value">92%</span></div>
-              <div class="row"><span class="label">Control UI</span><div class="track"><div class="bar" style="width:84%"></div></div><span class="value">84%</span></div>
-              <div class="row"><span class="label">Mobile</span><div class="track"><div class="bar" style="width:68%"></div></div><span class="value">68%</span></div>
-            </figure>`;
       await installMockGateway(page, {
         sessionKey,
-        methodResponses: { "canvas.document.view": canvasView(documentHtml) },
+        methodResponses: { "canvas.document.view": canvasView(visualHtml) },
         historyMessages: [
           chatMessage("user", "Check it.", 1_000),
           chatMessage(
@@ -340,9 +314,8 @@ suite.define(() => {
       });
 
       await captureProof(page, "worked-for-geometry-expanded");
-      expect(geometry.expanded).toBe("true");
+      expect(geometry).toMatchObject({ expanded: "true", overlaps: [] });
       expect(geometry.rows.length).toBeGreaterThanOrEqual(3);
-      expect(geometry.overlaps).toEqual([]);
 
       await page.evaluate(() => window.resumeTranscriptResizeObservers());
       await workedFor.click();

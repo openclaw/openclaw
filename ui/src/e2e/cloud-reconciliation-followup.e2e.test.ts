@@ -14,6 +14,7 @@ import {
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:cloud-reconciliation";
 const now = Date.now();
+const failureMessage = "Workspace reconciliation failed: local worktree is locked.";
 
 function placement(
   state: "active" | "failed",
@@ -31,7 +32,7 @@ function placement(
       ...timing,
       state,
       recoveryAction: "restart" as const,
-      recoveryError: "Workspace reconciliation failed: local worktree is locked.",
+      recoveryError: failureMessage,
     };
   }
   return {
@@ -103,6 +104,7 @@ suite.define(() => {
           }
         };
         const waiting = page.getByText("Received · waiting for workspace sync", { exact: true });
+        const followUp = page.getByText(pendingInput.message.content, { exact: true });
         const reconciling = session("active", false, true);
         const reconcilingHistory = {
           inFlightRun: null,
@@ -127,10 +129,17 @@ suite.define(() => {
         });
         const setHistory = async <T extends { sessionInfo: ReturnType<typeof session> }>(
           history: T,
+          reason: "send" | "placement",
         ) => {
           await gateway.setMethodResponse("chat.history", history);
           await gateway.setMethodResponse("chat.startup", history);
           await gateway.setSessionsListResponse(chatSessionListResponse([history.sessionInfo]));
+          await gateway.emitGatewayEvent("sessions.changed", {
+            agentId: "main",
+            sessionKey,
+            reason,
+            ...(reason === "send" ? { hasActiveRun: true } : {}),
+          });
         };
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -160,17 +169,9 @@ suite.define(() => {
           pendingInputs: { items: [admittedInput], total: 1 },
           sessionInfo: queued,
         };
-        await setHistory(queuedHistory);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          agentId: "main",
-          hasActiveRun: true,
-          reason: "send",
-          sessionKey,
-        });
+        await setHistory(queuedHistory, "send");
         await waiting.waitFor();
-        await expect
-          .poll(() => page.getByText(pendingInput.message.content, { exact: true }).count())
-          .toBe(1);
+        await expect.poll(() => followUp.count()).toBe(1);
         await capture("01-slow-sync");
 
         const active = session("active");
@@ -184,7 +185,7 @@ suite.define(() => {
         const activeHistory = {
           ...reconcilingHistory,
           messages: [
-            { role: "assistant", content: "Cloud edits are ready to apply." },
+            ...reconcilingHistory.messages,
             {
               ...pendingInput.message,
               __openclaw: { id: "persisted-follow-up", idempotencyKey: `${runId}:user` },
@@ -194,12 +195,7 @@ suite.define(() => {
           pendingInputs: { items: [], total: 0 },
           sessionInfo: active,
         };
-        await setHistory(activeHistory);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          agentId: "main",
-          reason: "placement",
-          sessionKey,
-        });
+        await setHistory(activeHistory, "placement");
         await gateway.emitGatewayEvent("session.message", {
           activeRunIds: [],
           hasActiveRun: false,
@@ -216,9 +212,7 @@ suite.define(() => {
           .filter({ hasText: "The queued follow-up started automatically." })
           .waitFor();
         await expect.poll(() => waiting.count()).toBe(0);
-        await expect
-          .poll(() => page.getByText(pendingInput.message.content, { exact: true }).count())
-          .toBe(1);
+        await expect.poll(() => followUp.count()).toBe(1);
         await capture("02-resumed");
 
         const completedUpdatedAt = await evaluateControlUiContext(
@@ -235,25 +229,17 @@ suite.define(() => {
         const failed = session("failed");
         expect(completedUpdatedAt).toBeLessThanOrEqual(failed.updatedAt);
         const failedHistory = { ...activeHistory, sessionInfo: failed };
-        await setHistory(failedHistory);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          agentId: "main",
-          reason: "placement",
-          sessionKey,
-        });
+        await setHistory(failedHistory, "placement");
         await page.getByText("Runner failed", { exact: true }).waitFor();
-        const failure = page.locator(".chat-error").filter({
-          hasText: "Workspace reconciliation failed: local worktree is locked.",
-        });
+        const failure = page.locator(".chat-error").filter({ hasText: failureMessage });
         await failure
           .locator("summary strong")
           .getByText("Couldn't finish this reply. Check the conversation before trying again.")
           .waitFor();
         await failure.locator("summary").click();
-        await failure.getByLabel("Error details", { exact: true }).waitFor();
-        expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
-          "Workspace reconciliation failed: local worktree is locked.",
-        );
+        const details = failure.getByLabel("Error details", { exact: true });
+        await details.waitFor();
+        expect(await details.textContent()).toContain(failureMessage);
         await capture("03-true-failure");
       },
     );

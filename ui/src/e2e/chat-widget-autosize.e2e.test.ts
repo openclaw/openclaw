@@ -24,6 +24,7 @@ const documentPath = `/__openclaw__/canvas/documents/${documentId}/index.html`;
 // can only come from the reported height rather than from the layout box.
 const rowCount = 90;
 const rowHeight = 28;
+const scrollTop = (target: Locator) => target.evaluate((element) => element.scrollTop);
 const assistant = (content: unknown, timestamp: number) => ({
   role: "assistant",
   content,
@@ -113,11 +114,11 @@ suite.define(() => {
       await gateway.waitForRequest("canvas.document.view");
       await gateway.resolveDeferred("canvas.document.view");
       const frame = page.locator(".chat-tool-card__preview-frame");
-      await frame
+      const ready = frame
         .contentFrame()
         .frameLocator("iframe")
-        .getByText("All data in this preview is synthetic.", { exact: false })
-        .waitFor();
+        .getByText("All data in this preview is synthetic.", { exact: false });
+      await ready.waitFor();
       await page.waitForFunction(
         () =>
           document.querySelector(".chat-tool-card__preview-frame")?.getBoundingClientRect()
@@ -195,11 +196,7 @@ suite.define(() => {
         await captureFrame(page, thread, anchor, path.join(artifacts, "waiting.png"));
       }
       await gateway.resolveDeferred("canvas.document.view");
-      await frame
-        .contentFrame()
-        .frameLocator("iframe")
-        .getByText("All data in this preview is synthetic.", { exact: false })
-        .waitFor();
+      await ready.waitFor();
       const samples = await page.evaluate(async () => {
         for (let index = 0; index < 20; index += 1) {
           await new Promise<void>((resolve) => {
@@ -362,14 +359,12 @@ suite.define(() => {
         .poll(async () => Math.round((await frame.boundingBox())?.height ?? 0))
         .toBeGreaterThanOrEqual(contentHeight);
       // Measure inside the cross-origin frame to detect inaccessible nested overflow.
-      const overflow = await frame
-        .contentFrame()
-        .frameLocator("iframe")
+      const widget = frame.contentFrame().frameLocator("iframe");
+      const overflow = await widget
         .locator("body")
-        .evaluate((body) => body.scrollHeight - window.innerHeight);
+        .evaluate((body) => body.scrollHeight - innerHeight);
       expect(overflow).toBeLessThanOrEqual(0);
 
-      const widget = frame.contentFrame().frameLocator("iframe");
       const player = widget.getByLabel("Synthetic video");
       const thread = page.locator(".chat-thread");
       await expect
@@ -395,11 +390,9 @@ suite.define(() => {
           Reflect.set(window, "widgetScrollInputs", Reflect.get(window, "widgetScrollInputs") + 1);
         });
       });
-      const beforeDown = await thread.evaluate((element) => element.scrollTop);
+      const beforeDown = await scrollTop(thread);
       await page.mouse.wheel(0, 100);
-      await expect
-        .poll(() => thread.evaluate((element) => element.scrollTop))
-        .toBeGreaterThan(beforeDown);
+      await expect.poll(() => scrollTop(thread)).toBeGreaterThan(beforeDown);
       await expect
         .poll(() => page.evaluate(() => Reflect.get(window, "widgetScrollInputs")))
         .toBe(1);
@@ -407,42 +400,36 @@ suite.define(() => {
         false,
       );
       await player.hover();
-      const beforeUp = await thread.evaluate((element) => element.scrollTop);
+      const beforeUp = await scrollTop(thread);
       await page.mouse.wheel(0, -100);
-      await expect
-        .poll(() => thread.evaluate((element) => element.scrollTop))
-        .toBeLessThan(beforeUp);
+      await expect.poll(() => scrollTop(thread)).toBeLessThan(beforeUp);
 
       // Playback uses the browser's own focused video controls after scrolling.
-      await player.press("Space");
-      await expect
-        .poll(() => player.evaluate((element: HTMLVideoElement) => element.paused))
-        .toBe(false);
-      await player.press("Space");
-      await expect
-        .poll(() => player.evaluate((element: HTMLVideoElement) => element.paused))
-        .toBe(true);
+      for (const paused of [false, true]) {
+        await player.press("Space");
+        await expect
+          .poll(() => player.evaluate((element: HTMLVideoElement) => element.paused))
+          .toBe(paused);
+      }
 
       const details = widget.getByLabel("Scrollable widget details");
       await details.hover();
-      const beforeNested = await thread.evaluate((element) => element.scrollTop);
+      const beforeNested = await scrollTop(thread);
       await page.mouse.wheel(0, 100);
-      await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeNested);
+      await expect.poll(() => scrollTop(details)).toBeGreaterThan(0);
+      expect(await scrollTop(thread)).toBe(beforeNested);
       await details.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
       await page.mouse.wheel(0, 100);
-      await expect
-        .poll(() => thread.evaluate((element) => element.scrollTop))
-        .toBeGreaterThan(beforeNested);
+      await expect.poll(() => scrollTop(thread)).toBeGreaterThan(beforeNested);
 
       const control = widget.getByLabel("Wheel-controlled widget");
       await control.hover();
-      const beforeControl = await thread.evaluate((element) => element.scrollTop);
+      const beforeControl = await scrollTop(thread);
       await page.mouse.wheel(0, 100);
       await expect.poll(() => control.textContent()).toBe("Wheel handled");
-      expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeControl);
+      expect(await scrollTop(thread)).toBe(beforeControl);
     });
   });
 });

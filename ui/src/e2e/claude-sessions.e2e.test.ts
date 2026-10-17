@@ -81,19 +81,19 @@ function terminalGatewayOptions(items: Array<{ type: string; text: string }> = [
 
 async function catalogHeaderAffordances(header: Locator) {
   return header.evaluate((element) => {
-    const toggle = element.querySelector<HTMLElement>(".sidebar-session-group-toggle");
-    const providerIcon = element.querySelector<HTMLElement>(
-      ".sidebar-session-catalog-provider-icon",
-    );
-    const chevron = element.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
-    const grip = element.querySelector<HTMLElement>(".sidebar-session-group-drag-handle");
-    const actions = element.querySelector<HTMLElement>(".sidebar-session-group-actions");
-    const toolbarButton = element.ownerDocument.querySelector<HTMLElement>(
-      ".sidebar-session-toolbar__button",
-    );
-    if (!toggle || !providerIcon || !chevron || !grip || !actions || !toolbarButton) {
-      throw new Error("expected complete branded catalog header affordances");
-    }
+    const find = (selector: string, root: ParentNode = element) => {
+      const target = root.querySelector(selector);
+      if (!target) {
+        throw new Error(`Missing catalog header affordance: ${selector}`);
+      }
+      return target;
+    };
+    const toggle = find(".sidebar-session-group-toggle");
+    const providerIcon = find(".sidebar-session-catalog-provider-icon");
+    const chevron = find(".sidebar-session-group-toggle__icon");
+    const grip = find(".sidebar-session-group-drag-handle");
+    const actions = find(".sidebar-session-group-actions");
+    const toolbarButton = find(".sidebar-session-toolbar__button", element.ownerDocument);
     const actionsStyle = getComputedStyle(actions);
     const toolbarButtonStyle = getComputedStyle(toolbarButton);
     return {
@@ -159,6 +159,26 @@ async function openClaudeCatalogTerminal(page: Page) {
   await triggerClaudeCatalogTerminal(page);
 }
 
+async function scrollThread(thread: Locator, top: "start" | "end") {
+  await thread.evaluate((element, edge) => {
+    element.scrollTop = edge === "start" ? 0 : element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  }, top);
+}
+
+async function preservePaintedAnchor(thread: Locator, applyPage: () => Promise<void>) {
+  const anchor = await captureTopVisibleVirtualRow(thread);
+  await startVirtualRowPaintProbe(thread, anchor);
+  let result: VirtualRowPaintResult;
+  try {
+    await applyPage();
+    await waitForPaintedVirtualRowAnchor(thread);
+  } finally {
+    result = await stopVirtualRowPaintProbe(thread);
+  }
+  expectPaintedVirtualRowAnchor(anchor, result);
+}
+
 suite.define(() => {
   it("shows catalog header affordances only for hover or keyboard-visible focus", async () => {
     await suite.withPage(
@@ -206,17 +226,6 @@ suite.define(() => {
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            focusWithin: true,
-            hovered: false,
-            toggleFocusVisible: false,
-            toggleFocused: true,
-          });
-
-        await capture(page, artifactDir, "catalog-header-pointer-away", { surface: header });
-
-        await expect
-          .poll(() => catalogHeaderAffordances(header))
-          .toMatchObject({
             actionsOpacity: "0",
             actionsPointerEvents: "none",
             chevronOpacity: "0",
@@ -227,6 +236,7 @@ suite.define(() => {
             toggleFocusVisible: false,
             toggleFocused: true,
           });
+        await capture(page, artifactDir, "catalog-header-pointer-away", { surface: header });
 
         await page.keyboard.press("Tab");
         await expect
@@ -540,10 +550,7 @@ suite.define(() => {
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
       .toBe(true);
-    await thread.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    await scrollThread(thread, "end");
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await gateway.deferNext("sessions.catalog.read");
@@ -557,10 +564,7 @@ suite.define(() => {
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
     await expectHistoryBoundaryState(catalogPane, true);
-    const anchor = await captureTopVisibleVirtualRow(thread);
-    await startVirtualRowPaintProbe(thread, anchor);
-    let paintResult: VirtualRowPaintResult;
-    try {
+    await preservePaintedAnchor(thread, async () => {
       await gateway.resolveDeferred("sessions.catalog.read");
       await expect
         .poll(() =>
@@ -571,11 +575,7 @@ suite.define(() => {
         )
         .toBe(41);
       await page.clock.runFor(100);
-      await waitForPaintedVirtualRowAnchor(thread);
-    } finally {
-      paintResult = await stopVirtualRowPaintProbe(thread);
-    }
-    expectPaintedVirtualRowAnchor(anchor, paintResult);
+    });
     expect(
       await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
     ).toBe(true);
@@ -650,40 +650,31 @@ suite.define(() => {
     const older = Array.from({ length: 1000 }, (_, index) =>
       historyMessage(index + 1, "older native message"),
     );
+    const historyPage = (
+      messages: ReturnType<typeof historyMessage>[],
+      totalMessages = 1100,
+      nextOffset?: number,
+    ) => ({
+      messages,
+      totalMessages,
+      hasMore: nextOffset !== undefined,
+      ...(nextOffset === undefined ? {} : { nextOffset }),
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
-        "chat.startup": {
-          messages: recent,
-          hasMore: true,
-          nextOffset: 100,
-          totalMessages: 1100,
-          sessionId: "native-scrollback",
-          thinkingLevel: null,
-        },
+        "chat.startup": historyPage(recent, 1100, 100),
         "chat.history": {
           cases: [
             {
               match: { offset: 100 },
-              response: {
-                messages: older,
-                hasMore: false,
-                totalMessages: 1100,
-                sessionId: "native-scrollback",
-                thinkingLevel: null,
-              },
+              response: historyPage(older),
             },
             {
-              // Served to the background prefetch staged after the successful
-              // older page below reports more history at offset 1100.
               match: { offset: 1100 },
-              response: {
-                messages: [],
-                hasMore: false,
-                totalMessages: 1140,
-                sessionId: "native-scrollback",
-                thinkingLevel: null,
-              },
+              response: historyPage([], 1140),
             },
           ],
         },
@@ -696,10 +687,7 @@ suite.define(() => {
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
       .toBe(true);
-    await thread.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    await scrollThread(thread, "end");
     const showEarlier = page.getByRole("button", { name: "Show earlier" });
     // The boundary is in-flow content above the oldest loaded message: present
     // in the transcript, above the viewport until the reader scrolls back up.
@@ -707,10 +695,7 @@ suite.define(() => {
     expect((await showEarlier.boundingBox())?.y ?? 0).toBeLessThan(0);
     const initialRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    await scrollThread(thread, "start");
     // Pin each wait past the earlier chat.history traffic so a slow runner
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
@@ -744,18 +729,8 @@ suite.define(() => {
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     await expectHistoryBoundaryState(page, true);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
-    const readerAnchor = await captureTopVisibleVirtualRow(thread);
-    await startVirtualRowPaintProbe(thread, readerAnchor);
-    let paintResult: VirtualRowPaintResult;
-    try {
-      await gateway.resolveDeferred("chat.history", {
-        messages: older,
-        hasMore: true,
-        nextOffset: 1100,
-        totalMessages: 1140,
-        sessionId: "native-scrollback",
-        thinkingLevel: null,
-      });
+    await preservePaintedAnchor(thread, async () => {
+      await gateway.resolveDeferred("chat.history", historyPage(older, 1140, 1100));
       await expect
         .poll(() =>
           page
@@ -768,11 +743,7 @@ suite.define(() => {
         )
         .toBe(1100);
       await expectHistoryBoundaryState(page, false);
-      await waitForPaintedVirtualRowAnchor(thread);
-    } finally {
-      paintResult = await stopVirtualRowPaintProbe(thread);
-    }
-    expectPaintedVirtualRowAnchor(readerAnchor, paintResult);
+    });
     await capture(page, artifactDir, "03-native-history-prepended-visible", { fullPage: true });
     // The applied page reports more history, so the pane stages the next page
     // (offset 1100) in the background without entering the loading state.

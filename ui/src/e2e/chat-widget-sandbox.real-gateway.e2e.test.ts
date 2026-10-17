@@ -85,10 +85,41 @@ async function sessionUrl(owner: OpenClawTestInstance, key: string, face: "chat"
   return url.toString();
 }
 
-function canvasDocument(owner: OpenClawTestInstance, id: string, title: string, html: string) {
+function canvasDocument(
+  owner: OpenClawTestInstance,
+  id: string,
+  title: string,
+  body: string,
+  options?: Parameters<typeof buildWidgetDocument>[2],
+) {
   return createCanvasDocument(
-    { id, title, html, cspSandbox: "scripts", surface: "assistant_message" },
+    {
+      id,
+      title,
+      html: buildWidgetDocument(title, body, options),
+      cspSandbox: "scripts",
+      surface: "assistant_message",
+    },
     { stateDir: owner.stateDir },
+  );
+}
+
+async function createSession(owner: OpenClawTestInstance, key: string, label: string) {
+  const session = await rpc(owner, "sessions.create", { key, agentId: "main", label });
+  expect(session.ok).toBe(true);
+  expect(typeof session.sessionId).toBe("string");
+  return String(session.sessionId);
+}
+
+function appendAssistant(
+  owner: OpenClawTestInstance,
+  sessionKey: string,
+  sessionId: string,
+  content: unknown[],
+) {
+  return appendTranscriptMessage(
+    { agentId: "main", sessionKey, sessionId, env: owner.env },
+    { message: { role: "assistant", content, timestamp: Date.now() } },
   );
 }
 
@@ -107,24 +138,15 @@ suite.define(() => {
     const owner = gatewayOwner();
     const sessionKey = "agent:main:widget-live-proof";
     const docId = "widget-live-proof";
-    const session = await rpc(owner, "sessions.create", {
-      key: sessionKey,
-      agentId: "main",
-      label: "Synthetic widget proof",
-    });
-    expect(session.ok).toBe(true);
-    expect(typeof session.sessionId).toBe("string");
+    const sessionId = await createSession(owner, sessionKey, "Synthetic widget proof");
     await canvasDocument(
       owner,
       docId,
       "Live widget proof",
-      buildWidgetDocument(
-        "Live widget proof",
-        `<style>body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
+      `<style>body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
               input{padding:12px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border)}</style>
               <h1>Live widget proof</h1><p>Loaded from this isolated Gateway's persisted Canvas document.</p>
               <label>Local note <input aria-label="Local note"></label>`,
-      ),
     );
     const a2uiDocId = `${docId}-a2ui`;
     const a2uiBundlePath = "/__openclaw__/a2ui/a2ui-v0.9.bundle.js";
@@ -154,11 +176,8 @@ suite.define(() => {
       owner,
       a2uiDocId,
       "A2UI live proof",
-      buildWidgetDocument(
-        "A2UI live proof",
-        `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
-        { scriptOrigins: ["'self'"] },
-      ),
+      `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
+      { scriptOrigins: ["'self'"] },
     );
     const content = [
       {
@@ -166,21 +185,7 @@ suite.define(() => {
         text: `The synthetic widgets are ready.\n[embed ref="${docId}" title="Live widget proof" height="320" /]\n[embed ref="${a2uiDocId}" title="A2UI live proof" height="200" /]`,
       },
     ];
-    await appendTranscriptMessage(
-      {
-        agentId: "main",
-        sessionKey,
-        sessionId: String(session.sessionId),
-        env: owner.env,
-      },
-      {
-        message: {
-          role: "assistant",
-          content,
-          timestamp: Date.now(),
-        },
-      },
-    );
+    await appendAssistant(owner, sessionKey, sessionId, content);
     const history = await rpc(owner, "chat.history", { sessionKey, agentId: "main" });
     expect(history.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ content })]),
@@ -260,11 +265,7 @@ suite.define(() => {
           ${Array.from({ length: 30 }, (_, index) => `<p>Story ${index + 1}: Synthetic engineering news for the navigation retention proof.</p>`).join("")}
         </article>`,
       );
-    await call("sessions.create", {
-      key: dashboardKey,
-      agentId: "main",
-      label: "The Daily Claw",
-    });
+    await createSession(owner, dashboardKey, "The Daily Claw");
     await call("sessions.patch", { key: dashboardKey, boardFace: "dashboard" });
     const widgetParams = {
       sessionKey: dashboardKey,
@@ -276,22 +277,10 @@ suite.define(() => {
       ...widgetParams,
       content: { kind: "html", html: articleHtml("Morning edition") },
     });
-    const chat = await call("sessions.create", {
-      key: chatKey,
-      agentId: "main",
-      label: "Navigation proof chat",
-    });
-    expect(typeof chat.sessionId).toBe("string");
-    await appendTranscriptMessage(
-      { agentId: "main", sessionKey: chatKey, sessionId: String(chat.sessionId), env: owner.env },
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Synthetic session ready for navigation." }],
-          timestamp: Date.now(),
-        },
-      },
-    );
+    const chatId = await createSession(owner, chatKey, "Navigation proof chat");
+    await appendAssistant(owner, chatKey, chatId, [
+      { type: "text", text: "Synthetic session ready for navigation." },
+    ]);
     const url = await sessionUrl(owner, dashboardKey, "dashboard");
     await suite.withPage(browserOptions(), async ({ page }) => {
       const capture = async (filename: string) => {

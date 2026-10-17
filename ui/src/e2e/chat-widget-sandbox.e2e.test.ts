@@ -13,6 +13,7 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
@@ -42,19 +43,8 @@ const sourceAuthorization = "Bearer synthetic-widget-source-credential";
 function widgetDocument(): string {
   return buildWidgetDocument(
     "Community pulse",
-    `<style>
-      body{margin:0;padding:24px;background:var(--surface);color:var(--text);font:15px system-ui}
-      h1{margin:10px 0;font-size:26px}p{line-height:1.5;color:var(--text-muted)}
-      .eyebrow{font-size:11px;letter-spacing:.15em;color:var(--accent)}
-      label{display:block;margin-top:20px}input{box-sizing:border-box;width:100%;padding:10px;
-        margin:8px 0 16px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border);border-radius:6px}
-      button{padding:10px 12px;margin:0 6px 8px 0;border:1px solid var(--border);
-        background:var(--surface-raised);color:var(--text);border-radius:6px;cursor:pointer}
-      output{display:block;margin-top:12px}.details{height:540px;padding-top:20px}
-    </style>
-    <div class="eyebrow">SYNTHETIC COMMUNITY DASHBOARD</div>
+    `<style>.details{height:540px;padding-top:20px}</style>
     <h1>Community pulse</h1>
-    <p>The same interactive document is available in chat and in the dashboard.</p>
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
@@ -273,12 +263,9 @@ suite.define(() => {
             },
           });
           const outer = page.locator(".chat-tool-card__preview-frame");
-          let releaseConfig!: () => void;
-          const configReady = new Promise<void>((resolve) => {
-            releaseConfig = resolve;
-          });
+          const configReady = createDeferredCore();
           const holdConfig = async (route: Route) => {
-            await configReady;
+            await configReady.promise;
             await route.fallback();
           };
           const configRoute = `**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
@@ -303,7 +290,7 @@ suite.define(() => {
             await capture("01-auth-gated-widget");
           } finally {
             await page.unroute(configRoute, holdConfig);
-            releaseConfig();
+            configReady.resolve();
           }
           const boardOuter = page.locator(".board-widget__frame");
           const board = boardOuter.contentFrame().frameLocator("iframe");
@@ -388,6 +375,7 @@ suite.define(() => {
             idempotencyKey: expect.any(String),
           });
           const runId = String(sent.idempotencyKey);
+          const paragraph = (hasText: RegExp) => page.getByRole("paragraph").filter({ hasText });
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,
@@ -398,19 +386,13 @@ suite.define(() => {
               content: [{ type: "text", text: "Refreshing community signals…" }],
             },
           });
-          await page
-            .getByRole("paragraph")
-            .filter({ hasText: /^Refreshing community signals…$/u })
-            .waitFor();
+          await paragraph(/^Refreshing community signals…$/u).waitFor();
           await gateway.emitChatFinal({
             sessionKey,
             runId,
             text: "Synthetic dashboard refreshed.",
           });
-          await page
-            .getByRole("paragraph")
-            .filter({ hasText: /^Synthetic dashboard refreshed\.$/u })
-            .waitFor();
+          await paragraph(/^Synthetic dashboard refreshed\.$/u).waitFor();
           await expectRetainedNote();
           expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
@@ -518,7 +500,7 @@ suite.define(() => {
           });
           await board.getByRole("button", { name: "Attempt shortcut", exact: true }).click();
           await page.waitForFunction(() => Reflect.get(window, "shortcutForgerySettled") === true);
-          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          expect(await paletteInput.count()).toBe(0);
           await savedNote.focus();
           await savedNote.evaluate(() => {
             Reflect.set(
@@ -534,7 +516,7 @@ suite.define(() => {
           });
           await page.keyboard.press("j");
           expect(await savedNote.inputValue()).toBe("Saved draft!j");
-          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          expect(await paletteInput.count()).toBe(0);
           await savedNote.evaluate(() => {
             Object.defineProperties(
               KeyboardEvent.prototype,
