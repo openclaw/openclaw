@@ -37,7 +37,7 @@ export function wireMessage(id: string, text: string) {
   };
 }
 
-export function expectTypes(items: readonly { type?: string }[], types: readonly string[]) {
+export function expectTypes(items: readonly { type?: string | null }[], types: readonly string[]) {
   expect(items.map((item) => item.type)).toEqual(types);
 }
 

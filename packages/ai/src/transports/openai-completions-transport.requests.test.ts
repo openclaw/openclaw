@@ -1,5 +1,5 @@
-import { createServer, type RequestListener } from "node:http";
-import { expect, it } from "vitest";
+import { createServer } from "node:http";
+import { describe, expect, it } from "vitest";
 import {
   COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   expectOpenAITransportRequestPolicy,
@@ -9,69 +9,71 @@ import { streamSimpleOpenAICompletions } from "../providers/openai-completions.j
 import type { AssistantMessage, SimpleStreamOptions } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
-import { collectEventTypes, userMessage } from "./openai-stream-cases.test-support.js";
 
-async function withServer(handler: RequestListener, run: (baseUrl: string) => Promise<void>) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing loopback server address");
-    }
-    await run(`http://127.0.0.1:${address.port}/v1`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-}
-
-const tools = [
-  { id: "call_weather", name: "weather", arguments: { city: "Vienna" } },
-  { id: "call_time", name: "time", arguments: { zone: "UTC" } },
-];
-const wireTools = tools.map(({ id, name, arguments: args }) => ({
-  id,
-  type: "function",
-  function: { name, arguments: JSON.stringify(args) },
-}));
-const context = { systemPrompt: "system", messages: [userMessage("Reply live-ok")], tools: [] };
-const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
-const providerError = {
-  message: "Quota exceeded for api_key=sk-secret1234567890abcd",
-  type: "rate_limit_error",
-  code: "insufficient_quota",
-};
-
-it(
-  "honors turn timeout and pinned SDK retries over real HTTP",
-  () =>
-    expectOpenAITransportRequestPolicy({
-      api: "openai-completions",
+describe("openai completions transport requests", () => {
+  it.each([
+    {
+      api: "openai-completions" as const,
       provider: "openai",
       createStream: createOpenAICompletionsTransportStreamFn,
-    }),
-  COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
-);
-it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
-  await withServer(
-    (req, res) => {
+    },
+  ])(
+    "honors turn timeout and pinned SDK retries over real $api HTTP",
+    expectOpenAITransportRequestPolicy,
+    COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  );
+  it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
+    const server = createServer((req, res) => {
       req.resume();
       req.on("end", () => {
-        res.writeHead(429, jsonHeaders);
-        res.end(JSON.stringify({ error: providerError }));
+        res.writeHead(429, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_error_metadata",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded for api_key=sk-secret1234567890abcd",
+              type: "rate_limit_error",
+              code: "insufficient_quota",
+            },
+          }),
+        );
       });
-    },
-    async (baseUrl) => {
-      const model = makeCompletionsModel({ id: "gpt-5.4-mini", baseUrl });
-      const stream = await createOpenAICompletionsTransportStreamFn()(model, context, {
-        apiKey: "test-key",
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = makeCompletionsModel({
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
       });
-      expect(await collectEventTypes(stream)).toEqual(["error"]);
-      const errorPayload = await stream.result();
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
 
       expect(errorPayload).toMatchObject({
         stopReason: "error",
@@ -80,19 +82,21 @@ it("preserves OpenAI-compatible error metadata on failed chat requests", async (
       });
       expect(String(errorPayload?.errorBody)).toContain("Quota exceeded");
       expect(String(errorPayload?.errorBody)).not.toContain("sk-secret1234567890abcd");
-    },
-  );
-});
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 
-it.each(["managed", "direct"] as const)(
-  "preserves JSON completions and honors streaming controls (%s)",
-  async (mode) => {
-    const capturedRequests: Array<Record<string, unknown>> = [];
-    let includeTools = false;
-    let oversized = false;
-    let releaseBody: (() => void) | undefined;
-    await withServer(
-      (req, res) => {
+  it.each(["managed", "direct"] as const)(
+    "preserves JSON completions and honors streaming controls (%s)",
+    async (mode) => {
+      const capturedRequests: Array<Record<string, unknown>> = [];
+      let includeTools = false;
+      let oversized = false;
+      let releaseBody: (() => void) | undefined;
+      const server = createServer((req, res) => {
         let body = "";
         req.setEncoding("utf8");
         req.on("data", (chunk) => {
@@ -100,18 +104,38 @@ it.each(["managed", "direct"] as const)(
         });
         req.on("end", () => {
           capturedRequests.push(JSON.parse(body) as Record<string, unknown>);
-          res.writeHead(200, jsonHeaders);
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+          });
           const responseBody = oversized
             ? " ".repeat(16 * 1024 * 1024 + 1)
             : JSON.stringify({
                 id: "chatcmpl-json-fallback",
+                object: "chat.completion",
+                model: "moonshotai/kimi-k2.6",
                 choices: [
                   {
+                    index: 0,
                     message: {
                       role: "assistant",
                       reasoning_content: "Need a direct answer.",
                       content: "live-ok",
-                      ...(includeTools ? { tool_calls: wireTools } : {}),
+                      ...(includeTools
+                        ? {
+                            tool_calls: [
+                              {
+                                id: "call_weather",
+                                type: "function",
+                                function: { name: "weather", arguments: '{"city":"Vienna"}' },
+                              },
+                              {
+                                id: "call_time",
+                                type: "function",
+                                function: { name: "time", arguments: '{"zone":"UTC"}' },
+                              },
+                            ],
+                          }
+                        : {}),
                     },
                     finish_reason: includeTools ? "tool_calls" : "stop",
                   },
@@ -126,12 +150,23 @@ it.each(["managed", "direct"] as const)(
             res.end(responseBody);
           }
         });
-      },
-      async (baseUrl) => {
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
         const model = makeCompletionsModel({
           id: "moonshotai/kimi-k2.6",
+          name: "Kimi K2.6",
           provider: "openrouter",
-          baseUrl,
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          contextWindow: 256_000,
+          maxTokens: 16_384,
           compat: {
             supportsReasoningEffort: true,
           },
@@ -140,26 +175,34 @@ it.each(["managed", "direct"] as const)(
           mode === "managed"
             ? createOpenAICompletionsTransportStreamFn()
             : streamSimpleOpenAICompletions;
-        const requestOptions = (
-          streaming?: boolean,
-          reasoning?: "high",
-        ): SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> => ({
-          apiKey: "test-key",
-          streaming,
-          reasoning,
-          onResponse: () => releaseBody?.(),
-        });
-        for (const [modelStreaming, streaming, expected, withTools] of [
-          [undefined, undefined, true, false],
-          [false, undefined, false, false],
-          [undefined, false, false, true],
-          [false, true, true, true],
-        ] as const) {
-          includeTools = withTools;
+        for (const scenario of [
+          { params: {}, options: {}, expected: true, tools: false },
+          { params: { streaming: false }, options: {}, expected: false, tools: false },
+          { params: {}, options: { streaming: false }, expected: false, tools: true },
+          {
+            params: { streaming: false },
+            options: { streaming: true },
+            expected: true,
+            tools: true,
+          },
+        ]) {
+          includeTools = scenario.tools;
+          const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
+            apiKey: "test-key",
+            reasoning: "high",
+            ...scenario.options,
+            onResponse: () => {
+              releaseBody?.();
+            },
+          };
           const stream = await createStream(
-            { ...model, params: { streaming: modelStreaming } },
-            context,
-            requestOptions(streaming, "high"),
+            { ...model, params: scenario.params },
+            {
+              systemPrompt: "system",
+              messages: [{ role: "user", content: "Reply live-ok", timestamp: 1 }],
+              tools: [],
+            },
+            options,
           );
           let final: AssistantMessage | undefined;
           const eventTypes: string[] = [];
@@ -170,8 +213,8 @@ it.each(["managed", "direct"] as const)(
             }
           }
           const request = capturedRequests.at(-1);
-          expect(request?.stream).toBe(expected);
-          if (expected) {
+          expect(request?.stream).toBe(scenario.expected);
+          if (scenario.expected) {
             expect(request?.stream_options).toEqual({ include_usage: true });
           } else {
             expect(request).not.toHaveProperty("stream_options");
@@ -193,7 +236,20 @@ it.each(["managed", "direct"] as const)(
             }),
             expect.objectContaining({ type: "text", text: "live-ok" }),
             ...(includeTools
-              ? tools.map((tool) => expect.objectContaining({ type: "toolCall", ...tool }))
+              ? [
+                  expect.objectContaining({
+                    type: "toolCall",
+                    id: "call_weather",
+                    name: "weather",
+                    arguments: { city: "Vienna" },
+                  }),
+                  expect.objectContaining({
+                    type: "toolCall",
+                    id: "call_time",
+                    name: "time",
+                    arguments: { zone: "UTC" },
+                  }),
+                ]
               : []),
           ]);
           expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(
@@ -201,12 +257,29 @@ it.each(["managed", "direct"] as const)(
           );
         }
         oversized = true;
-        const oversizedStream = await createStream(model, context, requestOptions(false));
+        const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
+          apiKey: "test-key",
+          streaming: false,
+          onResponse: () => {
+            releaseBody?.();
+          },
+        };
+        const oversizedStream = await createStream(
+          model,
+          {
+            messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+          },
+          options,
+        );
         expect(await oversizedStream.result()).toMatchObject({
           stopReason: "error",
           errorMessage: expect.stringContaining("JSON response exceeds 16777216 bytes"),
         });
-      },
-    );
-  },
-);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+});
