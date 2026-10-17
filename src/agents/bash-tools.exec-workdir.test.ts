@@ -91,6 +91,16 @@ describe("resolveExecWorkdir", () => {
       nodeCwd: "/node/default",
       expected: { kind: "node", remoteCwd: "/node/explicit" },
     },
+    {
+      workdir: "/node/trailing ",
+      nodeCwd: "/node/default",
+      expected: { kind: "node", remoteCwd: "/node/trailing " },
+    },
+    {
+      workdir: " /node/leading",
+      nodeCwd: undefined,
+      expected: { kind: "node", remoteCwd: " /node/leading" },
+    },
   ])(
     "selects remote cwd for $workdir / $nodeCwd without local validation",
     async ({ workdir, nodeCwd, expected }) => {

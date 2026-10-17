@@ -62,6 +62,21 @@ describe("resolveSystemRunApprovalRequestContext", () => {
     expect(context.agentId).toBe("main");
     expect(context.sessionKey).toBe("agent:main:main");
   });
+
+  test("preserves whitespace in cwd from a node plan", () => {
+    const context = resolveSystemRunApprovalRequestContext({
+      host: "node",
+      command: "echo hi",
+      cwd: "/fallback",
+      systemRunPlan: {
+        argv: ["echo", "hi"],
+        cwd: "/srv/data ",
+        commandText: "echo hi",
+      },
+    });
+    expect(context.cwd).toBe("/srv/data ");
+    expect(context.plan?.cwd).toBe("/srv/data ");
+  });
 });
 
 describe("parsePreparedSystemRunPayload", () => {
@@ -175,6 +190,25 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
       ok: false,
       message: "rawCommand requires params.command",
       details: { code: "MISSING_COMMAND" },
+    });
+  });
+
+  test("preserves whitespace in cwd when falling back without a plan", () => {
+    const context = resolveSystemRunApprovalRuntimeContext({
+      command: ["echo", "hi"],
+      rawCommand: "echo hi",
+      cwd: "/srv/data ",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    expect(context).toEqual({
+      ok: true,
+      plan: null,
+      argv: ["echo", "hi"],
+      cwd: "/srv/data ",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      commandText: "echo hi",
     });
   });
 });

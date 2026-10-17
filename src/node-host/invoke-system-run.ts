@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
@@ -222,7 +223,8 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
   const sessionKey = requestedSessionKey ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
-  const cwd = normalizeOptionalString(opts.params.cwd);
+  const cwd = readNonBlankString(opts.params.cwd);
+  // Node-host cwd preserves whitespace; see resolveExecWorkdir.
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const approvalSource = opts.params.approvalSource;
   if (
@@ -247,7 +249,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
       approvalPlan !== null &&
       argvArraysMatch(approvalPlan.argv, command.argv) &&
       approvalPlan.commandText === commandText &&
-      normalizeOptionalString(approvalPlan.cwd) === cwd &&
+      approvalPlan.cwd === cwd &&
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
       normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
     if (!planMatchesRequest) {

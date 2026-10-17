@@ -319,6 +319,15 @@ describe("executable path helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves whitespace in cwd for relative executable candidates",
+    () => {
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "/srv/data " })).toBe(
+        "/srv/data /tool",
+      );
+    },
+  );
+
   it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
     withMockedPlatform("win32", () => {
       expect(
@@ -334,6 +343,29 @@ describe("executable path helpers", () => {
     });
   });
 });
+
+it.runIf(process.platform !== "win32")(
+  "preserves whitespace cwd in PATH-relative executable resolution",
+  async () => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const dirWithSpace = `${base}/data `;
+      const dirNoSpace = `${base}/data`;
+      await fs.mkdir(dirWithSpace, { recursive: true });
+      await fs.mkdir(dirNoSpace, { recursive: true });
+      const toolWithSpace = path.join(dirWithSpace, "runner");
+      const toolNoSpace = path.join(dirNoSpace, "runner");
+      await fs.writeFile(toolWithSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fs.writeFile(toolNoSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      expect(resolveExecutablePath("runner", { env: { PATH: "" }, cwd: dirWithSpace })).toBe(
+        toolWithSpace,
+      );
+      expect(resolveExecutablePath("runner", { env: { PATH: "" }, cwd: dirNoSpace })).toBe(
+        toolNoSpace,
+      );
+    });
+  },
+);
 
 describe("resolveExecutable", () => {
   afterEach(() => {

@@ -931,3 +931,34 @@ describe("allow-always pattern persistence", () => {
     },
   );
 });
+
+it.runIf(process.platform !== "win32")(
+  "produces distinct shell-script grants for whitespace-distinct cwd values",
+  () => {
+    const base = makeExecApprovalsTempDir();
+    const dirWithSpace = path.join(base, "data ");
+    const dirNoSpace = path.join(base, "data");
+    fs.mkdirSync(dirWithSpace, { recursive: true });
+    fs.mkdirSync(dirNoSpace, { recursive: true });
+    const script = path.join(dirWithSpace, "task.sh");
+    fs.writeFileSync(script, "echo ok\n");
+    const env = makePathEnv(base);
+    const contextWith = { cwd: dirWithSpace, env, platform: process.platform };
+    const contextNo = { cwd: dirNoSpace, env, platform: process.platform };
+    const analysisWith = analyzeArgvCommand({ argv: ["/bin/sh", script], ...contextWith });
+    const analysisNo = analyzeArgvCommand({ argv: ["/bin/sh", script], ...contextNo });
+    expect(analysisWith.ok).toBe(true);
+    expect(analysisNo.ok).toBe(true);
+    const entriesWith = resolveAllowAlwaysPatternEntries({
+      segments: analysisWith.segments,
+      ...contextWith,
+    });
+    const entriesNo = resolveAllowAlwaysPatternEntries({
+      segments: analysisNo.segments,
+      ...contextNo,
+    });
+    expect(entriesWith.length).toBeGreaterThan(0);
+    expect(entriesNo.length).toBeGreaterThan(0);
+    expect(entriesWith[0]?.argPattern).not.toBe(entriesNo[0]?.argPattern);
+  },
+);

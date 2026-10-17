@@ -1106,7 +1106,7 @@ function collectAllowAlwaysPatterns(
       });
       const argPattern = buildCwdBoundHashedArgPattern(
         scriptArgv,
-        params.cwd && params.cwd.trim() ? params.cwd.trim() : process.cwd(),
+        params.cwd && params.cwd.trim() ? params.cwd : process.cwd(),
         params.platform,
       );
       addAllowAlwaysPattern(out, scriptTrustPath, argPattern);
