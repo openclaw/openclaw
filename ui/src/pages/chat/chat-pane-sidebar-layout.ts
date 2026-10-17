@@ -56,7 +56,7 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   ],
   "link-reader": [
     "openclaw-link-reader-panel",
-    () => import("../../components/link-reader-panel.ts"),
+    () => import("../../components/link-reader-panel.tsx"),
   ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],

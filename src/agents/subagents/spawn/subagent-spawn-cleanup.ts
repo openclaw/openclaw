@@ -1,18 +1,14 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { callGateway } from "../../../gateway/call.js";
-import { waitForChatAbortControllerRemoval } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { cleanupMaterializedSubagentAttachments } from "./subagent-attachments.js";
-import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { callSubagentGateway, type SubagentGatewayRequest } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
-type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
+type GatewayCall = (options: SubagentGatewayRequest) => Promise<unknown>;
 type AcceptedRunAbortParams = {
   childSessionKey: string;
   gatewayRunId: string;
@@ -21,9 +17,7 @@ type AcceptedRunAbortParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
 };
-type AcceptedRunTerminationResult =
-  | { status: "settled" }
-  | { status: "pending" | "failed"; error: unknown };
+type AcceptedRunTerminationResult = { status: "settled" } | { status: "failed"; error: unknown };
 
 /** Binds rollback to the session this spawn created, independently of its operator's lifetime. */
 export function bindSubagentSpawnCleanup(params: {
@@ -72,7 +66,7 @@ export function bindSubagentSpawnCleanup(params: {
       throw new Error("Subagent cleanup cannot dispatch this Gateway method");
     }
     const identity = params.getSessionIdentity();
-    const payload = asNullableRecord(request.params);
+    const payload = request.params;
     const assertCurrent = () => {
       const currentIdentity = params.getSessionIdentity();
       if (
@@ -84,7 +78,7 @@ export function bindSubagentSpawnCleanup(params: {
       }
       if (method === "sessions.delete") {
         if (
-          payload?.key !== params.childSessionKey ||
+          payload.key !== params.childSessionKey ||
           payload.expectedSessionId !== identity.expectedSessionId ||
           payload.expectedLifecycleRevision !== identity.expectedLifecycleRevision
         ) {
@@ -92,7 +86,7 @@ export function bindSubagentSpawnCleanup(params: {
         }
       } else if (
         !acceptedRun ||
-        payload?.sessionKey !== params.childSessionKey ||
+        payload.sessionKey !== params.childSessionKey ||
         payload.runId !== acceptedRun.runId
       ) {
         throw new Error("Subagent cleanup run does not match its accepted owner");
@@ -120,18 +114,17 @@ export function bindSubagentSpawnCleanup(params: {
   };
   const terminateAcceptedRun =
     context && context.localEmbedded !== true
-      ? async (retainAdmission: () => () => void): Promise<AcceptedRunTerminationResult> => {
+      ? async (): Promise<AcceptedRunTerminationResult> => {
           if (!acceptedRun) {
             return { status: "failed", error: new Error("Subagent cleanup has no accepted run") };
           }
-          const { runId, entry, operationalRunInstance } = acceptedRun;
-          const abort = async (signal?: AbortSignal) => {
+          const { runId } = acceptedRun;
+          try {
             const response = await requestAcceptedRunAbort({
               childSessionKey: params.childSessionKey,
               gatewayRunId: runId,
               callGateway,
               isCurrent: () => isCurrent("chat.abort"),
-              signal,
             });
             if (
               !isMatchingAbortResponse(response, runId) &&
@@ -139,70 +132,11 @@ export function bindSubagentSpawnCleanup(params: {
             ) {
               throw new Error("Gateway did not confirm accepted child termination");
             }
-          };
-          let abortError: unknown;
-          try {
-            await abort();
             return { status: "settled" };
           } catch (error) {
-            abortError = error;
+            // Keep uncertain children discoverable; their Gateway still owns execution and shutdown.
+            return { status: "failed", error };
           }
-          let releaseAdmission: (() => void) | undefined;
-          const scheduling = createDeferredCore<AcceptedRunTerminationResult>();
-          const fail = (error: unknown) => {
-            releaseAdmission?.();
-            const failure = new AggregateError(
-              [abortError, error],
-              `Child termination failed (${formatErrorMessage(abortError)}); cleanup failed (${formatErrorMessage(error)})`,
-            );
-            scheduling.resolve({ status: "failed", error: failure });
-            context.logGateway.warn(`Accepted child ${runId}: ${failure.message}`);
-          };
-          try {
-            releaseAdmission = retainAdmission();
-            // This exact Gateway joins the tail after the spawning tool returns.
-            const cleanup = context.trackExecution(async () => {
-              const signal = getAsyncWorkSignal();
-              try {
-                if (!signal) {
-                  throw new Error("Subagent cleanup requires its Gateway work lifetime");
-                }
-                signal.throwIfAborted();
-                scheduling.resolve({ status: "pending", error: abortError });
-                try {
-                  await abort(signal);
-                } catch (cleanupError) {
-                  context.logGateway.warn(
-                    `Accepted child ${runId} termination remains unconfirmed: ${formatErrorMessage(cleanupError)}`,
-                  );
-                  // Registry admission can retire while this exact child still owns execution.
-                  if (
-                    !signal.aborted &&
-                    entry &&
-                    context.chatAbortControllers.get(runId) === entry &&
-                    entry.operationalRunInstance === operationalRunInstance
-                  ) {
-                    await waitForChatAbortControllerRemoval({
-                      entries: context.chatAbortControllers,
-                      targets: [{ runId, entry }],
-                      timeoutMs: null,
-                      signal,
-                    }).catch((error: unknown) => {
-                      if (!signal.aborted) {
-                        throw error;
-                      }
-                    });
-                  }
-                }
-              } finally {
-                releaseAdmission?.();
-              }
-            });
-            void cleanup.catch(fail);
-          } catch (error) {
-            fail(error);
-          }
-          return await scheduling.promise;
         }
       : undefined;
   return {
@@ -319,19 +253,16 @@ export async function terminateFailedRegistrationRun(params: {
   isCleanupCurrent: () => boolean;
   isAbortCurrent: () => boolean;
   cleanupOwner?: ReturnType<typeof bindSubagentSpawnCleanup>;
-  retainAdmission?: () => () => void;
 }): Promise<string | undefined> {
   // A failed required registration stops its accepted run while uncertain
   // or retained registry data still forbids deleting the session.
   const deleteSessionOnMiss = params.isCleanupCurrent();
-  if (!deleteSessionOnMiss && params.retainAdmission && params.cleanupOwner?.terminateAcceptedRun) {
-    const termination = await params.cleanupOwner.terminateAcceptedRun(params.retainAdmission);
+  if (!deleteSessionOnMiss && params.cleanupOwner?.terminateAcceptedRun) {
+    const termination = await params.cleanupOwner.terminateAcceptedRun();
     if (termination.status !== "settled") {
       return (
         `Child termination is not confirmed: ${formatErrorMessage(termination.error)}. ` +
-        (termination.status === "pending"
-          ? "Its session is retained, and Gateway cleanup is pending."
-          : "Its session is retained; Gateway cleanup could not be scheduled.")
+        "Its session is retained; stop the child by its run ID or restart the Gateway."
       );
     }
   } else {

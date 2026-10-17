@@ -1,7 +1,7 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import {
   deliverReplies,
@@ -30,4 +30,4 @@ export const telegramDirectDeliveryDepsForTest = {
   resolveApproval() {
     throw new Error("Direct-delivery fixtures do not resolve approvals");
   },
-} satisfies Partial<TelegramBotDeps>;
+} satisfies Partial<TelegramBotFixtureMocks>;

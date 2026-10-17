@@ -20,10 +20,14 @@ export type PostgresErrorData = {
 export type BridgeCommand =
   | { operation: "connect" }
   | { operation: "close" }
+  | { operation: "release" }
+  | { operation: "recovery-generation"; storeId: string; lock: boolean }
   | { operation: "query"; sql: string; parameters: readonly SQLInputValue[] };
 export type BridgeRequest = BridgeCommand & { id: number };
 export type BridgeReply = { id: number } & (
   | { result: PostgresResult }
+  | { generation: string }
+  | { reusable: boolean }
   | { error: PostgresErrorData }
 );
 export type BridgeWorkerData = {

@@ -9,8 +9,8 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
-import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { concatGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
   type LiveTextPublication,
@@ -162,7 +162,7 @@ function frameWithSequence(
   seq: number,
   payload: FramePayload,
   recipientProfileId?: string,
-): string | Buffer {
+): Buffer {
   const recipient =
     recipientProfileId === undefined
       ? ""
@@ -170,20 +170,14 @@ function frameWithSequence(
   let prefix = `{"type":"event","event":${base.eventJSON}`;
   let suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
   if (typeof payload === "string") {
-    return `${prefix}${payload}${suffix}`;
+    return Buffer.from(`${prefix}${payload}${suffix}`);
   }
   const bytes = Buffer.isBuffer(payload) ? payload : payload.message;
   if (!Buffer.isBuffer(payload)) {
     prefix += payload.prefix;
     suffix = payload.suffix + suffix;
   }
-  const frame = Buffer.allocUnsafe(
-    Buffer.byteLength(prefix) + bytes.length + Buffer.byteLength(suffix),
-  );
-  const offset = frame.write(prefix);
-  bytes.copy(frame, offset);
-  frame.write(suffix, offset + bytes.length);
-  return frame;
+  return concatGatewayFrame([Buffer.from(prefix), bytes, Buffer.from(suffix)]);
 }
 
 export function createGatewayBroadcaster(params: {
@@ -247,7 +241,7 @@ export function createGatewayBroadcaster(params: {
     }
     const live = opts?.liveText;
     const publication = retained ? retained.publication : delivery.publish(live);
-    if (params.clients.size === 0) {
+    if (params.clients.size === 0 || (!retained && targetConnIds?.size === 0)) {
       return;
     }
     const { sessionKeys, agentId } = resolveBroadcastSessionScope(
@@ -255,6 +249,30 @@ export function createGatewayBroadcaster(params: {
       opts?.sessionKeys,
       opts?.agentId,
     );
+    const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
+    const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
+    const sessionMessageSubscribers = params.sessionMessageSubscribers;
+    const subscriptionRequired = event === "session.typing" || sessionSubscriptionVerified;
+    let sessionSubscriberConnIdsByKey: ReadonlySet<string>[] | undefined;
+    let recipientConnIds = targetConnIds;
+    if (!retained && !recipientConnIds && (subscriptionRequired || isSessionSubscriptionEvent)) {
+      // The subscription owner supplies candidates; live authority is still checked at delivery.
+      const audience = new Set(
+        subscriptionRequired ? undefined : params.clients.unscopedSessionEventConnIds,
+      );
+      sessionSubscriberConnIdsByKey = sessionMessageSubscribers
+        ? sessionKeys.map((key) => sessionMessageSubscribers.get(key))
+        : [];
+      for (const subscribers of sessionSubscriberConnIdsByKey) {
+        for (const connId of subscribers) {
+          audience.add(connId);
+        }
+      }
+      if (audience.size === 0) {
+        return;
+      }
+      recipientConnIds = audience;
+    }
     const isTargeted = Boolean(targetConnIds);
     const presencePayload =
       // SAFETY: Internal presence producers emit { presence: SystemPresence[] }; wire input cannot publish events.
@@ -286,10 +304,7 @@ export function createGatewayBroadcaster(params: {
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    const encodedFrames = new Map<
-      FramePayload,
-      Map<string | undefined, Map<number, string | Buffer>>
-    >();
+    const encodedFrames = new Map<FramePayload, Map<string | undefined, Map<number, Buffer>>>();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -311,14 +326,10 @@ export function createGatewayBroadcaster(params: {
               : serializeFrameField("payload", value),
           ),
     });
-    const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
-    const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
-    const sessionMessageSubscribers = params.sessionMessageSubscribers;
-    let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
     const recipients = retained
       ? [retained.client]
-      : targetConnIds
-        ? params.clients.getByConnectionIds(targetConnIds)
+      : recipientConnIds
+        ? params.clients.getByConnectionIds(recipientConnIds)
         : params.clients;
     for (const c of recipients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
@@ -355,11 +366,8 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       const requiresSessionSubscription =
-        event === "session.typing" ||
-        sessionSubscriptionVerified ||
-        ((isBrowserCopilotClient(c.connect.client) ||
-          hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
-          isSessionSubscriptionEvent);
+        subscriptionRequired ||
+        (isSessionSubscriptionEvent && !params.clients.unscopedSessionEventConnIds.has(c.connId));
       if (
         requiresSessionSubscription &&
         !(isTargeted && sessionSubscriptionVerified && !retained)
@@ -367,21 +375,10 @@ export function createGatewayBroadcaster(params: {
         if (!sessionKeys.length || !sessionMessageSubscribers) {
           continue;
         }
-        // Resolve keys lazily to preserve short-circuit order, then reuse their live sets across clients.
-        // This avoids repeated normalization and map lookups without snapshotting recipients.
-        sessionSubscriberConnIdsByKey ??= [];
-        let subscribed = false;
-        let sessionKeyIndex = 0;
-        for (const sessionKey of sessionKeys) {
-          const subscriberConnIds = (sessionSubscriberConnIdsByKey[sessionKeyIndex] ??=
-            sessionMessageSubscribers.get(sessionKey));
-          if (subscriberConnIds.has(c.connId)) {
-            subscribed = true;
-            break;
-          }
-          sessionKeyIndex += 1;
-        }
-        if (!subscribed) {
+        sessionSubscriberConnIdsByKey ??= sessionKeys.map((key) =>
+          sessionMessageSubscribers.get(key),
+        );
+        if (!sessionSubscriberConnIdsByKey.some((subscribers) => subscribers.has(c.connId))) {
           // Scoped clients opt out of cross-session fanout, including critical observer announces.
           // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
           continue;
@@ -559,7 +556,7 @@ export function createGatewayBroadcaster(params: {
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
           : (frames.snapshot ??= frameBaseFor(payload));
-      let frame: string | Buffer;
+      let frame: Buffer;
       let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
@@ -677,11 +674,8 @@ export function createGatewayBroadcaster(params: {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
         state.socket.batchWrites?.();
-        if (typeof frame === "string") {
-          state.socket.send(frame, sent);
-        } else {
-          state.socket.send(frame, { binary: false }, sent);
-        }
+        state.socket.send(frame, { binary: false }, sent);
+        state.socket.recordEventSent?.(event, frame.byteLength);
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
       }

@@ -660,7 +660,6 @@ describe("zalouser monitor group mention gating", () => {
     if (testCase.partial) {
       vi.mocked(sendMessageZalouser).mockImplementationOnce(async (_threadId, _text, options) => {
         const result = {
-          ok: true,
           messageId: "accepted-1",
           receipt: createZalouserSendReceipt({ messageId: "accepted-1", threadId: "u-1" }),
         };

@@ -1,5 +1,6 @@
 // Keep the registered pane class on this file's module graph.
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionSuggestionsListResult } from "../../../../packages/gateway-protocol/src/schema/sessions-suggestions.js";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -77,6 +78,75 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
+  it.each(["main", "research"])(
+    "loads %s suggestions once when startup and session projection share a target",
+    async (agentId) => {
+      const listed = createDeferred<SessionSuggestionsListResult>();
+      const fallback = createReconnectRequest({ messages: [], sessionId: "suggestion-session" });
+      const row = {
+        key: `agent:${agentId}:current`,
+        kind: "direct" as const,
+        sessionId: "suggestion-session",
+        updatedAt: 1,
+      };
+      const request = vi.fn((...args: Parameters<GatewayBrowserClient["request"]>) => {
+        if (args[0] === "session.suggestions.list") {
+          return listed.promise;
+        }
+        if (args[0] === "sessions.list") {
+          return Promise.resolve(sessionsResult([row], 1));
+        }
+        if (args[0] === "sessions.describe") {
+          return Promise.resolve({ session: row });
+        }
+        return fallback(...args);
+      });
+      const { pane, state, sessions } = createTestChatPane({
+        client: createTestGatewayClient(request),
+      });
+      await sessions.refresh({ agentId: "main" });
+      state.sessionKey = row.key;
+      pane.sessionKey = row.key;
+      state.sessionsResult = sessions.state.result;
+      state.sessionsResultAgentId = "main";
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
+      pane.connectedClient = null;
+      const snapshot = pane.context.gateway.snapshot;
+      const connected = {
+        ...snapshot,
+        hello: {
+          ...snapshot.hello!,
+          snapshot: {
+            presence: [
+              { ts: 0, user: { id: "owner" } },
+              { ts: 0, user: { id: "alice" } },
+            ],
+          },
+        },
+      };
+
+      pane.applyGatewaySnapshot(connected);
+      pane.applySessionsState(sessions.state);
+      listed.resolve({ suggestions: [], role: "owner" });
+      await pane.sessionSuggestionsRefreshPromise;
+      expect(
+        request.mock.calls.filter(([method]) => method === "session.suggestions.list"),
+      ).toHaveLength(1);
+      await pane.refreshSessionSuggestions();
+      expect(
+        request.mock.calls.filter(([method]) => method === "session.suggestions.list"),
+      ).toHaveLength(2);
+
+      pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+      pane.applyGatewaySnapshot(connected);
+      pane.applySessionsState(sessions.state);
+      await pane.sessionSuggestionsRefreshPromise;
+      expect(
+        request.mock.calls.filter(([method]) => method === "session.suggestions.list"),
+      ).toHaveLength(3);
+    },
+  );
+
   it.each(["reconnect", "auth change", "authenticated owner", "pane disposal"])(
     "retires pairing QR credentials on %s without losing canonical history",
     async (transition) => {

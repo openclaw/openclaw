@@ -47,12 +47,10 @@ function createPairedNode() {
       usesSharedGatewayAuth: false,
       socket: {
         readyState: WebSocket.OPEN,
-        send(frame: unknown) {
-          if (typeof frame === "string") {
-            frames.push(frame);
-            frameArrived.resolve();
-            frameArrived = createDeferredCore();
-          }
+        send(frame: string | Buffer) {
+          frames.push(frame.toString());
+          frameArrived.resolve();
+          frameArrived = createDeferredCore();
         },
       },
       connect: {

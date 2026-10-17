@@ -32,6 +32,13 @@ import { SessionManager } from "./session-manager.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const bindings: SelectedSessionActorStorageBinding[] = [];
+function revocable(message: string) {
+  const controller = new AbortController();
+  return {
+    revoke: () => controller.abort(new Error(message)),
+    assertCurrent: () => controller.signal.throwIfAborted(),
+  };
+}
 afterEach(async () => {
   for (const binding of bindings.splice(0)) {
     await binding.actor.release();
@@ -70,44 +77,37 @@ async function create(name: string) {
   ).toMatchObject({ kind: "committed" });
   return { target, binding, run: <T>(run: () => T) => runWithSessionActorStorage(binding, run) };
 }
-async function captureCommitRevocation(
+async function withCommitRevocation(
   target: SessionTranscriptRuntimeTarget,
   operation: (assertCurrent: () => void) => Promise<unknown>,
 ) {
-  let current = true;
+  const caller = revocable("Caller revoked after commit");
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
     if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-      current = false;
+      caller.revoke();
     }
   });
   try {
-    await operation(() => {
-      if (!current) {
-        throw new Error("Caller revoked after commit");
-      }
-    });
-  } catch (error) {
-    return error;
+    await operation(caller.assertCurrent);
   } finally {
     unsubscribe();
   }
-  throw new Error("Expected committed operation to report revoked publication");
+}
+
+function readWatermark(binding: SelectedSessionActorStorageBinding) {
+  return binding.actor.storage.read({ type: "session.history.watermark", input: {} }, authority);
 }
 
 it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and compaction on the memory owner", async () => {
   const { target } = await create("maintenance");
   const manager = await SessionManager.openAsync(target);
   const fresh = vi.fn();
+  const grant = { beforeFreshMessageCommit: fresh };
   const original = { ...makeUserMessage("original", 1), idempotencyKey: "original:user" };
-  const first = await manager.appendMessageWithTranscriptAnchorAsync(original, {
-    beforeFreshMessageCommit: fresh,
-  });
+  const first = await manager.appendMessageWithTranscriptAnchorAsync(original, grant);
   expect(first).toMatchObject({ appended: true, anchor: { entryId: first.entryId } });
   expect(
-    await manager.appendMessageWithTranscriptAnchorAsync(
-      { ...original, timestamp: 2 },
-      { beforeFreshMessageCommit: fresh },
-    ),
+    await manager.appendMessageWithTranscriptAnchorAsync({ ...original, timestamp: 2 }, grant),
   ).toMatchObject({ appended: false, entryId: first.entryId });
   expect(fresh).toHaveBeenCalledTimes(1);
   await manager.appendLeafControlAsync({ targetId: first.entryId, appendParentId: first.entryId });
@@ -151,10 +151,7 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
   const { target, binding, run } = await create("cli-metadata");
   await run(async () => {
     const manager = await SessionManager.openAsync(target);
-    const { watermark } = await binding.actor.storage.read(
-      { type: "session.history.watermark", input: {} },
-      authority,
-    );
+    const { watermark } = await readWatermark(binding);
     const runId = "synthetic-cli-run";
     const authFingerprint = "a".repeat(64);
     await patchSessionEntryCore(target, () => ({
@@ -168,45 +165,30 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
         writerRunId: runId,
       },
     }));
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("CLI writer revoked");
-      }
-    };
+    const caller = revocable("CLI writer revoked");
     await runWithCliHistoryWriter(
       {
         target,
         runId,
         authFingerprint,
         lifecycleRevision: "initial",
-        assertCurrent,
-        assertReadable: assertCurrent,
+        assertCurrent: caller.assertCurrent,
+        assertReadable: caller.assertCurrent,
       },
       async () => {
         await manager.appendCustomEntryAsync("cli-metadata", { synthetic: true });
-        const after = await binding.actor.storage.read(
-          { type: "session.history.watermark", input: {} },
-          authority,
-        );
+        const after = await readWatermark(binding);
         expect(
           binding.actor.storage.readCurrent({ type: "session.entry.read", input: {} }, authority),
         ).toMatchObject({
           cliHistoryBoundary: { ...after.watermark, writerRunId: runId, authFingerprint },
         });
         expect(after.watermark.maxSeq).toBe((watermark.maxSeq ?? -1) + 1);
-        current = false;
+        caller.revoke();
         await expect(manager.appendCustomEntryAsync("refused", {})).rejects.toThrow(
           "CLI writer revoked",
         );
-        expect(
-          (
-            await binding.actor.storage.read(
-              { type: "session.history.watermark", input: {} },
-              authority,
-            )
-          ).watermark,
-        ).toEqual(after.watermark);
+        expect((await readWatermark(binding)).watermark).toEqual(after.watermark);
       },
     );
   });
@@ -230,18 +212,12 @@ it("rolls back fresh-message refusal and checks queued caller authority before m
     await release.promise;
   });
   await entered.promise;
-  let current = true;
-  const refused = withSessionManagerWriteAssertion(
-    manager,
-    () => {
-      if (!current) {
-        throw new Error("writer revoked");
-      }
-    },
-    () => manager.appendCustomEntryAsync("refused"),
+  const caller = revocable("writer revoked");
+  const refused = withSessionManagerWriteAssertion(manager, caller.assertCurrent, () =>
+    manager.appendCustomEntryAsync("refused"),
   );
   const rejected = expect(refused).rejects.toThrow("writer revoked");
-  current = false;
+  caller.revoke();
   release.resolve();
   await Promise.all([held, rejected]);
   const [one, two] = await Promise.all([
@@ -255,61 +231,42 @@ it("rolls back fresh-message refusal and checks queued caller authority before m
   expect((await SessionManager.openAsync(target)).getEntries()).toEqual(manager.getEntries());
 });
 
-it.each(["append", "persist"] as const)(
-  "preserves acknowledged %s after caller revocation",
-  async (method) => {
-    const { target } = await create(`committed-${method}`);
-    const manager = await SessionManager.openAsync(target);
-    await manager.appendCustomEntryAsync("before-revocation");
-    let current = true;
-    const unsubscribe = sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-        current = false;
+it.each(["append", "persist"] as const)("keeps committed %s after revocation", async (method) => {
+  const { target } = await create(`committed-${method}`);
+  const manager = await SessionManager.openAsync(target);
+  await manager.appendCustomEntryAsync("before-revocation");
+  await withCommitRevocation(target, (assertCurrent) =>
+    withSessionManagerWriteAssertion(manager, assertCurrent, async () => {
+      if (method === "append") {
+        await manager.appendCustomEntryAsync("committed-once");
+      } else {
+        await manager.persistAsync({
+          type: "custom",
+          id: "committed-once",
+          parentId: null,
+          timestamp: new Date(1).toISOString(),
+          customType: "committed-once",
+          data: {},
+        });
       }
-    });
-    try {
-      await withSessionManagerWriteAssertion(
-        manager,
-        () => {
-          if (!current) {
-            throw new Error("Caller revoked after commit");
-          }
-        },
-        async () => {
-          if (method === "append") {
-            await manager.appendCustomEntryAsync("committed-once");
-          } else {
-            await manager.persistAsync({
-              type: "custom",
-              id: "committed-once",
-              parentId: null,
-              timestamp: new Date(1).toISOString(),
-              customType: "committed-once",
-              data: {},
-            });
-          }
-          expect(current).toBe(false);
-          await expect(manager.appendCustomEntryAsync("refused")).rejects.toThrow(
-            "Caller revoked after commit",
-          );
-        },
+      expect(assertCurrent).toThrow("Caller revoked after commit");
+      await expect(manager.appendCustomEntryAsync("refused")).rejects.toThrow(
+        "Caller revoked after commit",
       );
-    } finally {
-      unsubscribe();
-    }
-    if (method === "persist") {
-      await manager.reloadPersistedTranscriptAsync();
-    }
-    expect(manager.getEntries()).toMatchObject([
-      { type: "custom", customType: "before-revocation" },
-      { type: "custom", customType: "committed-once" },
-    ]);
-    expect((await SessionManager.openAsync(target)).getEntries()).toEqual(manager.getEntries());
-  },
-);
+    }),
+  );
+  if (method === "persist") {
+    await manager.reloadPersistedTranscriptAsync();
+  }
+  expect(manager.getEntries()).toMatchObject([
+    { type: "custom", customType: "before-revocation" },
+    { type: "custom", customType: "committed-once" },
+  ]);
+  expect((await SessionManager.openAsync(target)).getEntries()).toEqual(manager.getEntries());
+});
 
 it.each(["registry", "pattern"] as const)(
-  "preserves static notes when %s logging redaction changes during commit",
+  "keeps notes through %s redaction changes",
   async (policy) => {
     const { target, binding } = await create(`redaction-${policy}`);
     const marker = `synthetic-note-${policy}-private-value`;
@@ -352,20 +309,18 @@ it.each(["registry", "pattern"] as const)(
 
 it("retains the static-note receipt after acknowledged caller authority loss", async () => {
   const { target } = await create("static-receipt");
-  const failure = await captureCommitRevocation(target, (assertCurrent) =>
+  const failure = await withCommitRevocation(target, (assertCurrent) =>
     withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
       appendSessionTranscriptNote(target, makeUserMessage("acknowledged note", 1), {
         config: { logging: { redactPatterns: [] } },
       }),
     ),
-  );
-  expect(failure).toBeInstanceOf(SessionTranscriptMessageCommittedError);
+  ).catch((error: unknown) => error);
   assert(failure instanceof SessionTranscriptMessageCommittedError);
   expect(isRecordedModelFallbackStop(failure)).toBe(true);
-  expect(failure.committedTarget).toMatchObject(target);
-  expect(failure.committedVersion).toMatchObject({
-    generation: expect.any(String),
-    rawSeq: expect.any(Number),
+  expect(failure).toMatchObject({
+    committedTarget: target,
+    committedVersion: { generation: expect.any(String), rawSeq: expect.any(Number) },
   });
   expect((await SessionManager.openAsync(target)).getEntries()).toMatchObject([
     { id: failure.committedMessageId, type: "message" },
@@ -381,11 +336,11 @@ it("keeps acknowledged rewrite payloads out of error diagnostics", async () => {
   const marker = "synthetic-incognito-private-receipt-content";
   const replacement = await rewrite.sessionManager.appendMessageAsync(makeUserMessage(marker, 2));
   assert(source && replacement);
-  const failure = await captureCommitRevocation(target, (assertCurrent) =>
+  const failure = await withCommitRevocation(target, (assertCurrent) =>
     withSessionManagerWriteAssertion(manager, assertCurrent, () =>
       rewrite.commit(new Map([[source, replacement]])),
     ),
-  );
+  ).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
   expect(inspect(failure, { depth: null })).not.toContain(marker);
   expect(() => manager.getEntries()).toThrow();
@@ -402,37 +357,33 @@ it("refuses synchronous SDK writes before view mutation or tool-result hooks", a
   const before = structuredClone(manager.getEntries());
   const beforeTarget = manager.getSessionTarget();
   const beforeWrite = vi.fn();
-  const reject = (run: () => unknown, replacement: string) => {
-    expect(run).toThrow(replacement);
+  const read = vi.fn();
+  const bounds = { maxEvents: 2, maxBytes: 8192 };
+  for (const [method, run] of Object.entries({
+    appendCustomEntry: () => manager.appendCustomEntry("forbidden", {}),
+    branch: () => manager.branch("missing"),
+    prepareTranscriptRewrite: () => manager.prepareTranscriptRewrite(),
+    removeTrailingEntries: () => manager.removeTrailingEntries(() => true),
+    reloadPersistedTranscript: () => manager.reloadPersistedTranscript(),
+    setSessionTarget: () => manager.setSessionTarget(target),
+    appendMessage: () => manager.appendMessage(makeUserMessage("forbidden", 2)),
+    open: () => SessionManager.open(target),
+    openBounded: () => SessionManager.openBounded(target, bounds),
+    openDetachedBounded: () => SessionManager.openDetachedBounded(target, bounds),
+    openModelContext: () => SessionManager.openModelContext(target),
+    readSessionContext: () => SessionManager.readSessionContext(target, read),
+    appendMessageToTranscript: () =>
+      SessionManager.appendMessageToTranscript(target, makeUserMessage("forbidden", 2)),
+  })) {
+    if (method === "appendMessage") {
+      installSessionToolResultGuard(manager, { beforeMessageWriteHook: beforeWrite });
+    }
+    expect(run).toThrow(`${method}Async`);
     expect(manager.getEntries()).toEqual(before);
     expect(manager.getSessionTarget()).toEqual(beforeTarget);
     expect(manager.getLeafId()).toBe(id);
-  };
-  reject(() => manager.appendCustomEntry("forbidden", {}), "appendCustomEntryAsync");
-  reject(() => manager.branch("missing"), "branchAsync");
-  reject(() => manager.prepareTranscriptRewrite(), "prepareTranscriptRewriteAsync");
-  reject(() => manager.removeTrailingEntries(() => true), "removeTrailingEntriesAsync");
-  reject(() => manager.reloadPersistedTranscript(), "reloadPersistedTranscriptAsync");
-  reject(() => manager.setSessionTarget(target), "setSessionTargetAsync");
-  installSessionToolResultGuard(manager, { beforeMessageWriteHook: beforeWrite });
-  reject(() => manager.appendMessage(makeUserMessage("forbidden", 2)), "appendMessageAsync");
+  }
   expect(beforeWrite).not.toHaveBeenCalled();
-  const read = vi.fn();
-  reject(() => SessionManager.open(target), "openAsync");
-  reject(
-    () => SessionManager.openBounded(target, { maxEvents: 2, maxBytes: 8192 }),
-    "openBoundedAsync",
-  );
-  reject(
-    () => SessionManager.openDetachedBounded(target, { maxEvents: 2, maxBytes: 8192 }),
-    "openDetachedBoundedAsync",
-  );
-  reject(() => SessionManager.openModelContext(target), "openModelContextAsync");
-  reject(() => SessionManager.readSessionContext(target, read), "readSessionContextAsync");
-  reject(
-    () => SessionManager.appendMessageToTranscript(target, makeUserMessage("forbidden", 2)),
-    "appendMessageToTranscriptAsync",
-  );
   expect(read).not.toHaveBeenCalled();
   await manager.appendCustomEntryAsync("still writable", {});
 });

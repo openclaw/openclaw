@@ -1,7 +1,7 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
@@ -23,6 +23,7 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
@@ -118,6 +119,7 @@ export async function captureSessionEventTargetForHost(
     assertCaptureCurrent();
     const { withSessionEntryReadOnlyInWorker } =
       await import("../../config/sessions/session-entry-read-runtime.js");
+    await readAgentDeletionJournalStatusInWorker(agentId, { env });
     const entry = await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey, env },
       assertCaptureCurrent,
@@ -183,7 +185,7 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
   }
   const cfg = getSessionEventRuntimeConfig();
   resolveConfiguredAgentId(cfg, target.agentId);
-  if (isAgentDeletionBlocked(target.agentId)) {
+  if (isAgentDeletionBlocked(target.agentId, { env: targetScopes.get(target)?.env })) {
     throw new Error("Session event owner is being deleted");
   }
 }
@@ -343,8 +345,9 @@ export function intersectSessionEventToolsAllow(
   if (restrictions.length === 0) {
     return undefined;
   }
+  const matchers = restrictions.map((restriction) => createRuntimeToolMatcher(restriction));
   const candidates = [...new Set(restrictions.flat())].filter((name) =>
-    restrictions.every((restriction) => isRuntimeToolAllowed(name, restriction)),
+    matchers.every((matches) => matches(name)),
   );
   return attachToolAllowlistIntersection(candidates, restrictions);
 }

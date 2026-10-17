@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-// Re-exports the OpenClaw CLI entry point for package execution.
-// Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { resolveOpenClawCliInvocation } from "../cli-invocation.mjs";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import {
   enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -153,7 +151,12 @@ if (compileCacheRespawnEnv) {
     process.execve(command, [command, ...args], compileCacheRespawnEnv);
   }
   const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
-  await runRespawnedChild(command, args, compileCacheRespawnEnv);
+  await runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: fileURLToPath(import.meta.url),
+      env: compileCacheRespawnEnv,
+    }),
+  );
 }
 if (shouldRunCli && !compileCacheRespawnEnv) {
   enableOpenClawCompileCache({
@@ -186,7 +189,6 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
   const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-  // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {

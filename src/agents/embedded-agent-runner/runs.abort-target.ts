@@ -1,4 +1,7 @@
-import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  getAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -39,7 +42,7 @@ export function prepareEmbeddedAgentRunAbort(sessionId: string) {
       ? current
       : undefined;
   };
-  return () => {
+  const abort = () => {
     const current = resolveCurrent();
     return current
       ? {
@@ -49,4 +52,11 @@ export function prepareEmbeddedAgentRunAbort(sessionId: string) {
         }
       : { active: false, aborted: false };
   };
+  return Object.assign(abort, {
+    isWaitingForLocalModel: () => {
+      const current = resolveCurrent();
+      const runId = current && ACTIVE_EMBEDDED_RUNS.get(current.sessionId)?.runId;
+      return Boolean(runId && getAgentRunContext(runId)?.localModelWait);
+    },
+  });
 }

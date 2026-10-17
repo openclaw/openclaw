@@ -125,7 +125,8 @@ export function startSessionsSendReplyFlow(
               }
               return receipt;
             };
-            if (responseLost || isGatewayAgentRunPending(readReceipt())) {
+            let receipt = responseLost ? undefined : readReceipt();
+            if (responseLost || isGatewayAgentRunPending(receipt)) {
               const result = await waitForAgentRunReply({
                 runId: idempotencyKey,
                 timeoutMs,
@@ -151,8 +152,9 @@ export function startSessionsSendReplyFlow(
               // A successful run permits receipt-only replay of this exact
               // input. Failed or timed-out processing must never execute again here.
               response = await dispatch();
+              receipt = readReceipt();
             }
-            const delivery = resolvePrivateCompletionDeliveryResult(readReceipt());
+            const delivery = resolvePrivateCompletionDeliveryResult(receipt);
             if (!delivery.delivered) {
               throw new Error(delivery.error ?? "Private requester input was not processed.");
             }

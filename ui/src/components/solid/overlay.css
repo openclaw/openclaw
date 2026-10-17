@@ -195,6 +195,7 @@
 
 .oc-menu {
   padding: var(--menu-padding);
+  font-size: calc(13px * var(--control-ui-text-scale));
   user-select: none;
 }
 
@@ -305,6 +306,25 @@ a.oc-menu-item[href] {
 .oc-menu-item__submenu-icon {
   margin-inline-start: auto;
   padding-inline-start: 0.75em;
+}
+
+/* Keyboard hints share one end rail, independent of optional checks and arrows. */
+.oc-menu-item__details:has(.shortcut-kbd) {
+  padding-inline-end: 1.75em;
+}
+
+.oc-menu-item:has(.oc-menu-item__details .shortcut-kbd)
+  > :is(.oc-menu-item__check, .oc-menu-item__submenu-icon) {
+  position: absolute;
+  inset-inline-end: var(--oc-menu-item-padding-inline, 1em);
+  width: 1em;
+  margin: 0;
+  padding: 0;
+}
+
+.oc-menu-item__details .shortcut-kbd {
+  justify-content: flex-end;
+  white-space: nowrap;
 }
 
 .oc-menu-item__submenu-icon:dir(rtl) {

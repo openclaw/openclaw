@@ -8,7 +8,6 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
-import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
@@ -24,7 +23,6 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
-import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -33,18 +31,9 @@ import {
 } from "../../infra/update-run-ledger.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
@@ -55,10 +44,7 @@ import {
   migratedFinalizeFixtureEntrypoint,
 } from "./update-command-migrated-fixture-entrypoint.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
-import {
-  continueMigratedUpdateInFreshProcess,
-  inspectActivatedUpdateState,
-} from "./update-command-migrated.js";
+import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { taskRecovery } from "./update-command-post-update.test-support.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
 
@@ -114,152 +100,8 @@ afterEach(async () => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
 });
-
-it.each([
-  { agentId: "main", changed: "none", blocked: undefined },
-  { agentId: "verification", changed: "none", blocked: undefined },
-  { agentId: "main", changed: "local", blocked: undefined },
-  { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
-  { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
-  { agentId: "main", changed: "incomplete", blocked: "state-migrated-no-rollback" },
-  { agentId: "main", changed: "retained", blocked: "state-migrated-no-rollback" },
-  { agentId: "main", changed: "pending", blocked: "state-migrated-no-rollback" },
-])(
-  "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
-  async ({ agentId, changed, blocked }) => {
-    const stateDir = await fs.realpath(dirs.make("update-first-serving-turn-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const shared = openOpenClawStateDatabase({ env });
-    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
-    if (changed === "local") {
-      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
-    }
-    const agentPath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
-    expect(
-      schemaVersions.find((entry) => entry.path === agentPath)?.userVersion ?? null,
-    ).toBeNull();
-
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        appendTranscriptEventsInTransaction(
-          database,
-          { agentId, sessionKey: `agent:${agentId}:update-check`, sessionId: "serving-check" },
-          [
-            {
-              type: "message",
-              id: "request",
-              parentId: null,
-              message: { role: "user", content: "Reply with update-verified-run" },
-            },
-            {
-              type: "message",
-              id: "reply",
-              parentId: "request",
-              message: {
-                role: "assistant",
-                content: "update-verified-run",
-                provider: "openai",
-                model: "gpt-4.1-mini",
-                stopReason: "stop",
-                __openclaw: { runId: "run" },
-              },
-            },
-          ],
-        );
-      },
-      { agentId, env },
-    );
-    closeOpenClawAgentDatabasesForTest();
-    let retainedPath: string | undefined;
-    let retainedBytes: Buffer | undefined;
-    if (changed === "retained" || changed === "pending") {
-      const agentDir = path.join(stateDir, "agents", "retired", "agent");
-      retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
-      await fs.mkdir(agentDir, { recursive: true });
-      const db = new DatabaseSync(retainedPath);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
-      db.close();
-      retainedBytes = await fs.readFile(retainedPath);
-      beginAgentDeletionJournal(
-        {
-          agentId: "retired",
-          operationId: "delete-retired",
-          agentDir,
-          workspaceDir: path.join(stateDir, "workspace-retired"),
-          sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
-          deleteFiles: false,
-        },
-        { env },
-      );
-      if (changed === "retained") {
-        runOpenClawStateWriteTransaction(
-          (database) =>
-            completeAgentDeletionJournalInDatabase(database, "retired", "delete-retired"),
-          { env },
-        );
-      }
-      // The candidate also advances shared state: the old parent cannot reopen it.
-      shared.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-    }
-    if (changed === "shared" || changed === "agent") {
-      const db = new DatabaseSync(changed === "shared" ? shared.path : agentPath);
-      try {
-        db.exec(
-          `PRAGMA user_version = ${changed === "shared" ? OPENCLAW_STATE_SCHEMA_VERSION + 1 : OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-        );
-      } finally {
-        db.close();
-      }
-    }
-    const result = {
-      status: "ok" as const,
-      mode: "npm" as const,
-      root: candidateRoot,
-      steps: [],
-      durationMs: 0,
-    };
-    await expect(
-      runtimeFixture.track(
-        inspectActivatedUpdateState({
-          result,
-          root: candidateRoot,
-          schemaVersions,
-          candidateSchemaVersions: {
-            state:
-              OPENCLAW_STATE_SCHEMA_VERSION +
-              Number(changed === "shared" || changed === "retained" || changed === "pending"),
-            agent: OPENCLAW_AGENT_SCHEMA_VERSION + Number(changed === "incomplete"),
-          },
-          config: {},
-          env,
-        }),
-      ),
-    ).resolves.toBe(blocked);
-    if (changed === "local") {
-      expect(result.status).toBe("ok");
-    }
-    if (changed === "incomplete" || changed === "pending") {
-      expect(result).toMatchObject({
-        status: "error",
-        reason: "openclaw doctor",
-        steps: [
-          expect.objectContaining({
-            exitCode: 1,
-            stderrTail: expect.stringContaining(retainedPath ?? agentPath),
-          }),
-        ],
-      });
-    } else if (changed === "retained") {
-      expect(result).toMatchObject({ status: "ok", steps: [] });
-    }
-    if (retainedPath) {
-      expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
-    }
-  },
-);
 
 it.each<{
   pending: boolean;
@@ -450,76 +292,6 @@ it.each<{
         '"version":"1.0.0"',
       );
     }
-  },
-);
-
-it("refuses state inspection when activation leaves no known runtime root", async () => {
-  const result = { status: "error" as const, mode: "npm" as const, steps: [], durationMs: 0 };
-  await expect(
-    runtimeFixture.track(
-      inspectActivatedUpdateState({
-        result,
-        root: candidateRoot,
-        schemaVersions: [],
-        config: {},
-        env: { OPENCLAW_STATE_DIR: dirs.make("unknown-update-runtime-") },
-      }),
-    ),
-  ).resolves.toBe("rollback-state-unverified");
-  expect(result).toMatchObject({
-    reason: "rollback-state-unverified",
-    steps: [expect.objectContaining({ name: "state-schema-verification", exitCode: 1 })],
-  });
-});
-
-it.each([
-  { beforeContent: false, publish: false, blocked: "state-migrated-no-rollback" },
-  { beforeContent: true, publish: false, blocked: undefined },
-  { beforeContent: true, publish: true, blocked: undefined },
-])(
-  "accepts applied shared content through activation (alreadyApplied=$beforeContent, published=$publish)",
-  async ({ beforeContent, publish, blocked }) => {
-    const stateDir = await fs.realpath(dirs.make("update-deferred-content-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const shared = openOpenClawStateDatabase({ env });
-    const contentVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
-    const markContentApplied = () =>
-      shared.db
-        .prepare(
-          "INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        )
-        .run("state.schema.contentVersion", JSON.stringify(contentVersion), Date.now());
-    if (beforeContent) {
-      markContentApplied();
-    }
-    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
-    markContentApplied();
-    if (publish) {
-      shared.db.exec(`PRAGMA user_version = ${contentVersion};`);
-    }
-    const result = {
-      status: "ok" as const,
-      mode: "npm" as const,
-      root: candidateRoot,
-      steps: [],
-      durationMs: 0,
-    };
-    await expect(
-      runtimeFixture.track(
-        inspectActivatedUpdateState({
-          result,
-          root: candidateRoot,
-          schemaVersions,
-          candidateSchemaVersions: { state: contentVersion, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
-          config: {},
-          env,
-        }),
-      ),
-    ).resolves.toBe(blocked);
-    expect(result).toMatchObject({ status: "ok", steps: [] });
-    expect(shared.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-      publish ? contentVersion : OPENCLAW_STATE_SCHEMA_VERSION,
-    );
   },
 );
 

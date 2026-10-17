@@ -35,7 +35,7 @@ import {
 import {
   assertStateFileSnapshotAllowed,
   isStatePostgres,
-  openStatePostgresReadConnection,
+  openExistingStatePostgresConnection,
 } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
 import {
@@ -421,7 +421,7 @@ function openStateReadConnectionResult(
       if (checkSchemaPolicy) {
         isExistingOpenClawStateSchema(pathname);
       }
-      const postgres = openStatePostgresReadConnection(pathname, expectedIdentity);
+      const postgres = openExistingStatePostgresConnection(pathname, expectedIdentity);
       if (postgres) {
         return { status: "available", value: postgres };
       }

@@ -6,7 +6,6 @@ import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-co
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../config/model-cost.js";
 import type {
@@ -95,14 +94,6 @@ export function buildSourceModelFields(
   );
 }
 
-function getProviderModelId(model: unknown): string {
-  if (!model || typeof model !== "object") {
-    return "";
-  }
-  const id = (model as { id?: unknown }).id;
-  return normalizeOptionalString(id) ?? "";
-}
-
 /** Merges implicit provider models with explicit config while preserving explicit fields. */
 export function mergeProviderModels<TProvider extends ProviderModelCatalog>(
   implicit: TProvider,
@@ -114,15 +105,13 @@ export function mergeProviderModels(
   explicit: ProviderModelCatalog,
   options?: ProviderModelMergeOptions,
 ): ProviderModelCatalog {
-  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
-  const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  const implicitHeaders = isRecord(implicit.headers) ? implicit.headers : undefined;
-  const explicitHeaders = isRecord(explicit.headers) ? explicit.headers : undefined;
+  const implicitModels = implicit.models ?? [];
+  const explicitModels = explicit.models ?? [];
   const mergedProvider = {
     ...implicit,
     ...explicit,
-    ...(implicitHeaders || explicitHeaders
-      ? { headers: { ...implicitHeaders, ...explicitHeaders } }
+    ...(implicit.headers || explicit.headers
+      ? { headers: { ...implicit.headers, ...explicit.headers } }
       : {}),
   };
   if (implicitModels.length === 0) {
@@ -130,7 +119,7 @@ export function mergeProviderModels(
   }
 
   const getModelId = (model: { id: string }) =>
-    options?.modelIdMatching === "exact" ? model.id : getProviderModelId(model);
+    options?.modelIdMatching === "exact" ? model.id : model.id.trim();
   const implicitById = new Map(
     implicitModels
       .map((model) => [getModelId(model), model] as const)

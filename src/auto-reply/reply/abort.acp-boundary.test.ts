@@ -146,6 +146,9 @@ it.each([
     });
     acpTesting.resetAcpSessionManagerForTests();
     const manager = getAcpSessionManager();
+    const syncRead = vi.spyOn(manager, "resolveSession").mockImplementation(() => {
+      throw new Error("Stop must resolve ACP metadata through the worker");
+    });
     const native = createReplyOperation({
       sessionKey: sourceKey,
       sessionId: "source-session",
@@ -376,6 +379,7 @@ it.each([
         !active && completion === "reject" ? "error" : "idle",
       );
     } finally {
+      syncRead.mockRestore();
       stopObservingNative();
       childAdmission?.release();
       proceed.resolve();

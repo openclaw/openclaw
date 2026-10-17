@@ -65,9 +65,10 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request waits up to 300 ms for stored history before falling back to
-a live read. Agent switches and stale asynchronous reads retain their own
-identity checks. Agent pickers and the agent directory wait for a live roster;
+first chat request uses the saved cursor if the cached transcript is ready when
+the live message subscription finishes connecting. Otherwise, the live read and
+cache restoration run in parallel. Agent switches and stale asynchronous reads
+retain their own identity checks. Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
@@ -86,7 +87,13 @@ Pages view saves and restores its dashboard catalog without waiting for the
 inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
-their bounded cache limits. Clearing site data removes local recovery data.
+up to 80 recent rows (plus rows from the same history entry) for a warm reload.
+Older history loads from the Gateway as you scroll up. Cache upgrades discard
+older, unbounded transcript records; a connected visit fills the new cache.
+The first upward scroll or **Show earlier** refills the Gateway's current history
+window before continuing to older pages. Automatic viewport filling does not
+trigger this refill. Overlapping cached rows are deduplicated.
+Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
 screen appears as usual.
 

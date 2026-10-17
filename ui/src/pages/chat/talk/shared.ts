@@ -240,6 +240,7 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     : undefined;
 }
 
+// Settlement releases this wait's Gateway subscription, abort listener, and timers together.
 export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
@@ -495,6 +496,7 @@ function maybeSpeakRealtimeTalkControlResult(
   }
 }
 
+// Owns the consult's abort listener until its acknowledged run and result settle.
 export async function submitRealtimeTalkConsult(params: {
   ctx: RealtimeTalkTransportContext;
   args: unknown;

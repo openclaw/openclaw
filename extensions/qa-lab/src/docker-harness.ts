@@ -247,26 +247,10 @@ kill the container by detaching a replacement child.
   };
 }
 
-export async function buildQaDockerHarnessImage(
-  params: {
-    repoRoot: string;
-    imageName?: string;
-  },
-  deps?: {
-    runCommand?: (
-      command: string,
-      args: string[],
-      cwd: string,
-    ) => Promise<{ stdout: string; stderr: string }>;
-  },
-) {
+export async function buildQaDockerHarnessImage(params: { repoRoot: string; imageName?: string }) {
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
-  const runCommand =
-    deps?.runCommand ??
-    ((command: string, args: string[], cwd: string) =>
-      runExec(command, args, { cwd, logOutput: false }));
 
-  await runCommand(
+  await runExec(
     "docker",
     [
       "build",
@@ -278,7 +262,7 @@ export async function buildQaDockerHarnessImage(
       "Dockerfile",
       ".",
     ],
-    params.repoRoot,
+    { cwd: params.repoRoot, logOutput: false },
   );
 
   return { imageName };

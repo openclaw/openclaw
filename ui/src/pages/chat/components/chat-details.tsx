@@ -3,7 +3,8 @@ import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } fr
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -29,7 +30,37 @@ const DETAILS_DOCK_MIN_WIDTH = 1200;
 export const ChatDetails = defineSolidBridge<Props, Methods>(
   "openclaw-chat-details",
   (props, host) => {
-    const [intent, setIntent] = createSignal<"auto" | "open" | "closed">("auto");
+    const presentation = createMemo(
+      () =>
+        [
+          props.props?.sessionKey,
+          props.props?.currentAgentId,
+          props.props?.selectedSession?.sessionId,
+          props.props?.gatewayScope,
+        ] as const,
+      { equals: (before, after) => before.every((value, index) => value === after[index]) },
+    );
+    const scope = createMemo(() => ({ value: props.props?.gatewayScope }), {
+      equals: (before, after) => before.value === after.value,
+    });
+    // Session replacement resets intent; parking forgets only an explicitly open inspector.
+    const [choice, setChoice] = createSignal<{
+      presentation: ReturnType<typeof presentation>;
+      intent: "auto" | "open" | "closed";
+    }>((previous) => {
+      const current = presentation();
+      const presented = props.presented;
+      return {
+        presentation: current,
+        intent:
+          previous?.presentation === current && (presented || previous.intent !== "open")
+            ? previous.intent
+            : "auto",
+      };
+    });
+    const intent = () => choice().intent;
+    const setIntent = (nextIntent: "auto" | "open" | "closed") =>
+      setChoice((previous) => ({ ...previous, intent: nextIntent }));
     const [wideEnough, setWideEnough] = createSignal(false);
     const canDock = () => !props.mobile && props.conversationVisible !== false && wideEnough();
     const opened = () =>
@@ -42,9 +73,13 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
     const panelId = `chat-details-${++nextId}`;
     let panel!: HTMLDivElement;
     let trigger!: HTMLButtonElement;
-    let opener: HTMLElement | undefined;
+    let opener: { presentation: ReturnType<typeof presentation>; element: HTMLElement } | undefined;
     const focusSource = (mobile: boolean, externalTrigger: boolean) =>
-      mobile || externalTrigger ? opener : trigger;
+      mobile || externalTrigger
+        ? opener?.presentation === presentation()
+          ? opener.element
+          : undefined
+        : trigger;
     let progressMenu: MenuHandle | undefined;
     const mountSurface = (mobile: boolean, conversationVisible: boolean) => {
       // Fullscreen panels hide the conversation frame, but not the pane or mobile header.
@@ -127,11 +162,11 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
         if (!props.presented) {
           return;
         }
-        opener = source;
+        opener = { presentation: presentation(), element: source };
         setIntent("open");
       },
     });
-    const outside = (event: PointerEvent) => {
+    const outside = (event: Event) => {
       if (
         opened() &&
         !docked() &&
@@ -153,34 +188,7 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
         close(true);
       }
     };
-    const identity = createMemo(() =>
-      JSON.stringify([
-        props.props?.sessionKey,
-        props.props?.currentAgentId,
-        props.props?.selectedSession?.sessionId,
-      ]),
-    );
-    const presentation = createMemo(() => [identity(), props.props?.gatewayScope] as const, {
-      equals: (before, after) => before.every((value, index) => value === after[index]),
-    });
-    const scope = createMemo(() => ({ value: props.props?.gatewayScope }), {
-      equals: (before, after) => before.value === after.value,
-    });
-    createEffect(
-      () => presentation(),
-      () => {
-        setIntent("auto");
-        opener = undefined;
-      },
-    );
-    createEffect(
-      () => [props.presented, intent()] as const,
-      ([presented, choice]) => {
-        if (!presented && choice === "open") {
-          setIntent("auto");
-        }
-      },
-    );
+    // Synchronize the native popover and pane geometry with presentation intent.
     createEffect(
       () =>
         [
@@ -229,30 +237,36 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
         }
       }
       reposition();
-      return () => resize?.disconnect();
+      const stop = [
+        listen(window, "resize", reposition),
+        listen(document, "pointerdown", outside),
+        listen(document, "keydown", (event) => {
+          if (event instanceof KeyboardEvent) {
+            escape(event);
+          }
+        }),
+        ...(window.visualViewport
+          ? [
+              listen(window.visualViewport, "resize", reposition),
+              listen(window.visualViewport, "scroll", reposition),
+            ]
+          : []),
+      ];
+      return () => {
+        resize?.disconnect();
+        stop.forEach((dispose) => dispose());
+      };
     });
-    window.addEventListener("resize", reposition);
-    window.visualViewport?.addEventListener("resize", reposition);
-    window.visualViewport?.addEventListener("scroll", reposition);
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
     onCleanup(() => {
       controls.delete(host);
       hide();
       frame?.style.removeProperty("--chat-details-space");
       surface.remove();
-      window.removeEventListener("resize", reposition);
-      window.visualViewport?.removeEventListener("resize", reposition);
-      window.visualViewport?.removeEventListener("scroll", reposition);
-      document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("keydown", escape);
     });
     return (
       <>
         <button
-          ref={(element) => {
-            trigger = element;
-          }}
+          ref={(element) => (trigger = element)}
           class="chat-details-toggle"
           hidden={props.mobile || props.externalTrigger}
           type="button"
@@ -267,9 +281,7 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
         </button>
         <Portal mount={surface}>
           <div
-            ref={(element) => {
-              panel = element;
-            }}
+            ref={(element) => (panel = element)}
             class="chat-details"
             id={panelId}
             popover="manual"

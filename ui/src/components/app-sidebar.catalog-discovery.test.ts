@@ -23,6 +23,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { setStoredSessionCatalogHidden } from "./app-sidebar-session-types.ts";
 import "./app-sidebar.tsx";
 
 async function settle(sidebar: SidebarLifecycleState) {
@@ -42,7 +43,7 @@ function discoveryGateway(request: GatewayRequestHandler) {
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   return gateway;
@@ -73,6 +74,37 @@ describe("AppSidebar hidden catalog discovery", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it("keeps catalog visibility current across moves, context replacement, and remounts", async () => {
+    const request = createGatewayRequestMock().mockResolvedValue(
+      catalogPage([{ threadId: "visible", name: "Visible catalog session" }]),
+    );
+    const { sidebar, provider, context, gatewayHarness } = await mountDiscovery(request);
+    const catalog = () => sidebar.querySelector('[data-session-section="catalog:codex"]');
+    expect(catalog()).not.toBeNull();
+    setStoredSessionCatalogHidden("codex", true);
+    await settle(sidebar);
+    expect(catalog()).toBeNull();
+
+    provider.setContext(createContext(gatewayHarness.gateway, context.sessions));
+    await settle(sidebar);
+    setStoredSessionCatalogHidden("codex", false);
+    await settle(sidebar);
+    expect(catalog()).not.toBeNull();
+
+    sidebar.hostElement.remove();
+    setStoredSessionCatalogHidden("codex", true);
+    provider.append(sidebar.hostElement);
+    await settle(sidebar);
+    expect(catalog()).toBeNull();
+
+    sidebar.hostElement.remove();
+    await settle(sidebar);
+    setStoredSessionCatalogHidden("codex", false);
+    provider.append(sidebar.hostElement);
+    await settle(sidebar);
+    expect(catalog()).not.toBeNull();
+  });
+
   it.each(["agent", "Gateway source"] as const)(
     "keeps the replacement scan active after discovery from the previous %s finishes",
     async (scope) => {
@@ -92,7 +124,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         if (scope === "agent") {
           context.agentSelection.state.selectedId = "research";
           context.agentSelection.state.scopeId = "research";
-          sidebar.requestUpdate();
+          sidebar.invalidate();
         } else {
           const gateway = discoveryGateway(currentRequest);
           provider.setContext(createContext(gateway.gateway, context.sessions, TWO_AGENTS));
@@ -121,7 +153,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         await settle(sidebar);
         expect(sidebar.textContent).toContain("Current session");
         expect(sidebar.textContent).not.toContain("Retired session");
-        await vi.advanceTimersByTimeAsync(599_999);
+        await vi.advanceTimersByTimeAsync(119_999);
         expect(currentRequest).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(1);
         await settle(sidebar);
@@ -151,7 +183,7 @@ describe("AppSidebar hidden catalog discovery", () => {
       ...Array.from({ length: 7 }, (_, index) => `page-${index + 2}`),
     ]);
     expect(sidebar.sessionData.sessionCatalogPageDepths.values().next().value).toBe(7);
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect(request).toHaveBeenCalledTimes(8);
     await sidebar.sessionData.refreshSessionCatalogs();
     await settleLitElement(sidebar);
@@ -173,12 +205,12 @@ describe("AppSidebar hidden catalog discovery", () => {
             : catalogPage([]),
       );
     });
-    const { sidebar, gatewayHarness } = await mountDiscovery(request);
+    const { sidebar } = await mountDiscovery(request);
     added = true;
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(sidebar.textContent).not.toContain("Older session now visible");
     expect(request).toHaveBeenCalledTimes(3);
-    gatewayHarness.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
     await settle(sidebar);
     expect(sidebar.textContent).toContain("Older session now visible");
@@ -389,8 +421,8 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
         page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1, "Refreshed"),
       );
     });
-    const { sidebar, gateway } = await mountExpanded(request);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    const { sidebar } = await mountExpanded(request);
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
     const issuedBeforeHide = 5;
     expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
@@ -454,7 +486,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       expect(scrollBody).not.toBeNull();
       expect(observed.has(scrollBody!)).toBe(true);
 
-      sidebar.requestUpdate();
+      sidebar.invalidate();
       provider.remove();
       const timersAfterDetach = vi.getTimerCount();
       const observationsAfterDetach = observe.mock.calls.length;

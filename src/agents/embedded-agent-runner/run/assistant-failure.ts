@@ -337,7 +337,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       result: effectiveFailoverReason === "timeout" ? "timeout" : result,
       ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
-      ...(typeof status === "number" ? { status } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
   };
   const throwFailure = (error: FailoverError): never => {

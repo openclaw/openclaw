@@ -51,7 +51,6 @@ export function createSlackDraftStream(params: {
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
   metadata?: MessageMetadata;
-  log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
   const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
@@ -252,8 +251,6 @@ export function createSlackDraftStream(params: {
     stopTrackingConversationBoundary();
     return true;
   };
-
-  params.log?.(`slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
     update,

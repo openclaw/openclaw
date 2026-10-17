@@ -38,7 +38,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
     skipWhenPluginsDisabled: true,
     excludeExplicitlyDisabled: true,
     sort: "codepoint",
-  }).filter((channelId) => !isChannelDoctorBlockedByConfig(channelId, cfg));
+  });
 }
 
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {

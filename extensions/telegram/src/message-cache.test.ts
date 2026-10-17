@@ -249,14 +249,18 @@ describe("telegram message cache", () => {
 
   it("persists prompt-context projection provenance across cache restart", async () => {
     const marker = projection("assistant-projection-restart");
+    const text = "  indented\nnext  \n";
     const cache = createTelegramMessageCache();
-    await record(cache, botMessage(9125, "Projection-aware state message"), {
+    const live = await record(cache, botMessage(9125, text), {
+      botUserId: 999,
       promptContextProjection: marker,
     });
+    expect(live.body).toBe(text);
 
     resetCache();
     const reloadedCache = createTelegramMessageCache();
     const reloaded = await get(reloadedCache, "9125");
+    expect(reloaded?.body).toBe(text);
     expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection: marker });
 
     const edited = await record(
@@ -324,25 +328,6 @@ describe("telegram message cache", () => {
     });
     const mismatched = await reloadGet("9128");
     expect(mismatched?.promptContextProjectionMarker).toBeUndefined();
-  });
-
-  it("preserves projected message whitespace across cache restart", async () => {
-    const marker = projection("assistant-whitespace-projection");
-    const text = "  indented\nnext  \n";
-    const cache = createTelegramMessageCache();
-    const live = await record(
-      cache,
-      message(9132, "OpenClaw", { text, from: sender(42, "OpenClaw", true) }),
-      {
-        botUserId: 42,
-        promptContextProjection: marker,
-      },
-    );
-    expect(live.body).toBe(text);
-
-    const reloaded = await reloadGet("9132");
-    expect(reloaded?.body).toBe(text);
-    expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection: marker });
   });
 
   it.each([

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import {
   installTranscriptDomMocks,
@@ -27,22 +28,26 @@ it("keeps the focused work summary toggle through expansion updates", async () =
     ]),
     showToolCalls: true,
   };
-  const transcript = createTestTranscript();
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
+  const transcript = createTestTranscript(props.paneId);
   const container = document.body.appendChild(document.createElement("div"));
   const thread = createChatThreadHarness(container, transcript);
   const rerender = () => {
     thread.render(props);
-    transcript.hostUpdated();
+    transcript.update();
   };
   props.onRequestUpdate = rerender;
   onTestFinished(() => {
     thread.unmount();
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
   rerender();
   const toggleSelector = ".chat-group--work .chat-work-group > button";
-  transcript.hostConnected();
-  transcript.hostUpdated();
+  transcript.start();
+  transcript.update();
   await waitForSolid(() => expect(container.querySelector(toggleSelector)).not.toBeNull());
   const toggle = container.querySelector<HTMLButtonElement>(toggleSelector)!;
   toggle.focus();

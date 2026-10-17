@@ -248,7 +248,7 @@ suite.define(() => {
         await identityStatus.click();
         const menu = page.locator(".sidebar-identity-menu");
         await menu.getByText("Alex", { exact: true }).waitFor();
-        await menu.getByText("Studio Gateway", { exact: true }).waitFor();
+        await menu.getByRole("menuitem", { name: "Studio Gateway", exact: true }).waitFor();
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
         expect(await page.locator(".chat-queue__item").count()).toBe(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);

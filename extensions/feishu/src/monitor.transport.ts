@@ -4,6 +4,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -517,9 +518,7 @@ async function handleFeishuWebhook(
       encryptKey,
     });
     if (isChallenge) {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify(challenge));
+      sendJson(res, 200, challenge);
       return;
     }
 
@@ -536,9 +535,7 @@ async function handleFeishuWebhook(
         // non-durable event types ack without claiming durable acceptance.
         res.setHeader(FEISHU_WEBHOOK_ACCEPTED_HEADER, FEISHU_WEBHOOK_ACCEPTED_VALUE);
       }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify(invocation.value));
+      sendJson(res, 200, invocation.value);
     }
   } catch (err) {
     reportError("webhook handler error", err);

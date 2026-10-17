@@ -24,7 +24,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
-import { rewriteSessionActorContextMetadata } from "./session-actor-context-metadata.js";
+import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
   SessionActorOperations,
   SessionActorOutcome,
@@ -321,9 +321,9 @@ export function createSessionActorWorker(
           return run();
         }
         const working = forkSessionActorStoredState(before);
-        rewriteSessionActorContextMetadata(working, rewrite.rows);
         working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
         return withSessionActorTransactionState(opened, working, run, (authority) => {
+          initializeSessionActorContextStats(opened, working);
           working.hot = projectSessionActorHotState(working);
           const pendingToken = readSqliteDatabasePendingScopedWriteToken(
             opened.db,
@@ -513,6 +513,7 @@ export function createSessionActorWorker(
               epoch: before.hot.version.epoch,
               sequence: before.hot.version.sequence + 1,
             };
+            initializeSessionActorContextStats(opened, working);
             working.hot = projectSessionActorHotState(working);
             recordPhase("actorProjectionMs");
             const pendingToken = readSqliteDatabasePendingScopedWriteToken(

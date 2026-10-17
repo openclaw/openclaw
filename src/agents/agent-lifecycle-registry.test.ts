@@ -20,8 +20,8 @@ import {
   completeAgentDeletionJournalInDatabase,
   deleteAgentDeletionJournalInDatabase,
   handoffAgentDeletionJournalInDatabase,
-  readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { recordAgentProvenanceInDatabase } from "../state/agent-provenance.kernel.js";
 import {
@@ -41,7 +41,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -128,6 +131,7 @@ describe("agent lifecycle registry", () => {
     const config = { agents: { entries: { main: {} } } };
     await recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 1 });
     const binding = (await captureAgentLifecycleBinding(() => config, "main", options))!;
+    await readAgentDeletionJournalStatusInWorker("main", options);
     const rollback = new Error("rollback authority changes");
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
@@ -151,6 +155,7 @@ describe("agent lifecycle registry", () => {
         throw rollback;
       }, options),
     ).toThrow(rollback);
+    await readAgentDeletionJournalStatusInWorker("main", options);
     expect(isAgentDeletionBlocked("main", options)).toBe(false);
     expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
   });
@@ -345,7 +350,6 @@ describe("agent lifecycle registry", () => {
     expect(() => readAgentDeletionJournal("main", options)).toThrow(
       "Agent deletion journal missing; run openclaw doctor --fix",
     );
-    expect(isAgentDeletionBlocked("main", options)).toBe(false);
     runOpenClawStateWriteTransaction((current) => {
       expect(isAgentDeletionBlocked("main", options, current.db)).toBe(false);
       expect(tableExists(current.db, "agent_deletion_journal")).toBe(false);

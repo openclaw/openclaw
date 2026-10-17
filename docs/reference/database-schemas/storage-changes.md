@@ -120,6 +120,14 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+The transcript navigation CHECK keeps its JSON validation for present metadata.
+Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
+calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
+the helper's CTE during unsuccessful SQL-function inlining attempts.
+Agent schema 29 applies these attributes to existing PostgreSQL stores through
+the migration owner without rewriting rows. Historical admission and rollback
+preserve the predecessor function attributes.
+
 For a manual state-schema check, run `psql` from the generated directory and
 supply the transaction and chosen schema explicitly:
 
@@ -260,7 +268,7 @@ host reader retry and repair; SQLite workers never schedule that maintenance.
 Transcript bytes, session recovery rows, schemas, and update behavior are unchanged.
 
 Global projection preflight and search readiness use the projection maintenance
-owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+owner's published readiness. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
 local SQL. A sibling-writer receipt or schema change restarts bounded admission;
 local changes consume only the queued sessions. A bounded recursive key query
@@ -287,9 +295,12 @@ the workers serving committed history, reactions, and progress-card reads.
 A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
-Clean status reads reuse these facts without entering a write transaction or
-requesting write grants until a mutation invalidates them; connection close
-discards them. No durable tables or migration are added. Shipped synchronous
+After clean traversal commits, the owner publishes readiness with the physical
+database's committed write token. Search consumes that fact before borrowing a
+writer, without a TEMP-status query or write grants. Committed writes invalidate
+readiness; idle writer retirement preserves it while another native reader retains
+the database admission. Physical admission retirement discards it. No durable tables
+or migration are added. Shipped synchronous
 durable SDK callbacks and operator maintenance retain their native reconciliation
 adapter; moving those callbacks to another thread requires a separate SDK cutover.
 Their one-shot orphan cleanup retains ordered, indexed owner-set differences
@@ -322,8 +333,12 @@ admission without reentering SQLite on the host. These checks belong to each
 startup request; reusing the native actor for ordinary work does not retain them.
 Committed deletion invalidates the captured pending admission before observers
 run, while rollback and replacement admission owners remain unaffected. Startup
-migration preserves its pending-versus-completed cleanup diagnostics. No schema,
-retention, permission, or update migration changes are required.
+migration reads deletion status, retained paths, and registered owners once per
+startup pass through the shared-state worker, preserving pending-versus-completed
+cleanup diagnostics. A later startup reads fresh facts; an overlapping deletion
+is enforced by database admission and cleanup owners without repeating discovery
+between maintenance phases. No schema, retention, permission, or update migration
+changes are required.
 
 Callers should request domain operations, such as claiming a cron run or
 appending a transcript report, from the store that owns the invariant. That
@@ -715,8 +730,9 @@ avatar bytes are not part of enumeration. Mention directory preparation respects
 the existing profile-version invalidation, then evaluates current requester,
 session, and role policy and publishes the RPC response in one synchronous step.
 Prepared directory rows are descriptive
-facts, never permission or current alias authority. Project recents retain a narrow
-fresh primary-profile and alias query for their disclosure scope. Profile creation,
+facts, never permission or current alias authority. Project recents prepare aliases
+from the committed profile catalog and retain live merge-authority checks across
+their disclosure waits. Profile creation,
 display-name and role changes, explicit avatar uploads, identity merges, and final
 identity/permission lookups keep their existing native owners.
 
@@ -724,8 +740,9 @@ Chat startup prepares its requester from the profile catalog retained by the
 session projection. Metadata reads the current merge head after preparation
 waits and rejects a changed client identity or retired physical database. A
 missing catalog leaves optional metadata unavailable without opening SQLite.
-Legacy email clients resolve their alias through the read-only worker; only
-a missing alias enters the shared-state writer and existing profile transaction.
+Legacy email clients resolve their alias through the canonical profile owner,
+reusing its committed email bindings when resident and its existing profile
+transaction otherwise.
 Committed creation updates the same resident catalog before profile observers,
 including retained reconciliation when result delivery fails. Other profile
 mutation and authorization paths retain their existing owners. Schema, migration,
@@ -1645,27 +1662,25 @@ Task/flow lifecycle joins and writes remain retired. This migration adds no
 runtime Task reader, replacement ledger, or SQL schema change.
 
 Existing asynchronous config observation, recovery health records, and config
-audit appends run their SQLite work on this same actor. Observations capture a
-short-lived scope before awaited work; newer observations of the same database
-and config path supersede older scopes. Scopes end on return, and synchronous
-write invalidation waits for the outer transaction to commit. The worker checks
-each operation's scope at dispatch; a superseded read stops before logging or
-file work. Health writes carry the exact persisted facts from their original read
-and compare them again inside the
-write transaction. They merge only the selected path's changed fields when those
-facts still match; a failed read or stale observation cannot overwrite newer
-health state. Other paths and untouched JSON fields remain unchanged. Audit
-appends retain the same redaction, insertion ordering, scope limits, and atomic
-insertion-and-pruning transaction. Promotion and recovery return true when their
-file operation commits, even if newer health metadata supersedes their conditional
-update. Ordinary post-file metadata retirement uses the existing best-effort
-failure policy; ownership and maintenance refusals still propagate. Doctor uses
-the committed result to reread the changed file. Explicit prepared
-recovery re-runs the same planner at apply and rejects changed or no-longer-eligible
-candidates before file work. Unavailable health metadata retains the existing
-backup-based planning fallback. Health metadata remains best-effort; the file and
-health row are not one atomic transaction. Synchronous config readers and writers
-keep their existing APIs; config parsing, validation, and plugin preparation retain
+audit appends run their SQLite work on this same actor. Each operation retains
+its captured database and current admission rather than superseding other
+observations. Health writes carry the exact persisted facts from their original
+read and compare them inside the write transaction. They merge only the selected
+path's changed fields when those facts still match; a failed read cannot supply
+an authoritative comparison basis. Other paths and untouched JSON fields remain
+unchanged. Audit appends retain the same redaction, insertion ordering, scope
+limits, and atomic insertion-and-pruning transaction.
+
+Prepared recovery keeps its originally selected candidate instead of rerunning
+the planner at apply. The file effect rechecks the original source bytes and
+physical identity, caller authority, and current database admission before each
+rename attempt. A changed source refuses the write. Ordinary post-file metadata
+retirement uses the existing best-effort failure policy; ownership and
+maintenance refusals still propagate. Doctor uses the committed result to reread
+the changed file. Unavailable health metadata retains the existing backup-based
+planning fallback. Health metadata remains best-effort; the file and health row
+are not one atomic transaction. Synchronous config readers and writers keep
+their existing APIs; config parsing, validation, and plugin preparation retain
 their own execution paths.
 
 GitHub OAuth reconciliation loads persisted config through the asynchronous config
@@ -1677,14 +1692,13 @@ Each new operation uses current rows or facts invalidated by owning-writer recei
 These changes preserve
 schemas, retention, synchronous cold-load compatibility, and update behavior.
 
-The native Gateway host supplies snapshot preparation through its registered
-config owner. Those reads prepare deferred migration and plugin metadata with the
-existing shared-state actor. Each read captures one exact owner before awaiting
-preparation and rejects its result if that owner closes; failures never select a
-replacement or switch readers. Direct servers and standalone config readers keep
-their existing execution path unless their host explicitly supplies this operation.
+Gateway, direct-server, and standalone asynchronous config snapshots share the
+same validation, materialization, and plugin metadata preparation owners. Metadata
+reads use the existing asynchronous state reader without a host-supplied adapter.
+Unobserved snapshots preserve source artifacts through metadata completion;
+config writes retain their live source authority and runtime activation owner.
 Missing-file defaults still load plugin metadata only when those defaults need it.
-The operation changes no schema, persisted representation, or publication authority.
+This routing changes no schema, persisted representation, or publication authority.
 
 Meeting transcript identity, descriptor, notes, summary, utterance, and export-ownership reads use
 the shared-state worker. Typed commands call the existing synchronous query
@@ -2071,11 +2085,19 @@ post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
 and active-work, ancestor, and lifecycle protection remain unchanged. No schema
 or migration change is required.
 
-After archive preparation, session deletion rereads its target before admitting
-the final reclamation worker. A missing or changed target returns the existing
-entry-mismatch result without starting that worker, while preserving archives
-already committed by the deletion. Admitted workers still recheck the target
-and current authority inside their deletion transaction.
+Session deletion checks its target and current authority inside the deletion
+transaction. A missing or changed target returns the existing entry-mismatch
+result while preserving archives already committed by the deletion. Exact
+metadata-only deletion with an expected entry uses the admitted session writer,
+without a separate planning read or archive worker. Cron run alias cleanup uses
+that path and keeps the stable session's transcript. Native-session participants,
+pending-delivery protection, and lease-loss refusal remain in the lifecycle owner.
+The transaction passes its validated rows to deletion instead of reading them again.
+Deletion planning uses a read snapshot on the admitted agent worker, including
+historical-generation planning and rechecks. Empty transcript plans use that
+writer for removal without starting a reclamation worker. Nonempty transcripts
+retain archive extraction and reclamation before publication; pending-archive
+recovery, retention, and final authority checks are unchanged.
 
 Prepared session-store updates, entry replacements, and lifecycle upserts use
 the same admission for cold snapshot reads and actual commits, retaining their
@@ -2193,15 +2215,18 @@ adopts newly established integrity verification only after operation cleanup and
 while its database claim remains current. These connection lifetimes are documented in the
 [accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
 
-Pressure sweeps and explicit deletion reuse one archive worker within their operation
-scope. The shared archive queue admits each materialization or publication separately;
+Pressure sweeps and explicit deletion reuse one archive worker across successful operation
+scopes. The shared archive queue admits each materialization or publication separately;
 every request opens a fresh read-only database and closes its database and file handles
 before acknowledging completion. No archive database connection or lease survives
 between requests. Each victim still commits and publishes before the next victim is
 deleted. A preparation or publication failure retires the worker and joins its native
-exit before returning the existing error. Scope completion and database retirement
-revoke queued requests, drain dispatched work, and join native exit. The process keeps
-at most one reusable archive worker; competing scopes retire the previous idle worker.
+exit before returning the existing error. Scope completion refuses further work under
+that scope while retaining a healthy idle worker. Database retirement revokes queued
+requests, drains dispatched work, and joins native exit. The process keeps at most one
+reusable archive worker; scopes in the same state directory transfer it with fresh
+authority. Different state directories and unhealthy workers require native exit
+before replacement.
 Cold preparation and mutations retain their separate one-shot workers; cold mutations
 join their existing page maintenance and native exit.
 
@@ -2348,7 +2373,8 @@ Shared-state database drainage also joins resources registered while an earlier
 resource is closing. Native retirement waits for those resources; failed cleanup
 remains owned for a later explicit retry.
 Maintenance cleanup joins work started by earlier cleanup phases before closing
-the resources it uses. Clients adopted by actor retirement share its cleanup result.
+the resources it uses. The broker joins every client's accepted commands and native
+close; shared-state owners await that result without a second adoption protocol.
 
 Memory managers admit writes on their exact borrowed agent connection. Provider
 calls and source preparation run before admission; generated-cache and source
@@ -2782,7 +2808,7 @@ yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
-Expected refresh cancellation during shutdown logs at debug level; refresh or cleanup failures still warn.
+Refresh or cleanup failures still warn.
 After in-process DDL, worker admission publishes its validated schema even if a
 retained reader adopted another wrapper of the previous shared receipt while it
 was pending. The received schema and physical database proof must remain valid;

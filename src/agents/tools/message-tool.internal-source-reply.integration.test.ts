@@ -19,7 +19,6 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
-import * as transcriptMessageAppend from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as sessionTranscript from "../../config/sessions/transcript.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
@@ -31,6 +30,8 @@ import {
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import { buildRestartSafeChatTranscriptState } from "../../gateway/server-methods/chat-restart-recovery.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -159,6 +160,10 @@ describe("WebChat message tool internal source reply", () => {
           expect(assistants[0]?.content).toEqual([
             { type: "text", text: "Still working after restart." },
           ]);
+          expect(assistants[0]).toMatchObject({
+            __openclaw: { runId },
+            openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
+          });
         },
       );
     },
@@ -189,24 +194,18 @@ describe("WebChat message tool internal source reply", () => {
           async (owner) => {
             const message = "must never become a committed assistant message";
             let commitRequests = 0;
-            const append = transcriptMessageAppend.appendTranscriptMessageInTransaction;
-            const admission = vi
-              .spyOn(transcriptMessageAppend, "appendTranscriptMessageInTransaction")
-              .mockImplementation((database, resolved, options, preparedMessage, projection) => {
-                if (
-                  resolved.sessionKey === sessionKey &&
-                  resolved.sessionId === sessionId &&
-                  isRecord(options.message) &&
-                  options.message.role === "assistant" &&
-                  readAssistantDisplayContent(options.message).some(
-                    (block) => block.type === "text" && block.text === message,
-                  )
-                ) {
-                  commitRequests += 1;
-                  owner.closeAdmission();
-                }
-                return append(database, resolved, options, preparedMessage, projection);
-              });
+            const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-entry-patch-committed"
+              ) {
+                commitRequests += 1;
+                owner.closeAdmission();
+              }
+              admit(request, grant);
+            });
             try {
               const tool = owner.createTool({
                 preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
@@ -369,7 +368,6 @@ describe("WebChat message tool internal source reply", () => {
       const { replyPayloads: payloads } = await buildReplyPayloads({
         payloads: embeddedPayloads,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",

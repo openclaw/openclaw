@@ -15,11 +15,6 @@ import {
 import { retryUpdateReportStateWrite } from "./update-failure-report-precreate.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 
-export type UpdateFailureReportSweepHooks = {
-  beforeList?: () => Promise<void>;
-  listCandidates?: typeof listRetiredUpdateFailureReportArtifacts;
-};
-
 export type UpdateFailureReportSweepReceipt = Pick<
   UpdateFailureReportReceipt,
   "artifactSweep" | "previewDigest" | "replacementReady" | "reservationId"
@@ -31,7 +26,6 @@ export async function cleanRetiredUpdateFailureReportArtifacts(
   receipt: UpdateFailureReportSweepReceipt,
   stateEnv: NodeJS.ProcessEnv,
   keepCurrent = true,
-  hooks: UpdateFailureReportSweepHooks = {},
   context = captureOpenClawStateWorkerContext({ env: stateEnv }),
 ): Promise<boolean> {
   const sweepOwnerId = randomUUID();
@@ -64,14 +58,10 @@ export async function cleanRetiredUpdateFailureReportArtifacts(
     );
   let swept = false;
   try {
-    await hooks.beforeList?.();
     if (!(await hasSweepLease())) {
       return false;
     }
-    const candidates = await (hooks.listCandidates ?? listRetiredUpdateFailureReportArtifacts)(
-      prepared,
-      keep,
-    );
+    const candidates = await listRetiredUpdateFailureReportArtifacts(prepared, keep);
     if (!(await hasSweepLease())) {
       return false;
     }

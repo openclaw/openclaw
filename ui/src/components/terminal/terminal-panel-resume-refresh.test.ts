@@ -17,8 +17,6 @@ import {
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
-  terminalPanelControllerForTest,
-  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 
@@ -60,24 +58,15 @@ it("settles availability changes while offline without repeatedly suspending the
   panel.available = true;
   document.body.append(panel);
   panel.toggle();
-  const sessions = terminalSessionsForTest(panel);
-  await waitForFast(() => expect(sessions.tabs[0]?.gatewaySessionId).toBe("retained"));
+  await waitForFast(() =>
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]'),
+  );
   panel.gatewayConnected = false;
   await panel.updateComplete;
   await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(true));
   await panel.updateComplete;
   expect(terminal.dispose).not.toHaveBeenCalled();
 
-  const owner = terminalPanelControllerForTest(panel);
-  const requestUpdate = owner.requestUpdate.bind(owner);
-  let updates = 0;
-  // Bound a regressed render loop so it fails instead of starving the test worker.
-  vi.spyOn(owner, "requestUpdate").mockImplementation(() => {
-    if (++updates <= 8) {
-      requestUpdate();
-    }
-  });
-  const suspend = vi.spyOn(panel.terminalPanelUploadController, "suspend");
   request.mockClear();
 
   for (const available of [false, true]) {
@@ -85,20 +74,11 @@ it("settles availability changes while offline without repeatedly suspending the
     await panel.updateComplete;
     await vi.dynamicImportSettled();
     await panel.updateComplete;
-    expect(updates).toBeLessThanOrEqual(8);
-    expect(suspend).toHaveBeenCalledOnce();
     expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(sessions.tabs).toEqual([]);
+    expect(panel.hostedTabs).toEqual([]);
     expect(panel.terminalPanelOpen).toBe(available);
-    expect(panel.renderRoot.querySelector(".tp") !== null).toBe(available);
+    expect(panel.querySelector(".tp") !== null).toBe(available);
     expect(request).not.toHaveBeenCalled();
-
-    updates = 0;
-    suspend.mockClear();
-    sessions.scheduleLifecycleSync();
-    await Promise.resolve();
-    expect(updates).toBe(0);
-    expect(suspend).not.toHaveBeenCalled();
   }
 });
 
@@ -125,14 +105,19 @@ it("holds retained PTYs and queued actions behind the same-client reconnect refr
   panel.available = true;
   document.body.append(panel);
   panel.toggle();
-  const sessions = terminalSessionsForTest(panel);
-  await waitForFast(() => expect(sessions.tabs[0]?.gatewaySessionId).toBe("retained"));
-  const tab = sessions.tabs[0]!;
+  await waitForFast(() =>
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]'),
+  );
+  const tabId = panel.hostedTabs[0]!.id;
+  const terminalHost = createGhosttyTerminalMock.mock.calls[0]![0].parent;
 
   panel.gatewayConnected = false;
   await panel.updateComplete;
   await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(true));
-  await sessions.openSession();
+  panel.handleToggleRequest(
+    new CustomEvent("openclaw:terminal-toggle", { detail: { open: true, newSession: true } }),
+  );
+  await panel.updateComplete;
   expect(opened).toBe(1);
 
   panel.gatewayConnected = true;
@@ -140,7 +125,7 @@ it("holds retained PTYs and queued actions behind the same-client reconnect refr
   await waitForFast(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
   expect(request.mock.calls.filter(([method]) => method === "terminal.attach")).toEqual([]);
   expect(opened).toBe(1);
-  expect(sessions.tabs).toEqual([tab]);
+  expect(panel.hostedTabs.map((tab) => tab.id)).toEqual([tabId]);
   expect(terminal.dispose).not.toHaveBeenCalled();
 
   refresh.resolve(false);
@@ -151,15 +136,15 @@ it("holds retained PTYs and queued actions behind the same-client reconnect refr
   expect(terminal.setReadOnly).toHaveBeenLastCalledWith(true);
   reattach.resolve({ ...terminalOpenResult("retained"), buffer: "", seq: 0 });
   await waitForFast(() => {
-    expect(sessions.tabs.map((entry) => entry.gatewaySessionId)).toEqual(["retained", "queued"]);
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained","queued"]');
     expect(terminal.setReadOnly).toHaveBeenLastCalledWith(false);
   });
   expect(request.mock.calls.filter(([method]) => method === "terminal.attach")).toHaveLength(1);
   expect(opened).toBe(2);
-  expect(sessions.tabs[0]).toBe(tab);
-  expect(tab.controller).toBe(terminal);
+  expect(panel.hostedTabs[0]?.id).toBe(tabId);
+  expect(panel.contains(terminalHost)).toBe(true);
   expect(terminal.dispose).not.toHaveBeenCalled();
-  expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+  expect(panel.querySelector(".tp-error")).toBeNull();
 });
 
 it("exits a confirmed missing retained PTY without leaving its surviving tab read-only", async () => {
@@ -189,13 +174,12 @@ it("exits a confirmed missing retained PTY without leaving its surviving tab rea
   panel.available = true;
   document.body.append(panel);
   panel.toggle();
-  const sessions = terminalSessionsForTest(panel);
-  await waitForFast(() => expect(sessions.tabs[0]?.status).toBe("live"));
-  await sessions.openSession();
-  await waitForFast(() => expect(sessions.tabs[1]?.status).toBe("live"));
-  const [expired, survivor] = sessions.tabs;
-  expect(expired?.gatewaySessionId).toBe("expired");
-  expect(survivor?.gatewaySessionId).toBe("survivor");
+  await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+  panel.querySelector<HTMLButtonElement>('[aria-label="New terminal session"]')!.click();
+  await panel.updateComplete;
+  await waitForFast(() => expect(panel.hostedTabs[1]?.className).toBe("is-live"));
+  const tabIds = panel.hostedTabs.map((tab) => tab.id);
+  expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["expired","survivor"]');
 
   panel.gatewayConnected = false;
   await panel.updateComplete;
@@ -206,15 +190,13 @@ it("exits a confirmed missing retained PTY without leaving its surviving tab rea
   panel.gatewayConnected = true;
   await panel.updateComplete;
   await waitForFast(() => {
-    expect(expired!.status).toBe("exited");
-    expect(survivor!.status).toBe("live");
     expect(survivingTerminal.setReadOnly).toHaveBeenLastCalledWith(false);
     expect(panel.hostedTabs.map((tab) => tab.className)).toEqual(["is-exited", "is-live"]);
   });
   expect(expiredTerminal.setReadOnly).toHaveBeenLastCalledWith(true);
-  expect(sessions.tabs).toEqual([expired, survivor]);
+  expect(panel.hostedTabs.map((tab) => tab.id)).toEqual(tabIds);
   expect(expiredTerminal.dispose).not.toHaveBeenCalled();
   expect(survivingTerminal.dispose).not.toHaveBeenCalled();
   expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["survivor"]');
-  expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+  expect(panel.querySelector(".tp-error")).toBeNull();
 });

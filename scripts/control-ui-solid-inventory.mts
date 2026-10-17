@@ -1,4 +1,4 @@
-// Shared syntax census for the migration report and the Lit growth ratchet.
+// Shared syntax census for the UI inventory and controller retirement guard.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

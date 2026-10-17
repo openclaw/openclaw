@@ -7,6 +7,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import { ensureColumn, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
 import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
@@ -223,3 +224,8 @@ export function mutateSessionGroupCatalogInDatabase(
   }
   return result;
 }
+
+export const sessionGroupOperations = {
+  "sessionGroups.mutate": (input: SessionGroupCatalogMutation, context: WorkerOperationContext) =>
+    mutateSessionGroupCatalogInDatabase(context.open(), input, context.stateOptions().env),
+};

@@ -1,3 +1,4 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
   ChannelPreviewStreamingConfig,
   DmPolicy,
@@ -72,7 +73,7 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
   string | number,
   TelegramPreviewStreamingConfig
 > &
-  ChannelReactionConfig<"off" | "own" | "all", "off" | "ack" | "minimal" | "extensive", string> & {
+  ChannelReactionConfig<"off" | "own" | "all", ReactionLevel, string> & {
     /** Post a room-specific introduction when joining a group. Default: true. */
     joinIntro?: boolean;
     /** Telegram-native exec approval delivery + approver authorization. */

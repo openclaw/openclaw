@@ -10,10 +10,13 @@ import {
   requireCodexSupervisionModelSelection,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 
-function supervisedBinding(pluginConfig: unknown, agentDir?: string) {
+function supervisedBinding(pluginConfig: CodexPluginConfig, agentDir?: string) {
   return {
     connectionScope: "supervision" as const,
     appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(

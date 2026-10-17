@@ -275,9 +275,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: isHostNoticePayload for agent-to-agent reply filtering.
       // +1: approved jsonPathValue on the experimental database-engine worker entrypoint.
       // +11: approved experimental engine-owned search capabilities on existing entrypoints.
+      // +14: versioned Decision data contracts, lossless codecs, validation, and typed errors.
+      // +4: Decision execution/context types; completes Peter Steinberger's
+      // approved +18 exports / +6 callables scope (2026-09-26, #157148 and #157225).
       // +1: approved boot-selected family lookup on the database-engine runtime.
       // +1: shared auth-patch application replaces manual plugin config merging.
-      3774,
+      // +6: packaged Settings placement, snapshot, components, context, view, and
+      // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
+      // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
+      // for the plugin-owned indexed Memory search presentation.
+      3800,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -314,9 +321,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same host-notice classifier on reply-payload.
       // +1: the same approved database-engine JSON path helper.
       // +1: the same engine-owned search admission helper.
+      // +6: four lossless Decision codecs and two bounded V2 validators.
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
-      2199,
+      2205,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

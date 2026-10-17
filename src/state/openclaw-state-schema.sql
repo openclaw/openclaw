@@ -36,9 +36,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
   last_agent_id TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_skill_usage_key
-  ON skill_usage(skill_key, skill_file);
-
 -- Profile-owned skill library: additive, absent until first publication/import.
 CREATE TABLE IF NOT EXISTS skill_library_entries (
   skill_id TEXT NOT NULL PRIMARY KEY,
@@ -295,7 +292,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, agent_id)
-) STRICT;
+) STRICT, WITHOUT ROWID;
 
 -- Notifiable watcher identity is the bare session key, matching the process-local
 -- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
@@ -354,7 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
+  ON state_leases(owner);
 
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
@@ -1215,9 +1212,6 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
-  ON acp_replay_events(session_id, seq);
 
 CREATE TABLE IF NOT EXISTS agent_databases (
   agent_id TEXT NOT NULL,
@@ -2714,6 +2708,8 @@ CREATE TABLE IF NOT EXISTS user_profile_identities (
   subject TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   canonical_login TEXT,
+  -- Host-scoped verified credit evidence; current profile bindings govern attribution.
+  verified_email_json TEXT,
   created_at INTEGER NOT NULL,
   authorization_id TEXT,
   authorization_basis_json TEXT,

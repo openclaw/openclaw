@@ -374,12 +374,25 @@ The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
 `actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
 `sampleLossCount: null` because the native profilers do not expose an explicit lost-sample count.
 Node samples V8; Bun samples JavaScriptCore and returns the same profile format.
-The complete result is limited to 1 MiB; larger profiles fail without truncating
-nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
+The complete result is limited to 1 MiB. When the full graph exceeds that limit,
+the result contains `summary` instead of `profile`, with `truncated: true`,
+`originalNodeCount`, `sampleCount`, and `omittedSampleCount`. Each summary row
+contains a leaf-first `stack` of up to eight frames and its recorded `sampleCount`.
+If those frames contain no OpenClaw code, the nearest `openclaw:` caller toward
+the root is appended when available, for at most nine frames. `elidedFrameCount`
+counts frames skipped between the first eight frames and that appended caller;
+it is zero when there is no gap. Stacks with identical frames and elision counts
+are combined; the most sampled stacks come first, with at most
+128 rows within the same byte limit. These counts are samples, not exact CPU time.
+This preserves useful attribution during busy startup windows, when deep stacks
+and V8 deoptimization samples can enlarge the graph despite the sampling interval.
+The input limits of 16,384 nodes and 65,536 samples still apply; captures exceeding
+either limit remain unavailable to bound processing work.
+Code locations inside the OpenClaw package use `openclaw:` paths;
 Node builtin locations use `node:` paths. External paths, eval labels, and other
 unrecognized names are redacted. Bounded code-symbol names at recognized locations
 are retained; their syntax does not prove that a computed name is public. Review
-the profile before sharing it. Graph edges, native signed script IDs, and sample order remain intact. V8 can
+the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
 
@@ -402,12 +415,16 @@ attribute capture-induced stalls when analyzing an individual capture; it cannot
 be subtracted from aggregate event-loop maxima or percentiles. The measurement
 reports the cost; it does not prevent or interrupt the native stall.
 
-From a source checkout, attribute native self samples to their nearest JavaScript
-parent with:
+For a full `profile` result, a source checkout can attribute native self samples
+to their nearest JavaScript parent with:
 
 ```bash
 node scripts/diagnostic-cpu-native-parents.mts cpu-1.json cpu-2.json
 ```
+
+This analyzer requires a full profile. For a truncated result, inspect its
+`summary` rows directly: each `stack` starts at the sampled function and continues
+through its nearest callers, with `sampleCount` recording how often it was sampled.
 
 The script accepts saved RPC results or raw V8 profiles and prints the top 20
 parents for each capture. Add `--json` for all parent rows. Percentages use elapsed
@@ -703,6 +720,29 @@ memory, so do not add those values together. Other direct workers use native hea
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
 
+The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
+censuses with fixed structure labels, entry counts, approximate bytes, and
+aggregate generation, provider, and account counts where applicable. They never
+include catalog contents, object keys, provider or account identities, or secrets.
+The census uses the existing worker-memory sampling channel; it does not take a
+heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+objects are counted once within each structure, and structures can overlap.
+`stringBytes` estimates string payload bytes, while `objects` counts traversed
+objects. Coverage includes the named structures, not module runtime or closure roots.
+`truncated: true` means the estimator reached its work bound or skipped opaque
+values (proxies, accessors, or custom instances), so that estimate is partial.
+Only plain records and arrays are traversed; plugin iterators and accessors never run. Native-only fallback samples omit the census until the worker responds.
+`catalog-static` counts retained provider records without reading plugin-owned model arrays.
+`catalog-source` covers shared cached provider payloads, which may already be
+normalized. `catalog-request` rows count pending cache loads and active worker
+tasks separately. Pending loads have zero-byte estimates because their state is
+opaque; active task inputs are measured.
+Read the latest sampled census through the existing diagnostics CLI:
+
+```bash
+openclaw gateway stability --type diagnostic.memory.sample --limit 1 --json
+```
+
 `workerHeapSampledCount` and `workerArrayBuffersSampledCount` show coverage against
 `workerCount`. `workerMemoryCoverage` is `complete`, `partial`, or `unavailable`
 for direct workers. Before the first sample or after a sample expires, missing
@@ -784,6 +824,26 @@ automatically included in support exports. The existing profiling RPCs still
 target the main isolate. Capture duration can exceed five seconds if synchronous
 guest work blocks the worker's event loop; retiring the worker can interrupt capture.
 
+## Outbound WebSocket event traffic
+
+The [Prometheus exporter](/gateway/prometheus) records
+`openclaw_gateway_ws_events_total{event}` and
+`openclaw_gateway_ws_event_bytes_total{event}` for outbound event frames accepted
+by the WebSocket sender. Each receiving socket contributes one frame and its full
+encoded JSON size, so fan-out is visible. Bytes are UTF-8 payload bytes before
+WebSocket framing or compression; acceptance does not prove delivery to the client.
+The event label contains only known protocol names, with `other` for unknown
+names. Payload content and session, user, and connection identifiers are excluded.
+The sender batches observations by event name within one event-loop turn,
+preserving the per-socket frame and byte totals without exporting every send
+as a separate diagnostic event.
+`openclaw_gateway_ws_operator_connections` reports the current authenticated
+operator socket count without labels, updating on connect/disconnect and every
+30 seconds to refresh late-starting exporters or recover dropped snapshots.
+OpenTelemetry exports the corresponding
+`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
+`openclaw.gateway.ws.operator_connections` metrics.
+
 ## RPC response size and heap changes
 
 The [Prometheus exporter](/gateway/prometheus) records
@@ -798,7 +858,24 @@ include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
 `filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
 filter kinds contain parameter names, never search text, identities, or paths.
 The optimized WebSocket journal also records fast `sessions.list` responses of
-at least 200 KiB. Metric labels remain unchanged.
+at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
+`client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
+`openclaw_sessions_list_response_bytes_total` attributes successful response
+bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
+`full-no-base`, `full-with-base`, or `not-sidebar`). Full sidebar replies use
+`full-no-base` when the request omits `ifRowsRevision`; `full-with-base` covers
+stale or evicted bases and the rare case where every row changed. Attribution
+uses the request and existing response fields without changing the protocol payload.
+
+`openclaw_chat_history_requests_total` and
+`openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
+responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.
+Shapes distinguish receipt recovery, pending-input paging, older pages, cursor
+reads, message-anchored windows, and tail reads; outcomes are `delta`, `reset`, or
+`page`. Both byte counters
+reuse the encoded frame size above without serializing again or inspecting rows.
+Only bounded labels are recorded, never parameter values, identifiers, or text.
+See [Prometheus metrics](/gateway/prometheus) for bucket and precedence rules.
 
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample

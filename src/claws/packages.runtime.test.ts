@@ -18,12 +18,13 @@ import {
 } from "../plugins/plugin-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { stageClawAddHostRequirementsStateless } from "./add-stateless.js";
 import {
   installClawPackages,
-  preflightClawPackage,
   rollbackStatelessClawPackages,
-} from "./packages.js";
+} from "./packages.boundary.test-support.js";
+import { preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { runClawPluginBatch } from "./plugin-runtime.js";
 
@@ -39,6 +40,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const integrity = `sha256:${"a".repeat(64)}`;
 type InstallOptions = NonNullable<Parameters<typeof installClawPackages>[1]>;
+const realPreflightPluginInstall = preflightPluginInstall;
 
 function testPackageLease(onRelease: () => void = () => {}) {
   return {
@@ -57,7 +59,7 @@ function packageDeps(
   loadInstallRecords: () => Promise<Record<string, PluginInstallRecord>>,
 ) {
   return {
-    preflightPlugin: (params) => preflightPluginInstall({ ...params, loadInstallRecords }),
+    preflightPlugin: (params) => realPreflightPluginInstall({ ...params, loadInstallRecords }),
     probePlugin: async (request) => {
       const { spec } = request;
       const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
@@ -556,24 +558,30 @@ describe("Claw source-host plugin collision", () => {
     const env = sourceHostEnv(root);
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
     await withEnvAsync(env, async () => {
-      await expect(
-        preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
-          config: {},
-          env,
-          deps: {
-            preflightPlugin,
-            probePlugin,
-            inspectPluginCapabilities: (_rootDir, pluginId) => ({
-              ...emptyPluginCapabilityEvidence,
-              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-            }),
-          },
-        }),
-      ).resolves.toMatchObject({
-        ok: false,
-        code: "plugin_source_host_conflict",
-        message: expect.stringContaining("bundled plugin memory-core"),
-      });
+      const sql = observeMainThreadSql();
+      try {
+        await expect(
+          preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
+            config: {},
+            env,
+            deps: {
+              preflightPlugin,
+              probePlugin,
+              inspectPluginCapabilities: (_rootDir, pluginId) => ({
+                ...emptyPluginCapabilityEvidence,
+                grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+              }),
+            },
+          }),
+        ).resolves.toMatchObject({
+          ok: false,
+          code: "plugin_source_host_conflict",
+          message: expect.stringContaining("bundled plugin memory-core"),
+        });
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
     });
   });
 

@@ -559,6 +559,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<"lifecycle-artifact-plan">;
     findTranscriptEvent: (
       request: SessionTranscriptMatchWorkerInput["request"],
+      signal?: AbortSignal,
     ) => Promise<SessionTranscriptWorkerValues["transcript-match"]["result"]>;
     readHistoricalEvictionCandidates: (
       input: Omit<SessionHistoricalEvictionCandidatesWorkerInput, "kind" | "database">,

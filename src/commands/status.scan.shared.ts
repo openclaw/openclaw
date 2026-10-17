@@ -36,16 +36,16 @@ const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
   const { loadBundledPluginPublicArtifactModuleSync } =
     await import("../plugins/public-surface-loader.js");
   return loadBundledPluginPublicArtifactModuleSync<{
-    inspectMemoryIndexPresence: (databasePath: string) => Promise<boolean>;
+    inspectMemoryIndexPresence: (databasePath: string, agentId?: string) => Promise<boolean>;
   }>({ dirName: "memory-core", artifactBasename: "status-api.js" });
 });
 
-async function hasBuiltInMemoryState(databasePath: string): Promise<boolean> {
+async function hasBuiltInMemoryState(databasePath: string, agentId: string): Promise<boolean> {
   if (!existsSync(databasePath)) {
     return false;
   }
   const { inspectMemoryIndexPresence } = await memoryPresenceModuleLoader.load();
-  return await inspectMemoryIndexPresence(databasePath);
+  return await inspectMemoryIndexPresence(databasePath, agentId);
 }
 
 export type MemoryStatusSnapshot =
@@ -116,6 +116,7 @@ async function applyLocalStatusRpcFallback(params: {
         config: params.cfg,
         configPath: params.configPath,
         method: "status",
+        params: { includeChannelSummary: false, includeCliProjection: true },
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
         timeoutMs,
@@ -361,7 +362,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (
     defaultDatabasePath &&
     !hasExplicitConfig &&
-    !(await hasBuiltInMemoryState(defaultDatabasePath))
+    !(await hasBuiltInMemoryState(defaultDatabasePath, agentId))
   ) {
     // Avoid instantiating built-in memory for users who never created the default store.
     return null;
@@ -371,7 +372,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const shouldInspectStore =
-    hasExplicitConfig || (await hasBuiltInMemoryState(resolvedMemory.store.databasePath));
+    hasExplicitConfig || (await hasBuiltInMemoryState(resolvedMemory.store.databasePath, agentId));
   if (!shouldInspectStore) {
     return null;
   }

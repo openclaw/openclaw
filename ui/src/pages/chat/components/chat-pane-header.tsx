@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { Show, createMemo, createUniqueId } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -17,11 +17,14 @@ import {
 import { SessionColorDot } from "../../../components/session-color.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
+import { Popover } from "../../../components/solid/popover.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
+import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -68,6 +71,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   title: string;
+  agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
   session: GatewaySessionRow | undefined;
   incognito?: boolean;
@@ -113,6 +117,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
+  onOpenAgentSettings?: (agentId: string) => void;
   onBranchSelect: (leafEntryId: string) => void;
 };
 
@@ -189,6 +194,58 @@ function IdentityCrumbs(props: ChatPaneHeaderProps) {
         </Show>
         <SessionCrumb {...props} />
       </div>
+    </div>
+  );
+}
+
+function AgentCrumb(
+  props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
+) {
+  const id = createUniqueId();
+  const presented = usePanePresentation(() => props.presented);
+  // Rename opens the context and hidden panes close it; otherwise the user controls it.
+  const requestedOpen = createMemo(() => (!presented() ? false : props.editing ? true : undefined));
+  return (
+    <div class="chat-pane__agent-identity">
+      {/* Conversation changes retire the open panel and its rename input together. */}
+      <Show when={`${props.agent.id}\0${props.session?.key ?? ""}`} keyed>
+        {(_scope) => (
+          <Popover
+            id={id}
+            lazy
+            sameRoot
+            class="chat-pane__agent-context"
+            label={t("chat.sessionHeader.agentContext", { agent: props.agent.name })}
+            placement="bottom-start"
+            open={requestedOpen()}
+            onOpenChange={(open) => {
+              if (!open && props.editing) {
+                props.onCancelRename();
+              }
+            }}
+            trigger={
+              <>
+                <span class="chat-pane__agent-avatar" aria-hidden="true">
+                  <AgentIdentityAvatar agent={props.agent} />
+                </span>
+                <span class="chat-pane__agent-name">{props.agent.name}</span>
+                <Icon name="chevronDown" />
+              </>
+            }
+          >
+            <IdentityCrumbs {...props} />
+          </Popover>
+        )}
+      </Show>
+      <button
+        class="chat-pane__agent-settings"
+        type="button"
+        title={t("agentChip.namedSettings", { name: props.agent.name })}
+        aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
+        onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
+      >
+        <Icon name="settings" />
+      </button>
     </div>
   );
 }
@@ -369,13 +426,14 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           "chat-pane__header",
           {
             "chat-pane__header--mobile": props.mergedChrome,
+            "chat-pane__header--agent": Boolean(props.agent),
             "chat-pane__header--closable": props.onClosePane !== undefined,
             "chat-pane__header--stacked-status":
               props.narrow && (props.runningSubagentCount ?? 0) > 0,
           },
         ]}
         role="group"
-        aria-label={props.title}
+        aria-label={props.agent?.name ?? props.title}
         tabindex={-1}
         onMouseDown={beginNativeWindowDrag}
       >
@@ -415,7 +473,9 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>
           </Show>
-          <IdentityCrumbs {...props} />
+          <Show when={!props.agent}>
+            <IdentityCrumbs {...props} />
+          </Show>
           <Show when={props.publicAccessIndicator}>
             {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
           </Show>
@@ -459,6 +519,13 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
           </Show>
         </div>
+        <Show when={props.agent}>
+          {(agent) => (
+            <div class="chat-pane__header-agent">
+              <AgentCrumb {...props} agent={agent()} />
+            </div>
+          )}
+        </Show>
         <div class="chat-pane__header-trailing">
           <Show when={props.onToggleConversation}>
             <button

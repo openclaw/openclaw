@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, getOwner, runWithOwner } from "solid-js";
+import { createMemo, getOwner, runWithOwner, Show } from "solid-js";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -24,12 +24,14 @@ export function SessionMenuShortcut(props: {
   return (
     <span class="session-menu__shortcut" aria-hidden="true">
       <Kbd keys={props.shortcut.toUpperCase()} inline />
-      {props.alias ? (
-        <>
-          {" "}
-          / <KeyboardShortcut combo={props.alias} inline />
-        </>
-      ) : undefined}
+      <Show when={props.alias} keyed>
+        {(alias) => (
+          <>
+            {" "}
+            / <KeyboardShortcut combo={alias} inline />
+          </>
+        )}
+      </Show>
     </span>
   );
 }
@@ -60,7 +62,6 @@ const STANDARD_ITEMS = {
 } as const;
 
 export function useSessionMenuEntries(
-  host: HTMLElement,
   actions: SessionMenuActions,
   readState: () => MenuState,
   options: { openInExtra?: () => readonly MenuEntry[] } = {},
@@ -72,7 +73,6 @@ export function useSessionMenuEntries(
   const disabled = (kind: SessionManagementActionKind) =>
     actions.actionDisabled(kind, actions.actionExtraDisabled(kind));
   const appearance = useSessionMenuAppearance(
-    host,
     readState,
     (kind) => actions.actionDisabled(kind),
     (action) => actions.runAction(action),
@@ -98,7 +98,7 @@ export function useSessionMenuEntries(
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
     label: entry.label,
-    class: `session-menu__item${entry.kind === "delete" ? " session-menu__item--destructive" : ""}`,
+    class: ["session-menu__item", { "session-menu__item--destructive": entry.kind === "delete" }],
     variant: entry.kind === "delete" ? "danger" : undefined,
     disabled: disabled(entry.kind),
     attributes: {
@@ -123,13 +123,11 @@ export function useSessionMenuEntries(
       id: state.compact ? `compact:open-${entry.view}` : `submenu:${entry.view}`,
       label: entry.label,
       labelClass: "session-menu__text",
-      class: [
-        "session-menu__item",
-        !state.compact && entry.view === "assign-owner" ? "people-menu__submenu" : "",
-        !state.compact && entry.view === "advanced" ? "session-menu__advanced" : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
+      class: {
+        "session-menu__item": true,
+        "people-menu__submenu": !state.compact && entry.view === "assign-owner",
+        "session-menu__advanced": !state.compact && entry.view === "advanced",
+      },
       disabled: entry.disabled,
       attributes: {
         title: entry.title,

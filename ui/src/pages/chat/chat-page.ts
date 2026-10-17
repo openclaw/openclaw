@@ -1,6 +1,6 @@
 import { createComponent, untrack } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ChatPageBody } from "./chat-page-pane-render.tsx";
 import { createChatPageState } from "./chat-page-state.ts";
 import type { ChatPageHost, ChatPageProps } from "./chat-page-types.ts";
@@ -14,6 +14,7 @@ export type ChatPage = ChatPageHost & {
 defineSolidBridge<ChatPageProps>(
   "openclaw-chat-page",
   (props, host) => {
+    // The fallback application is lifetime-stable; page state follows replacement props.context.
     const application = untrack(() => props.context ?? useApplication());
     const state = createChatPageState(host, props, application);
     Object.defineProperty(host, "sessionSplitAvailable", {

@@ -37,7 +37,7 @@ describe("remote model catalog store", () => {
         captureOpenClawStateWorkerContext(options),
       ),
     ).toBe(false);
-    expect(readConfigMachineState("modelCatalog.remote.v2", options)).toBeUndefined();
+    expect(readConfigMachineState("modelCatalog.remote.v3", options)).toBeUndefined();
     await writeRemoteModelCatalogAsync(initial, captureOpenClawStateWorkerContext(options));
     const updated = {
       ...initial,
@@ -96,7 +96,7 @@ describe("remote model catalog store", () => {
       source_url: "https://catalog.test/two",
       checked_at: 6,
     });
-    expect(readConfigMachineState("modelCatalog.remote.v2", options)).toEqual({
+    expect(readConfigMachineState("modelCatalog.remote.v3", options)).toEqual({
       bundle_json: '{"schemaVersion":1,"updated":true}',
       generated_at: 3,
       min_version: "2026.7.0",
@@ -107,37 +107,40 @@ describe("remote model catalog store", () => {
     });
   });
 
-  it("serves an upgraded install from the older client's row without writing it", async () => {
-    const options = { path: path.join(tempDirs.make("openclaw-catalog-"), "state.sqlite") };
-    const legacy = {
-      bundle_json: '{"schemaVersion":1,"legacy":true}',
-      generated_at: 100,
-      min_version: "2026.7.0",
-      source_url: "https://mirror.test/v1/catalog.json",
-      etag: '"legacy"',
-      last_modified: null,
-      checked_at: 10,
-    };
-    writeConfigMachineState("modelCatalog.remote", legacy, options);
-    // Offline or unchanged mirrors keep their catalog across the upgrade.
-    expect(readRemoteModelCatalog(options)).toEqual({ id: 1, ...legacy });
-    // A 304 revalidation adopts the row into this client's slot.
-    expect(
-      await markRemoteModelCatalogCheckedAsync(
-        20,
-        { expected: legacy, etag: '"legacy"', lastModified: null },
-        captureOpenClawStateWorkerContext(options),
-      ),
-    ).toBe(true);
-    expect(readConfigMachineState("modelCatalog.remote.v2", options)).toEqual({
-      ...legacy,
-      checked_at: 20,
-    });
-    expect(readConfigMachineState("modelCatalog.remote", options)).toEqual(legacy);
-    // Once adopted, later writes by the older client no longer affect this client.
-    writeConfigMachineState("modelCatalog.remote", { ...legacy, generated_at: 200 }, options);
-    expect(readRemoteModelCatalog(options)?.generated_at).toBe(100);
-  });
+  it.each(["modelCatalog.remote", "modelCatalog.remote.v2"])(
+    "adopts %s without writing the older client slot",
+    async (previousKey) => {
+      const options = { path: path.join(tempDirs.make("openclaw-catalog-"), "state.sqlite") };
+      const legacy = {
+        bundle_json: '{"schemaVersion":1,"legacy":true}',
+        generated_at: 100,
+        min_version: "2026.7.0",
+        source_url: "https://mirror.test/v1/catalog.json",
+        etag: '"legacy"',
+        last_modified: null,
+        checked_at: 10,
+      };
+      writeConfigMachineState(previousKey, legacy, options);
+      // Offline or unchanged mirrors keep their catalog across the upgrade.
+      expect(readRemoteModelCatalog(options)).toEqual({ id: 1, ...legacy });
+      // A 304 revalidation adopts the row into this client's slot.
+      expect(
+        await markRemoteModelCatalogCheckedAsync(
+          20,
+          { expected: legacy, etag: '"legacy"', lastModified: null },
+          captureOpenClawStateWorkerContext(options),
+        ),
+      ).toBe(true);
+      expect(readConfigMachineState("modelCatalog.remote.v3", options)).toEqual({
+        ...legacy,
+        checked_at: 20,
+      });
+      expect(readConfigMachineState(previousKey, options)).toEqual(legacy);
+      // Once adopted, later writes by the older client no longer affect this client.
+      writeConfigMachineState(previousKey, { ...legacy, generated_at: 200 }, options);
+      expect(readRemoteModelCatalog(options)?.generated_at).toBe(100);
+    },
+  );
 
   it("leaves this client's slot empty when the older client's row no longer matches", async () => {
     const options = { path: path.join(tempDirs.make("openclaw-catalog-"), "state.sqlite") };
@@ -160,7 +163,7 @@ describe("remote model catalog store", () => {
         captureOpenClawStateWorkerContext(options),
       ),
     ).toBe(false);
-    expect(readConfigMachineState("modelCatalog.remote.v2", options)).toBeUndefined();
+    expect(readConfigMachineState("modelCatalog.remote.v3", options)).toBeUndefined();
     // Until this client stores its own row, it keeps following the older client's slot.
     expect(readRemoteModelCatalog(options)).toEqual({ id: 1, ...newer });
     expect(readConfigMachineState("modelCatalog.remote", options)).toEqual(newer);

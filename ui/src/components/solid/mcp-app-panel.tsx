@@ -10,7 +10,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { McpAppOpenDetail } from "../mcp-app-launch.ts";
 import { McpAppRetirement } from "../mcp-app-retirement.tsx";
 import { McpAppSettingsForm } from "./mcp-app-settings.tsx";
@@ -21,7 +21,7 @@ registerMcpAppEnglish();
 type McpAppPanelProps = { launch?: McpAppOpenDetail };
 export type McpAppPanelElement = SolidBridgeElement<McpAppPanelProps>;
 
-export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
+function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
   const context = useApplication();
   const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);

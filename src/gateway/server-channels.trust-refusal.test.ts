@@ -94,8 +94,6 @@ describe("channel startup trust refusal", () => {
     const healthMonitor = startChannelHealthMonitor({
       scheduler: createTestGatewayScheduler("fake-timers"),
       channelManager: manager,
-      checkIntervalMs: 60_000,
-      timing: { monitorStartupGraceMs: 50, channelConnectGraceMs: 0 },
     });
     try {
       await manager.startChannels();

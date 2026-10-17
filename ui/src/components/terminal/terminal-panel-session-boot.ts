@@ -8,11 +8,11 @@ import { updateTerminalFont } from "./terminal-fonts.ts";
 import {
   TERMINAL_OUTPUT_ENCODER,
   shellBasename,
-  type TerminalPanelSessionControllerHost,
+  type TerminalPanelSessionHost,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
-import type { TerminalTabReadinessController } from "./terminal-tab-readiness.ts";
+import type { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
@@ -22,7 +22,7 @@ export function adoptTerminalPanelSession(params: {
   result: TerminalOpenResult;
   agentOwned: boolean;
   connection: TerminalConnection | null;
-  readiness: TerminalTabReadinessController<TerminalPanelSessionTab>;
+  readiness: ReturnType<typeof createTerminalTabReadiness<TerminalPanelSessionTab>>;
   onDeliveryError: () => void;
 }): void {
   const { tab, result } = params;
@@ -74,7 +74,10 @@ export function observeTerminalRestoreInput(document: Document, signal: AbortSig
 
 /** Creates the emulator and stream sink; the session controller owns tab adoption. */
 export async function bootTerminalPanelSession(params: {
-  panel: TerminalPanelSessionControllerHost;
+  panel: Pick<
+    TerminalPanelSessionHost,
+    "inputs" | "updateComplete" | "terminalFontFamily" | "findTerminalPanelViewport"
+  >;
   connection: TerminalConnection;
   sequence: number;
   awaitFirstOutput: boolean;
@@ -105,7 +108,10 @@ export async function bootTerminalPanelSession(params: {
         ? undefined
         : tabReference.current?.gatewaySessionId,
     () => (tabReference.current ? params.captureDeliveryError(tabReference.current) : () => {}),
-    () => panel.gatewayConnected && panel.available && !tabReference.current?.controller.readOnly,
+    () =>
+      panel.inputs.gatewayConnected &&
+      panel.inputs.available &&
+      !tabReference.current?.controller.readOnly,
   );
   const { createTerminalDefaultColorQueryResponder } =
     await import("@openclaw/libterminal/browser");
@@ -114,7 +120,7 @@ export async function bootTerminalPanelSession(params: {
     reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
   });
   const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
-    panel.createTerminalController(
+    panel.inputs.createTerminalController(
       {
         parent,
         readOnly: controllerOptions?.readOnly ?? false,
@@ -122,7 +128,7 @@ export async function bootTerminalPanelSession(params: {
           fontSize: 11,
           fontFamily: panel.terminalFontFamily,
           cursorBlink: true,
-          theme: terminalTheme(panel.themeMode),
+          theme: terminalTheme(panel.inputs.themeMode),
           scrollback: 5000,
         },
         // The session owner explicitly disposes adopted views. A completed view

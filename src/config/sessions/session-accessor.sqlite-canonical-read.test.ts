@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -25,7 +24,7 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { loadExactSessionEntryCandidatesReadOnlyBatch } from "./session-accessor.sqlite-exact-read.js";
+import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
@@ -281,8 +280,10 @@ it("preserves delivery JSON semantics, retained windows, and invalid-row failure
     }, scope);
     const keys = [...cases.map(({ name }) => `agent:main:${name}`), retained, "agent:main:missing"];
     const read = (projection: "list" | "delivery") =>
-      loadExactSessionEntryCandidatesReadOnlyBatch(
-        keys.map((key) => ({ ...scope, sessionKeys: [key], projection })),
+      readExactSessionEntryCandidatesInDatabase(
+        database,
+        keys.map((key) => [key]),
+        projection,
       );
     expect(read("delivery").every((result) => result.ok)).toBe(true);
     // Admitted readers preserve raw metadata parsing; cold admission still rejects uncertified rows.
@@ -326,67 +327,5 @@ it("preserves delivery JSON semantics, retained windows, and invalid-row failure
         error: { code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" },
       });
     }
-  });
-});
-
-describe("exact SQLite session batch availability", () => {
-  it.each(["session_key_contract", "session_nodes"])(
-    "preserves table-missing (%s) outcomes for every requested key",
-    (table) => {
-      const scope = {
-        agentId: "main",
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-exact-unavailable-") },
-      };
-      const { db: connection, path: databasePath } = openOpenClawAgentDatabase(scope);
-      const db = requireNativeSqliteDatabase(connection);
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      const prepare = db.prepare.bind(db);
-      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        if (sql.includes(`from "${table}"`)) {
-          // Lose the table after schema admission, before reading its metadata.
-          prepareSpy.mockRestore();
-          db.exec(`DROP TABLE ${table}`);
-        }
-        return prepare(sql);
-      });
-      const healthy = {
-        agentId: "main",
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-exact-available-") },
-      };
-      openOpenClawAgentDatabase(healthy);
-      const results = loadExactSessionEntryCandidatesReadOnlyBatch([
-        { ...scope, sessionKeys: ["agent:main:first"] },
-        { ...healthy, sessionKeys: ["agent:main:absent"] },
-        { ...scope, sessionKeys: ["agent:main:second"] },
-      ]);
-      const expected = {
-        ok: false,
-        error: {
-          name: "SessionMetadataUnavailableError",
-          reason: "table-missing",
-          cause: { code: "ERR_SQLITE_ERROR" },
-          missingTables: [table],
-        },
-      };
-      expect(results).toMatchObject([expected, { ok: true, value: [] }, expected]);
-      expect(fs.existsSync(databasePath)).toBe(true);
-    },
-  );
-
-  it("keeps a present empty store and an empty key request successful", () => {
-    const scope = {
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-exact-empty-") },
-    };
-    openOpenClawAgentDatabase(scope);
-    expect(
-      loadExactSessionEntryCandidatesReadOnlyBatch([
-        { ...scope, sessionKeys: ["agent:main:absent"] },
-        { ...scope, sessionKeys: [" "] },
-      ]),
-    ).toEqual([
-      { ok: true, value: [] },
-      { ok: true, value: [] },
-    ]);
   });
 });

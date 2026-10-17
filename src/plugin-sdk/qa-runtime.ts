@@ -1,6 +1,5 @@
 import { createServer } from "node:net";
 import path from "node:path";
-// QA runtime helpers register and execute plugin QA scenarios from local files.
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";

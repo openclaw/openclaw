@@ -374,9 +374,6 @@ function drainLane(
         .then(
           (result) => {
             entry.resolve(result);
-            diag.debug(
-              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTasks.size} queued=${state.queue.length}`,
-            );
           },
           (err: unknown) => {
             entry.reject(err);

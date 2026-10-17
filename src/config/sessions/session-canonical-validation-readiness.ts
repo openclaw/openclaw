@@ -29,7 +29,6 @@ import {
 } from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;
@@ -60,18 +59,15 @@ export async function certifySessionCanonicalValidationPending(
   const drainKey = readOpenClawAgentDatabaseIdentity(database).incarnation;
   let oversizedRows = 0;
   try {
-    const readiness = runSqliteReadOperationSync(database.db, () => {
+    const initialize = runSqliteReadOperationSync(database.db, () => {
       loadOpenClawAgentCanonicalValidationReceipt(database);
-      const initialize = !hasOpenClawAgentCanonicalValidation(database);
-      return {
-        initialize,
-        hasWork: initialize || hasPendingCanonicalSessionValidation(database),
-      };
+      // Import, repair, and main-key writers revoke readiness when they queue validation.
+      return !hasOpenClawAgentCanonicalValidation(database);
     });
-    if (!readiness.hasWork) {
+    if (!initialize) {
       return;
     }
-    let initializeCanonicalValidation = readiness.initialize;
+    let initializeCanonicalValidation = true;
     const databaseOptions = {
       agentId: normalizeAgentId(options.agentId),
       path: readOpenClawAgentDatabaseIdentity(database).filename,

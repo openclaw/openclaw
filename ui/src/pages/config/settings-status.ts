@@ -28,8 +28,10 @@ export function createSettingsStatus<T>(
       ? snapshot.client
       : null;
   };
-  const [state, setState] = createSignal<"idle" | "pending" | "complete" | "error">(
-    untrack(client) ? "pending" : "idle",
+  const stateConnection = createMemo(client);
+  // A connection change retires the local request state; refreshes keep their result.
+  const [state, setState] = createSignal<"idle" | "pending" | "complete" | "error">(() =>
+    stateConnection() ? "pending" : "idle",
   );
   const [error, setError] = createSignal<unknown>();
   const [result, setResult] = createSignal<{ status: T; isCurrent: () => boolean }>();
@@ -41,6 +43,7 @@ export function createSettingsStatus<T>(
   };
   let connection = connectionKey();
   onCleanup(
+    // Every connection receipt retires requests before a same-turn reconnect can settle them.
     gatewayProjection.subscribe(() => {
       const next = connectionKey();
       if (connection.some((value, index) => value !== next[index])) {
@@ -53,6 +56,7 @@ export function createSettingsStatus<T>(
   );
   function capture() {
     const owner = context.gateway;
+    // Mutation authority captures this connection once, then checks it at settlement.
     const currentClient = untrack(client);
     const captured = connectionKey();
     return () => {
@@ -81,6 +85,7 @@ export function createSettingsStatus<T>(
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // Gateway status requests follow the admitted connection and config revision.
   createEffect(key, ([currentClient, hash], previous) => {
     request?.abort();
     if (!currentClient) {

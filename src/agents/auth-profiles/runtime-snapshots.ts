@@ -4,6 +4,8 @@ import path from "node:path";
  * Snapshots are cloned at boundaries so callers cannot mutate shared state.
  */
 import { isDeepStrictEqual } from "node:util";
+import type { DiagnosticWorkerRetainedData } from "../../infra/diagnostic-process-types.js";
+import { estimateRetainedDataSize } from "../../infra/retained-data-size.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { registerListener } from "../../shared/listeners.js";
 import { cloneAuthProfileStore } from "./clone.js";
@@ -54,6 +56,18 @@ import type {
 } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, OwnedRuntimeSnapshot>();
+
+/** Anonymous store sizes only; do not materialize or clone credentials for diagnostics. */
+export function measureRuntimeAuthProfileStores(): DiagnosticWorkerRetainedData[] {
+  return [...runtimeAuthStoreSnapshots.values()].map(({ store }) =>
+    Object.assign(estimateRetainedDataSize([store]), {
+      structure: "catalog-auth" as const,
+      entries: 1,
+      accounts: Object.keys(store.profiles).length,
+      providers: new Set(Object.values(store.profiles).map((profile) => profile.provider)).size,
+    }),
+  );
+}
 
 export const {
   invalidateRuntimeAuthProfileStoreSnapshotsForOwner,
@@ -269,7 +283,7 @@ export function registerRuntimeAuthProfileStoreMutationListener(
   return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
 
-/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
 ): void {

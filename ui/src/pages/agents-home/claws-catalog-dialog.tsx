@@ -599,6 +599,7 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
     invalidateRequests: (change) => model.invalidateRequests(change),
     ensureInitialData: () => model.ensureInitialData(),
   });
+  // Current route snapshots admit catalog detail requests; request revisions retire late results.
   createEffect(
     () => ({
       initialEntry: props.initialEntry ?? null,

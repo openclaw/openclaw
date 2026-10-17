@@ -10,7 +10,7 @@ import {
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
-import type { McpAppViewProps } from "./mcp-app-view-controller.ts";
+import type { McpAppViewProps } from "./mcp-app-view-owner.ts";
 import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 
 const viewLoad = vi.hoisted(() => ({

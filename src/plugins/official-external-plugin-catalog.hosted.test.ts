@@ -270,6 +270,32 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("replaces unsigned snapshots without losing a neighboring feed", async () => {
+    const snapshotStore = sqliteSnapshotStore();
+    const snapshotFor = (pluginName: string, url = FEED_URL) => {
+      const body = JSON.stringify(hostedCatalogFeed({ sequence: 1, pluginName }));
+      return {
+        body,
+        metadata: {
+          url,
+          status: 200,
+          checksum: `sha256:${crypto.createHash("sha256").update(body).digest("hex")}`,
+        },
+        savedAt: "2026-06-22T00:00:10.000Z",
+      };
+    };
+    const first = snapshotFor("@fixture/first");
+    const neighbor = snapshotFor("@fixture/neighbor", `${FEED_URL}/neighbor`);
+    const replacement = snapshotFor("@fixture/replacement");
+
+    await snapshotStore.write(first);
+    await snapshotStore.write(neighbor);
+    await snapshotStore.write(replacement);
+
+    await expect(snapshotStore.read(FEED_URL)).resolves.toEqual(replacement);
+    await expect(snapshotStore.read(neighbor.metadata.url)).resolves.toEqual(neighbor);
+  });
+
   it("keeps signed SQLite snapshot writes monotonic when writes compete", async () => {
     const newer = signedFeed(10, "@openclaw/signed-v10");
     const older = signedFeed(9, "@openclaw/signed-v9", { privateKeyPem: newer.privateKeyPem });
@@ -652,13 +678,24 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it.each([
+  it.each<[string, string, string?]>([
     ["2026-06-21T23:59:59.000Z", "expiresAt must be later than generatedAt"],
     ["2026-02-30T00:00:00.000Z", "requires a valid expiresAt value"],
-  ])("rejects invalid signed feed expiry %s", async (expiresAt, error) => {
-    const signed = signedHostedCatalogFeed({
-      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/invalid-expiry", expiresAt }),
+    [
+      "2026-06-22T00:01:00.000Z",
+      "expiresAt must be later than generatedAt",
+      " 2026-06-22T00:02:00.000Z ",
+    ],
+  ])("rejects invalid signed feed expiry %s", async (expiresAt, error, generatedAt) => {
+    const feed = hostedCatalogFeed({
+      sequence: 8,
+      pluginName: "@openclaw/invalid-expiry",
+      expiresAt,
     });
+    if (generatedAt !== undefined) {
+      feed.generatedAt = generatedAt;
+    }
+    const signed = signedHostedCatalogFeed({ feed });
     const result = await loadSigned(signed, { now: () => new Date("2026-06-22T00:00:30.000Z") });
     expectSource(result, "bundled-fallback");
     expect(result.entries).toEqual([]);

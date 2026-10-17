@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import "../../../ui/src/test-helpers/lit-warnings.setup.ts";
+import "../../../ui/src/test-helpers/dom.setup.ts";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../ui/src/i18n/index.ts";

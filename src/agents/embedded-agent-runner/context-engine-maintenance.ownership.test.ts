@@ -12,11 +12,9 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/index.js";
-import {
-  runContextEngineMaintenance,
-  waitForDeferredTurnMaintenanceForSession,
-} from "./context-engine-maintenance.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
@@ -44,7 +42,7 @@ async function withTranscriptOwners(
     try {
       await run(owners);
     } finally {
-      await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
+      await waitForSessionMaintenance(owners.target.sessionKey);
       resetCommandQueueStateForTest();
     }
   });

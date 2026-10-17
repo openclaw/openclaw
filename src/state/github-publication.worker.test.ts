@@ -53,6 +53,7 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -406,21 +407,6 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
   ).resolves.toEqual(inserted);
 });
 
-it("inserts a repository request through its retained session source", async () => {
-  const { facts } = observeAuthority();
-  const { row, source } = await sourceFixture("source-insert");
-  try {
-    await expect(insertRepositoryGitHubPublicationAsync(row, source)).resolves.toEqual(row);
-    expect(facts.get(JSON.stringify(["repository", row.request_id]))).toMatchObject({
-      kind: "postimage",
-      value: { request_id: row.request_id, status: "requested" },
-    });
-    expect(read(row)).toMatchObject({ ok: true, rows: [row] });
-  } finally {
-    await source.release();
-  }
-});
-
 it("does not cancel a newer personal GitHub authorization", async () => {
   const owner = ensureProfileForEmail("publication-cancel@example.test").id;
   const first = "09208f47-f654-4120-a878-bbed310e02d1";
@@ -498,6 +484,38 @@ it("revokes personal source authority at commit before reply delivery without re
   } finally {
     await source.release();
   }
+});
+
+it("rejects a cold personal connection read overtaken by disconnect", async ({ signal }) => {
+  const owner = ensureProfileForEmail("publication-cold-disconnect@example.test").id;
+  const readReady = createDeferredCore();
+  const release = createDeferredCore();
+  const executeRead = stateReads.executeExistingOpenClawStateRead;
+  const delayedRead: typeof executeRead = async (options, operation, readOptions) => {
+    const result = await executeRead(options, operation, readOptions);
+    if (operation.type === "userGitHubConnections.read") {
+      readReady.resolve();
+      await release.promise;
+    }
+    return result;
+  };
+  const reads = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementation(delayedRead);
+  const preparing = prepareUserGitHubConnection(owner);
+  const rejected = expect(preparing).rejects.toThrow("My GitHub connection changed");
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(readReady.promise, preparing, "cold connection read was not held"),
+      signal,
+    );
+    await mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
+  } finally {
+    release.resolve();
+    reads.mockRestore();
+  }
+  await rejected;
+  expect((await prepareUserGitHubConnection(owner)).read()?.selection.kind).toBe("disconnected");
 });
 
 it("revokes cached personal authority when a committed disconnect loses its receipt", async ({

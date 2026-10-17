@@ -4,7 +4,7 @@ import {
   buildDiscordActivityCustomId,
   parseDiscordActivityCustomIdForInteraction,
 } from "../component-custom-id.js";
-import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
+import type { BaseComponentInteraction, ComponentData } from "../internal/discord.js";
 import { Button } from "../internal/discord.js";
 import { replySilently } from "../monitor/agent-components-reply.js";
 import type { AgentComponentContext } from "../monitor/agent-components.types.js";
@@ -33,7 +33,7 @@ class DiscordActivityButton extends Button {
     logError(`discord activity: failed to record pending launch: ${String(error)}`);
   }
 
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
     if (typeof data.widgetId !== "string") {
       await replySilently(interaction, {
         content: "This widget is no longer valid.",

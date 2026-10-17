@@ -7,6 +7,7 @@ import { i18n } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
 import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import "../styles/link-reader-hovercard.css";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
 import type {
@@ -25,6 +26,10 @@ import {
   type LinkPreview,
 } from "./link-reader-preview.tsx";
 import {
+  LINK_READER_METADATA_UPDATED_EVENT,
+  type LinkReaderMetadataUpdate,
+} from "./link-reader-response.ts";
+import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
   resolveLinkReaderTarget,
   linkReaderTargetKey,
@@ -35,7 +40,7 @@ import {
   type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 registerLinkReaderEnglish();
 
@@ -64,6 +69,7 @@ export class HovercardOwner {
       this.seeds = {
         client: this.host.client,
         agentId: this.host.agentId,
+        sessionKey: this.host.sessionKey,
         recoveryScope: this.host.client?.recoveryScope,
         previews: this.host.previewSeeds,
       };
@@ -127,6 +133,7 @@ export class HovercardOwner {
   private seeds: {
     client: GatewayBrowserClient | null;
     agentId: string | undefined;
+    sessionKey: string | undefined;
     recoveryScope: string | undefined;
     previews: readonly ControlUiLinkReaderPreview[];
   } | null = null;
@@ -137,6 +144,7 @@ export class HovercardOwner {
       !seeds ||
       seeds.client !== this.host.client ||
       seeds.agentId !== this.host.agentId ||
+      seeds.sessionKey !== this.host.sessionKey ||
       seeds.recoveryScope !== this.host.client?.recoveryScope
     ) {
       return undefined;
@@ -193,6 +201,32 @@ export class HovercardOwner {
     }
   }
 
+  private readonly handleMetadataUpdate = (event: CustomEvent<LinkReaderMetadataUpdate>) => {
+    const { client, agentId, sessionKey, target, preview: detail } = event.detail;
+    if (
+      client !== this.host.client ||
+      agentId !== this.host.agentId ||
+      (sessionKey ?? "") !== (this.host.sessionKey ?? "") ||
+      !this.host.readers.includes(target.reader)
+    ) {
+      return;
+    }
+    this.syncPreviewContext();
+    const key = linkReaderTargetKey(target);
+    const entry = this.previews.updateFromDocument(target, detail);
+    if (this.activeTarget && linkReaderTargetKey(this.activeTarget) === key) {
+      const pending = this.previewRequest;
+      this.previewRequest = {
+        controller: new AbortController(),
+        generation: client?.connectionGeneration,
+        state: "complete",
+        preview: { ...entry.preview, ...this.activeTarget },
+      };
+      pending?.controller.abort();
+    }
+    this.update();
+  };
+
   private readonly inlineObserver = new MutationObserver(() => this.syncInlineStates());
 
   private clearPreviews(): void {
@@ -223,7 +257,7 @@ export class HovercardOwner {
   // the portaled card (e.g. clicking the title link) can hold it open, so a
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
-  private readonly hovercard = new PortaledHovercardController(() => this.close());
+  private readonly hovercard = createPortaledHovercardOwner(() => this.close());
   private stopI18n: (() => void) | null = null;
   private previewRequest: {
     controller: AbortController;
@@ -283,6 +317,7 @@ export class HovercardOwner {
 
   connect(): void {
     this.connected = true;
+    window.addEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
     this.host.style.display = "contents";
     this.inlineObserver.observe(this.host, {
       childList: true,
@@ -309,6 +344,7 @@ export class HovercardOwner {
 
   disconnect(): void {
     this.connected = false;
+    window.removeEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
     this.host.removeEventListener("pointerover", this.handlePointerOver);
     this.host.removeEventListener("pointerout", this.handlePointerOut);
     this.host.removeEventListener("focusin", this.handleFocusIn);
@@ -554,9 +590,12 @@ export class HovercardOwner {
     if (existing) {
       this.hovercard.position();
     } else {
-      card.addEventListener("pointerleave", this.handleCardPointerLeave);
+      const stopPointerLeave = listen(card, "pointerleave", this.handleCardPointerLeave);
       this.hovercard.markTrigger(anchor);
-      this.hovercard.mount(anchor, card, "vertical", true, () => disposePreview(card));
+      this.hovercard.mount(anchor, card, "vertical", true, () => {
+        stopPointerLeave();
+        disposePreview(card);
+      });
     }
   }
 

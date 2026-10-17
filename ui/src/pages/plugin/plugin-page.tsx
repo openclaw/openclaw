@@ -8,7 +8,7 @@ import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import {
@@ -24,23 +24,24 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
   const lifecycle = new PluginPageOwner(props, context, host);
   const projection = projectOwner(lifecycle, (source) => source);
+  const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
-  // Owner notifications sample current route props without creating render dependencies.
+  // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.
   const update = () => untrack(lifecycle.update);
   const unsubscribeGateway = context.gateway.subscribe(update);
-  const unsubscribePlugins = context.plugins?.subscribe(update);
   createEffect(() => [props.pluginId, props.tabId], update);
   update();
   onCleanup(() => {
     unsubscribeGateway();
-    unsubscribePlugins?.();
     lifecycle.dispose();
   });
   const view = createMemo(() => {
     projection.read();
     const info = lifecycle.tabInfo();
     const key = lifecycle.tabKey();
-    const contribution = context.plugins?.registrations("pages").some((entry) => entry.key === key);
+    const contribution = plugins?.()
+      .registrations("pages")
+      .some((entry) => entry.key === key);
     const authKey = lifecycle.externalTabAuthKey(info, false);
     let mode = "unavailable";
     if (contribution) {
@@ -60,7 +61,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       }
     } else if (
       context.gateway.snapshot.phase !== "connected" ||
-      context.plugins?.isLoading(props.pluginId ?? "")
+      plugins?.().isLoading(props.pluginId ?? "")
     ) {
       mode = "loading";
     }
@@ -83,13 +84,13 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   };
   const disabled = () =>
     !view().info?.path &&
-    context.plugins?.errors.some(
+    plugins?.().errors.some(
       (entry) => entry.pluginId === props.pluginId && entry.code === "custom-plugin-ui-disabled",
     );
   const unavailableMessage = () =>
     view().info?.path
       ? t("pluginTabs.unavailableSubtitle")
-      : (context.plugins?.errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
+      : (plugins?.().errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
         t("pluginTabs.unavailableSubtitle"));
   return (
     <Switch>

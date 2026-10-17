@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createPostCompactionLoopGuard } from "./embedded-agent-runner/post-compaction-loop-guard.js";
 import {
@@ -6,7 +6,10 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import * as gateway from "./tools/in-process-gateway.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 vi.mock("./embedded-agent-messaging.js", () => ({ isMessagingToolSendAction: () => false }));
 const markdown = "Waiting for reviewer results.";
@@ -17,8 +20,8 @@ type Params = {
 };
 function createFixture() {
   const state = makeState();
-  const callGateway = vi.fn();
-  const tool = createProgressCardTool({ agentSessionKey: "agent:main:proof", callGateway });
+  const callGateway = vi.spyOn(gateway, "callInProcessGatewayTool");
+  const tool = createProgressCardTool({ agentSessionKey: "agent:main:proof" });
   let revision = 0;
   async function execute(params: Params, runId = "run-1") {
     revision++;

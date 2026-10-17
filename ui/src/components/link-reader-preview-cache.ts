@@ -4,8 +4,10 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
 import type { HovercardProperties } from "./link-reader-hovercard.types.ts";
 import {
-  parsePreviewResponse,
+  cacheEntryFromDocument,
+  cachedReaderPreview,
   previewContextFor,
+  requestReaderPreview,
   type CacheEntry,
   type PreviewContext,
 } from "./link-reader-preview.tsx";
@@ -20,7 +22,10 @@ export class LinkReaderPreviewCache {
   private readonly entries = new Map<string, CacheEntry>();
 
   constructor(
-    private readonly host: Pick<HovercardProperties, "client" | "agentId" | "readers">,
+    private readonly host: Pick<
+      HovercardProperties,
+      "client" | "agentId" | "sessionKey" | "readers"
+    >,
     private readonly context: () => PreviewContext | null,
     private readonly onChange: () => void,
   ) {}
@@ -47,9 +52,21 @@ export class LinkReaderPreviewCache {
     return cached &&
       !cached.controller.signal.aborted &&
       ((!client?.connected && cached.preview) ||
-        (cached.expiresAt > Date.now() && cached.generation === client?.connectionGeneration))
+        (cachedReaderPreview(this.entries, target) &&
+          cached.generation === client?.connectionGeneration))
       ? cached
       : undefined;
+  }
+
+  updateFromDocument(target: LinkReaderTarget, detail: ControlUiLinkReaderPreview) {
+    const key = linkReaderTargetKey(target);
+    const previous = this.entries.get(key);
+    const entry = cacheEntryFromDocument(target, detail, previous, Date.now() + SUCCESS_CACHE_MS);
+    entry.generation = this.host.client?.connectionGeneration;
+    this.entries.set(key, entry);
+    previous?.controller.abort();
+    pruneMapToMaxSize(this.entries, CACHE_LIMIT);
+    return entry;
   }
 
   load(target: LinkReaderTarget, signal: AbortSignal): Promise<ControlUiLinkReaderPreview> {
@@ -58,7 +75,10 @@ export class LinkReaderPreviewCache {
     const cached = this.get(target);
     this.entries.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
-    if (cached) {
+    if (
+      cached &&
+      (!this.host.client?.connected || cached.enrichment !== "needed" || cached.preview?.stale)
+    ) {
       this.entries.set(key, cached);
       return subscribeToSharedRequest(cached, {}, signal);
     }
@@ -71,29 +91,30 @@ export class LinkReaderPreviewCache {
     const controller = new AbortController();
     const context = this.context();
     const agentId = this.host.agentId;
+    const sessionKey = this.host.sessionKey;
+    const scope = { client, agentId, sessionKey };
+    const generation = client.connectionGeneration;
+    const isCurrent = () =>
+      !controller.signal.aborted &&
+      client === this.host.client &&
+      agentId === this.host.agentId &&
+      sessionKey === this.host.sessionKey &&
+      client.connectionGeneration === generation &&
+      previewContextFor(client, agentId) === context &&
+      this.host.readers.includes(target.reader);
     const entry: CacheEntry = {
-      generation: client.connectionGeneration,
+      generation,
+      enrichment: previous?.enrichment ? "pending" : undefined,
       preview: previous?.preview,
       expiresAt: Date.now() + SUCCESS_CACHE_MS,
       controller,
       subscribers: new Set(),
-      promise: client
-        .request<ControlUiLinkReaderPreview>(
-          method,
-          { ...(agentId ? { agentId } : {}), url: target.href },
-          { signal: controller.signal },
-        )
-        .then((response) => {
-          const preview = parsePreviewResponse(target, response);
-          if (
-            !controller.signal.aborted &&
-            this.entries.get(key) === entry &&
-            client === this.host.client &&
-            agentId === this.host.agentId &&
-            client.connectionGeneration === entry.generation &&
-            previewContextFor(client, agentId) === context
-          ) {
+      promise: requestReaderPreview(scope, target, controller.signal, isCurrent, previous)
+        .then((preview) => {
+          if (isCurrent() && this.entries.get(key) === entry) {
             entry.preview = preview;
+            entry.enrichment = preview.stale && previous?.enrichment ? "needed" : undefined;
+            entry.expiresAt = Date.now() + (preview.stale ? FAILURE_CACHE_MS : SUCCESS_CACHE_MS);
             this.onChange();
           }
           return preview;

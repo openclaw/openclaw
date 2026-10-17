@@ -4,6 +4,7 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import {
   buildSystemAgentSessionInvalidatedErrorDetails,
   type SystemAgentChatResult,
+  type SystemChangesListResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -43,7 +44,7 @@ async function element<T extends HTMLElement>(page: HTMLElement, selector: strin
     return found!;
   });
 }
-async function mount(request: ReturnType<typeof vi.fn>) {
+async function mount(request: Parameters<typeof createContext>[0]) {
   const harness = createContext(request);
   return { ...harness, ...(await mountPage(harness.context)) };
 }
@@ -365,7 +366,7 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
-      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+      client: createContext(replacementRequest).context.gateway.snapshot.client,
     });
     await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
@@ -466,6 +467,46 @@ describe("custodian page", () => {
     expect(page.textContent).toContain("NO_REPLY");
   });
 
+  it("keeps replacement-connection history when the previous request finishes late", async () => {
+    const pending = createDeferred<SystemChangesListResult>();
+    const request = vi.fn((method: string) =>
+      method === "openclaw.changes.list" ? pending.promise : Promise.resolve(chatReply("Ready.")),
+    );
+    const harness = createContext(request, ["openclaw.chat", "openclaw.changes.list"]);
+    const { page } = await mountPage(harness.context, { onboarding: false });
+    button(page, ".custodian__history-toggle").click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("openclaw.changes.list", { limit: 50 }),
+    );
+
+    const entry = {
+      id: "config-audit:replacement",
+      at: 1_700_000_000_000,
+      kind: "config-write" as const,
+      source: "config-rpc" as const,
+      summary: "Replacement connection history",
+    };
+    const nextRequest = vi.fn(async (method: string) =>
+      method === "openclaw.changes.list" ? { entries: [entry] } : chatReply("Ready."),
+    );
+    harness.setGatewaySnapshot({
+      // SAFETY: This fixture supplies the request method used by the mounted page.
+      client: { request: nextRequest } as unknown as GatewayBrowserClient,
+    });
+    await waitForFast(() => expect(page.querySelector(".custodian__history")).toBeNull());
+    button(page, ".custodian__history-toggle").click();
+    await waitForFast(() =>
+      expect(page.querySelector(".custodian__history")?.textContent).toContain(entry.summary),
+    );
+    pending.resolve({
+      entries: [{ ...entry, id: "config-audit:old", summary: "Retired history" }],
+    });
+    await pending.promise;
+    await page.updateComplete;
+    expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(1);
+    expect(page.querySelector(".custodian__history")?.textContent).toContain(entry.summary);
+    expect(page.querySelector(".custodian__history")?.textContent).not.toContain("Retired history");
+  });
   it.each([
     { hatch: true, search: `?draft=${encodeURIComponent("Wake up, my friend!")}` },
     { hatch: false, search: "?__openclawComposerFocus=1" },
@@ -681,7 +722,9 @@ describe("custodian page", () => {
     );
     await page.updateComplete;
 
-    expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(3);
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(3),
+    );
     // Continuation follows the cursor, even for a short page.
     expect(page.querySelector(".custodian__history-more")).not.toBeNull();
     expect(page.querySelector(".custodian__change-source")?.textContent).toContain("system-agent");
@@ -706,7 +749,9 @@ describe("custodian page", () => {
       }),
     );
     await page.updateComplete;
-    expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(4);
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(4),
+    );
     expect(page.querySelector(".custodian__history-more")).toBeNull();
 
     button(page, ".custodian__history-toggle").click();
@@ -720,7 +765,9 @@ describe("custodian page", () => {
       ).toHaveLength(2),
     );
     await page.updateComplete;
-    expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(3);
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".custodian__change-card")).toHaveLength(3),
+    );
 
     harness.setGatewaySnapshot({
       client: { request } as unknown as GatewayBrowserClient,
@@ -848,7 +895,7 @@ describe("custodian page session lifecycle", () => {
       details: buildSystemAgentSessionInvalidatedErrorDetails(),
     });
 
-  async function mountReady(request: ReturnType<typeof vi.fn>) {
+  async function mountReady(request: Parameters<typeof createContext>[0]) {
     const { page } = await mount(request);
     await waitForFast(() => expect(page.textContent).toContain("Ready."));
     return page;

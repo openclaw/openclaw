@@ -225,6 +225,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+A confirmed unavailable child Node runtime follows this same graceful drain when
+the effective native service command's Node can still start. The lifecycle owner
+requests a fresh-process supervisor handoff once; it never uses the in-process
+restart fallback for a broken retained runtime. If the service runtime is also
+broken or the latest shutdown records runtime recovery within five minutes, the
+Gateway stays up with degraded readiness for operator repair. See
+[Runtime health](/gateway/health#http-probes) for the health fields and report-only
+cases. A handoff failure after shutdown begins requires a service-owner restart.
+
 On Linux, shutdown closes idle pooled database readers through IPC before closing
 their spawn broker; active readers retain the existing cancellation grace.
 
@@ -399,6 +408,20 @@ pending placement subphase, such as
 `shutdown.worker-placement.reconcile.session-retirement`, `reconcile.active`, or
 `reconcile.publications`. These joins keep the worker transports and shared
 database available until accepted effects have recorded their outcomes.
+
+Worker-environment shutdown also names its computer, inference, transfer, tunnel,
+and accepted-operation joins. For an attached worker, shutdown stops the exact
+remote environment before draining its workspace queue: a foreground command
+can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
+share at most ten seconds of the remaining process cleanup budget. An unreachable
+worker keeps its durable attachment for cleanup on reconnect; it is not reported
+as physically stopped. Local writes and transfer cleanup still settle before
+database retirement.
+
+The core `shutdown completed` message precedes final process cleanup. Slow-step
+diagnostics continue through managed local services, snapshot cleanup, log
+flushing, watchdog retirement, and shared-state closure, so a delay after that
+message can be attributed to its remaining owner.
 
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
@@ -623,11 +646,11 @@ restart and verification. Unchanged plugins do not run another full Doctor pass.
 
 After activation, the updater verifies that the managed service is running and
 owns its port, the Gateway hello handshake matches the expected version/build
-identity, a 12-check health settle passes, plugins and channels are healthy, and
+identity, health checks pass, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
 Startup receives the update's existing per-step `--timeout` budget (1800 seconds
-by default), including migration and listener initialization, followed by the
-12-check settle window. On the first update from an older release, the old updater
+by default), including migration, listener initialization, and readiness checks.
+On the first update from an older release, the old updater
 invokes the newly installed CLI but does not pass that readiness budget. The
 candidate recognizes the existing update marker and, once the managed process is
 running, uses the five-minute startup watchdog instead of the standalone
@@ -809,10 +832,11 @@ receipts remain intact; recovery uses its normal transcript replay checks.
 
 If a Gateway left a dead writer and an unfinished recovery cycle,
 `sessions.recover` reconciles that writer
-and starts a continuation in the same session. A new Control UI message also reconciles this
-state before admission, so a rejected send cannot trap the conversation in a
-"conversation changed" retry loop. Both paths preserve the session key and
-transcript. A live run or cloud worker still prevents this repair. Tombstoned
+and starts a continuation in the same session. New Control UI and channel messages
+also reconcile this state before admission, so a rejected send cannot trap the
+conversation in a "conversation changed" retry loop. Channel messages wait behind
+live recovery ownership and resume admission when it settles. These paths preserve
+the session key and transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
 
 If recovery fails during preparation before the agent starts, the Gateway restores
@@ -1223,10 +1247,17 @@ existing restart delivery and continuation behavior.
 - **Metrics:** recovery activity is exported via
   [Prometheus](/gateway/prometheus) as `openclaw_session_recovery_total` and
   `openclaw_session_recovery_age_seconds`.
-- **Startup timing:** set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` before starting the
-  Gateway to log the reader preparation, delivery recovery, exec recovery, and
-  registry activation spans inside `sidecars.subagent-recovery`. Normal startup
-  progress logs include only the outer recovery phase.
+- **Startup timing:** the `sidecars.subagent-recovery` completion line includes
+  `readersMs`, `deliveryMs`, `execMs`, `registryLoadMs`, and `registryActivationMs`
+  at the normal info level. These elapsed times include dependency loading and
+  waits for workers or database admission. Within `deliveryMs`,
+  `deliveryNoticesMs` measures blocked-notice selection and persistence, and
+  `retryWaitMs` measures retry backoff; these nested totals are not additional
+  phase time. Notice selection can wait for database writer admission even
+  when an unchanged notice does not need another write. Set
+  `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to also log each individual span. The phase
+  runs after readiness; its duration does not measure time until the Gateway
+  can accept connections.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
   subsystems. Every startup pass includes bounded skip counts by reason such as

@@ -84,9 +84,6 @@ END;
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
   ON session_nodes(updated_at DESC, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_last_interaction_at
-  ON session_nodes(last_interaction_at DESC, session_key);
-
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_label
   ON session_nodes(label, session_key)
   WHERE label IS NOT NULL;
@@ -183,7 +180,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at
   ON session_windows(created_at DESC, session_id);
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_windows_conversation
-  ON session_windows(primary_conversation_id, updated_at DESC, session_id)
+  ON session_windows(primary_conversation_id)
   WHERE primary_conversation_id IS NOT NULL;
 
 -- Offline imports and repairs queue explicit work; admission also settles keys
@@ -335,9 +332,6 @@ CREATE TABLE IF NOT EXISTS session_reactions (
   PRIMARY KEY (session_key, session_id, message_id, emoji, identity_id),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_session_reactions_message
-  ON session_reactions(session_key, session_id, message_id);
 
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
@@ -583,10 +577,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_message_idempotency
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence
   ON transcript_event_identities(session_id, seq);
 
-CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
-  ON transcript_event_identities(session_id, parent_id)
-  WHERE parent_id IS NOT NULL;
-
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
   ON transcript_event_identities(session_id, event_type, seq DESC);
 
@@ -701,7 +691,7 @@ CREATE TABLE IF NOT EXISTS memory_entry_origins (
   origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
   observed_at INTEGER NOT NULL,
   PRIMARY KEY (entry_key, agent_id, session_id)
-) STRICT;
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS memory_session_tombstones (
   session_id TEXT NOT NULL PRIMARY KEY,

@@ -1,18 +1,15 @@
 import { createEffect, createSignal, onSettled, untrack } from "solid-js";
-import { Value } from "typebox/value";
-import {
-  SessionObserverDigestSchema,
-  type SessionObserverDigest,
-} from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { pickFreshestObserverDigest } from "../../../lib/observer-digest.ts";
+import { isSessionObserverDigest } from "../../../lib/protocol-validators.generated/activity.js";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
   resolveUiSessionRowAgentId,
 } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatSubagentActivity as ChatSubagentActivityRow } from "../chat-subagent-wait.ts";
 import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.ts";
 
@@ -52,6 +49,7 @@ function SubagentActivityLive(props: SubagentActivityProps) {
     const gateway = context.gateway;
     let connection = gateway.snapshot.hello;
     const changed = () => setRevision((value) => value + 1);
+    // Clear prior-connection digests before the next observer frame can be accepted.
     const unsubscribe = gateway.subscribe(() => {
       if (connection !== gateway.snapshot.hello) {
         connection = gateway.snapshot.hello;
@@ -64,7 +62,7 @@ function SubagentActivityLive(props: SubagentActivityProps) {
         event.event !== "session.observer" ||
         !connection ||
         connection !== gateway.snapshot.hello ||
-        !Value.Check(SessionObserverDigestSchema, event.payload)
+        !isSessionObserverDigest(event.payload)
       ) {
         return;
       }
@@ -95,7 +93,12 @@ function SubagentActivityLive(props: SubagentActivityProps) {
         live,
         stored?.runId === live.runId ? stored : undefined,
       );
-      return { ...row, activity: digest?.headline.trim() || undefined };
+      return {
+        ...row,
+        activity: digest?.headline.trim() || undefined,
+        // Session rows omit plan steps, so only a winning live digest carries them.
+        progress: digest === live && live.planProgress?.total ? live.planProgress : undefined,
+      };
     });
   };
   return <SubagentActivity {...props} rows={rows()} />;
@@ -108,6 +111,7 @@ export const ChatSubagentActivity = defineSolidBridge<SubagentActivityProps>(
     properties: {
       rows: { default: [], attribute: false },
       compact: { default: false },
+      limit: { default: undefined, attribute: false },
       turnStartedAt: { default: undefined, attribute: false },
       onOpenSubagent: { default: undefined, attribute: false },
       onOpenSession: { default: undefined, attribute: false },
@@ -126,6 +130,7 @@ declare module "@solidjs/web" {
         Properties<ChatSubagentActivityElement> & {
           "prop:rows"?: SubagentActivityProps["rows"];
           "prop:compact"?: SubagentActivityProps["compact"];
+          "prop:limit"?: SubagentActivityProps["limit"];
           "prop:turnStartedAt"?: SubagentActivityProps["turnStartedAt"];
           "prop:onOpenSubagent"?: SubagentActivityProps["onOpenSubagent"];
           "prop:onOpenSession"?: SubagentActivityProps["onOpenSession"];

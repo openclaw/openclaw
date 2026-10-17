@@ -43,6 +43,7 @@ import {
 import type { authorizePluginGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import {
   finishFailedGatewayHttpResponse,
+  finishGatewayHttpDatabaseAdmissionError,
   sendGatewayAuthFailure,
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
@@ -160,7 +161,10 @@ export function createGatewayHttpRequestHandler(
           res.end();
         }
       } catch (error) {
-        if (finishGatewayHttpAuthorityError(res, error)) {
+        if (
+          finishGatewayHttpAuthorityError(res, error) ||
+          finishGatewayHttpDatabaseAdmissionError(res, error)
+        ) {
           return undefined;
         }
         console.error("[gateway-http] legacy plugin request failed:", error);
@@ -712,7 +716,10 @@ export function createGatewayHttpRequestHandler(
       respondNotFound(res);
       return undefined;
     } catch (err) {
-      if (finishGatewayHttpAuthorityError(res, err)) {
+      if (
+        finishGatewayHttpAuthorityError(res, err) ||
+        finishGatewayHttpDatabaseAdmissionError(res, err)
+      ) {
         return undefined;
       }
       console.error("[gateway-http] unhandled error in request handler:", err);

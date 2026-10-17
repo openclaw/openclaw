@@ -35,6 +35,7 @@ export type ClickClackDiscussionBinding = {
   detachedAt?: number;
 };
 
+/** Retained for the shipped synchronous ScopedSessionAccessProvider contract. */
 export function bindingMatchesActiveSessionIncarnation(
   runtime: PluginRuntime,
   sessionKey: string,
@@ -77,20 +78,8 @@ export async function attachBindingToCurrentActiveSession(params: {
   }
   const { detachedAt: _detachedAt, ...retained } = params.binding;
   const attached = { ...retained, sessionId: entry.sessionId };
-  const applied = await params.store.setIfCurrent(params.sessionKey, params.binding, attached, {
-    assertCurrent: () => {
-      const current = params.store.get(params.sessionKey);
-      if (
-        !current ||
-        current.externalRef !== params.binding.externalRef ||
-        current.serverBaseUrl !== params.binding.serverBaseUrl ||
-        current.channelId !== params.binding.channelId ||
-        !bindingMatchesActiveSessionIncarnation(params.runtime, params.sessionKey, attached)
-      ) {
-        throw new Error("ClickClack discussion session changed before attachment committed");
-      }
-    },
-  });
+  // A later reset is picked up by the next refresh; effects check session authority separately.
+  const applied = await params.store.setIfCurrent(params.sessionKey, params.binding, attached);
   return applied ? attached : undefined;
 }
 

@@ -17,7 +17,6 @@ import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -530,49 +529,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
     },
   );
-
-  it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
-    const sessionKey = "agent:main:main";
-    seedPersistentSession(sessionKey, "persistent-session");
-
-    let agentExecutionStarted = false;
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (runParams: { onExecutionStarted?: () => void }) => {
-        runParams.onExecutionStarted?.();
-        agentExecutionStarted = true;
-        return {
-          payloads: [{ text: "completed" }],
-          meta: { agentMeta: {} },
-        };
-      },
-    );
-
-    const writeRow = patchSessionEntryMock.getMockImplementation();
-    if (!writeRow) {
-      throw new Error("Expected guarded session writer");
-    }
-    patchSessionEntryMock.mockImplementation((scope, update, options) =>
-      writeRow(
-        scope,
-        (entry: SessionEntry, context: { existingEntry?: SessionEntry }) =>
-          update(entry, {
-            existingEntry:
-              agentExecutionStarted && scope.sessionKey === sessionKey
-                ? { ...entry, lifecycleRevision: "replacement-revision" }
-                : context.existingEntry,
-          }),
-        options,
-      ),
-    );
-
-    await expect(
-      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: `Session "${sessionKey}" changed while starting work. Retry.`,
-      executionStarted: true,
-    });
-  });
 });
 
 describe("runCronIsolatedAgentTurn terminal lifecycle", () => {

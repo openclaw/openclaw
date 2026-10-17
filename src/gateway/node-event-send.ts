@@ -5,6 +5,7 @@ import type { GatewayConnectionTransport } from "./server/connection-transport.j
 
 export function sendNodeWebSocketEvent(
   socket: GatewayConnectionTransport,
+  event: string,
   serialize: () => string,
 ): boolean {
   // ws.send() does not throw after entering CLOSING; it only accounts unsent bytes.
@@ -22,7 +23,9 @@ export function sendNodeWebSocketEvent(
     return false;
   }
   try {
-    socket.send(serialize());
+    const frame = Buffer.from(serialize());
+    socket.send(frame, { binary: false });
+    socket.recordEventSent?.(event, frame.byteLength);
     return true;
   } catch {
     return false;

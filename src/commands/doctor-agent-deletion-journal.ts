@@ -13,6 +13,7 @@ import { prepareStateDatabaseInitialization } from "../state/openclaw-state-db-i
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { quarantineAgentDeletionJournal } from "./doctor-agent-deletion-journal-quarantine.js";
+import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 /** Doctor alone reconstructs lost deletion history and records the stores it cannot verify. */
@@ -86,6 +87,8 @@ export async function repairDoctorAgentDeletionJournal(params: {
   if (params.shouldRepair) {
     const recovery = await quarantineAgentDeletionJournal({
       inventory: [...discovery.targets, ...discovery.retainedTargets, ...held],
+      configuredTargets:
+        params.preflight.agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets ?? [],
       env: params.env,
     });
     if (recovery) {
@@ -105,9 +108,18 @@ export async function repairDoctorAgentDeletionJournal(params: {
         ),
       );
     }
+    const automatic = await restoreDoctorMissingJournalStores({ env: params.env, held });
+    changes.push(...automatic.changes.map(sanitizeForLog));
+    recoveryWarnings.push(...automatic.warnings.map(sanitizeForLog));
+    held = held.filter(
+      (target) =>
+        !automatic.restored.some(
+          (restored) => restored.agentId === target.agentId && restored.path === target.path,
+        ),
+    );
   }
   if (held.length === 0 && (!missing || params.shouldRepair)) {
-    return { changes, warnings: [] };
+    return { changes, warnings: recoveryWarnings };
   }
   const snapshot = await createConfigIO({
     env: params.env,
@@ -143,7 +155,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
     }),
     ...(missing && !params.shouldRepair
       ? [
-          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal without activating held stores.`,
+          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore qualifying stores from affected published builds automatically after verified backups. Other stores remain held.`,
         ]
       : []),
   ];

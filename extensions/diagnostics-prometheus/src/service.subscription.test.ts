@@ -6,6 +6,39 @@ import {
 import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
+import { createMetricsHarness, untrusted } from "./service.test-helpers.js";
+
+it("exports trusted WebSocket event totals and the current operator socket count", () => {
+  const metrics = createMetricsHarness();
+  try {
+    metrics.record({ type: "gateway.ws.connections", operators: 2 });
+    metrics.record({ type: "gateway.ws.event", event: "chat", count: 2, bytes: 256 });
+    metrics.record({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
+    metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
+    metrics.record({ type: "gateway.ws.connections", operators: 0 });
+    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+      metrics.record(
+        { type: "gateway.ws.event", event: "private-untrusted", count: 99, bytes: 999 },
+        metadata,
+      );
+      metrics.record({ type: "gateway.ws.connections", operators: 99 }, metadata);
+    }
+
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_gateway_ws_events_total counter\n");
+    expect(rendered).toContain("# TYPE openclaw_gateway_ws_event_bytes_total counter\n");
+    expect(rendered).toContain("# TYPE openclaw_gateway_ws_operator_connections gauge\n");
+    expect(rendered.split("\n").filter((line) => line.startsWith("openclaw_gateway_ws_"))).toEqual([
+      'openclaw_gateway_ws_event_bytes_total{event="chat"} 384',
+      'openclaw_gateway_ws_event_bytes_total{event="other"} 64',
+      'openclaw_gateway_ws_events_total{event="chat"} 3',
+      'openclaw_gateway_ws_events_total{event="other"} 1',
+      "openclaw_gateway_ws_operator_connections 0",
+    ]);
+  } finally {
+    metrics.stop();
+  }
+});
 
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
   const exporter = createDiagnosticsPrometheusExporter();

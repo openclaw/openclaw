@@ -134,9 +134,6 @@ export async function resolveIMessageRemoteHost(params: {
       detectedRemoteHosts.set(key, ambiguousSshWrapper);
       throwAmbiguousSshWrapper();
     }
-    if (detected) {
-      logVerbose(`imessage: detected remoteHost=${detected} from cliPath`);
-    }
     detectedRemoteHosts.set(key, detected ?? null);
     return detected;
   })().finally(() => remoteHostLookups.delete(key));

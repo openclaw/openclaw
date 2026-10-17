@@ -44,6 +44,25 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   return {
+    recordGatewayWsEvent(
+      evt: Extract<DiagnosticEventPayload, { type: "gateway.ws.event" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (!metadata.trusted) {
+        return;
+      }
+      const attrs = { "openclaw.gateway.ws.event": evt.event };
+      runtime.gatewayWsEventsCounter.add(evt.count, attrs);
+      runtime.gatewayWsEventBytesCounter.add(evt.bytes, attrs);
+    },
+    recordGatewayWsConnections(
+      evt: Extract<DiagnosticEventPayload, { type: "gateway.ws.connections" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (metadata.trusted) {
+        runtime.gatewayWsOperatorConnectionsGauge.record(evt.operators);
+      }
+    },
     recordGatewayRpc(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
       metadata: DiagnosticEventMetadata,

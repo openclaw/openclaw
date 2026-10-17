@@ -1,4 +1,4 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -41,7 +41,7 @@ import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import {
   dismissThreadPortals,
@@ -49,6 +49,7 @@ import {
   resetTranscriptSession,
 } from "./components/chat-thread-interactions.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -57,6 +58,47 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected readonly activeSessionResources = new ChatPaneActiveResources();
 
+  readProgressCardScope() {
+    const gateway = this.context.gateway;
+    const { client, hello } = gateway.snapshot;
+    const target = this.initialProgressCardTarget();
+    return {
+      store: this.progressCards,
+      target,
+      client,
+      hello,
+      options: {
+        admitAutomaticRead: () => {
+          const current = this.initialProgressCardTarget();
+          return (
+            this.isConnected &&
+            this.context.gateway === gateway &&
+            gateway.snapshot.client === client &&
+            gateway.snapshot.hello === hello &&
+            current?.sessionKey === target?.sessionKey &&
+            current?.agentId === target?.agentId
+          );
+        },
+      },
+    };
+  }
+
+  cacheProgressCard(
+    target: ProgressCardGetParams | undefined,
+    card: ProgressCard | null | undefined,
+  ) {
+    const state = this.state;
+    if (!target || card === undefined || !state || !this.ownsChatSnapshot(target)) {
+      return;
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (snapshot && snapshot.progressCard !== card) {
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+        ...snapshot,
+        progressCard: card,
+      });
+    }
+  }
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
     const scope = this.captureConnectionScope();
     if (!scope) {
@@ -67,7 +109,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const sessionId = state.currentSessionId;
     const agentId = resolveChatAgentId(state);
     return {
-      state: this.progressCard.refreshState,
+      state: this.progressCardSnapshot.refreshState,
       onRefresh: (card) => {
         if (
           this.isConnectionScopeCurrent(scope) &&
@@ -75,7 +117,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           state.currentSessionId === sessionId &&
           resolveChatAgentId(state) === agentId
         ) {
-          this.progressCard.refresh(card);
+          const target = this.initialProgressCardTarget();
+          if (target) {
+            this.progressCards.refresh(target, card);
+          }
         }
       },
     };
@@ -154,7 +199,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (archived && this.currentSessionArchived === false) {
       dismissThreadPortals(this.presentationId, this.element);
       if (this.archiveFocusOwned) {
-        this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+        this.transcript.scrollElement?.focus({ preventScroll: true });
       }
     }
     this.currentSessionArchived = archived;
@@ -170,7 +215,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const retained = this.hasQueuedMessageEdit;
     if (retained !== this.retainedQueuedEdit) {
       this.retainedQueuedEdit = retained;
-      this.dispatchEvent(new Event(QUEUED_EDIT_RETENTION_CHANGE_EVENT, { bubbles: true }));
+      this.element.dispatchEvent(new Event(QUEUED_EDIT_RETENTION_CHANGE_EVENT, { bubbles: true }));
     }
   }
 
@@ -264,7 +309,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     ) {
       this.retainedProgressCard = undefined;
     }
-    const card = this.progressCard.card;
+    const progress = this.progressCardSnapshot;
+    const card = progress.card;
     const target = this.resolveChatReadTarget();
     if (card && target) {
       this.retainedProgressCard = {
@@ -274,11 +320,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: state.currentSessionId,
         agentId,
         card,
-        lifetime: this.progressCard.lifetime,
+        lifetime: progress.lifetime,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
       };
-    } else if (!this.progressCard.loading) {
+    } else if (!progress.loading) {
       this.retainedProgressCard = undefined;
     }
     // The X only hides this presentation. The Gateway card remains available to
@@ -303,8 +349,12 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   }
 
   protected readonly clearSavedProgressCard = (card: ProgressCard): void => {
-    void this.progressCard
-      .dismiss(card)
+    const target = this.initialProgressCardTarget();
+    if (!target) {
+      return;
+    }
+    void this.progressCards
+      .dismiss(target, card)
       .catch(() => showToast({ message: t("sessionProgressCard.clearFailed") }));
   };
 
@@ -318,7 +368,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       lifetime: presented.lifetime,
       revision: card.revision,
     });
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected override initialProgressCardTarget() {
@@ -347,7 +397,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.progressPresentationSessionKey = state.sessionKey;
       this.progressPresentationReady = false;
     }
-    if (!this.progressCard.loading || this.progressPresentationReady) {
+    const progress = this.progressCardSnapshot;
+    if (!progress.loading || this.progressPresentationReady) {
       return false;
     }
     const phase = this.context.gateway.snapshot.phase;
@@ -364,9 +415,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         (!this.presented ||
           document.visibilityState === "hidden" ||
           (!this.transcriptReady && !getAcceptedChatHistorySession(state)) ||
-          (this.initialProgressCardTarget() &&
-            this.progressCard.loading &&
-            !this.progressCard.error))
+          (this.initialProgressCardTarget() && progress.loading && !progress.error))
       ) {
         return true;
       }
@@ -414,6 +463,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     const { promise, resolve } = createDeferredCore<boolean>();
     this.resetConfirmation = { scopeKey, promise, resolve };
+    this.invalidate();
     return promise;
   }
 
@@ -430,6 +480,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     this.resetConfirmation = undefined;
+    this.invalidate();
     pending.resolve(confirmed);
   }
 
@@ -452,10 +503,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       void refreshCurrentChatSessionList(this.state).catch(() => undefined);
       void resumeStoredChatOutboxes(this.state);
     }
-    this.querySelector(".chat-transcript-announcement")?.setAttribute(
-      "aria-live",
-      active ? "polite" : "off",
-    );
+    // Parked transcript snapshots do not rerender; update their component-owned live region now.
+    this.element
+      .querySelector(".chat-transcript-announcement")
+      ?.setAttribute("aria-live", active ? "polite" : "off");
   }
 
   protected override presentedChanged(presented: boolean): void {
@@ -531,7 +582,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       clearSessionWorkspacePreviews(state);
       state.requestUpdate?.();
     }
-    this.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
+    // Hidden snapshots stay parked, so the retained live region must be silenced synchronously.
+    this.element.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
   }
 
   public prepareForEviction(): void {

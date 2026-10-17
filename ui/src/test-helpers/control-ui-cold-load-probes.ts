@@ -310,8 +310,8 @@ function installColdLoadProbes(
         owner.hostElement === host &&
         "isConnected" in owner &&
         typeof owner.isConnected === "boolean" &&
-        "requestUpdate" in owner &&
-        typeof owner.requestUpdate === "function" &&
+        "invalidate" in owner &&
+        typeof owner.invalidate === "function" &&
         "prepareRender" in owner &&
         typeof owner.prepareRender === "function" &&
         "commitRender" in owner &&
@@ -356,7 +356,9 @@ function installColdLoadProbes(
     },
   };
   // The init script precedes application modules, including their host→owner maps.
-  window.WeakMap = RegistrationWeakMap;
+  if (input.ownerProbes !== false) {
+    window.WeakMap = RegistrationWeakMap;
+  }
   window.addEventListener(
     "pagehide",
     () => {
@@ -526,6 +528,10 @@ function installColdLoadProbes(
     startLive() {
       liveStartedAt = performance.now();
       liveRpcOffset = rpcs.length;
+      if (input.ownerProbes === false) {
+        eventStream.startLive(liveStartedAt);
+        return;
+      }
       frameProbe.install();
       const sidebar = document.querySelector("openclaw-app-sidebar");
       sidebarRegistration.restore();
@@ -539,12 +545,12 @@ function installColdLoadProbes(
       }
       if (solidSidebarOwner) {
         const owner = solidSidebarOwner;
-        for (const method of ["requestUpdate", "prepareRender", "commitRender"] as const) {
+        for (const method of ["invalidate", "prepareRender", "commitRender"] as const) {
           const original = owner[method];
           sidebarLifecycleOriginals.set(method, original);
           owner[method] = function (this: ProbeInit.SolidSidebarProbeOwner) {
             const connected = this.isConnected;
-            if (method === "requestUpdate" && connected) {
+            if (method === "invalidate" && connected) {
               const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
               const key = `${liveKind} :: ${stack}`;
               if (sidebarOwnerStacks.has(key) || sidebarOwnerStacks.size < 100) {
@@ -615,7 +621,8 @@ function installColdLoadProbes(
         ),
         stacks: Object.fromEntries(liveStacks),
         sidebarInvalidations: Object.fromEntries(liveOrigins),
-        solidChat: chatProbe.read(),
+        ownerProbes: input.ownerProbes !== false,
+        solidChat: input.ownerProbes === false ? null : chatProbe.read(),
         solidSidebar: solidSidebarOwner
           ? {
               measurement: "owner-invalidations-and-projection-lifecycle-passes",

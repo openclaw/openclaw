@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
 import * as tmpDirs from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { NodeBootstrapArtifactWorkerTasks } from "./node-bootstrap-artifact-contract.js";
 import {
   buildId,
   longEntryPath,
@@ -20,10 +21,15 @@ import {
   type OwnedRuntimeChunk,
 } from "./node-bootstrap-artifact.test-support.js";
 
-// Keep byte/race fault injection beside the real builder. The worker suite covers transport.
+// mock-isolation: keep byte/race fault injection beside the builder; the worker suite covers transport.
 vi.mock("./node-bootstrap-artifact-worker.js", async () => {
   const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
-  return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
+  return {
+    prepareNodeArtifactInWorker: (
+      _kind: "bootstrap",
+      { options, temporaryRoot }: NodeBootstrapArtifactWorkerTasks["bootstrap"]["input"],
+    ) => prepareNodeBootstrapArtifact(options, temporaryRoot),
+  };
 });
 
 const { fixture, createProvider, tempDirs } = useNodeBootstrapArtifactFixtures();
@@ -292,6 +298,7 @@ describe("node bootstrap distribution", () => {
           modes.set(entry.path, entry.mode);
         },
       });
+      expect(entries).toContain("package/cli-parent-lifetime.mjs");
       expect(
         entries.some((entry) =>
           /(?:\.env|private\.ts|host-native|\.map|\.buildstamp)$/u.test(entry),

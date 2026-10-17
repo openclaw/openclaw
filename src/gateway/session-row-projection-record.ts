@@ -26,6 +26,7 @@ import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 export type ProjectionOptions = {
@@ -42,7 +43,6 @@ export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
-  runtimeOwnershipRetryPending?: true;
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
@@ -51,11 +51,7 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
   Partial<
     Pick<
       PreparedSessionRowDatabaseFacts,
-      | "acpMeta"
-      | "runtimeOwnership"
-      | "runtimeOwnershipDependencies"
-      | "runtimeOwnershipRetryPending"
-      | "repositoryWorkspace"
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
     >
   >;
 
@@ -74,9 +70,8 @@ export function isPreparedSessionRowDatabaseFacts(
 /** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
 export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
   return (
-    !facts.runtimeOwnershipRetryPending &&
-    (facts.runtimeOwnershipDependencies.length > 0 ||
-      resolveSessionPinnedHarnessId(facts.entry) === undefined)
+    facts.runtimeOwnershipDependencies.length > 0 ||
+    resolveSessionPinnedHarnessId(facts.entry) === undefined
   );
 }
 
@@ -118,6 +113,7 @@ export type Row = {
   profileRevision?: number;
   subagentRevision?: number;
   lastMessagePreview?: string;
+  lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
   fallbackModel?: ReturnType<
     typeof rowProjection.readSessionRowInputs
   >["presentation"]["activeModel"];
@@ -364,6 +360,7 @@ export function renewGeneration(row: Row): Row {
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
     generation: Symbol("row"),
   };
@@ -385,7 +382,7 @@ export function ready(row: Row | undefined): row is MaterializedRow {
 
 export function publishTranscriptFields(
   row: MaterializedRow,
-  fields: Pick<Row, "lastMessagePreview" | "fallbackModel">,
+  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
 ): boolean {
@@ -404,13 +401,20 @@ export function publishTranscriptFields(
   });
   if (
     row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
     isDeepStrictEqual(row.fallbackModel, fallbackModel)
   ) {
     return false;
   }
-  Object.assign(row, { lastMessagePreview: fields.lastMessagePreview, fallbackModel });
+  Object.assign(row, {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+    fallbackModel,
+  });
   row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
   row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
+  row.materialized.source.lastAssistantMessage = fields.lastAssistantMessage;
+  row.materialized.row.lastAssistantMessage = fields.lastAssistantMessage;
   return true;
 }
 
@@ -489,6 +493,7 @@ export function present(
   }
   if (!options.includeLastMessage) {
     row.lastMessagePreview = undefined;
+    row.lastAssistantMessage = undefined;
   }
   return row;
 }
@@ -611,6 +616,7 @@ export function dematerialize(row: Row): Row {
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
   };
 }
@@ -719,6 +725,7 @@ export function acquireSessionRowEntry(params: {
     ...(generation !== row.generation
       ? {
           lastMessagePreview: undefined,
+          lastAssistantMessage: undefined,
           fallbackModel: undefined,
           materialized: undefined,
           preparedAcpMeta: undefined,

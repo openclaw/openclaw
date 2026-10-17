@@ -12,7 +12,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
 registerEnglishCatalog(registerChatCiEnglish);
@@ -120,11 +120,13 @@ function createCiDetails(
     clearTimeout(refreshTimer);
   });
 
+  // Rebind Gateway connection notifications and retire requests from the old client.
   createEffect(
     () => props.gateway,
     (gateway) => {
       connection.transition(gateway?.snapshot ?? { client: null, phase: "stopped" });
       reset();
+      // Revoke in-flight request scopes on every connection edge, before later acknowledgments.
       const stop = gateway?.subscribe((snapshot) => {
         if (connection.transition(snapshot)) {
           reset();
@@ -144,10 +146,9 @@ function createCiDetails(
       props.pullRequest?.headSha,
     ]),
   );
-  const currentSessionKey = createMemo(() => props.sessionKey);
-  const presented = createMemo(() => props.presented);
+  // Session and visibility changes control the external checks request and disclosure.
   createEffect(
-    () => [currentSessionKey(), targetKey(), presented()] as const,
+    () => [props.sessionKey, targetKey(), props.presented] as const,
     ([sessionKey, nextTarget], previous) => {
       if (target !== nextTarget) {
         // Head changes refresh the same open monitor; session changes dismiss it.

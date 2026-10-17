@@ -26,15 +26,22 @@ deny rules still apply.
 }
 ```
 
-Install a current canonical Auto Review package through the managed skill
-installation or skill library. The sandbox must provide `/usr/bin/python3` and
-a protected, read-only copy of that selected package. A repository-local skill
+Install a current canonical Auto Review package in the Gateway user’s
+`~/.agents/skills/autoreview`, through the managed skill installation, or in a
+skill library. The personal `~/.agents/skills` directory is discovered only when
+the Gateway uses its default state directory; a custom state directory needs a
+managed installation or skill library. The sandbox must provide `/usr/bin/python3`
+and a protected, read-only copy of the selected package. A repository-local skill
 named `autoreview` does not qualify. The tool is unavailable when those bindings
 or the calling user's model authority are absent.
 The backend must enforce read-only resource mounts; SSH sandbox file uploads do
 not qualify. Mounts or tmpfs overlays that replace the selected package also make
 it unavailable.
-Writable aliases of the package's backing files also disqualify it.
+The original selected package must not be writable through the guest's workspace
+or mounts. A read-only synchronized copy does not make a guest-writable source
+trusted. Installer symlinks remain supported when their canonical targets are
+host-only or read-only; writable aliases of either the original or copied package
+disqualify it. Move an affected installation to a host-only or read-only location.
 
 The canonical skill discovers the enabled tool and calls it at its required
 checkpoint. If the tool is unavailable, enable the narrow capability or repair

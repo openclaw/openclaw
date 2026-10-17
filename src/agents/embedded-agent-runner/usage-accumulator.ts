@@ -15,6 +15,7 @@ export type UsageAccumulator = {
   usageReport?: NormalizedUsage["usageReport"];
   /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
   cost: NormalizedUsage["cost"] | "unavailable";
+  costStatus?: NormalizedUsage["costStatus"];
   /** Counts every attempt, including retries. */
   assistantTurns: number;
   /** Omitted until an attempt reports a tool-search/code-mode catalog. */
@@ -37,6 +38,12 @@ export const mergeUsageIntoAccumulator = (
   target: UsageAccumulator,
   usage: NormalizedUsage | undefined,
 ) => {
+  if (usage?.costStatus) {
+    target.costStatus = usage.costStatus;
+    if (usage.costStatus === "unavailable") {
+      target.cost = "unavailable";
+    }
+  }
   if (usage?.usageReport?.state === "unavailable") {
     target.usageReport = usage.usageReport;
     target.cost = "unavailable";
@@ -127,5 +134,8 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
     total: usage.usageReport ? usage.total : usage.total || derivedTotal || undefined,
     ...(cost ? { cost: { ...cost } } : {}),
+    ...(usage.costStatus
+      ? { costStatus: usage.cost === "unavailable" ? "unavailable" : "complete" }
+      : {}),
   };
 };

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -131,6 +132,7 @@ export function createCodexLifecycleHarness(options: {
           method: "thread/status/changed",
           params: { threadId, status: { type: "notLoaded" } },
         });
+        harness.send({ method: "thread/closed", params: { threadId } });
       }
       return response;
     }
@@ -434,6 +436,10 @@ function stubEmptyCodexSkillCatalog(client: CodexAppServerClient): void {
       : request(method, params, options)) as CodexAppServerClient["request"];
   if (typeof client.addNotificationHandler !== "function") {
     client.addNotificationHandler = () => () => undefined;
+  }
+  if (typeof client.getInstanceId !== "function") {
+    const instanceId = randomUUID();
+    client.getInstanceId = () => instanceId;
   }
   clientsWithEmptySkillCatalog.add(client);
 }

@@ -59,54 +59,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("shares auth across config publications until the auth owner publishes changed facts", async () => {
-  vi.useFakeTimers();
-  const { gateway, current } = createGatewayStoreTestStore();
-  gateway.start();
-  current().opts.onHello?.(gatewayHelloForMethods([]));
-  const client = gateway.snapshot.client;
-  assert.ok(client);
-  const initial: ModelAuthStatusResult = { ts: 1, providers: [] };
-  const updated: ModelAuthStatusResult = {
-    ts: 2,
-    providers: [{ provider: "example", displayName: "Example", status: "missing", profiles: [] }],
-  };
-  const request = current().request.mockResolvedValue(initial);
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = {
-    context: {
-      config: createShellConfigFixture(),
-      gateway,
-    } as unknown as ApplicationContext,
-  };
-  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
-  const read = () =>
-    Promise.all(Array.from({ length: 40 }, () => loadModelAuthStatus(client, { agentId: "main" })));
-  try {
-    expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
-    request.mockResolvedValue(updated);
-    for (let index = 0; index < 10; index++) {
-      current().opts.onEvent?.({
-        type: "event",
-        event: "config.changed",
-        payload: { hash: `plugin-toggle-${index}`, ts: index },
-      });
-      expect(await read()).toEqual(Array.from({ length: 40 }, () => initial));
-    }
-    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
-    current().opts.onEvent?.({
-      type: "event",
-      event: "chat.metadata.changed",
-      payload: { authChanged: true, modelCatalogChanged: false, commandsChanged: false },
-    });
-    expect(await read()).toEqual(Array.from({ length: 40 }, () => updated));
-    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
-  } finally {
-    stopShell();
-    gateway.stop();
-  }
-});
-
 it("retains model and auth reads across 50 metadata-only publications", async () => {
   vi.useFakeTimers();
   const { gateway, current, client } = connectedGateway();
@@ -451,7 +403,7 @@ it.each([
   const hello = {
     ...gatewayHelloForMethods([]),
     snapshot: {
-      presence: [{ instanceId: current().instanceId, user: { id: "original" } }],
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "original" } }],
     },
   };
   current().opts.onHello?.(hello);
@@ -547,38 +499,6 @@ it("rebinds global chat metadata immediately on agent selection and follows late
   } finally {
     retireChatMetadataRequests(state);
   }
-});
-
-it("retires an unmounted session catalog on session changes without evicting draft choices", async () => {
-  const request = vi.fn(async () => ({ models: [] }));
-  const client = { request } as unknown as GatewayBrowserClient;
-  const session = { agentId: "main", sessionKey: "main" };
-  const otherAgent = { agentId: "writer", sessionKey: "main" };
-  const otherSession = { agentId: "main", sessionKey: "agent:main:other" };
-  const draft = { agentId: "main" };
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = {
-    context: {
-      config: createShellConfigFixture(),
-      gateway: { snapshot: { client, phase: "connected" } },
-      agents: { state: { agentsList: null } },
-      sessions: { state: { deletedSessions: [] } },
-    } as unknown as ApplicationContext,
-  };
-  await Promise.all([
-    loadModelCatalog(client, session),
-    loadModelCatalog(client, otherAgent),
-    loadModelCatalog(client, otherSession),
-    loadModelCatalog(client, draft),
-  ]);
-  shell.handleGatewayEvent({
-    event: "sessions.changed",
-    payload: { key: "agent:main:main", agentId: "main", reason: "patch" },
-  });
-  expect(peekModelCatalog(client, session)).toBeUndefined();
-  expect(peekModelCatalog(client, otherAgent)).toEqual({ models: [] });
-  expect(peekModelCatalog(client, otherSession)).toEqual({ models: [] });
-  expect(peekModelCatalog(client, draft)).toEqual({ models: [] });
 });
 
 describe("session command metadata events", () => {

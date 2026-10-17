@@ -10,7 +10,7 @@ export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";
-const CHAT_SNAPSHOT_DB_VERSION = 7;
+const CHAT_SNAPSHOT_DB_VERSION = 8;
 
 export function isPersistableChatSnapshotKey(key: string): boolean {
   return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
@@ -33,6 +33,8 @@ function indexedDbFactory(): IDBFactory | null {
   }
 }
 
+// IndexedDB requests own their one-shot listeners; database listeners end when callers close it.
+// Persistence stays independent of any Solid view's lifetime.
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
@@ -48,8 +50,13 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
       }
       if (event.oldVersion < 5) {
         database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
-      } else {
+      } else if (event.oldVersion < 7) {
         request.transaction?.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).clear();
+      }
+      if (event.oldVersion >= 4 && event.oldVersion < 8) {
+        // Retire unbounded transcripts without reading them onto the main thread.
+        request.transaction?.objectStore(CHAT_SNAPSHOT_STORE_NAME).clear();
+        request.transaction?.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).clear();
       }
       // The unified projection replaces this disposable cache; retirement never gates startup.
       try {

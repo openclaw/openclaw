@@ -12,7 +12,6 @@ import {
   type ExecApprovalElement,
   type ExecApprovalProps,
 } from "./exec-approval-solid.tsx";
-import "./exec-approval.ts";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -339,19 +338,31 @@ describe("openclaw-exec-approval", () => {
   // report an open dialog now that approvals surface passively.
   it("records dialogOpen only while the dialog is explicitly open", async () => {
     const { approval, onDecision } = await renderApproval(createExecRequest());
-    const element = approval as ExecApprovalElement & { show(): void; dialogOpen: boolean };
-    expect(element.dialogOpen).toBe(false);
+    const opener = document.createElement("button");
+    container.append(opener);
+    opener.focus();
+    expect(approval.dialogOpen).toBe(false);
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
 
-    element.show();
+    approval.show();
     await approval.updateComplete;
-    expect(element.dialogOpen).toBe(true);
+    expect(approval.dialogOpen).toBe(true);
 
-    const { modal } = await getRenderedModalDialog(container);
-    modal.dispatchEvent(
-      new CustomEvent("modal-cancel", { bubbles: true, composed: true, cancelable: true }),
-    );
+    const { dialog } = await getRenderedModalDialog(container);
+    expect(dialog.open).toBe(true);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     await approval.updateComplete;
-    expect(element.dialogOpen).toBe(false);
+    expect(approval.dialogOpen).toBe(false);
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect(onDecision).not.toHaveBeenCalled();
+
+    approval.show();
+    await approval.updateComplete;
+    const reopened = await getRenderedModalDialog(container);
+    expect(reopened.dialog.open).toBe(true);
+    expect(approval.dialogOpen).toBe(true);
     expect(onDecision).not.toHaveBeenCalled();
   });
 

@@ -23,7 +23,6 @@
     "src/gateway/session-method-policy.ts",
     "src/gateway/operator-scopes.ts",
     "src/shared/gateway-method-policy.ts",
-    "src/gateway/server-methods-list.ts",
     "src/gateway/events.ts"
   ]
 }

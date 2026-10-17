@@ -7,17 +7,18 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type {
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySyncParams,
-  MemoryWorkspaceFiles,
+import {
+  warnPluginSdkDeprecation,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySyncParams,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import { getMemoryManagerLifecycle } from "./lifecycle.js";
+import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -302,6 +303,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.batch = this.resolveBatchConfig();
     if (!transient) {
+      markMemoryIndexingLive();
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
@@ -417,18 +419,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const run = async () => {
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
-        try {
-          await this.publishedDatabase.refreshFacts();
-        } catch (error) {
-          if (params?.force && !hasTargetedSessionSyncParams(params)) {
-            this.markFailedFullReindexRetry({
-              memory: this.sources.has("memory"),
-              sessions: this.sources.has("sessions"),
-            });
-            this.recordFullReindexFailure(this.provider !== null);
-          }
-          throw error;
-        }
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
         let forceFtsOnly =
           this.embeddingBootstrapFailure !== undefined &&
@@ -456,6 +446,19 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           const dbPath = resolveUserPath(this.settings.store.databasePath);
           const lock = await waitForMemoryReindexLock(dbPath, { waitForActive: true });
           try {
+            // A preceding generation may have replaced the index while this sync waited.
+            try {
+              await this.publishedDatabase.refreshFacts();
+            } catch (error) {
+              if (params?.force && !hasTargetedSessionSyncParams(params)) {
+                this.markFailedFullReindexRetry({
+                  memory: this.sources.has("memory"),
+                  sessions: this.sources.has("sessions"),
+                });
+                this.recordFullReindexFailure(this.provider !== null);
+              }
+              throw error;
+            }
             await this.publishedDatabase.closePublicationWorker();
             this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
             try {
@@ -523,10 +526,18 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return this.syncing;
   }
 
-  /** @deprecated Compatibility for released synchronous callers; use statusAsync. */
+  /** @deprecated Use statusAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus {
+    warnPluginSdkDeprecation({
+      family: "memory-status",
+      method: "MemorySearchManager.status",
+      replacement: "MemorySearchManager.statusAsync",
+    });
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
+    }
+    if (this.database.admission?.engine === "postgres") {
+      return this.publishedStatus();
     }
     return this.withPublishedDatabase(() =>
       this.publishedStatus(
@@ -544,14 +555,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       if (options?.includeCounts === false) {
         return this.publishedStatus();
       }
-      const target = this.publishedDatabase.writeOptions;
-      if (!target?.agentId || !target.path) {
+      const { agentId, path: databasePath } = this.publishedDatabase.writeOptions ?? {};
+      if (!agentId || !databasePath) {
         throw new Error("Memory status requires its captured database target");
       }
-      const snapshot = await runMemoryStatus(
-        { agentId: target.agentId, databasePath: target.path },
-        this.statusQuery(),
-      );
+      const snapshot = await runMemoryStatus({ agentId, databasePath }, this.statusQuery());
       return this.publishedStatus(snapshot);
     });
   }

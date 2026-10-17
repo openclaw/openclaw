@@ -187,7 +187,9 @@ export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
       constructor(
         public readonly databasePath: string,
         public override readonly cause?: unknown,
-        holderDetail?: string,
+        public readonly holderDetail?: string,
+        /** Recorded holder identity: diagnostic evidence for waiting, never ownership authority. */
+        public readonly holder?: Pick<LockPayload, "pid" | "role">,
       ) {
         super(
           `OpenClaw state database is busy at ${databasePath}. ${holderDetail ? `${holderDetail} ` : ""}Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
@@ -309,7 +311,12 @@ function acquireOwnerFile(
           pathname,
           holder && isPidAlive(holder.pid) ? "live" : "unknown",
         );
-        throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
+        throw new GatewayStateOwnerContentionError(
+          databasePath,
+          error,
+          holderDetail,
+          holder ? { pid: holder.pid, role: holder.role } : undefined,
+        );
       }
       throw error;
     }
@@ -395,10 +402,17 @@ export function acquireGatewayStateOwner(params: {
       params.databasePath,
       undefined,
       describeGatewayLockHolder(held.payload, pathname, "live"),
+      { pid: held.payload.pid, role: held.payload.role },
     );
   }
   const payload = params.payload
-    ? { ...params.payload, ownerId: params.payload.ownerId ?? randomUUID() }
+    ? {
+        ...(params.payload.role === "sqlite-maintenance"
+          ? defaultPayload(params.databasePath)
+          : {}),
+        ...params.payload,
+        ownerId: params.payload.ownerId ?? randomUUID(),
+      }
     : defaultPayload(params.databasePath);
   const owner: ProcessOwner = {
     kind: "process",

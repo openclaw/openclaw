@@ -175,16 +175,6 @@ export function createSessionRowProjectionFixture(params: {
     },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
-    observeGeneration() {
-      const observedRevision = revision;
-      let active = true;
-      return {
-        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
-        dispose() {
-          active = false;
-        },
-      };
-    },
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);
@@ -305,6 +295,7 @@ export function createSessionRowProjectionFixture(params: {
       policyConfig: cfg,
       modelCatalog,
       rowContext,
+      physicalStorePaths: (path) => [path],
       scope: (options) => {
         const ownerAgentIds = new Set(listAgentIds(cfg));
         return {

@@ -314,7 +314,7 @@ export const LINK_READER_PANEL_ELEMENT = {
   get label() {
     return t("linkReader.title");
   },
-  loadModule: () => import("../components/link-reader-panel.ts"),
+  loadModule: () => import("../components/link-reader-panel.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DASHBOARD_DOCUMENT_ELEMENT = {
@@ -346,7 +346,7 @@ export const EXEC_APPROVAL_ELEMENT = {
   get label() {
     return t("tabs.approvals");
   },
-  loadModule: () => import("../components/exec-approval.ts"),
+  loadModule: () => import("../components/exec-approval-solid.tsx"),
 } satisfies OptionalCustomElement;
 
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {

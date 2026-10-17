@@ -19,12 +19,12 @@ const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it.each([
-    { mode: "roster", theme: "light", touch: false },
-    { mode: "chip", theme: "dark", touch: false },
-    { mode: "roster", theme: "dark", touch: true },
+    { theme: "light", touch: false },
+    { theme: "dark", touch: false },
+    { theme: "dark", touch: true },
   ] as const)(
-    "reveals new children without losing counts or manual collapse in $mode ($theme, touch=$touch)",
-    async ({ mode, theme, touch }) => {
+    "reveals new children without losing counts or manual collapse in chip mode ($theme, touch=$touch)",
+    async ({ theme, touch }) => {
       await suite.withPage(
         { colorScheme: theme, hasTouch: touch, viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
@@ -56,7 +56,7 @@ suite.define(() => {
             },
             {
               key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-              prefs: { sidebarAgentsMode: mode, themeMode: theme, navWidth: 320 },
+              prefs: { sidebarAgentsMode: "chip", themeMode: theme, navWidth: 320 },
             },
           );
           const gateway = await installMockGateway(page, {
@@ -82,7 +82,7 @@ suite.define(() => {
               elements: [surface],
             });
             await writeFile(
-              path.join(suite.artifactDir, "children-expanded-" + mode + "-" + theme + ".png"),
+              path.join(suite.artifactDir, `children-expanded-chip-${theme}-touch-${touch}.png`),
               frame.elements[0]!.png,
             );
           }
@@ -93,13 +93,7 @@ suite.define(() => {
           const toggleBox = await toggle.boundingBox();
           const titleBox = await row.locator(".sidebar-recent-session__title-row").boundingBox();
           expect(toggleBox!.x).toBeGreaterThanOrEqual(titleBox!.x + titleBox!.width);
-          if (mode === "roster") {
-            expect(
-              await row.getByRole("img", { name: "Child sessions: 2", exact: true }).isVisible(),
-            ).toBe(true);
-          } else {
-            expect(await toggle.textContent()).toContain("2");
-          }
+          expect(await toggle.textContent()).toContain("2");
           await toggle.click();
           await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
           const third = sessionRow(

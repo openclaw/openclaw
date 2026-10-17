@@ -5,6 +5,7 @@ import {
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
@@ -15,9 +16,8 @@ import {
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -39,7 +39,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import {
-  preflightGatewaySessionCompaction,
+  prepareGatewaySessionCompaction,
   runGatewaySessionCompaction,
 } from "./sessions-compaction-runner.js";
 import { emitSessionOperation, requireSessionKey } from "./sessions-shared.js";
@@ -138,24 +138,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       }
 
       const lifecycleRevision = entry.lifecycleRevision;
-      const readCurrentEntry = async () => {
-        const latest = await readSessionEntryReadOnlyInWorker(
-          { ...transcriptScope, readConsistency: "latest" },
-          assertRequestCurrent,
-        );
-        assertRequestCurrent();
-        return latest &&
-          latest.sessionId === sessionId &&
-          latest.lifecycleRevision === lifecycleRevision &&
-          !resolveSessionWorkStartError(target.canonicalKey, latest)
-          ? latest
-          : undefined;
-      };
       const queueIdentities = [key, target.canonicalKey, compactPrimaryKey, sessionId];
       const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
       let admissionError: ReturnType<typeof errorShape> | undefined;
       let compactionNoopReason: string | undefined;
       let preparedEntry: InternalSessionEntry | undefined;
+      let preparedSession: PreparedCompactionSession | undefined;
       const terminalSettled = await waitForTerminalSessionRunSettlement({
         context,
         storePath,
@@ -174,22 +162,28 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         prepare: async () => {
           assertRequestCurrent();
           if (maxLines === undefined) {
-            preparedEntry = await readCurrentEntry();
-            if (!preparedEntry) {
+            const prepared = await prepareGatewaySessionCompaction({
+              cfg,
+              entry,
+              abortSignal,
+              agentId: target.agentId,
+              sessionId,
+              sessionKey: target.canonicalKey,
+              sessionStoreKey: compactPrimaryKey,
+              storePath,
+            });
+            preparedEntry = prepared.entry;
+            if (
+              !preparedEntry ||
+              preparedEntry.sessionId !== sessionId ||
+              preparedEntry.lifecycleRevision !== lifecycleRevision ||
+              resolveSessionWorkStartError(target.canonicalKey, preparedEntry)
+            ) {
               admissionError = sessionChangedError();
               return;
             }
-            compactionNoopReason = (
-              await preflightGatewaySessionCompaction({
-                cfg,
-                entry: preparedEntry,
-                agentId: target.agentId,
-                sessionId,
-                sessionKey: target.canonicalKey,
-                sessionStoreKey: compactPrimaryKey,
-                storePath,
-              })
-            )?.reason;
+            preparedSession = prepared.preparedSession;
+            compactionNoopReason = prepared.reason;
             if (compactionNoopReason) {
               return;
             }
@@ -250,10 +244,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             const trimResult = await trimSessionTranscriptForManualCompact(transcriptScope, {
               maxLines,
               authority: {
-                source: composeSessionSourceAssertion([
+                // Router authorization already includes the request's live authority.
+                source:
+                  options.sessionMutationAuthorization?.assertCurrent ??
                   requestAuthority.assertCurrent,
-                  options.sessionMutationAuthorization?.assertCurrent,
-                ]),
                 assertHostCurrent: () => {
                   signal?.throwIfAborted();
                   if (!hasPreparedGatewayDeviceAuthority(client, hasCurrentClientAuthority)) {
@@ -313,6 +307,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             });
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
           let persisted = false;
+          let boundaryTokensAfter: number | undefined;
           let expectedEntry: InternalSessionEntry = latestEntry;
           const assertActive = () => {
             assertRequestCurrent();
@@ -333,13 +328,37 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               },
               {
                 assertActive,
+                preparedSession,
+                // Aliases can share a transcript but own different accounting rows.
+                withCompactionPersistenceAsync:
+                  preparedSession?.sessionTarget.sessionKey === compactPrimaryKey
+                    ? async (prepared) => {
+                        const committed = await persistCompactionBoundaryWithSessionEntryAsync(
+                          prepared.scope,
+                          {
+                            prepared,
+                            tokensAfter: prepared.event.tokensAfter,
+                            transcriptByteCompactionLatch: null,
+                          },
+                          assertActive,
+                        );
+                        expectedEntry = committed.entry;
+                        persisted = true;
+                        boundaryTokensAfter = prepared.event.tokensAfter;
+                        return committed;
+                      }
+                    : undefined,
                 sourceAuthority: { assertActive, operatorAuthority: capturedOperator?.authority },
                 onCommitted: (accepted) => {
                   expectedEntry = accepted.entry;
                 },
               },
             );
-            if (result.ok && result.compacted) {
+            if (
+              result.ok &&
+              result.compacted &&
+              (!persisted || boundaryTokensAfter !== result.result?.tokensAfter)
+            ) {
               const persistedEntry = await applySessionEntryOperation(
                 transcriptScope,
                 {
@@ -351,7 +370,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   },
                   accounting: {
                     compactionKind: result.compactionKind,
-                    tokensAfter: result.result?.tokensAfter,
+                    amount: persisted ? 0 : undefined,
+                    tokensAfter: result.result?.tokensAfter ?? (persisted ? null : undefined),
                     transcriptByteCompactionLatch:
                       result.compactionKind === "native-harness" ? undefined : null,
                   },

@@ -1,11 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  onCleanup,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, onCleanup } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -23,8 +16,8 @@ import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { browserTabTweet } from "./browser-tab-tweet.ts";
 import "../../../styles/session-menu.css";
 import "./browser-tab-card.css";
@@ -39,26 +32,20 @@ type BrowserTabCardProps = {
 function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<BrowserTabCardProps>) {
   const application = useOptionalApplication();
   const menuId = createUniqueId();
-  const projection = projectSource<ApplicationContext | undefined, ApplicationContext | undefined>(
-    untrack(() => props.context ?? application),
-    {
-      read: (context) => context,
-      subscribe: (context, notify) => {
-        const subscriptions = [
-          context?.gateway.subscribe(notify),
-          context?.config.subscribe(notify),
-          context?.theme.subscribe(notify),
-        ];
-        return () => subscriptions.forEach((stop) => stop?.());
-      },
-      equality: "revision",
-    },
-  );
-  createEffect(
-    () => props.context ?? application,
-    (context) => projection.replaceSource(context),
-  );
-  const context = () => projection.read();
+  const sources = createMemo(() => {
+    const context = props.context ?? application;
+    return (
+      context && [
+        projectOwner(context.gateway, (owner) => owner),
+        projectOwner(context.config, (owner) => owner),
+        projectOwner(context.theme, (owner) => owner),
+      ]
+    );
+  });
+  const context = () => {
+    sources()?.forEach((source) => source.read());
+    return props.context ?? application;
+  };
   const [thumbnail, setThumbnail] = createSignal<string>();
   const [pagePreview, setPagePreview] = createSignal<ControlUiLinkPreview>();
   const [failedImages, setFailedImages] = createSignal<ReadonlySet<string>>(new Set<string>());
@@ -83,8 +70,9 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       pageIdentity.url === url,
     );
   };
+  // Fetch browser screenshots and link metadata from the current Gateway client.
   createEffect(
-    () => [context(), props.preview, props.revision, props.latest, projection.revision()] as const,
+    () => [context(), props.preview, props.revision, props.latest] as const,
     ([current, preview, revision, latest]) => {
       const client = current?.gateway.snapshot.client;
       const url = preview?.url;
@@ -167,7 +155,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       );
     }
   };
-  const open = () => (untrack(opensExternally) ? openExternal() : openPanel());
+  const open = () => (opensExternally() ? openExternal() : openPanel());
   const onMenuSelect = (value: string) => {
     const url = host.preview?.url;
     if (!url) {
@@ -246,7 +234,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   return (
     <>
       {data() && (
-        <div class={data()!.tweet ? "card tweet" : "card"}>
+        <div class={["card", { tweet: Boolean(data()!.tweet) }]}>
           {data()!.tweet && (
             <>
               <header class="tweet-header">
@@ -274,7 +262,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
           {data()!.image && !failedImages().has(data()!.image!) && (
             <button
               type="button"
-              class={data()!.image === data()!.currentImage ? "shot" : "shot social"}
+              class={["shot", { social: data()!.image !== data()!.currentImage }]}
               aria-label={data()!.label}
               title={opensExternally() ? t("browser.openExternal") : t("browser.openPanel")}
               data-new-tab-action={opensExternally() ? "" : undefined}

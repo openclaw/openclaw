@@ -459,6 +459,41 @@ describe("Systems workspace", () => {
     expect(enable.disabled).toBe(false);
   });
 
+  it("updates desktop setup when only the configuration owner publishes", async () => {
+    const { controller, context } = harness(async () => [
+      { ...host, desktopSetup: { state: "ready" } },
+    ]);
+    const { page } = await mount(controller);
+    expect(page.querySelector(".systems-state button")?.textContent).toContain(
+      "Enable desktop access in OpenClaw",
+    );
+    const request = vi.spyOn(context.gateway.snapshot.client!, "request");
+    request.mockResolvedValueOnce({
+      config: { desktop: { host: { enabled: true } } },
+      hash: "enabled",
+      valid: true,
+    });
+    await context.runtimeConfig.refresh();
+    await waitForSolid(() =>
+      expect(page.querySelector(".systems-state h2")?.textContent).toBe(
+        "Desktop access is enabled",
+      ),
+    );
+    expect(page.querySelector(".systems-state button")).toBeNull();
+
+    request.mockResolvedValueOnce({
+      config: { desktop: { host: { enabled: false } } },
+      hash: "disabled",
+      valid: true,
+    });
+    await context.runtimeConfig.refresh();
+    await waitForSolid(() =>
+      expect(page.querySelector(".systems-state button")?.textContent).toContain(
+        "Enable desktop access in OpenClaw",
+      ),
+    );
+  });
+
   it.each(["selection", "authority"])(
     "cancels pending desktop enablement when %s changes",
     async (change) => {

@@ -51,6 +51,7 @@ async function openArchivedPage(operatorScopes: string[]) {
     },
   });
   await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
+  await page.getByRole("button", { name: "Filters" }).click();
   const deleteAll = page.getByRole("button", { name: /Delete all archived/ });
   await deleteAll.waitFor();
   return { context, deleteAll, gateway, page };

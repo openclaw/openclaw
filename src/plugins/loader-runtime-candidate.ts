@@ -105,7 +105,7 @@ export function prepareRuntimePluginConfig(
   return preparedConfig.validation;
 }
 
-export function loadRuntimePluginCandidate(params: {
+export function* loadRuntimePluginCandidate(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
   context: PluginLoadCacheContext;
@@ -118,7 +118,7 @@ export function loadRuntimePluginCandidate(params: {
   logger: PluginLogger;
   state: PluginLoadLoopState;
   preparedConfig: PreparedPluginConfig;
-}): void {
+}): Generator<() => Promise<void>, void> {
   const { candidate, manifestRecord, context, state } = params;
   const cliMetadata = params.options.mode === "cli-metadata";
   const { registry } = params.registryBuilder;
@@ -315,7 +315,9 @@ export function loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
+  const beforeConfigValidation = performance.now();
   const validatedConfig = prepareRuntimePluginConfig(params);
+  const configValidationMs = performance.now() - beforeConfigValidation;
   if (!validatedConfig.ok) {
     params.logger.error(
       `[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`,
@@ -328,6 +330,7 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const beforeArtifactPreparation = performance.now();
   const artifactParams = {
     pluginId,
     rootDir: pluginRoot,
@@ -485,6 +488,7 @@ export function loadRuntimePluginCandidate(params: {
   let failurePhase: "load" | "register" = "load";
   let failed = false;
   const beforeModuleLoad = performance.now();
+  const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
   try {
     // Top-level code may execute before module evaluation throws, so record the
     // import attempt before invoking the loader.
@@ -493,6 +497,17 @@ export function loadRuntimePluginCandidate(params: {
     }
     state.pluginLoadAttemptCount++;
     params.logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
+    if (!recovery && candidate.origin !== "bundled") {
+      // Host callers await acquisition after selection and policy checks. Synchronous
+      // CLI consumers skip this step and use the same loader's inline acquisition.
+      yield () =>
+        params.loadPluginModule.prepare(safeSource, {
+          record,
+          rootDir: moduleRoot,
+          registry,
+          standalone: manifestRecord.manifestPath === candidate.source,
+        });
+    }
     const loadPluginModule = (source: string) => {
       if (recovery) {
         let instance = getPluginInstance(record);
@@ -670,6 +685,8 @@ export function loadRuntimePluginCandidate(params: {
     const registerMs =
       beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
     detailPluginStartupTrace(params.options.startupTrace, record.id, [
+      ["configValidationMs", configValidationMs],
+      ["artifactPreparationMs", artifactPreparationMs],
       ["loadMs", moduleLoadMs || elapsed],
       ["loadFailedCount", failed && failurePhase === "load" ? 1 : 0],
       ...(registerMs === undefined

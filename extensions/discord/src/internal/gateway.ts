@@ -14,7 +14,7 @@ import {
 import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type * as ws from "ws";
-import { Plugin, type Client } from "./client.js";
+import type { Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
 import { mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
@@ -60,7 +60,7 @@ const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
 const MAX_RECONNECT_ATTEMPTS = 50;
 
-export class GatewayPlugin extends Plugin implements GatewayPluginContract {
+export class GatewayPlugin implements GatewayPluginContract {
   readonly id = "gateway";
   protected client?: Client;
   readonly options: GatewayPluginContract["options"];
@@ -91,7 +91,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   );
 
   constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {
-    super();
     this.options = {
       ...options,
       intents: options.intents ?? 0,
@@ -111,7 +110,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     return this.voiceStateCache.takeTransition(state);
   }
 
-  override async registerClient(client: Client): Promise<void> {
+  async registerClient(client: Client): Promise<void> {
     this.client = client;
     this.shouldReconnect = true;
     this.connect(false);

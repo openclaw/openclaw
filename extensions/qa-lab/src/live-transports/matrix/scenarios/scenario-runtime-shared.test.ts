@@ -1,5 +1,6 @@
 // QA Lab Matrix tests cover scenario runtime shared plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 import {
   buildMatrixReplyArtifact,
   resolveMatrixQaNoReplyWindowMs,
@@ -9,6 +10,7 @@ import {
 
 describe("matrix scenario runtime shared", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
@@ -69,7 +71,7 @@ describe("matrix scenario runtime shared", () => {
           },
         });
       };
-      vi.stubGlobal("fetch", fetchImpl);
+      mockMatrixQaHttp(fetchImpl);
       let settled = false;
       const pending = runNoReplyExpectedScenario({
         accessToken: "token",
@@ -107,7 +109,6 @@ describe("matrix scenario runtime shared", () => {
       } finally {
         await vi.runAllTimersAsync();
         await pending;
-        vi.unstubAllGlobals();
         vi.useRealTimers();
       }
     },

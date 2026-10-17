@@ -115,7 +115,7 @@ function tombstoneCorruptRow(
   now: number,
   reason: "corrupt_payload" | "corrupt_claim",
 ) {
-  executeSqliteQuerySync(
+  return executeSqliteQueryTakeFirstSync(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
@@ -138,59 +138,92 @@ function tombstoneCorruptRow(
         updated_at: now,
       }))
       .where("queue_name", "=", row.queue_name)
-      .where("event_id", "=", row.event_id),
+      .where("event_id", "=", row.event_id)
+      .returningAll(),
   );
 }
 
 export function enqueueChannelIngressInDatabase(
   db: EngineConnection,
   input: ChannelIngressScope & {
-    id: string;
-    payloadJson: string;
-    metadataJson: string | null;
-    receivedAt: number;
+    events: Array<{
+      id: string;
+      payloadJson: string;
+      metadataJson: string | null;
+      receivedAt: number;
+      laneKey?: string;
+    }>;
     now: number;
-    laneKey?: string;
   },
-): { accepted: boolean; row: ChannelIngressRow } {
-  const inserted = executeSqliteQuerySync(
-    db,
-    getQueue(db)
-      .insertInto("channel_ingress_events")
-      .values({
-        queue_name: input.queueName,
-        event_id: input.id,
-        channel_id: input.channelId,
-        account_id: input.accountId,
-        status: "pending",
-        lane_key: input.laneKey ?? null,
-        payload_json: input.payloadJson,
-        metadata_json: input.metadataJson,
-        received_at: input.receivedAt,
-        updated_at: input.now,
-        attempts: 0,
-      })
-      .onConflict((conflict) => conflict.columns(["queue_name", "event_id"]).doNothing()),
-  );
-  let row = selectRow(db, input.queueName, input.id);
-  if (!row) {
-    throw new Error(`Failed to read channel ingress event ${input.queueName}/${input.id}`);
-  }
-  const accepted = affectedRows(inserted) > 0;
-  if (accepted && !baseRecord(row)) {
-    throw new Error(`Corrupt payload_json in channel ingress event ${input.queueName}/${input.id}`);
-  }
-  if (row.status === "claimed" && !claimedRecord(row)) {
-    throw new Error(`Corrupt claimed channel ingress event ${input.queueName}/${input.id}`);
-  }
-  if (row.status === "pending" && !baseRecord(row)) {
-    tombstoneCorruptRow(db, row, input.now, "corrupt_payload");
-    row = selectRow(db, input.queueName, input.id);
-    if (!row) {
-      throw new Error(`Failed to read corrupt ingress tombstone ${input.queueName}/${input.id}`);
+): Array<{ accepted: boolean; row: ChannelIngressRow }> {
+  // Keep the first payload for duplicate IDs within the adapter batch, just as
+  // ordered individual admissions did. Bound each statement's parameter count.
+  const firstById = new Map<string, (typeof input.events)[number]>();
+  for (const event of input.events) {
+    if (!firstById.has(event.id)) {
+      firstById.set(event.id, event);
     }
   }
-  return { accepted, row };
+  const unique = [...firstById.values()];
+  const rows = new Map<string, ChannelIngressRow>();
+  const accepted = new Set<string>();
+  for (let offset = 0; offset < unique.length; offset += 100) {
+    const events = unique.slice(offset, offset + 100);
+    const inserted = executeSqliteQuerySync(
+      db,
+      getQueue(db)
+        .insertInto("channel_ingress_events")
+        .values(
+          events.map((event) => ({
+            queue_name: input.queueName,
+            event_id: event.id,
+            channel_id: input.channelId,
+            account_id: input.accountId,
+            status: "pending",
+            lane_key: event.laneKey ?? null,
+            payload_json: event.payloadJson,
+            metadata_json: event.metadataJson,
+            received_at: event.receivedAt,
+            updated_at: input.now,
+            attempts: 0,
+          })),
+        )
+        .onConflict((conflict) => conflict.columns(["queue_name", "event_id"]).doNothing())
+        .returningAll(),
+    ).rows;
+    for (const row of inserted) {
+      rows.set(row.event_id, row);
+      accepted.add(row.event_id);
+    }
+    const duplicates = events.filter((event) => !rows.has(event.id)).map((event) => event.id);
+    if (duplicates.length) {
+      for (const row of executeSqliteQuerySync(
+        db,
+        selectQueueRows(db, input.queueName).where("event_id", "in", duplicates),
+      ).rows) {
+        if (row.status === "claimed" && !claimedRecord(row)) {
+          throw new Error(
+            `Corrupt claimed channel ingress event ${input.queueName}/${row.event_id}`,
+          );
+        }
+        if (row.status === "pending" && !baseRecord(row)) {
+          const repaired = tombstoneCorruptRow(db, row, input.now, "corrupt_payload");
+          if (repaired) {
+            rows.set(row.event_id, repaired);
+          }
+        } else {
+          rows.set(row.event_id, row);
+        }
+      }
+    }
+  }
+  return input.events.map((event) => {
+    const row = rows.get(event.id);
+    if (!row) {
+      throw new Error(`Failed to read channel ingress event ${input.queueName}/${event.id}`);
+    }
+    return { accepted: accepted.delete(event.id), row };
+  });
 }
 
 export function claimChannelIngressInDatabase(
@@ -200,15 +233,7 @@ export function claimChannelIngressInDatabase(
 ): ChannelIngressRow | null {
   // Start the lease after worker admission, not while waiting for the writer.
   const transitionAt = now();
-  const row = selectRow(db, input.queueName, input.id);
-  if (!row || row.status !== "pending") {
-    return null;
-  }
-  if (!baseRecord(row)) {
-    tombstoneCorruptRow(db, row, transitionAt, "corrupt_payload");
-    return null;
-  }
-  executeSqliteQuerySync(
+  const row = executeSqliteQueryTakeFirstSync(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
@@ -222,9 +247,18 @@ export function claimChannelIngressInDatabase(
       })
       .where("queue_name", "=", input.queueName)
       .where("event_id", "=", input.id)
-      .where("status", "=", "pending"),
+      .where("status", "=", "pending")
+      .returningAll(),
   );
-  return selectRow(db, input.queueName, input.id) ?? null;
+  if (!row) {
+    return null;
+  }
+  if (!baseRecord(row)) {
+    // The claim and corrupt-payload tombstone settle in the same worker transaction.
+    tombstoneCorruptRow(db, row, transitionAt, "corrupt_payload");
+    return null;
+  }
+  return row;
 }
 
 export function claimNextChannelIngressInDatabase(
@@ -548,7 +582,7 @@ export function resubmitChannelIngressInDatabase(
   if (row.payload_json === "null" || !parseFailedPayload(row.payload_json).ok) {
     return { kind: "unrecoverable", row };
   }
-  executeSqliteQuerySync(
+  const updated = executeSqliteQueryTakeFirstSync(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
@@ -568,9 +602,9 @@ export function resubmitChannelIngressInDatabase(
       })
       .where("queue_name", "=", input.queueName)
       .where("event_id", "=", input.id)
-      .where("status", "=", "failed"),
+      .where("status", "=", "failed")
+      .returningAll(),
   );
-  const updated = selectRow(db, input.queueName, input.id);
   if (!updated) {
     throw new Error(
       `Failed to read resubmitted channel ingress event ${input.queueName}/${input.id}`,

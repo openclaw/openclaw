@@ -519,7 +519,8 @@ describe("CronPage lifecycle", () => {
         await page.settle();
         await waitForCronPage(() =>
           expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
-            change === "reconnect" ? 2 : 1,
+            // A replacement source invalidates the catalog, so its reader cannot join the old read.
+            change === "reconnect" || change === "gateway source" ? 2 : 1,
           ),
         );
         const count = request.mock.calls.length;

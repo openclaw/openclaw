@@ -287,10 +287,12 @@ export function createModelProviders(
     notify();
   }
 
+  // Route results drive the Gateway loading owner while the page stays mounted.
   createEffect(
     () => ({ routeData: inputs.routeData, pending: inputs.loaderPending ?? false }),
     (value) => synchronizeRoute(value.routeData, value.pending),
   );
+  // Dispatch deferred login/catalog requests once their owner admits them.
   createEffect(
     () => ({
       revision: projection.revision(),
@@ -302,6 +304,7 @@ export function createModelProviders(
       if (!connected) {
         return;
       }
+      syncConfig();
       if (pendingConnection && state.data && canMutate() && !core.loading) {
         pendingConnection = false;
         void login.open();
@@ -311,22 +314,20 @@ export function createModelProviders(
       }
     },
   );
+  // The catalog cache subscription belongs to the current Gateway client.
   createEffect(
     () => gatewayState.read().snapshot.client,
     (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),
   );
+  function syncConfig() {
+    if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
+      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
+    profileActions.flushPendingOrders();
+  }
   onSettled(() => {
     connected = true;
     gateway.connect();
-    const syncConfig = () => {
-      if (
-        !context.runtimeConfig.state.configSnapshot &&
-        !context.runtimeConfig.state.configLoading
-      ) {
-        void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-      }
-      profileActions.flushPendingOrders();
-    };
     const syncAgent = () => {
       syncSelectedAgent();
       installedAgents.synchronize();
@@ -339,10 +340,9 @@ export function createModelProviders(
           void refresh("publication");
         }
       }),
+      // Config-change events refresh installed agents after externally committed enablement changes.
       installedAgents.subscribe(context.gateway),
-      context.runtimeConfig.subscribe(syncConfig),
-      context.overlays.subscribe(() => profileActions.flushPendingOrders()),
-      context.agents.subscribe(syncAgent),
+      // Selection receipts retire probes, logins, confirmations, and queued orders for the old agent.
       context.settingsAgentSelection.subscribe(syncAgent),
     ];
     syncConfig();

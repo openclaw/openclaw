@@ -10,7 +10,8 @@ import {
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
-import { resolveCodexCommandDeps } from "../command-handler-deps.js";
+import { createCodexCommandHost } from "../command-host.test-support.js";
+import * as commandRpc from "../command-rpc.js";
 import {
   claimCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -373,8 +374,8 @@ async function createManualResumeFixture(
     if (method === "thread/read") {
       if (options.receipt === "stale") {
         await harness.notify({
-          method: "thread/status/changed",
-          params: { threadId, status: { type: "notLoaded" } },
+          method: "thread/closed",
+          params: { threadId },
         });
       }
       return {
@@ -393,10 +394,9 @@ async function createManualResumeFixture(
       if (options.receipt !== "none" && options.receipt !== "stale") {
         unloaded = options.receipt !== "unrelated";
         await harness.notify({
-          method: "thread/status/changed",
+          method: "thread/closed",
           params: {
             threadId: options.receipt === "unrelated" ? "other-thread" : threadId,
-            status: { type: "notLoaded" },
           },
         });
       }
@@ -458,32 +458,30 @@ async function createManualResumeFixture(
   }
   const params = { ...createParams(sessionFile, workspaceDir), agentDir };
   registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+  vi.spyOn(commandRpc, "codexControlRequest").mockImplementation(
+    async (_pluginConfig, method, requestParams, requestOptions) => {
+      await requestOptions?.beforeRequest?.(
+        <T>({
+          method: preflightMethod,
+          requestParams: preflightParams,
+        }: {
+          method: string;
+          requestParams?: unknown;
+        }) => client.request<T>(preflightMethod, preflightParams, { timeoutMs: 60_000 }),
+        client,
+        { assertCurrent: () => undefined },
+      );
+      const result = await client.request<JsonValue>(method, requestParams, { timeoutMs: 60_000 });
+      await requestOptions?.onResponse?.(result, client, {
+        authProfileId: undefined,
+        assertCurrent: () => undefined,
+      });
+      return result;
+    },
+  );
   const attach = () =>
     resumeThread(
-      resolveCodexCommandDeps({
-        bindingStore: testCodexAppServerBindingStore,
-        codexControlRequest: async (_pluginConfig, method, requestParams, requestOptions) => {
-          await requestOptions?.beforeRequest?.(
-            <T>({
-              method: preflightMethod,
-              requestParams: preflightParams,
-            }: {
-              method: string;
-              requestParams?: unknown;
-            }) => client.request<T>(preflightMethod, preflightParams, { timeoutMs: 60_000 }),
-            client,
-            { assertCurrent: () => undefined },
-          );
-          const result = await client.request<JsonValue>(method, requestParams, {
-            timeoutMs: 60_000,
-          });
-          await requestOptions?.onResponse?.(result, client, {
-            authProfileId: undefined,
-            assertCurrent: () => undefined,
-          });
-          return result;
-        },
-      }),
+      createCodexCommandHost(),
       {
         channel: "test",
         isAuthorizedSender: true,

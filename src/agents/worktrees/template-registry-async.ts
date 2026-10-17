@@ -1,8 +1,13 @@
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
+import { readWorktreeRegistryCommand } from "./registry-read.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
 
 type TemplateOperation = Extract<
@@ -67,38 +72,51 @@ async function runTemplateCommand<Key extends TemplateOperation>(
   return outcome.value;
 }
 
-export function readTemplateAsync(
+async function runTemplateReadCommand<
+  Command extends Extract<OpenClawStateReadCommand, { type: `worktrees.templates.${string}` }>,
+>(env: NodeJS.ProcessEnv, command: Command, commitGuard?: () => void) {
+  const context = captureOpenClawStateReadWorkerContext({ env });
+  commitGuard?.();
+  const reply = await readWorktreeRegistryCommand(context, command);
+  commitGuard?.();
+  return reply;
+}
+
+export async function readTemplateAsync(
   env: NodeJS.ProcessEnv,
   cacheKey: string,
   commitGuard?: () => void,
 ): Promise<WorktreeTemplateRecord | undefined> {
-  return runTemplateCommand(
+  const reply = await runTemplateReadCommand(
     env,
     { type: "worktrees.templates.read", input: { cacheKey } },
     commitGuard,
   );
+  return reply?.record;
 }
 
-export function hasTemplatesAsync(
+export async function hasTemplatesAsync(
   env: NodeJS.ProcessEnv,
   commitGuard?: () => void,
 ): Promise<boolean> {
-  return runTemplateCommand(
+  const reply = await runTemplateReadCommand(
     env,
     { type: "worktrees.templates.has", input: undefined },
     commitGuard,
   );
+  return reply?.has ?? false;
 }
 
-export function listTemplatesAsync(
+export async function listTemplatesAsync(
   env: NodeJS.ProcessEnv,
   commitGuard?: () => void,
 ): Promise<WorktreeTemplateRecord[]> {
-  return runTemplateCommand(
+  const reply = await runTemplateReadCommand(
     env,
     { type: "worktrees.templates.list", input: undefined },
     commitGuard,
   );
+  return reply?.records ?? [];
 }
 
 export function reserveTemplateAsync(

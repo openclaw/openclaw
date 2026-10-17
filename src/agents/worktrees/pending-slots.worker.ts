@@ -10,6 +10,7 @@ import {
 } from "../../infra/state-lease-process-owner.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { WORKTREE_CREATE_LEASE_SCOPE, WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 import { listRegistryWorktreesInDatabase } from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -59,7 +60,7 @@ function isPendingRecord(value: unknown): value is ManagedWorktreeRecord {
 }
 
 /** One statement observes publication as either pending or live, never neither or both. */
-export function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
+function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
   const k = query(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -89,7 +90,7 @@ export function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
   );
 }
 
-export function readPendingWorktreesInDatabase(db: EngineConnection): PendingWorktreeSlot[] {
+function readPendingWorktreesInDatabase(db: EngineConnection): PendingWorktreeSlot[] {
   return readSlots(db).map(({ record, state }) => ({ record, state }));
 }
 
@@ -227,3 +228,14 @@ export function publishPendingWorktreeInDatabase(
   }
   releasePendingWorktreeInDatabase(db, { id }, leases);
 }
+
+export const pendingWorktreeReadOperations = {
+  "worktrees.slotCount": (_input: undefined, db) => ({
+    type: "worktrees.slotCount" as const,
+    count: readWorktreeSlotCountInDatabase(db),
+  }),
+  "worktrees.pendingSlots": (_input: undefined, db) => ({
+    type: "worktrees.pendingSlots" as const,
+    records: readPendingWorktreesInDatabase(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;

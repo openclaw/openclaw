@@ -47,6 +47,7 @@ beforeEach(() => {
       run: async () => undefined,
       failure: () => undefined,
       isPrepared: () => false,
+      getPendingNativeOpen: () => undefined,
       getPendingPreparation: () => undefined,
       captureClaim: () => {
         throw new Error("Unused native claim");

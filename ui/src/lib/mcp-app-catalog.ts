@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createStore, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createStore, onCleanup } from "solid-js";
 import type {
   McpAppDiscoverResult,
   McpAppDiscoveredServer,
@@ -78,8 +78,7 @@ export function createMcpAppCatalog(
       draft.error = null;
       draft.loading = false;
     });
-    // The identity memo owns reactivity; each request snapshots target and live authority.
-    untrack(() => void refresh());
+    void refresh();
   });
   const unsubscribe = context.gateway.subscribeEvents((event) => {
     if (event.event === "config.changed") {

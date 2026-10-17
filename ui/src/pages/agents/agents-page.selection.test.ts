@@ -7,6 +7,7 @@ import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createBrowserHistory } from "../../app/browser.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { agentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
@@ -332,7 +333,7 @@ describe("AgentsPage routing", () => {
   });
 
   it.each(["same target", "different target", "excluded target", "profile", "source"])(
-    "retains an identity draft through discovery retirement only for its current owner (%s)",
+    "retains an identity draft for its original agent and profile through selection changes (%s)",
     (change) => {
       const listeners = new Set<() => void>();
       const client = {
@@ -387,7 +388,7 @@ describe("AgentsPage routing", () => {
           change === "excluded target" ? "research" : "main",
         );
         expect(page.read().overview.identityDraft.name).toBe(
-          change === "same target" ? "Lunar museum guide" : null,
+          change === "same target" || change === "different target" ? "Lunar museum guide" : null,
         );
       } finally {
         page.dispose();
@@ -496,13 +497,45 @@ describe("AgentsPage routing", () => {
     page.read().overview.onIdentityFieldChange("name", "Main draft");
 
     page.read().overview.onIdentitySave();
-    expect(runExternalMutation).toHaveBeenCalledOnce();
+    await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
     selection.set("research");
     admission.resolve();
     await runExternalMutation.mock.results[0]?.value;
 
     expect(request).not.toHaveBeenCalled();
     expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+    page.dispose();
+  });
+
+  it("does not dispatch a queued identity write after operator access is revoked", async () => {
+    const admission = deferred();
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "main"));
+    const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
+      async (task, options) => {
+        await admission.promise;
+        if (!options?.canDispatch?.()) {
+          return { ok: false, reason: "rejected", error: "Access changed." };
+        }
+        return { ok: true, value: await task(client), refresh: { ok: true } };
+      },
+    );
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      runtimeConfig: { subscribe: () => () => undefined, runExternalMutation },
+    } as unknown as ApplicationContext;
+    const page = createAgentsPage(context);
+    page.read().overview.onIdentityFieldChange("name", "Private draft");
+    page.read().overview.onIdentitySave();
+    await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+
+    currentGateway.snapshot.hello = gatewayHelloForMethods(["agents.update"], ["operator.read"]);
+    admission.resolve();
+    await runExternalMutation.mock.results[0]?.value;
+
+    expect(request).not.toHaveBeenCalled();
     page.dispose();
   });
 });

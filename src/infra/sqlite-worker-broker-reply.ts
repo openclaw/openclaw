@@ -470,12 +470,12 @@ export function receiveSqliteWorkerReply(
       const refusedOpen =
         job.request.type === "open" && reply.openOutcome === "refused-before-agent-open";
       const failure =
-        refusedOpen || (job.request.type === "open" && reply.admissionRefused)
+        refusedOpen || reply.admissionRefused
           ? toErrorObject(job.operationAdmission?.admission.failure ?? error, error.message)
           : error;
       owner.fail(
         failure,
-        job.request.type !== "execute" ? failure : undefined,
+        job.request.type !== "execute" || reply.admissionRefused ? failure : undefined,
         refusedOpen ? "refused-before-agent-open" : undefined,
       );
       return;

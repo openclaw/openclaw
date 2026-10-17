@@ -246,13 +246,11 @@ export async function readCodexSessionTranscript(params: {
         await invoke(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, { cursor, limit }),
       )
     : await readLegacyCodexTranscriptPage(
-        async ({ cursor: turnCursor, limit: turnLimit }) =>
-          parseTranscriptPage(
-            await invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
-              cursor: turnCursor,
-              limit: turnLimit,
-            }),
-          ),
+        ({ cursor: turnCursor, limit: turnLimit }) =>
+          invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
+            cursor: turnCursor,
+            limit: turnLimit,
+          }),
         { threadId: params.threadId, cursor, limit },
       );
   const { nodeLabel } = await import("./session-catalog-node-continue.js");

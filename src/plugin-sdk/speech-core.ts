@@ -1,5 +1,3 @@
-// Shared speech-provider implementation helpers for bundled and third-party plugins.
-
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "../tts/tts-types.js";
 export type {

@@ -108,7 +108,7 @@ export function projectNodeWorkerNativeInference(
   const workspace = resolveNodeWorkerNativeInferenceWorkspace(snapshot, descriptor);
   return {
     config: {
-      models: [...snapshot.models.values()].map(({ model }) => structuredClone(model)),
+      models: [...snapshot.models.values()].map(({ model }) => model),
       workspace,
     },
     credentials: Object.fromEntries(

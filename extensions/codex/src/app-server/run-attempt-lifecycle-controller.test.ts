@@ -98,7 +98,7 @@ function createTerminalReleaseHarness() {
     const scope = { threadId: "thread-1", turnId: "turn-1" };
     const prepared = prepareCodexServerNotification(notification, scope);
     notifications.noteNotificationReceived(prepared, scope, 0);
-    await notifications.enqueueNotification(prepared, scope);
+    await notifications.enqueueNotification(prepared);
   };
   const completeTurn = () => {
     for (const handler of notificationHandlers) {
@@ -185,7 +185,6 @@ function createTerminalReleaseHarness() {
             },
           },
         }),
-        { threadId: "thread-1", turnId: "turn-1" },
       ),
     order,
     pendingOpenClawDynamicToolCompletionIds,

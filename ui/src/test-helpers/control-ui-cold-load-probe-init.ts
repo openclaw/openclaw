@@ -5,11 +5,11 @@ export type SolidSidebarProbeOwner = {
   readonly hostElement: HTMLElement;
   readonly isConnected: boolean;
   sessionData: SessionDataProbeOwner;
-  requestUpdate(): void;
+  invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
 };
-export type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
+export type SidebarLifecycle = "invalidate" | "prepareRender" | "commitRender";
 export type ProbeMethod = (...args: unknown[]) => unknown;
 type ChatMethod =
   | "requestUpdate"
@@ -39,6 +39,7 @@ export type ChatOwnerRecord = {
 };
 
 export type ColdLoadProbeInput = {
+  ownerProbes?: boolean;
   latencyMs: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;

@@ -13,7 +13,6 @@ import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
 import {
-  cloneBoardSnapshot,
   createBoardWidgetPutResult,
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
@@ -370,7 +369,7 @@ export function applyBoardOpsToDatabase(
   updateWidgetLayouts(database, previous, next, now);
   updateWidgetHeightModes(database, previous, ops);
   deleteRemovedTabs(database, previous, next);
-  return cloneBoardSnapshot(next);
+  return next;
 }
 
 export function putBoardWidgetInDatabase(
@@ -520,5 +519,5 @@ export function grantBoardWidgetInDatabase(
       .where("session_key", "=", sessionKey)
       .where("name", "=", name),
   );
-  return cloneBoardSnapshot(next);
+  return next;
 }

@@ -1,14 +1,14 @@
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { Overlay } from "../../components/overlay-lifecycle.ts";
-import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import * as textareaAnchor from "../../components/textarea-token-anchor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
-} from "../new-session/composer-controller.ts";
+} from "../new-session/composer-textarea.ts";
 import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -21,7 +21,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
-const controllers: NewSessionComposerTextarea[] = [];
+const composerTextareas: NewSessionComposerTextarea[] = [];
 const fixtureDisposals: Array<() => void> = [];
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
@@ -31,13 +31,16 @@ afterEach(async () => {
   } else {
     Reflect.deleteProperty(document, "execCommand");
   }
-  controllers.splice(0).forEach((controller) => controller.disconnect());
+  composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
   await resetComposerFixture();
 });
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation(() => {});
+  vi.spyOn(textareaAnchor, "createTextareaTokenAnchor").mockReturnValue({
+    updateNative() {},
+    close() {},
+  });
   // jsdom has no editing engine. Exercise the browser command's input contract;
   // native undo itself is covered by the real-browser composer suite.
   Object.defineProperty(document, "execCommand", {
@@ -75,13 +78,13 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
-  const controller = createNewSessionComposerTextarea();
+  const composerTextarea = createNewSessionComposerTextarea();
   const attachmentDraft = new NewSessionAttachmentDraft(
     () => redraw(),
     () => {},
   );
   const modelControl = new NewSessionModelControl(() => redraw());
-  controllers.push(controller);
+  composerTextareas.push(composerTextarea);
   const props = createComposerProps({
     canSend: !locked,
     getDraft: () => draft,
@@ -89,7 +92,6 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     onDraftChange: (next) => {
       draft = next;
     },
-    onRequestUpdate: () => redraw(),
   });
   function redraw() {
     if (retired) {
@@ -110,7 +112,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
         requiresModifier,
         submitting: false,
         messageLocked: locked,
-        textareaController: controller,
+        composerTextarea,
         onChange: redraw,
         onInput: (next) => {
           draft = next;
@@ -198,10 +200,14 @@ describe("chat emoji acceptance", () => {
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
     let overlay: Overlay | undefined;
-    vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation((next) => {
-      overlay = next;
+    vi.mocked(textareaAnchor.createTextareaTokenAnchor).mockReturnValue({
+      updateNative(next) {
+        overlay = next;
+      },
+      close() {
+        overlay?.retire();
+      },
     });
-    vi.spyOn(TextareaTokenAnchor.prototype, "close").mockImplementation(() => overlay?.retire());
     const f = fixture(kind);
     f.input("Nice :smi");
     expect(overlay).toBeDefined();

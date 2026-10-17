@@ -448,10 +448,13 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
 
-// These namespaces belong to app documents. /plugins also owns Gateway HTTP
-// routes, so offline admission there stays limited to its exact catalog root.
+// These namespaces belong to app documents. /plugins and /plugin also own Gateway
+// HTTP routes (plugin tabs use /<slug> or /plugin?…), so offline admission there
+// stays limited to the exact roots.
+const GATEWAY_SHARED_ROUTE_IDS: ReadonlySet<RouteId> = new Set(["plugins", "plugin"]);
 export const APP_ROUTE_OFFLINE_PREFIXES = APP_ROUTE_IDS.filter(
-  (routeId) => routeId !== "plugins" && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
+  (routeId) =>
+    !GATEWAY_SHARED_ROUTE_IDS.has(routeId) && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
 ).map((routeId) => `${pathForRoute(routeId)}/`);
 
 const DYNAMIC_ROUTE_MATCHERS = [

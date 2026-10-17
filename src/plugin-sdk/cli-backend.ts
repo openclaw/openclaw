@@ -1,6 +1,3 @@
-/**
- * Public SDK type surface for CLI backend plugins and watchdog defaults.
- */
 export type {
   CliBackendAuthEpochMode,
   CliBackendConfig,

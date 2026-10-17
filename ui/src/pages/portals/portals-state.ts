@@ -93,6 +93,7 @@ export function createPortals(
     },
     equality: "revision",
   });
+  // Connection receipts retire portal requests, probes, and presentation acknowledgements before reconnect.
   const stopGateway = context.gateway.subscribe((value) => {
     if (lifecycle.transition(value)) {
       resetGatewayState();

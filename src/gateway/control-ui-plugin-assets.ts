@@ -87,7 +87,13 @@ function pluginState(record: PluginRecord): BrowserPluginState {
 
 function browserOwners(registry: PluginRegistry): PluginRecord[] {
   return registry.plugins
-    .filter((record) => record.enabled && record.status === "loaded" && record.controlUi)
+    .filter(
+      (record) =>
+        record.enabled &&
+        record.status === "loaded" &&
+        record.controlUi &&
+        record.controlUi.activation !== "settings-only",
+    )
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -96,7 +102,7 @@ async function staticBrowserImports(
   assets: ReadonlyMap<string, PluginControlUiAsset>,
   assetUrl: (name: string) => string,
 ): Promise<string[]> {
-  const { parse } = await import("@babel/parser");
+  const { parse } = await import("acorn");
   const modules = new Map(
     [...assets]
       .filter(([name]) => /\.m?js$/u.test(name))
@@ -112,7 +118,10 @@ async function staticBrowserImports(
     }
     let statements;
     try {
-      statements = parse(asset.body.toString("utf8"), { sourceType: "module" }).program.body;
+      statements = parse(asset.body.toString("utf8"), {
+        ecmaVersion: "latest",
+        sourceType: "module",
+      }).body;
     } catch {
       // Preloading is optional; parser support must not change browser build admission.
       continue;
@@ -126,7 +135,10 @@ async function staticBrowserImports(
         continue;
       }
       const specifier = statement.source?.value;
-      if (!specifier || (!specifier.startsWith("./") && !specifier.startsWith("../"))) {
+      if (
+        typeof specifier !== "string" ||
+        (!specifier.startsWith("./") && !specifier.startsWith("../"))
+      ) {
         continue;
       }
       const target = new URL(specifier, url).href;

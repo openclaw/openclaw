@@ -67,6 +67,7 @@ import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
+import { buildDocumentationSection } from "./system-prompt-documentation.js";
 import { buildMessagingSection, resolveSilentReplyPromptMode } from "./system-prompt-messaging.js";
 import { buildRuntimeLine } from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
@@ -346,6 +347,8 @@ export function buildAgentSystemPrompt(params: {
   projectMemoryBootstrap?: string[];
   /** Prepared repository identities used to filter curated raw context fail-closed. */
   activeProjectKeys?: readonly string[];
+  /** Current repository identity passed to memory prompt sections. */
+  projectKey?: string;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const promptMode = params.promptMode ?? "full";
@@ -534,39 +537,27 @@ export function buildAgentSystemPrompt(params: {
             agentId: runtimeInfo?.agentId,
             agentSessionKey: runtimeInfo?.sessionKey,
             sandboxed: sandboxedRuntime,
+            projectKey: params.projectKey,
           },
           params.preparedMemoryPrompt,
         );
-  const docsPath = params.docsPath?.trim();
-  const sourcePath = params.sourcePath?.trim();
-  const docsReadTool =
-    visibleTools.has("read") || promptSurface === "cli_backend" ? readToolName : undefined;
   const docsSection = isMinimal
     ? []
-    : [
-        "## Documentation",
-        docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
-        docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
-        sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
-        docsPath
-          ? `OpenClaw behavior questions: docs first${docsReadTool ? ` via \`${docsReadTool}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
-          : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
-        hasGateway
-          ? "Config field: use `gateway(config.schema.lookup)` with an exact path only when that action is exposed by the tool schema. Otherwise use `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`."
-          : "Configuration docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
-        sourcePath
-          ? "If docs are silent/stale, say so and inspect local source."
-          : "If docs are silent/stale, say so and inspect GitHub source.",
-        "Diagnosis: run `openclaw status` when possible; ask only if blocked.",
-        "",
-      ].filter((line): line is string => line !== undefined);
+    : buildDocumentationSection({
+        docsPath: params.docsPath,
+        sourcePath: params.sourcePath,
+        readToolName:
+          visibleTools.has("read") || promptSurface === "cli_backend" ? readToolName : undefined,
+        availableTools,
+        sandboxed: sandboxedRuntime,
+      });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
   const preparedContextFiles = prepareContextFilesForPrompt(
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
-    }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+    }).filter((file) => file.path.trim().length > 0),
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);

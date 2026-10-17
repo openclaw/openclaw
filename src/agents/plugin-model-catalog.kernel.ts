@@ -1,4 +1,3 @@
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import type { Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,17 +5,13 @@ import {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
-import {
-  createPluginModelCatalogReadOperations,
-  type PersistedPluginModelCatalog,
-} from "./plugin-model-catalog.read-operation.js";
 
-export type { PersistedPluginModelCatalog } from "./plugin-model-catalog.read-operation.js";
+export type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 
 export const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 export const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
@@ -58,20 +53,6 @@ export function readPluginModelCatalogEntries(
   }, options);
   return result.found ? result.value : [];
 }
-
-export const pluginModelCatalogReadOperations = createPluginModelCatalogReadOperations(
-  (input, context) => {
-    const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const options = { ...context, agentId: normalizeAgentId(input.agentId) };
-    try {
-      return scope.run(options, () =>
-        readPluginModelCatalogEntries(options, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
-      );
-    } finally {
-      scope.close();
-    }
-  },
-);
 
 /** The admitted worker or Doctor transaction owns the connection and commit. */
 export function replacePluginModelCatalogEntriesInDatabase(params: {

@@ -60,11 +60,6 @@ export const storageProcessTestEntrypoints = {
     sourceWorkerName: "lifecycle-tail-retention.test-support",
     distWorkerPath: "infra/lifecycle-tail-retention.test-support.js",
   },
-  sharedStateIdleFixture: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "sqlite-worker-shared-state-idle-fixture.test-support",
-    distWorkerPath: "infra/sqlite-worker-shared-state-idle-fixture.test-support.js",
-  },
   sharedStateWalFixture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../state/openclaw-state-worker-wal.test-support",

@@ -1,6 +1,6 @@
 import { createEffect, lazy, Loading, onSettled, Show } from "solid-js";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { LobsterPetProps } from "./lobster-pet-contract.ts";
 import { LobsterPetOwner } from "./lobster-pet-owner.ts";
 import { LobsterPetScene } from "./lobster-pet-scene-view.tsx";
@@ -15,7 +15,8 @@ const pets = new WeakMap<HTMLElement, LobsterPetOwner>();
 export const LobsterPet = defineSolidBridge<LobsterPetProps>(
   "openclaw-lobster-pet",
   (props, host) => {
-    const pet = pets.get(host) ?? new LobsterPetOwner(host, () => (host.visitsEnabled = false));
+    const pet =
+      pets.get(host) ?? new LobsterPetOwner(host, () => (host.visitsEnabled = false), props);
     pets.set(host, pet);
     const state = projectOwner(pet, (owner) => owner.snapshot()).read;
     onSettled(() => {

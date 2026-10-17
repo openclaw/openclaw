@@ -196,6 +196,7 @@ describe("PostgreSQL schema generation", () => {
     expect((await generatePostgresSchemas(root)).files).toEqual(files);
     expect(Object.keys(files).toSorted()).toEqual(
       [
+        "agent-port.json",
         "agent-runtime.ts",
         "agent.postgres.sql",
         "agent-search-runtime.ts",
@@ -216,6 +217,8 @@ describe("PostgreSQL schema generation", () => {
         "sqlite-daemon-catalogs.json",
         "sqlite-memory-catalogs.ts",
         "sqlite-memory-catalogs.json",
+        "sqlite-client-catalogs.ts",
+        "sqlite-client-catalogs.json",
         "state-port.json",
       ].toSorted(),
     );

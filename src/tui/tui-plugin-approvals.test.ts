@@ -1,17 +1,13 @@
-import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
+import {
+  captureChoicePromptSelector,
+  type TestChoiceSelector as TestSelector,
+} from "./components/choice-prompt.test-support.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
-
-type TestSelector = Component & {
-  items: SelectItem[];
-  onSelect?: (item: SelectItem) => void;
-  onCancel?: () => void;
-  onSelectionChange?: (item: SelectItem) => void;
-  setSelectedIndex: ReturnType<typeof vi.fn<(index: number) => void>>;
-};
 
 function approvalPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -32,12 +28,30 @@ function approvalPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const controllers: Array<ReturnType<typeof createTuiPluginApprovalController>> = [];
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(1_000);
+});
+
+afterEach(async () => {
+  for (const controller of controllers) {
+    controller.dispose();
+  }
+  controllers.length = 0;
+  await new Promise(setImmediate);
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 function createHarness() {
   const selectors: TestSelector[] = [];
   const addSystem = vi.fn();
   const closeOverlay = vi.fn();
   const overlayHandles: OverlayHandle[] = [];
-  const openOverlay = vi.fn((_component: Component) => {
+  const openOverlay = vi.fn((component: Component) => {
+    selectors.push(captureChoicePromptSelector(component));
     const handle = {
       hide: vi.fn(),
       setHidden: vi.fn(),
@@ -53,16 +67,8 @@ function createHarness() {
   const requestRender = vi.fn();
   const resolvePluginApproval = vi.fn().mockResolvedValue({ ok: true });
   const listPluginApprovals = vi.fn().mockResolvedValue([]);
-  const clearTimeoutFn = vi.fn();
-  const timers: Array<{ unref: ReturnType<typeof vi.fn> }> = [];
-  const setTimeoutFn = vi.fn(() => {
-    const timer = { unref: vi.fn() };
-    timers.push(timer);
-    return timer as unknown as NodeJS.Timeout;
-  });
   let agentId = "main";
   let sessionKey = "agent:main:main";
-  let now = 1_000;
   const controller = createTuiPluginApprovalController({
     client: { listPluginApprovals, resolvePluginApproval },
     chatLog: { addSystem },
@@ -71,21 +77,8 @@ function createHarness() {
     openOverlay,
     closeOverlay,
     requestRender,
-    createSelector: (items) => {
-      const selector = {
-        items,
-        setSelectedIndex: vi.fn<(index: number) => void>(),
-        render: () => [],
-        handleInput: () => undefined,
-        invalidate: () => undefined,
-      } satisfies TestSelector;
-      selectors.push(selector);
-      return selector;
-    },
-    nowMs: () => now,
-    setTimeoutFn,
-    clearTimeoutFn,
   });
+  controllers.push(controller);
   return {
     controller,
     selectors,
@@ -96,17 +89,11 @@ function createHarness() {
     requestRender,
     resolvePluginApproval,
     listPluginApprovals,
-    clearTimeoutFn,
-    setTimeoutFn,
-    timers,
     setAgentId: (value: string) => {
       agentId = value;
     },
     setSessionKey: (value: string) => {
       sessionKey = value;
-    },
-    setNow: (value: number) => {
-      now = value;
     },
   };
 }
@@ -300,40 +287,60 @@ describe("TUI plugin approvals", () => {
   it("preserves requested events received while a refresh is in flight", async () => {
     const harness = createHarness();
     const pendingList = deferred<unknown[]>();
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
+    try {
+      harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
 
-    const refresh = harness.controller.refresh();
-    harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
-    pendingList.resolve([]);
-    await refresh;
+      const refresh = harness.controller.refresh();
+      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+      pendingList.resolve([]);
+      await refresh;
 
-    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+      expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    } finally {
+      pendingList.resolve([]);
+      await Promise.allSettled([pendingList.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it("does not resurrect resolved approvals from a stale refresh snapshot", async () => {
     const harness = createHarness();
     const pendingList = deferred<unknown[]>();
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
+    try {
+      harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise);
 
-    const refresh = harness.controller.refresh();
-    harness.controller.handleEvent("plugin.approval.resolved", { id: "plugin:skill-1" });
-    pendingList.resolve([approvalPayload()]);
-    await refresh;
+      const refresh = harness.controller.refresh();
+      harness.controller.handleEvent("plugin.approval.resolved", { id: "plugin:skill-1" });
+      pendingList.resolve([approvalPayload()]);
+      await refresh;
 
-    expect(harness.openOverlay).not.toHaveBeenCalled();
+      expect(harness.openOverlay).not.toHaveBeenCalled();
+    } finally {
+      pendingList.resolve([]);
+      await Promise.allSettled([pendingList.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it("reruns a refresh requested while another refresh is in flight", async () => {
     const harness = createHarness();
     const pendingList = deferred<unknown[]>();
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise).mockResolvedValueOnce([]);
+    try {
+      harness.listPluginApprovals
+        .mockReturnValueOnce(pendingList.promise)
+        .mockResolvedValueOnce([]);
 
-    const firstRefresh = harness.controller.refresh();
-    const secondRefresh = harness.controller.refresh();
-    pendingList.resolve([]);
-    await Promise.all([firstRefresh, secondRefresh]);
+      const firstRefresh = harness.controller.refresh();
+      const secondRefresh = harness.controller.refresh();
+      pendingList.resolve([]);
+      await Promise.all([firstRefresh, secondRefresh]);
 
-    expect(harness.listPluginApprovals).toHaveBeenCalledTimes(2);
+      expect(harness.listPluginApprovals).toHaveBeenCalledTimes(2);
+    } finally {
+      pendingList.resolve([]);
+      await Promise.allSettled([pendingList.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it("binds global-session approvals to the active agent", () => {
@@ -452,24 +459,30 @@ describe("TUI plugin approvals", () => {
   it("does not reopen an approval while its decision is in flight", async () => {
     const harness = createHarness();
     const pendingResolution = deferred<{ ok: true }>();
-    harness.resolvePluginApproval.mockReturnValueOnce(pendingResolution.promise);
-    harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+    try {
+      harness.resolvePluginApproval.mockReturnValueOnce(pendingResolution.promise);
+      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
 
-    harness.selectors[0]?.onSelectionChange?.({ value: "allow-once", label: "Allow once" });
-    harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
-    await vi.waitFor(() => {
-      expect(harness.resolvePluginApproval).toHaveBeenCalledTimes(1);
-    });
+      harness.selectors[0]?.onSelectionChange?.({ value: "allow-once", label: "Allow once" });
+      harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
+      await vi.waitFor(() => {
+        expect(harness.resolvePluginApproval).toHaveBeenCalledTimes(1);
+      });
 
-    harness.listPluginApprovals.mockResolvedValueOnce([approvalPayload()]);
-    await harness.controller.refresh();
+      harness.listPluginApprovals.mockResolvedValueOnce([approvalPayload()]);
+      await harness.controller.refresh();
 
-    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+      expect(harness.openOverlay).toHaveBeenCalledTimes(1);
 
-    pendingResolution.resolve({ ok: true });
-    await vi.waitFor(() => {
-      expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
-    });
+      pendingResolution.resolve({ ok: true });
+      await vi.waitFor(() => {
+        expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
+      });
+    } finally {
+      pendingResolution.resolve({ ok: true });
+      await Promise.allSettled([pendingResolution.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it("removes and refreshes approvals that another client already resolved", async () => {
@@ -516,16 +529,21 @@ describe("TUI plugin approvals", () => {
   });
 
   it("clears the active prompt timer when disposed", () => {
+    const setTimer = vi.spyOn(globalThis, "setTimeout");
     const harness = createHarness();
     harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
 
-    expect(harness.timers[0]?.unref).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    const timer = setTimer.mock.results[0];
+    if (timer?.type !== "return") {
+      throw new Error("Expected the actual approval timer");
+    }
+    expect(timer.value.hasRef()).toBe(false);
 
     harness.controller.dispose();
     harness.controller.dispose();
 
-    expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
-    expect(harness.clearTimeoutFn).toHaveBeenCalledWith(harness.timers[0]);
+    expect(vi.getTimerCount()).toBe(0);
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
   });
 
@@ -534,26 +552,32 @@ describe("TUI plugin approvals", () => {
     async (outcome) => {
       const harness = createHarness();
       const pending = deferred<{ ok: boolean }>();
-      harness.resolvePluginApproval.mockReturnValueOnce(pending.promise);
-      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
-      harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
-      expect(harness.resolvePluginApproval).toHaveBeenCalledExactlyOnceWith(
-        "plugin:skill-1",
-        "deny",
-      );
-      harness.controller.dispose();
-      harness.requestRender.mockClear();
+      try {
+        harness.resolvePluginApproval.mockReturnValueOnce(pending.promise);
+        harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+        harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+        expect(harness.resolvePluginApproval).toHaveBeenCalledExactlyOnceWith(
+          "plugin:skill-1",
+          "deny",
+        );
+        harness.controller.dispose();
+        harness.requestRender.mockClear();
 
-      if (outcome === "failure") {
-        pending.reject(new Error("gateway unavailable"));
-      } else {
-        pending.resolve({ ok: outcome === "success" });
+        if (outcome === "failure") {
+          pending.reject(new Error("gateway unavailable"));
+        } else {
+          pending.resolve({ ok: outcome === "success" });
+        }
+        await pending.promise.catch(() => undefined);
+
+        expect(harness.addSystem).not.toHaveBeenCalled();
+        expect(harness.listPluginApprovals).not.toHaveBeenCalled();
+        expect(harness.requestRender).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve({ ok: false });
+        await Promise.allSettled([pending.promise]);
+        await new Promise(setImmediate);
       }
-      await pending.promise.catch(() => undefined);
-
-      expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.listPluginApprovals).not.toHaveBeenCalled();
-      expect(harness.requestRender).not.toHaveBeenCalled();
     },
   );
 
@@ -561,23 +585,30 @@ describe("TUI plugin approvals", () => {
     const harness = createHarness();
     const pending = deferred<unknown[]>();
     const started = deferred();
-    harness.resolvePluginApproval.mockResolvedValueOnce({ ok: false });
-    harness.listPluginApprovals.mockImplementationOnce(() => {
+    try {
+      harness.resolvePluginApproval.mockResolvedValueOnce({ ok: false });
+      harness.listPluginApprovals.mockImplementationOnce(() => {
+        started.resolve();
+        return pending.promise;
+      });
+      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+      harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+      await started.promise;
+      const refresh = harness.controller.refresh();
+      harness.controller.dispose();
+      harness.addSystem.mockClear();
+      harness.requestRender.mockClear();
+
+      pending.reject(new Error("refresh unavailable"));
+      await refresh.catch(() => undefined);
+
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    } finally {
       started.resolve();
-      return pending.promise;
-    });
-    harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
-    harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
-    await started.promise;
-    const refresh = harness.controller.refresh();
-    harness.controller.dispose();
-    harness.addSystem.mockClear();
-    harness.requestRender.mockClear();
-
-    pending.reject(new Error("refresh unavailable"));
-    await refresh.catch(() => undefined);
-
-    expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.requestRender).not.toHaveBeenCalled();
+      pending.resolve([]);
+      await Promise.allSettled([pending.promise]);
+      await new Promise(setImmediate);
+    }
   });
 });

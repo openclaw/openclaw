@@ -68,7 +68,6 @@ type SettledAgentTurnBase = {
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
   autoCompactionCount: number;
   compaction?: AgentTurnCompaction;
-  didLogHeartbeatStrip: boolean;
   /** Captured before cleanup; late settlements remain in the live receipts below. */
   hasDirectlySentBlockReply?: true;
   /** Delivery receipts for direct tool-flush payloads, including retry custody. */

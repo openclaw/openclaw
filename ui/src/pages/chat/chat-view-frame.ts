@@ -39,7 +39,7 @@ import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -71,7 +71,7 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
-    transcript: ChatTranscriptController;
+    transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
       | null;
@@ -146,6 +146,7 @@ export function createChatViewFrame(props: ChatProps) {
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Focus crosses the transcript boundary into either the native or plugin-owned composer.
   const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
     props.transcript.scrollElement
       ?.closest(".chat")
@@ -196,9 +197,13 @@ export function createChatViewFrame(props: ChatProps) {
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
     onReopen: (itemId, scope) => {
-      const composerState = getChatComposerState(props.paneId);
-      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
-      composerState.questionCollapsed = false;
+      const composer = getChatComposerState(props.paneId);
+      composer.restoreComposerFocus ||= composer.questionTakeoverActive;
+      composer.questionTakeoverActive = false;
+      composer.updatePresentation((draft) => {
+        draft.activeQuestionKey = JSON.stringify([scope, itemId]);
+        draft.questionCollapsed = false;
+      });
     },
   });
   const openImage = props.onOpenImage

@@ -67,6 +67,7 @@ import {
   loadAgentEntryReadOperations,
   loadAgentEntryPatchOperations,
   loadAgentCompoundOperations,
+  loadAgentEntryDeletionOperations,
   loadAgentPurgeOperations,
   loadAgentMaintenanceFinalizationOperations,
   loadAgentNativeBindingOperations,
@@ -442,6 +443,8 @@ function openAgentDatabaseBackend(
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.lifecycle.deletePlan": loadAgentEntryDeletionOperations,
+    "session.lifecycle.delete": loadAgentEntryDeletionOperations,
     "session.agentPurge.prepare": loadAgentPurgeOperations,
     "session.agentPurge.commit": loadAgentPurgeOperations,
     "session.maintenance.finalize": loadAgentMaintenanceFinalizationOperations,
@@ -553,7 +556,15 @@ function openAgentDatabaseBackend(
       return domain.execute(command);
     }
     if (command.type === "database.prepareWrite") {
-      openWriter(true);
+      try {
+        openWriter(true);
+      } catch (error) {
+        // Factory refusal markers must not hide typed causes during lazy preparation.
+        if (!preparingCreation && error instanceof SqliteWorkerOpenRefusedError) {
+          throw error.originalError;
+        }
+        throw error;
+      }
       return undefined;
     }
     if (command.type === "database.walMaintenance") {
@@ -619,7 +630,8 @@ function openAgentDatabaseBackend(
             ? command.input.nativeBindings
             : command.type === "session.entries.replace" ||
                 command.type === "session.agentPurge.commit" ||
-                command.type === "session.maintenance.finalize"
+                command.type === "session.maintenance.finalize" ||
+                command.type === "session.lifecycle.delete"
               ? command.input.nativeBindings
               : undefined;
       if (nativeBindings) {

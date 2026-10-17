@@ -13,7 +13,6 @@ import {
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
-  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 
@@ -146,10 +145,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.available = true;
     document.body.append(panel);
     panel.toggle();
-    const sessions = terminalSessionsForTest(panel);
-    await waitForFast(() => expect(sessions.tabs[0]?.gatewaySessionId).toBe("retained"));
-    const tab = sessions.tabs[0]!;
-    const activeId = sessions.activeId;
+    await waitForFast(() =>
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]'),
+    );
+    const tabId = panel.hostedTabs[0]!.id;
+    const activeId = panel.activeHostedTabId;
     listener?.({
       event: "terminal.data",
       payload: { sessionId: "retained", seq: 6, data: "before" },
@@ -159,29 +159,23 @@ describe("OpenClawTerminalPanel reconnect", () => {
     Object.defineProperty(file, "arrayBuffer", { value: () => read.promise });
     const drop = new Event("drop", { bubbles: true, cancelable: true });
     Object.defineProperty(drop, "dataTransfer", { value: { types: ["Files"], files: [file] } });
-    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
-    expect(panel.terminalPanelUploadController.hasPendingBatch()).toBe(true);
+    panel.querySelector(".tp-viewport")?.dispatchEvent(drop);
+    await waitForFast(() => expect(panel.querySelector(".tp-upload-card")).not.toBeNull());
 
     panel.gatewayConnected = false;
     await panel.updateComplete;
     await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(true));
     expect(panel.terminalPanelOpen).toBe(true);
-    expect(sessions.tabs[0]).toBe(tab);
-    expect(sessions.activeId).toBe(activeId);
+    expect(panel.hostedTabs[0]?.id).toBe(tabId);
+    expect(panel.activeHostedTabId).toBe(activeId);
     expect(terminal.dispose).not.toHaveBeenCalled();
-    expect(panel.terminalPanelUploadController.progress?.state).toBe("failed");
-    expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload-retry")?.disabled).toBe(
-      true,
-    );
+    expect(panel.querySelector(".tp-upload-card--failed")).not.toBeNull();
+    expect(panel.querySelector<HTMLButtonElement>(".tp-upload-retry")?.disabled).toBe(true);
     expect(panel.hostedTabs[0]?.closeDisabled).toBe(true);
-    expect(
-      panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.disabled,
-    ).toBe(true);
-    panel.renderRoot
-      .querySelector(".tabstrip-tab")!
-      .dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
-    await panel.closeHostedTab(tab.id);
-    expect(sessions.tabs[0]).toBe(tab);
+    expect(panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.disabled).toBe(true);
+    panel.querySelector(".tabstrip-tab")!.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
+    await panel.closeHostedTab(tabId);
+    expect(panel.hostedTabs[0]?.id).toBe(tabId);
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]');
     expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
     createGhosttyTerminalMock.mock.calls[0]![0].onData?.(new TextEncoder().encode("do not replay"));
@@ -191,15 +185,13 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.gatewayConnected = true;
     await panel.updateComplete;
     await waitForFast(() => expect(request).toHaveBeenCalledWith("terminal.attach"));
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-error .btn")).not.toBeNull(),
-    );
-    expect(sessions.tabs[0]).toBe(tab);
+    await waitForFast(() => expect(panel.querySelector(".tp-error .btn")).not.toBeNull());
+    expect(panel.hostedTabs[0]?.id).toBe(tabId);
     expect(terminal.setReadOnly).toHaveBeenLastCalledWith(true);
-    panel.renderRoot.querySelector<HTMLButtonElement>(".tp-error .btn")!.click();
+    panel.querySelector<HTMLButtonElement>(".tp-error .btn")!.click();
     await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenLastCalledWith(false));
-    expect(sessions.tabs[0]).toBe(tab);
-    expect(sessions.activeId).toBe(activeId);
+    expect(panel.hostedTabs[0]?.id).toBe(tabId);
+    expect(panel.activeHostedTabId).toBe(activeId);
     expect(createGhosttyTerminalMock).toHaveBeenCalledOnce();
     expect(panel.hostedTabs[0]?.closeDisabled).toBe(false);
     expect(terminal.write.mock.calls.map(([bytes]) => new TextDecoder().decode(bytes))).toEqual([
@@ -208,13 +200,13 @@ describe("OpenClawTerminalPanel reconnect", () => {
     ]);
     expect(request.mock.calls.some(([method]) => method === "terminal.input")).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "terminal.upload")).toBe(false);
-    expect(panel.terminalPanelUploadController.hasPendingBatch()).toBe(true);
+    await waitForFast(() => expect(panel.querySelector(".tp-upload-card")).not.toBeNull());
 
     createGhosttyTerminalMock.mock.calls[0]![0].onData?.(
       new TextEncoder().encode("after reconnect"),
     );
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+      expect(panel.querySelector(".tp-error")?.textContent).toContain(
         "Terminal delivery could not be confirmed",
       ),
     );
@@ -223,8 +215,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.available = false;
     await panel.updateComplete;
     await waitForFast(() => expect(terminal.dispose).toHaveBeenCalledOnce());
-    expect(sessions.tabs).toEqual([]);
-    expect(panel.terminalPanelUploadController.hasPendingBatch()).toBe(false);
+    expect(panel.hostedTabs).toEqual([]);
+    expect(panel.querySelector(".tp-upload-card")).toBeNull();
   });
 
   it.each([
@@ -258,10 +250,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
       panel.available = true;
       document.body.append(panel);
       panel.toggle();
-      const sessions = terminalSessionsForTest(panel);
-      await waitForFast(() => expect(sessions.tabs[0]?.gatewaySessionId).toBe("interrupted"));
+      await waitForFast(() =>
+        expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["interrupted"]'),
+      );
       await panel.updateComplete;
-      const tab = sessions.tabs[0]!;
+      const tabId = panel.hostedTabs[0]!.id;
       armed = true;
       const callbacks = createGhosttyTerminalMock.mock.calls[0]![0];
       if (action === "input") {
@@ -278,18 +271,18 @@ describe("OpenClawTerminalPanel reconnect", () => {
         recoveryScope.mockReturnValue("account-b");
         panel.available = false;
         await panel.updateComplete;
-        await waitForFast(() => expect(sessions.tabs).toEqual([]));
+        await waitForFast(() => expect(panel.hostedTabs).toEqual([]));
       }
       delivery.reject(new Error("connection lost"));
       await delivery.promise.catch(() => undefined);
       await panel.updateComplete;
 
       if (replaced) {
-        expect(sessions.error).toBeNull();
+        expect(panel.querySelector(".tp-error")).toBeNull();
       } else {
-        expect(sessions.tabs[0]).toBe(tab);
+        expect(panel.hostedTabs[0]?.id).toBe(tabId);
         await waitForFast(() =>
-          expect(panel.renderRoot.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
+          expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
             "Terminal delivery could not be confirmed",
           ),
         );
@@ -298,8 +291,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
         await panel.updateComplete;
         await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenLastCalledWith(false));
         await panel.updateComplete;
-        expect(sessions.tabs[0]).toBe(tab);
-        expect(panel.renderRoot.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
+        expect(panel.hostedTabs[0]?.id).toBe(tabId);
+        expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
           "Terminal delivery could not be confirmed",
         );
       }
@@ -375,26 +368,22 @@ describe("OpenClawTerminalPanel reconnect", () => {
         expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
       });
 
-      (
-        panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
-      ).click();
+      (panel.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement).click();
       await waitForFast(() => {
-        expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
-          "detached-agent",
-        );
+        expect(panel.querySelector(".tp-session-menu")?.textContent).toContain("detached-agent");
       });
-      const menuText = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+      const menuText = panel.querySelector(".tp-session-menu")?.textContent;
       expect(menuText).toContain("/work/detached");
       expect(
-        [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
+        [...panel.querySelectorAll<HTMLElement>(".tp-session")]
           .find((row) => row.textContent?.includes("detached-agent"))
           ?.querySelector(".tp-session__state")?.textContent,
       ).toContain("agent");
       expect(menuText).toContain("attached");
       expect(menuText).toContain("current");
-      const detachedRow = [
-        ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
-      ].find((button) => button.textContent?.includes("detached-agent"));
+      const detachedRow = [...panel.querySelectorAll<HTMLButtonElement>(".tp-session")].find(
+        (button) => button.textContent?.includes("detached-agent"),
+      );
       detachedRow?.click();
       await panel.updateComplete;
       await vi.dynamicImportSettled();
@@ -409,8 +398,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
       expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
         "detached history",
       );
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
-      expect(panel.renderRoot.textContent).toContain("codex");
+      expect(panel.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
+      expect(panel.textContent).toContain("codex");
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
         JSON.stringify(["current-1", "detached-1"]),
       );
@@ -598,11 +587,13 @@ describe("OpenClawTerminalPanel reconnect", () => {
     });
     panel.handleToggleRequest(requested);
     panel.handleToggleRequest(requested);
-    const sessions = terminalSessionsForTest(panel);
-    void sessions.attachSessionById("picked-terminal");
-    void sessions.attachSessionById("picked-terminal");
+    const another = new CustomEvent("openclaw:terminal-toggle", {
+      detail: { open: true, terminalSessionId: "another-terminal" },
+    });
+    panel.handleToggleRequest(another);
+    panel.handleToggleRequest(another);
     await panel.updateComplete;
-    const newSession = panel.renderRoot.querySelector<HTMLButtonElement>(
+    const newSession = panel.querySelector<HTMLButtonElement>(
       '[aria-label="New terminal session"]',
     );
     expect(newSession?.disabled).toBe(false);
@@ -613,7 +604,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(requests).toHaveLength(0);
     await waitForFast(() => {
       expect(
-        panel.renderRoot
+        panel
           .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]')
           ?.getAttribute("aria-label"),
       ).toContain("Connecting to session");
@@ -630,13 +621,13 @@ describe("OpenClawTerminalPanel reconnect", () => {
       ),
     ).toEqual([
       { method: "terminal.attach", params: { sessionId: "requested-terminal" } },
-      { method: "terminal.attach", params: { sessionId: "picked-terminal" } },
+      { method: "terminal.attach", params: { sessionId: "another-terminal" } },
       {
         method: "terminal.open",
         params: { agentId: "research", cols: 100, rows: 30 },
       },
     ]);
-    expect(panel.renderRoot.querySelectorAll(".tabstrip-tab__badge")).toHaveLength(1);
+    expect(panel.querySelectorAll(".tabstrip-tab__badge")).toHaveLength(2);
   });
 
   it("cancels captured restore and explicit actions when the panel closes during the fence", async () => {
@@ -796,20 +787,18 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
     await vi.advanceTimersByTimeAsync(10);
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+    expect(panel.querySelector(".tp-error")?.textContent).toContain(
       "Reload this page to continue the terminal action",
     );
     expect(
-      panel.renderRoot.querySelector(
-        'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
-      ),
+      panel.querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]'),
     ).toBeNull();
 
     vi.useRealTimers();
     releaseRefresh?.(false);
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull();
-      expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+      expect(panel.querySelector(".is-live")).not.toBeNull();
+      expect(panel.querySelector(".tp-error")).toBeNull();
     });
   });
 

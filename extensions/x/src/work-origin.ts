@@ -32,6 +32,83 @@ export function openXWorkOrigins(runtime: PluginRuntime) {
   return store;
 }
 
+/** References only: session tools still own inspection, continuation, and live access checks. */
+export async function buildXWorkSessionContext(params: {
+  runtime: PluginRuntime;
+  cfg: OpenClawConfig;
+  accountId: string;
+  conversationId: string;
+  requesterSessionKey: string;
+}): Promise<string> {
+  const { runtime, cfg, requesterSessionKey } = params;
+  // Reuse the bounded origin store; do not maintain a second conversation/session index.
+  const candidates = (await openXWorkOrigins(runtime).entries())
+    .filter(
+      ({ key, value }) =>
+        value.accountId === params.accountId &&
+        value.conversationId === params.conversationId &&
+        value.senderTier === "maintainer" &&
+        parseAgentSessionKey(key)?.rest.startsWith("dashboard:"),
+    )
+    .toSorted((a, b) => b.createdAt - a.createdAt || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .slice(0, 32);
+  if (!candidates.length) {
+    return "";
+  }
+  const readEntry = (sessionKey: string) =>
+    runtime.agent.session.getSessionEntryAsync({
+      sessionKey,
+      agentId: parseAgentSessionKey(sessionKey)?.agentId,
+      storePath: runtime.agent.session.resolveStorePath(cfg.session?.store, {
+        agentId: parseAgentSessionKey(sessionKey)?.agentId,
+      }),
+    });
+  const [source, { resolvePreparedSandboxRuntimeStatus }, visibility] = await Promise.all([
+    readEntry(requesterSessionKey),
+    import("openclaw/plugin-sdk/sandbox"),
+    import("openclaw/plugin-sdk/session-visibility"),
+  ]);
+  const { sandboxed } = resolvePreparedSandboxRuntimeStatus({
+    cfg,
+    sessionKey: requesterSessionKey,
+    preparedSessionEntry: source ?? null,
+  });
+  const checker = visibility.createSessionVisibilityRowChecker({
+    action: "list",
+    requesterSessionKey,
+    visibility: visibility.resolveEffectiveSessionToolsVisibility({ cfg, sandboxed }),
+    a2aPolicy: visibility.createAgentToAgentPolicy(cfg, { sandboxed }),
+  });
+  const references: string[] = [];
+  for (const { key, value } of candidates) {
+    const entry = await readEntry(key);
+    if (
+      !entry ||
+      entry.archivedAt ||
+      entry.incognito ||
+      entry.visibility === "draft" ||
+      entry.initializationPending ||
+      entry.createdVia !== "spawn" ||
+      entry.spawnedBy !== requesterSessionKey ||
+      !checker.check({ key, spawnedBy: entry.spawnedBy }).allowed
+    ) {
+      continue;
+    }
+    // Titles and work transcripts may contain private content; expose only the origin and key.
+    references.push(JSON.stringify({ sessionKey: key, originPostUrl: value.postUrl }));
+    if (references.length === 8) {
+      break;
+    }
+  }
+  return references.length
+    ? [
+        "X work-session references (recent visible sessions started here; not exhaustive):",
+        ...references,
+        "Before starting another work session, determine whether this request continues one of these tasks. The same X thread can contain unrelated tasks; do not route by thread membership alone. For a continuation, inspect the matching session with available authorized session tools and use an available authorized continuation tool. These references do not deliver a message or grant access. If continuation is unavailable or denied, do not spawn a duplicate or claim the work resumed; follow the failure-reporting rules. Keep private work contents out of public replies. Work-session replies to X still require explicit approval.",
+      ].join("\n")
+    : "";
+}
+
 /** Retain the original reply boundary when a work session delegates again. */
 export async function resolveXWorkOrigin(
   runtime: PluginRuntime,

@@ -216,10 +216,6 @@ jobs:
           NODE_OPTIONS: ${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}
         run: pnpm build:ci-artifacts
 
-      - name: Build Control UI on cache miss
-        if: steps.dist-cache.outputs.cache-hit != 'true'
-        run: pnpm ui:build
-
       - name: Verify build artifacts
         shell: bash
         run: |

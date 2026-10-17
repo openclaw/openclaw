@@ -17,7 +17,7 @@ import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
-import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import { createCompletionHandoff } from "./attempt-execution.announce.test-support.js";
 import type { runAgentAttempt } from "./attempt-execution.js";
 
 export function resetCliAttemptFixtureDatabases(suiteRoot: string): void {
@@ -26,7 +26,7 @@ export function resetCliAttemptFixtureDatabases(suiteRoot: string): void {
       continue;
     }
     runOpenClawAgentWriteTransaction(
-      (fixture) => {
+      (fixture) =>
         fixture.db.exec(`
           DELETE FROM session_transcript_fts;
           DELETE FROM session_transcript_fts_rows;
@@ -35,60 +35,39 @@ export function resetCliAttemptFixtureDatabases(suiteRoot: string): void {
           DELETE FROM auth_profile_store;
           DELETE FROM auth_profile_state;
           DELETE FROM cache_entries;
-        `);
-      },
+        `),
       database,
       { operationLabel: "test.attempt-execution.reset" },
     );
   }
 }
 
-/** Model capability and channel discovery fixtures for CLI fallback tests. */
 export function createCliImageCapabilityPlugins(model: string) {
   // MCP still builds message schemas before applying the read-only grant.
   // Keep this capability test independent of bundled Discord action discovery.
-  const pluginRegistry = createTestRegistry([
-    {
-      pluginId: "discord",
-      source: "test",
-      plugin: {
-        ...createChannelTestPluginBase({ id: "discord" }),
-        actions: { describeMessageTool: () => null },
-      } satisfies ChannelPlugin,
-    },
-  ]);
-  const metadataSnapshot = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: "anthropic",
-        providers: ["anthropic"],
-        cliBackends: ["claude-cli"],
-        modelCatalog: {
-          providers: {
-            anthropic: {
-              models: [{ id: model, name: model, reasoning: true, input: ["text", "image"] }],
-            },
-          },
-        },
-      },
-    ],
-  });
+  const plugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "discord" }),
+    actions: { describeMessageTool: () => null },
+  };
+  const pluginRegistry = createTestRegistry([{ pluginId: "discord", source: "test", plugin }]);
+  const input: ("text" | "image")[] = ["text", "image"];
+  const models = [{ id: model, name: model, reasoning: true, input }];
+  const provider = {
+    id: "anthropic",
+    providers: ["anthropic"],
+    cliBackends: ["claude-cli"],
+    modelCatalog: { providers: { anthropic: { models } } },
+  };
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [provider] });
   return { metadataSnapshot, pluginRegistry };
 }
 
 export type RunAgentAttemptParams = Parameters<typeof runAgentAttempt>[0];
 export type RunAgentAttemptOverrides = Omit<
   Partial<RunAgentAttemptParams>,
-  | "agentDir"
-  | "modelRoutingProvenance"
-  | "opts"
-  | "runContext"
-  | "sessionEntry"
-  | "sessionKey"
-  | "workspaceDir"
+  "opts" | "runContext"
 > & {
   agentDir: RunAgentAttemptParams["agentDir"];
-  modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   sessionEntry: NonNullable<RunAgentAttemptParams["sessionEntry"]>;
   sessionKey: NonNullable<RunAgentAttemptParams["sessionKey"]>;
   workspaceDir: RunAgentAttemptParams["workspaceDir"];
@@ -103,12 +82,6 @@ export function makeRunAgentAttemptParams(
   const model = overrides.modelOverride ?? "gpt-5.4";
   const isFallbackRetry = overrides.isFallbackRetry ?? false;
   const runId = overrides.runId ?? `run-${overrides.sessionEntry.sessionId}`;
-  const modelRoutingProvenance: ModelFallbackAttemptProvenance =
-    overrides.modelRoutingProvenance ?? {
-      requestedProvider: overrides.originalProvider ?? provider,
-      requestedModel: model,
-      stage: isFallbackRetry ? "fallback" : "initial",
-    };
   return {
     providerOverride: provider,
     originalProvider: provider,
@@ -130,7 +103,11 @@ export function makeRunAgentAttemptParams(
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
-    modelRoutingProvenance,
+    modelRoutingProvenance: overrides.modelRoutingProvenance ?? {
+      requestedProvider: overrides.originalProvider ?? provider,
+      requestedModel: model,
+      stage: isFallbackRetry ? "fallback" : "initial",
+    },
     pluginGeneration: overrides.pluginGeneration,
     preparedRunAdmission: overrides.preparedRunAdmission ?? createTestPreparedRunAdmission(runId),
     lifecycleGeneration: overrides.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
@@ -140,6 +117,7 @@ export function makeRunAgentAttemptParams(
 }
 
 export function makeCliResult(text: string, sessionId = "session-cli"): EmbeddedAgentRunResult {
+  const usage = { input: 12, output: 4, cacheRead: 3, cacheWrite: 0, total: 19 };
   return {
     payloads: [{ text }],
     meta: {
@@ -150,20 +128,8 @@ export function makeCliResult(text: string, sessionId = "session-cli"): Embedded
         ...(sessionId ? { cliSessionBinding: { sessionId } } : {}),
         provider: "claude-cli",
         model: "opus",
-        usage: {
-          input: 12,
-          output: 4,
-          cacheRead: 3,
-          cacheWrite: 0,
-          total: 19,
-        },
-        lastCallUsage: {
-          input: 12,
-          output: 4,
-          cacheRead: 3,
-          cacheWrite: 0,
-          total: 19,
-        },
+        usage: { ...usage },
+        lastCallUsage: { ...usage },
       },
       executionTrace: {
         winnerProvider: "claude-cli",
@@ -189,10 +155,7 @@ export function saveTestAuthProfiles(
   });
 }
 
-export function makeSessionEntry(
-  sessionId: string,
-  overrides: Partial<SessionEntry> = {},
-): SessionEntry {
+export function makeSessionEntry(sessionId: string, overrides: Partial<SessionEntry> = {}) {
   return { sessionId, updatedAt: Date.now(), ...overrides };
 }
 
@@ -241,65 +204,36 @@ export async function runTrustedClaudeCompletionForTest({
     body: "A background task finished. Process the completion update now.",
     runId: "run-cli-trusted-announce",
     opts: {
-      trustedInternalHandoff: {
-        kind: "subagent-completion",
+      ...createCompletionHandoff({
         sourceSessionKey: trustedChildSessionKey,
         sourceSessionId: trustedChildEntry.sessionId,
         targetSessionKey: trustedSessionKey,
         targetSessionId: sessionEntry.sessionId,
         provider: "claude-cli",
         model: "opus",
-      },
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: trustedChildSessionKey,
-        sourceChannel: "internal",
-        sourceTool: "subagent_announce",
-      },
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: trustedChildSessionKey,
-          childSessionId: trustedChildEntry.sessionId,
-          announceType: "subagent task",
-          taskLabel: "review",
-          status: "ok",
-          statusLabel: "completed",
-          result: "child output",
-          replyInstruction: "Relay this completion.",
-        },
-      ],
+      }),
       runtimeContextFragments: [{ kind: "conversation-data", text: "supplemental context" }],
     },
     messageChannel: "telegram",
     sessionStore,
   });
 
-  expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+  const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
+  expect(run).toMatchObject({
     provider: "claude-cli",
     disableTools: false,
     terminalReplyExpectation: "required",
   });
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
+  const fragment = (kind: string, text: unknown) => ({ kind, text });
   expect(run.runtimeContextFragments).toEqual([
-    {
-      kind: "runtime-instruction",
-      text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
-    },
-    {
-      kind: "conversation-data",
-      text: expect.stringContaining("child output"),
-    },
-    {
-      kind: "runtime-instruction",
-      text: "Relay this completion.",
-    },
-    {
-      kind: "conversation-data",
-      text: "supplemental context",
-    },
+    fragment(
+      "runtime-instruction",
+      "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
+    ),
+    fragment("conversation-data", expect.stringContaining("child output")),
+    fragment("runtime-instruction", "Relay this completion."),
+    fragment("conversation-data", "supplemental context"),
   ]);
   expect(run.trustedInternalHandoff?.sourceSessionKey).toBe(trustedChildSessionKey);
   const context = buildCliMcpGrantContext({
