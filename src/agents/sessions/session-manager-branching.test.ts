@@ -45,17 +45,18 @@ function createScope(sessionId: string, sessionKey = `agent:main:${sessionId}`) 
   return { dir, scope };
 }
 
-function transcriptEntries(
+async function expectTranscript(
+  scope: Parameters<typeof loadTranscriptEvents>[0],
   header: string | { id: string; parentSession: string },
   ...messageIds: string[]
 ) {
-  return [
+  expect(await loadTranscriptEvents(scope)).toEqual([
     expect.objectContaining({
       type: "session",
       ...(typeof header === "string" ? { id: header } : header),
     }),
     ...messageIds.map((id) => expect.objectContaining({ id, type: "message" })),
-  ];
+  ]);
 }
 
 async function branchSource(
@@ -131,9 +132,7 @@ it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, 
     const branchId = await manager.createBranchedSession("reply");
     const expected = [
       expect.objectContaining({ id: manager.getSessionId(), type: "session", version }),
-      entries[1],
-      entries[2],
-      entries[3],
+      ...entries.slice(1, 4),
       expect.objectContaining({ ...entries[4], id: expect.any(String) }),
     ];
     expect(manager.getSessionId()).not.toBe(scope.sessionId);
@@ -184,12 +183,7 @@ it("creates SQLite-backed branch sessions without rewriting the source transcrip
       }).getEntries(),
     });
   });
-  let branchedMarker: string | undefined;
-  try {
-    branchedMarker = await manager.createBranchedSession(replyId);
-  } finally {
-    stop();
-  }
+  const branchedMarker = await manager.createBranchedSession(replyId).finally(stop);
   const branchedSessionId = manager.getSessionId();
 
   expect(branchedMarker).toBe(branchedSessionId);
@@ -205,18 +199,17 @@ it("creates SQLite-backed branch sessions without rewriting the source transcrip
     delivery: { kind: "internal" },
     sessionId: branchedSessionId,
   });
-  await expect(loadTranscriptEvents(scope)).resolves.toEqual(
-    transcriptEntries(sessionId, userId, replyId),
-  );
-  await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
-    transcriptEntries({ id: branchedSessionId, parentSession: sessionId }, userId, replyId),
+  await expectTranscript(scope, sessionId, userId, replyId);
+  await expectTranscript(
+    { ...scope, sessionId: branchedSessionId },
+    { id: branchedSessionId, parentSession: sessionId },
+    userId,
+    replyId,
   );
   expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
   expect(manager.removeTrailingEntries((entry) => entry.id === replyId)).toBe(1);
   expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
-  await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
-    transcriptEntries(branchedSessionId, userId),
-  );
+  await expectTranscript({ ...scope, sessionId: branchedSessionId }, branchedSessionId, userId);
 });
 
 it("does not publish a branch identity when transcript persistence fails", async () => {
@@ -262,7 +255,7 @@ it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"
       lifecycleRevision: "original-revision",
     });
     const { sessionId, sessionKey } = scope;
-    const runAsWriter = <T>(run: () => Promise<T>) =>
+    const branchAsWriter = () =>
       withOwnedSessionTranscriptWrites(
         {
           sessionTarget: {
@@ -273,14 +266,13 @@ it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"
           ...(change === "guarded-target" ? { assertCommitAllowed: () => {} } : {}),
           withTranscriptWrite: async (operation) => await operation(),
         },
-        run,
+        () => manager.createBranchedSession(replyId),
       );
     if (change === "successor-writer") {
-      await runAsWriter(() => manager.createBranchedSession(replyId));
+      await branchAsWriter();
     }
     const branchSourceId = manager.getSessionId();
-    const readManagerState = () => managerState(manager);
-    const beforeBranch = readManagerState();
+    const beforeBranch = managerState(manager);
     const writerChanged = change === "writer" || change === "successor-writer";
     const ownerChangeGate = createDeferredCore();
     const ownerChangeStarted = createDeferredCore();
@@ -297,9 +289,9 @@ it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"
 
     const queuedAt = Date.now() - 1_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
-    const branch = runAsWriter(() => manager.createBranchedSession(replyId));
+    const branch = branchAsWriter();
     await setImmediate();
-    const whileQueued = readManagerState();
+    const whileQueued = managerState(manager);
     clock.mockRestore();
     const commitStartedAt = Date.now();
     ownerChangeGate.resolve();
@@ -325,7 +317,7 @@ it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"
           }),
         ).toThrow(SessionTranscriptWriterClaimReboundError);
       }
-      expect(readManagerState()).toEqual(beforeBranch);
+      expect(managerState(manager)).toEqual(beforeBranch);
     } else {
       const branchId = await branch;
       const updatedAt = loadSessionEntry(scope)?.updatedAt;
@@ -340,8 +332,6 @@ it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"
       ...(change === "metadata" ? { label: "updated" } : {}),
     });
     expect(whileQueued).toEqual(beforeBranch);
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual(
-      transcriptEntries(sessionId, userId, replyId),
-    );
+    await expectTranscript(scope, sessionId, userId, replyId);
   },
 );

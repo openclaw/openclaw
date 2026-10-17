@@ -7,7 +7,7 @@ import * as configEnv from "../../config/config-env-vars.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
@@ -29,8 +29,6 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
-
-const { prepareSessionTranscriptHydration } = transcriptHydration;
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -54,33 +52,38 @@ function expectMessages(manager: SessionManager, ...messages: unknown[]) {
   expect(manager.buildSessionContext().messages).toEqual(messages);
 }
 
-function restoreStateDir(value: string | undefined) {
-  if (value === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = value;
-  }
-}
-
-function pauseHistoryRead(at: "request" | "reply") {
+function pauseRead(
+  pool: Pick<WorkerTaskPool<unknown, unknown>, "run">,
+  at: "request" | "reply",
+  inspect?: (request: unknown) => void,
+) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+  const spy = vi.spyOn(pool, "run").mockImplementationOnce(function (
+    this: Pick<WorkerTaskPool<unknown, unknown>, "run">,
+    input,
+    options,
+  ) {
     spy.mockRestore();
     const pause = async () => {
       entered.resolve();
       await release.promise;
     };
+    const reading = this.run(async () => {
+      if (at === "request") {
+        await pause();
+      }
+      const request = typeof input === "function" ? await input() : input;
+      inspect?.(request);
+      return request;
+    }, options);
     if (at === "reply") {
-      return historyLane.pool.run(input, options).then(async (result) => {
+      return reading.then(async (result) => {
         await pause();
         return result;
       });
     }
-    return historyLane.pool.run(async () => {
-      await pause();
-      return typeof input === "function" ? await input() : input;
-    }, options);
+    return reading;
   });
   return {
     release: () => release.resolve(),
@@ -303,7 +306,7 @@ it("does not publish a stale retarget over a manager changed while its worker re
   await withSessionState("retarget", async ({ scope: target }) => {
     SessionManager.open(target).appendMessage(makeUserMessage("persisted", 1));
     const manager = SessionManager.inMemory("/detached");
-    const gate = pauseHistoryRead("request");
+    const gate = pauseRead(historyLane.pool, "request");
     const pending = manager.setSessionTargetAsync(target);
     const refused = expect(pending).rejects.toThrow("changed during transcript hydration");
     try {
@@ -337,6 +340,11 @@ it.each(["hydration", "current-turn"] as const)(
       const release = createDeferredCore();
       const run = historyLane.pool.run.bind(historyLane.pool);
       const capacity = historyLane.pool.getSnapshot().maxWorkers;
+      const expectQueue = (pendingTasks = capacity) =>
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks,
+        });
       let submissions = 0;
       let enteredCount = 0;
       const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
@@ -365,10 +373,7 @@ it.each(["hydration", "current-turn"] as const)(
             throw new Error("Hydration predecessors settled before filling the worker pool");
           }),
         ]);
-        expect(historyLane.pool.getSnapshot()).toMatchObject({
-          activeTasks: capacity,
-          pendingTasks: capacity,
-        });
+        expectQueue();
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
         const canceled =
@@ -386,15 +391,9 @@ it.each(["hydration", "current-turn"] as const)(
         const refused = expect(canceled).rejects.toBe(reason);
         reads.push(canceled, refused);
         await queued.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({
-          activeTasks: capacity,
-          pendingTasks: capacity + 1,
-        });
+        expectQueue(capacity + 1);
         controller.abort(reason);
-        expect(historyLane.pool.getSnapshot()).toMatchObject({
-          activeTasks: capacity,
-          pendingTasks: capacity,
-        });
+        expectQueue();
         await refused;
         release.resolve();
         for (const predecessor of await predecessors) {
@@ -439,7 +438,7 @@ it.each(["abort", "database-close"] as const)(
     await withSessionState("revoked", async ({ scope: target }) => {
       SessionManager.open(target).appendMessage(makeUserMessage("retained", 1));
       const controller = new AbortController();
-      const gate = pauseHistoryRead("reply");
+      const gate = pauseRead(historyLane.pool, "reply");
       const pending = SessionManager.openAsync(target, undefined, undefined, controller.signal);
       const refused = expect(pending).rejects.toThrow(
         reason === "abort" ? "cancelled hydration" : "revoked",
@@ -540,7 +539,11 @@ it.each([
             expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
           }
         } finally {
-          restoreStateDir(originalEnvironment);
+          if (originalEnvironment === undefined) {
+            delete process.env.OPENCLAW_STATE_DIR;
+          } else {
+            process.env.OPENCLAW_STATE_DIR = originalEnvironment;
+          }
           if (!privateStorage) {
             delete process.env.OPENCLAW_SUPERVISOR_MODE;
           }
@@ -575,8 +578,6 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
         await seedHistory(target, "durable shared history");
         await waitForSessionTranscriptProjection(target);
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-        const received = createDeferredCore();
-        const release = createDeferredCore();
         const drain = createDeferredCore();
         const revoked = createDeferredCore();
         const unregister =
@@ -588,21 +589,8 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
                 close: () => drain.promise,
               })
             : undefined;
-        const dispatch = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
-          this: WorkerTaskPool<unknown, unknown>,
-          input,
-          options,
-        ) {
-          dispatch.mockRestore();
-          return this.run(async () => {
-            const request = typeof input === "function" ? await input() : input;
-            expect(request).toMatchObject({ kind: "sqlite-target" });
-            return request;
-          }, options).then(async (reply) => {
-            received.resolve();
-            await release.promise;
-            return reply;
-          });
+        const gate = pauseRead(WorkerTaskPool.prototype, "reply", (request) => {
+          expect(request).toMatchObject({ kind: "sqlite-target" });
         });
         const pending = SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 10 });
         const expected =
@@ -613,7 +601,7 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
               );
         let closing: Promise<boolean> | undefined;
         try {
-          await received.promise;
+          await gate.wait(expected, "Discovery settled before the intercepted reply");
           if (transition === "active-drain") {
             closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath);
             await revoked.promise;
@@ -625,15 +613,15 @@ it.each(["completed-drain", "active-drain", "terminal-owner"])(
           } else {
             await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
           }
-          release.resolve();
+          gate.release();
           await expected;
           if (transition === "completed-drain") {
             expectMessages(await pending, makeUserMessage("durable shared history", 1));
           }
         } finally {
-          release.resolve();
+          gate.release();
           drain.resolve();
-          dispatch.mockRestore();
+          gate.restore();
           await Promise.allSettled([pending, ...(closing ? [closing] : [])]);
           unregister?.();
           clearOpenClawAgentDatabaseOpenFailure(target.storePath);
@@ -674,48 +662,23 @@ it.each(["canonical", "custom"])(
           // Only environment lookup uses Windows semantics; SQLite and paths use the actual host.
           withMockedPlatform("win32", () => cloneEnv(input)),
         );
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
       let transferred: unknown;
-      const dispatch =
-        layout === "canonical"
-          ? vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-              dispatch.mockRestore();
-              return historyLane.pool.run(async () => {
-                entered.resolve();
-                await release.promise;
-                const request = typeof input === "function" ? await input() : input;
-                transferred = request;
-                return request;
-              }, options);
-            })
-          : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
-              this: WorkerTaskPool<unknown, unknown>,
-              input,
-              options,
-            ) {
-              dispatch.mockRestore();
-              return this.run(async () => {
-                entered.resolve();
-                await release.promise;
-                transferred = typeof input === "function" ? await input() : input;
-                return transferred;
-              }, options);
-            });
+      const gate = pauseRead(
+        layout === "canonical" ? historyLane.pool : WorkerTaskPool.prototype,
+        "request",
+        (request) => {
+          transferred = request;
+        },
+      );
       const inputTarget = { ...target, env };
       const pending = SessionManager.openAsync(inputTarget);
       const result = expect(pending).resolves.toBeInstanceOf(SessionManager);
       try {
-        await Promise.race([
-          entered.promise,
-          result.then(() => {
-            throw new Error("Hydration settled before the intercepted environment transfer");
-          }),
-        ]);
+        await gate.wait(result, "Hydration settled before the intercepted environment transfer");
         env.OpenClaw_State_Dir = state.path("later-state");
         env.OpenClaw_Supervisor_Mode = "changed-after-capture";
         expect(process.platform).toBe(hostPlatform);
-        release.resolve();
+        gate.release();
         await result;
         expectMessages(await pending, makeUserMessage("captured store", 1));
         const expectedEnv = {
@@ -727,9 +690,9 @@ it.each(["canonical", "custom"])(
         );
         expect(fs.existsSync(state.path("later-state"))).toBe(false);
       } finally {
-        release.resolve();
+        gate.release();
         clone.mockRestore();
-        dispatch.mockRestore();
+        gate.restore();
         await Promise.allSettled([pending]);
       }
     });
