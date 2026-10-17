@@ -8,6 +8,9 @@ import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
   closeCatalogServer,
+  catalogModelDefaults,
+  catalogModelIds,
+  createCatalogAuthProfiles,
   createCatalogModel,
   createCatalogState,
   listenCatalogServer,
@@ -29,6 +32,10 @@ function runMembershipCase(
   let gateway: Awaited<ReturnType<typeof startCatalogGateway>> | undefined;
   let requests = 0;
   const advertisedModelIds = ["manual", "account-only"];
+  const hooks = [[provider, ""]];
+  if (secondHook) {
+    hooks.push(["membership-sibling", "/sibling"]);
+  }
   const endpoint = createServer((request, response) => {
     requests++;
     response.writeHead(200, { "content-type": "application/json" });
@@ -46,27 +53,23 @@ function runMembershipCase(
         secondHook ? [provider, "membership-sibling"] : provider,
         `module.exports = {
           id: "membership-fixture", register(api) {
-            for (const [id, suffix] of ${JSON.stringify(
-              secondHook
-                ? [
-                    [provider, ""],
-                    ["membership-sibling", "/sibling"],
-                  ]
-                : [[provider, ""]],
-            )}) api.registerProvider({ id, hookAliases: ["membership-fixture"], label: "Membership fixture", auth: [],
+            for (const [id, suffix] of ${JSON.stringify(hooks)}) api.registerProvider({ id, hookAliases: ["membership-fixture"], label: "Membership fixture", auth: [],
               catalog: { order: "profile", async run(ctx) {
                 if (!ctx.resolveProviderAuth("membership-fixture").discoveryApiKey) return null;
                 const response = await fetch(${JSON.stringify(baseUrl)} + suffix);
                 const rows = await response.json();
                 return { providers: { "membership-fixture": { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                  models: rows.map(id => ({ id, name: id, reasoning: false, input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })) } } };
+                  models: rows.map(id => ({ id, name: id, ...${JSON.stringify(catalogModelDefaults())} })) } } };
               } },
             });
           },
         };`,
       );
       const token = "membership-gateway-token";
+      const restricted = {
+        workspace: state.workspaceDir,
+        modelPolicy: { allow: [`${provider}/manual`] },
+      };
       const cfg = {
         agents: {
           ownership: "explicit",
@@ -76,14 +79,7 @@ function runMembershipCase(
           },
           entries: {
             main: { workspace: state.workspaceDir },
-            ...(!secondHook
-              ? {
-                  restricted: {
-                    workspace: state.workspaceDir,
-                    modelPolicy: { allow: [`${provider}/manual`] },
-                  },
-                }
-              : {}),
+            ...(!secondHook ? { restricted } : {}),
           },
         },
         models: {
@@ -106,12 +102,7 @@ function runMembershipCase(
         gateway: { mode: "local", auth: { mode: "token", token } },
       };
       await state.writeConfig(cfg);
-      const authProfiles = {
-        version: 1,
-        profiles: {
-          [`${provider}:default`]: { type: "api_key", provider, key: "membership-account-key" },
-        },
-      };
+      const authProfiles = createCatalogAuthProfiles({ [provider]: "membership-account-key" });
       await state.writeAuthProfiles(authProfiles);
       if (!secondHook) {
         await state.writeAuthProfiles(authProfiles, "restricted");
@@ -123,11 +114,7 @@ function runMembershipCase(
       signal.throwIfAborted();
       const read = (refresh = false, agentId = "main") =>
         client.request<ModelsListResult>("models.list", { agentId, refresh }, { signal });
-      const modelIds = (result: ModelsListResult) =>
-        result.models
-          .filter((row) => row.provider === provider)
-          .map((row) => row.id)
-          .toSorted();
+      const modelIds = (result: ModelsListResult) => catalogModelIds(result, provider).toSorted();
       const list = async (agentId = "main") => modelIds(await read(false, agentId));
       const refresh = async (agentId = "main") =>
         modelIds(
@@ -191,9 +178,7 @@ function runMembershipCase(
         await disconnectGatewayClient(gateway.client);
       }
     },
-    async () => {
-      await gateway?.server.close({ reason: "catalog membership test complete" });
-    },
+    async () => gateway?.server.close({ reason: "catalog membership test complete" }),
     async () => {
       if (endpoint.listening) {
         await closeCatalogServer(endpoint, true);
@@ -201,9 +186,7 @@ function runMembershipCase(
         endpoint.closeAllConnections();
       }
     },
-    async () => {
-      await state?.cleanup();
-    },
+    async () => state?.cleanup(),
   );
 }
 

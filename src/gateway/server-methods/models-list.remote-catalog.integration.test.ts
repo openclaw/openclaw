@@ -23,6 +23,11 @@ import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import {
   closeCatalogServer,
   createCatalogState,
+  createCatalogModel,
+  catalogAgents,
+  catalogModelIds,
+  createCatalogAuthProfiles,
+  catalogModelDefaults,
   listenCatalogServer,
   startCatalogGateway,
   writeCatalogPlugin,
@@ -46,17 +51,9 @@ it.for([1, 2])(
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     });
     const generatedAt = Date.now() + 86_400_000;
-    const modelMetadata = {
-      api: "anthropic-messages",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 32768,
-      maxTokens: 4096,
-    };
     const makeModel = (id: string, name: string, input: number) => ({
-      ...modelMetadata,
-      id,
-      name,
+      ...createCatalogModel(id, name),
+      api: "anthropic-messages",
       cost: { input, output: input * 2 },
     });
     const makeCatalog = (generation: number, models: ReturnType<typeof makeModel>[]) => ({
@@ -131,8 +128,7 @@ it.for([1, 2])(
                 }
                 return body;
               },
-              projectRows: rows => rows.map(id => ({ id, name: id, reasoning: false, input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })),
+              projectRows: rows => rows.map(id => ({ id, name: id, ...${JSON.stringify(catalogModelDefaults())} })),
             }) };
           } },
         });
@@ -146,10 +142,7 @@ it.for([1, 2])(
         refreshRemoteModelCatalog({ config: catalogConfig, force: true, bundledGeneratedAt });
       const cfg = {
         ...catalogConfig,
-        agents: {
-          defaults: { model: { primary: "kimi/remote-first" } },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
+        agents: catalogAgents(state, { model: { primary: "kimi/remote-first" } }),
         models: {
           ...catalogConfig.models,
           providers: {
@@ -170,12 +163,9 @@ it.for([1, 2])(
       };
       await state.writeConfig(cfg);
       state.applyEnv();
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          [`${provider}:default`]: { type: "api_key", provider, key: "catalog-fixture-key" },
-        },
-      });
+      await state.writeAuthProfiles(
+        createCatalogAuthProfiles({ [provider]: "catalog-fixture-key" }),
+      );
       setRemoteModelCatalogOverlaySourcesForTest({ bundledGeneratedAt });
       const initialRefresh = await refresh();
       expect(initialRefresh.status, redactSensitiveText(JSON.stringify(initialRefresh))).toBe(
@@ -200,8 +190,7 @@ it.for([1, 2])(
         await server.startupSettled;
         const list = (refreshCatalog = false) =>
           client.request<ModelsListResult>("models.list", { view: "all", refresh: refreshCatalog });
-        const kimiIds = (catalog: ModelsListResult) =>
-          catalog.models.filter((row) => row.provider === "kimi").map((row) => row.id);
+        const kimiIds = (catalog: ModelsListResult) => catalogModelIds(catalog, "kimi");
         const waitForRows = async (
           model: string,
           isReady: (catalog: ModelsListResult) => boolean = () => true,
@@ -235,16 +224,12 @@ it.for([1, 2])(
           })?.input;
         const currentPrice = (model = "remote-first") => price(getRuntimeConfig(), model);
         const settleInterrupted = async (pending: Promise<ModelsListResult>) => {
-          const outcome = await withinTest(
-            pending.then(
-              (value) => ({ value }),
-              (error: unknown) => ({ error }),
-            ),
+          await withinTest(
+            pending.catch((error: unknown) => {
+              expect(error).toMatchObject({ code: "UNAVAILABLE" });
+            }),
             signal,
           );
-          if ("error" in outcome) {
-            expect(outcome.error).toMatchObject({ code: "UNAVAILABLE" });
-          }
         };
         expect(kimiIds(await list(true))).toContain("remote-first");
         // Remote rows can precede executable provider publication; admit only its completed pair.
@@ -266,10 +251,9 @@ it.for([1, 2])(
         await using oldRun = await acquireAgentRunPreparedModelRuntime(input, {
           catalogMode: "static",
         });
-        const oldModel = expectDefined(
-          oldRun.snapshot.createStores().modelRegistry.find("kimi", "remote-first"),
-          "old run model",
-        );
+        const runModel = (run: typeof oldRun) =>
+          run.snapshot.createStores().modelRegistry.find("kimi", "remote-first");
+        const oldModel = expectDefined(runModel(oldRun), "old run model");
         expect(oldModel.cost.input).toBe(1);
         pausePublication = true;
         body = encode(next);
@@ -302,10 +286,7 @@ it.for([1, 2])(
         await using newRun = await acquireAgentRunPreparedModelRuntime(input, {
           catalogMode: "static",
         });
-        const newModel = expectDefined(
-          newRun.snapshot.createStores().modelRegistry.find("kimi", "remote-first"),
-          "new run model",
-        );
+        const newModel = expectDefined(runModel(newRun), "new run model");
         expect(newModel.cost.input).toBe(7);
         const retirement = new AbortController();
         const retainedBuild = startSerializedSnapshotBuildBatch(
@@ -331,9 +312,7 @@ it.for([1, 2])(
             }),
             "retained catalog",
           );
-          const retainedIds = retainedCatalog.entries
-            .filter((row) => row.provider === "kimi")
-            .map((row) => row.id);
+          const retainedIds = catalogModelIds({ models: retainedCatalog.entries }, "kimi");
           expect(retainedIds).toContain("remote-first");
           expect(retainedIds).not.toContain("remote-next");
         } finally {
@@ -377,9 +356,7 @@ it.for([1, 2])(
         expect(currentPrice()).toBe(11);
         expect(currentPrice("remote-last")).toBe(13);
         expect(oldModel.cost.input).toBe(1);
-        expect(
-          newRun.snapshot.createStores().modelRegistry.find("kimi", "remote-first")?.cost.input,
-        ).toBe(7);
+        expect(runModel(newRun)?.cost.input).toBe(7);
 
         const beforeDisable = await client.request<{ hash: string }>("config.get", {});
         await client.request("config.patch", {

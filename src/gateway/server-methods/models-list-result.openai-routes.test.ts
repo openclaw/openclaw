@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  type PreparedGatewayModelCatalogSnapshot,
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
@@ -105,9 +106,7 @@ describe("models.list OpenAI routes", () => {
   });
 
   it("does not project another owner's catalog as an explicitly requested agent", async () => {
-    const config: OpenClawConfig = {
-      agents: { entries: { main: {}, worker: {} } },
-    };
+    const config: OpenClawConfig = { agents: { entries: { main: {}, worker: {} } } };
     const context = createModelsListTestContext({
       agentId: "main",
       cfg: config,
@@ -227,11 +226,7 @@ describe("models.list OpenAI routes", () => {
                 refresh: "chatgpt-refresh",
                 expires: Date.now() + 30 * 60_000,
               },
-              "openai:key": {
-                type: "api_key",
-                provider: "openai",
-                key: "test-key",
-              },
+              "openai:key": { type: "api_key", provider: "openai", key: "test-key" },
             },
           });
           const cfg = {
@@ -268,13 +263,7 @@ describe("models.list OpenAI routes", () => {
 
           const inventoryConfig = {
             ...cfg,
-            models: {
-              providers: {
-                openai: {
-                  models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
-                },
-              },
-            },
+            ...providerConfig("openai", { models: [{ id: "gpt-5.5", name: "GPT-5.5" }] }),
           } as unknown as OpenClawConfig;
           await expect(
             listModels({
@@ -309,22 +298,12 @@ describe("models.list OpenAI routes", () => {
     });
   });
 
-  it.each([
-    {
-      provider: "litellm",
-      mode: "runtime" as const,
-      url: "http://127.0.0.1:14004",
-      ids: ["model-a", "model-b"],
-    },
-    {
-      provider: "kimi",
-      mode: "static" as const,
-      url: "https://api.kimi.com/coding/v1",
-      ids: ["kimi-for-coding"],
-    },
+  it.each<[provider: string, mode: "runtime" | "static", url: string, ids: string[]]>([
+    ["litellm", "runtime", "http://127.0.0.1:14004", ["model-a", "model-b"]],
+    ["kimi", "static", "https://api.kimi.com/coding/v1", ["kimi-for-coding"]],
   ])(
-    "projects $mode inventory without explicit $provider models",
-    async ({ provider, mode, url, ids }) => {
+    "projects %s inventory in %s mode without explicit models",
+    async (provider, mode, url, ids) => {
       await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
         await expect(
           listModels({
@@ -349,24 +328,15 @@ describe("models.list OpenAI routes", () => {
       const cfg = {
         agents: {
           defaults: {
-            model: {
-              primary: "anthropic/claude-test",
-              fallbacks: ["fast"],
-            },
-            models: {
-              "openai/chat-latest": { alias: "fast" },
-            },
+            model: { primary: "anthropic/claude-test", fallbacks: ["fast"] },
+            models: { "openai/chat-latest": { alias: "fast" } },
           },
         },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-chatgpt-responses",
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [],
-            },
-          },
-        },
+        ...providerConfig("openai", {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: [],
+        }),
       } as unknown as OpenClawConfig;
 
       await expect(
@@ -391,25 +361,33 @@ describe("models.list OpenAI routes", () => {
 });
 
 async function withPublishedCatalog(
-  run: (context: ReturnType<typeof createModelsListTestContext>) => Promise<void>,
+  run: (
+    context: ReturnType<typeof createModelsListTestContext>,
+    published: PreparedGatewayModelCatalogSnapshot,
+  ) => Promise<void>,
 ) {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "published-catalog-read-" },
     async (state) => {
-      await run(
-        createModelsListTestContext({
-          agentDir: state.agentDir(),
-          workspaceDir: state.workspaceDir,
-          catalog: [providerCatalogEntry("ollama", "published-model")],
-          cfg: {
-            agents: {
-              defaults: {
-                model: { primary: "ollama/published-model" },
-                modelPolicy: { allow: ["ollama/*"] },
-              },
+      const context = createModelsListTestContext({
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        catalog: [providerCatalogEntry("ollama", "published-model")],
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "ollama/published-model" },
+              modelPolicy: { allow: ["ollama/*"] },
             },
           },
-        }),
+        },
+      });
+      await run(
+        context,
+        expectDefined(
+          await readPreparedCatalog(context, "main"),
+          "Published catalog fixture must supply its owner",
+        ),
       );
     },
   );
@@ -417,11 +395,7 @@ async function withPublishedCatalog(
 
 describe("models.list published inventory", () => {
   it("refuses a retired generation and permits a later current read without discovery", async () => {
-    await withPublishedCatalog(async (context) => {
-      const first = expectDefined(
-        await readPreparedCatalog(context, "main"),
-        "Published catalog fixture must supply its owner",
-      );
+    await withPublishedCatalog(async (context, first) => {
       let published = { ...first, isCurrent: () => false };
       const loadDeferred = vi.fn(async () => published);
       registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
@@ -437,11 +411,7 @@ describe("models.list published inventory", () => {
   });
 
   it("reports a missing published owner without starting acquisition", async () => {
-    await withPublishedCatalog(async (context) => {
-      const published = expectDefined(
-        await readPreparedCatalog(context, "main"),
-        "Published catalog fixture must supply its owner",
-      );
+    await withPublishedCatalog(async (context, published) => {
       const loadDeferred = vi.fn(async () => published);
       registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
         loadDeferred,
@@ -453,11 +423,8 @@ describe("models.list published inventory", () => {
   });
 
   it("returns the generation published by an explicit refresh", async () => {
-    await withPublishedCatalog(async (context) => {
-      let published = expectDefined(
-        await readPreparedCatalog(context, "main"),
-        "Published catalog fixture must supply its owner",
-      );
+    await withPublishedCatalog(async (context, initial) => {
+      let published = initial;
       const refreshed = providerCatalogEntry("ollama", "refreshed-model");
       const loadDeferred = vi.fn(async () => {
         published = { ...published, entries: [refreshed], routeVariants: [refreshed] };

@@ -1,10 +1,12 @@
 import { once } from "node:events";
 import type { Server } from "node:http";
 import { expect } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { GatewayClient } from "../client.js";
 import { startGatewayWithClient } from "../test-helpers.e2e.js";
 
 export function createCatalogState(label: string, env: Record<string, string | undefined> = {}) {
@@ -82,16 +84,18 @@ export function expectAssistantReply(messages: unknown[], text: string) {
   );
 }
 
-export function createCatalogModel(id: string, name = id) {
+export function catalogModelDefaults() {
   return {
-    id,
-    name,
     reasoning: false,
     input: ["text" as const],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32768,
     maxTokens: 4096,
   };
+}
+
+export function createCatalogModel(id: string, name = id) {
+  return { id, name, ...catalogModelDefaults() };
 }
 
 export function catalogReply(id: string, model: string, text: string) {
@@ -103,4 +107,54 @@ export function catalogReply(id: string, model: string, text: string) {
     choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   })}\n\ndata: [DONE]\n\n`;
+}
+
+export function catalogAgents(
+  state: OpenClawTestState,
+  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
+) {
+  return { defaults, entries: { main: { workspace: state.workspaceDir } } };
+}
+
+export function catalogSessionRpc(client: GatewayClient) {
+  return {
+    create: (model: string, key: string, extra: { label?: string; cwd?: string } = {}) =>
+      client.request<{ ok: boolean; key: string; entry: { spawnedCwd: string } }>(
+        "sessions.create",
+        { agentId: "main", model, key, ...extra },
+      ),
+    send: (sessionKey: string, message: string, idempotencyKey: string) =>
+      client.request<{ runId: string; status: string }>("chat.send", {
+        sessionKey,
+        message,
+        idempotencyKey,
+      }),
+    wait: (runId: string) =>
+      client.request<{ status: string; error?: string }>(
+        "agent.wait",
+        { runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      ),
+    history: (sessionKey: string) =>
+      client.request<{ messages: unknown[] }>("chat.history", { sessionKey }),
+  };
+}
+
+export function createCatalogAuthProfiles(keys: Record<string, string>) {
+  return {
+    version: 1,
+    profiles: Object.fromEntries(
+      Object.entries(keys).map(([provider, key]) => [
+        `${provider}:default`,
+        { type: "api_key" as const, provider, key },
+      ]),
+    ),
+  };
+}
+
+export function catalogModelIds(
+  result: { models: Array<{ provider: string; id: string }> },
+  provider: string,
+) {
+  return result.models.filter((row) => row.provider === provider).map((row) => row.id);
 }
