@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
@@ -52,6 +53,8 @@ async function connectReadbackClient() {
   return { client, nextPublication: () => publication.promise };
 }
 const browserArgs: string[] = [];
+const writeArtifact = (name: string, value: unknown) =>
+  fs.writeFile(path.join(suite.artifactDir, name), JSON.stringify(value, null, 2));
 const suite = createControlUiE2eSuite({
   name: "Provider browser login through real HTTPS Gateway",
   startServerBeforeBrowser: true,
@@ -101,10 +104,7 @@ suite.define(() => {
     const initialAuthStatus: ModelAuthStatusResult = await call("models.authStatus", {
       agentId: "main",
     });
-    await fs.writeFile(
-      path.join(suite.artifactDir, "initial-auth-status.json"),
-      JSON.stringify(initialAuthStatus, null, 2),
-    );
+    await writeArtifact("initial-auth-status.json", initialAuthStatus);
     expect(
       initialAuthStatus.providerCapabilities?.flatMap((provider) => provider.loginOptions ?? []),
     ).toEqual([
@@ -115,6 +115,22 @@ suite.define(() => {
       }),
     ]);
     const callbacks: Array<{ url: string; status: number }> = [];
+    const recordCallback = (response: Response) => {
+      callbacks.push({ url: response.url(), status: response.status() });
+      return response;
+    };
+    const approve = async (page: Page) => {
+      const callback = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/oauth/provider/callback",
+      );
+      await page.getByRole("button", { name: "Approve sign-in" }).click();
+      return recordCallback(await callback);
+    };
+    const expectRejected = async (response: Response) => {
+      expect(response.status()).toBe(410);
+      expect(await profile()).toBeUndefined();
+      expect(fixture.requests).not.toContain("/token");
+    };
     let finalHistory: unknown;
     const sessionKey = loginSessionKey;
     expect(JSON.stringify(await call("chat.history", { sessionKey }))).toContain(
@@ -178,30 +194,17 @@ suite.define(() => {
           .getByRole("button", { name: "Cancel", exact: true })
           .click();
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
-        const cancelledCallback = cancelledPage.waitForResponse(
-          (response) => new URL(response.url()).pathname === "/oauth/provider/callback",
-        );
-        await cancelledPage.getByRole("button", { name: "Approve sign-in" }).click();
-        const cancelledResponse = await cancelledCallback;
-        callbacks.push({ url: cancelledResponse.url(), status: cancelledResponse.status() });
-        expect(cancelledResponse.status()).toBe(410);
-        expect(await profile()).toBeUndefined();
-        expect(fixture.requests).not.toContain("/token");
+        const cancelledResponse = await approve(cancelledPage);
+        await expectRejected(cancelledResponse);
         await cancelledPage.waitForURL(cancelledResponse.url());
         const staleUrl = cancelledResponse.url();
         expect(new URL(staleUrl).origin).toBe(loginOrigin);
         const freshPage = await begin();
-        const replay = expectDefined(await cancelledPage.goto(staleUrl), "callback response");
-        callbacks.push({ url: replay.url(), status: replay.status() });
-        expect(replay.status()).toBe(410);
-        expect(await profile()).toBeUndefined();
-        expect(fixture.requests).not.toContain("/token");
-        const freshCallback = freshPage.waitForResponse(
-          (response) => new URL(response.url()).pathname === "/oauth/provider/callback",
+        const replay = recordCallback(
+          expectDefined(await cancelledPage.goto(staleUrl), "callback response"),
         );
-        await freshPage.getByRole("button", { name: "Approve sign-in" }).click();
-        const freshResponse = await freshCallback;
-        callbacks.push({ url: freshResponse.url(), status: freshResponse.status() });
+        await expectRejected(replay);
+        const freshResponse = await approve(freshPage);
         expect(freshResponse.status()).toBe(200);
         await freshPage.waitForURL(freshResponse.url());
         expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
@@ -274,20 +277,13 @@ suite.define(() => {
         await fs.copyFile(fixture.edgeReceipt, path.join(suite.artifactDir, "edge-receipt.json"));
       },
       async () => {
-        await fs.writeFile(
-          path.join(suite.artifactDir, "flow.json"),
-          JSON.stringify(
-            {
-              callbacks,
-              finalHistory,
-              authorizations: fixture.authorizations,
-              requests: fixture.requests,
-              sessionKey,
-            },
-            null,
-            2,
-          ),
-        );
+        await writeArtifact("flow.json", {
+          callbacks,
+          finalHistory,
+          authorizations: fixture.authorizations,
+          requests: fixture.requests,
+          sessionKey,
+        });
       },
     );
   }, 120_000);

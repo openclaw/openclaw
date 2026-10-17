@@ -18,33 +18,32 @@ const sessionKey = "agent:main:main";
 
 async function seedSidePanel(page: Page, dock: SidebarDock = "right") {
   const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-  await page.addInitScript(
-    ({ settingsKey, session, dock: initialDock }) => {
-      localStorage.setItem(
-        settingsKey,
-        JSON.stringify({
-          sessionKey: session,
-          sidebarSessionLayouts: {
-            [session]: {
-              columns: [
-                {
-                  id: "side-panel-column",
-                  side: "right",
-                  panels: [{ id: "detail", slot: "detail" }],
-                  activePanelId: "detail",
-                  height: 320,
-                  width: 420,
-                },
-              ],
-              dock: initialDock,
-              open: true,
-              expanded: false,
-            },
+  const settings = {
+    sessionKey,
+    sidebarSessionLayouts: {
+      [sessionKey]: {
+        columns: [
+          {
+            id: "side-panel-column",
+            side: "right",
+            panels: [{ id: "detail", slot: "detail" }],
+            activePanelId: "detail",
+            height: 320,
+            width: 420,
           },
-        }),
-      );
+        ],
+        dock,
+        open: true,
+        expanded: false,
+      },
     },
-    { settingsKey: key, session: sessionKey, dock },
+  };
+  await page.addInitScript(
+    ({ key: settingsKey, value }) => localStorage.setItem(settingsKey, value),
+    {
+      key,
+      value: JSON.stringify(settings),
+    },
   );
 }
 

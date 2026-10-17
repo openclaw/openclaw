@@ -15,24 +15,11 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("loads shared Markdown and session-link styles on direct Cron, Skills, and Chat routes", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const emptyPage = { total: 0, offset: 0, limit: 50, hasMore: false, nextOffset: null };
       await installMockGateway(page, {
         methodResponses: {
-          "cron.list": {
-            jobs: [],
-            total: 0,
-            offset: 0,
-            limit: 50,
-            hasMore: false,
-            nextOffset: null,
-          },
-          "cron.runs": {
-            entries: [],
-            total: 0,
-            offset: 0,
-            limit: 50,
-            hasMore: false,
-            nextOffset: null,
-          },
+          "cron.list": { ...emptyPage, jobs: [] },
+          "cron.runs": { ...emptyPage, entries: [] },
           "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
           "skills.status": {
             workspaceDir: "/tmp/openclaw-e2e/workspace",
@@ -53,37 +40,34 @@ suite.define(() => {
           <a class="session-link">session</a>
         `;
         document.body.append(probe);
-        const list = probe.querySelector("ul");
-        const secondListItem = probe.querySelector("li + li");
-        const pre = probe.querySelector("pre");
-        const link = probe.querySelector(".session-link");
-        if (
-          !(list instanceof HTMLElement) ||
-          !(secondListItem instanceof HTMLElement) ||
-          !(pre instanceof HTMLElement) ||
-          !link
-        ) {
-          throw new Error("Cron style probe did not render");
-        }
-        const listItemStyle = getComputedStyle(secondListItem);
+        const style = (selector: string) => {
+          const element = probe.querySelector(selector);
+          if (!element) {
+            throw new Error(`Cron style probe missing ${selector}`);
+          }
+          return getComputedStyle(element);
+        };
+        const listItemStyle = style("li + li");
         const result = {
-          listPadding: Number.parseFloat(getComputedStyle(list).paddingLeft),
+          listPadding: Number.parseFloat(style("ul").paddingLeft),
           listItemGap: Number.parseFloat(listItemStyle.marginTop),
           listItemFontSize: Number.parseFloat(listItemStyle.fontSize),
-          preBorderStyle: getComputedStyle(pre).borderTopStyle,
-          preOverflow: getComputedStyle(pre).overflowX,
-          sessionFontWeight: getComputedStyle(link).fontWeight,
-          sessionTextDecoration: getComputedStyle(link).textDecorationLine,
+          preBorderStyle: style("pre").borderTopStyle,
+          preOverflow: style("pre").overflowX,
+          sessionFontWeight: style(".session-link").fontWeight,
+          sessionTextDecoration: style(".session-link").textDecorationLine,
         };
         probe.remove();
         return result;
       });
       expect(cronStyles.listPadding).toBeGreaterThan(0);
       expect(cronStyles.listItemGap / cronStyles.listItemFontSize).toBeCloseTo(0.4, 2);
-      expect(cronStyles.preBorderStyle).toBe("solid");
-      expect(cronStyles.preOverflow).toBe("auto");
-      expect(cronStyles.sessionFontWeight).toBe("500");
-      expect(cronStyles.sessionTextDecoration).toBe("none");
+      expect(cronStyles).toMatchObject({
+        preBorderStyle: "solid",
+        preOverflow: "auto",
+        sessionFontWeight: "500",
+        sessionTextDecoration: "none",
+      });
 
       const skillsResponse = await page.goto(`${suite.server.baseUrl}skills`);
       expect(skillsResponse?.status()).toBe(200);
@@ -99,26 +83,28 @@ suite.define(() => {
           <table><tbody><tr><td>Cell</td></tr></tbody></table>
         `;
         document.body.append(probe);
-        const heading = probe.querySelector("h2");
-        const task = probe.querySelector(".task-list-item");
-        const pre = probe.querySelector("pre");
-        const table = probe.querySelector("table");
-        if (!heading || !task || !pre || !table) {
-          throw new Error("Skills style probe did not render");
-        }
+        const style = (selector: string) => {
+          const element = probe.querySelector(selector);
+          if (!element) {
+            throw new Error(`Skills style probe missing ${selector}`);
+          }
+          return getComputedStyle(element);
+        };
         const result = {
-          headingBorderStyle: getComputedStyle(heading).borderBottomStyle,
-          preOverflow: getComputedStyle(pre).overflowX,
-          tableDisplay: getComputedStyle(table).display,
-          taskListStyle: getComputedStyle(task).listStyleType,
+          headingBorderStyle: style("h2").borderBottomStyle,
+          preOverflow: style("pre").overflowX,
+          tableDisplay: style("table").display,
+          taskListStyle: style(".task-list-item").listStyleType,
         };
         probe.remove();
         return result;
       });
-      expect(skillsStyles.headingBorderStyle).toBe("solid");
-      expect(skillsStyles.preOverflow).toBe("auto");
-      expect(skillsStyles.tableDisplay).toBe("block");
-      expect(skillsStyles.taskListStyle).toBe("none");
+      expect(skillsStyles).toEqual({
+        headingBorderStyle: "solid",
+        preOverflow: "auto",
+        tableDisplay: "block",
+        taskListStyle: "none",
+      });
 
       const chatResponse = await page.goto(`${suite.server.baseUrl}chat?session=main`);
       expect(chatResponse?.status()).toBe(200);
@@ -142,51 +128,37 @@ suite.define(() => {
           <ol class="probe-ordered"><li>Ordered</li></ol>
         `;
         document.body.append(probe);
-        const list = probe.querySelector(".probe-list");
-        const quote = probe.querySelector(".probe-quote");
-        const dimension = probe.querySelector("th:first-child");
-        const demographics = probe.querySelector("td:first-child");
-        const table = probe.querySelector("table");
-        const tableCopy = probe.querySelector(".probe-table-copy");
-        const taskList = probe.querySelector(".probe-task-list");
-        const details = probe.querySelector(".probe-details");
-        const unordered = probe.querySelector(".probe-unordered");
-        const ordered = probe.querySelector(".probe-ordered");
-        if (
-          !dimension ||
-          !demographics ||
-          !list ||
-          !quote ||
-          !table ||
-          !tableCopy ||
-          !taskList ||
-          !details ||
-          !unordered ||
-          !ordered
-        ) {
-          throw new Error("Chat Markdown style probe did not render");
-        }
-        const lineCount = (element: Element) => {
+        const element = (selector: string) => {
+          const found = probe.querySelector(selector);
+          if (!found) {
+            throw new Error(`Chat Markdown style probe missing ${selector}`);
+          }
+          return found;
+        };
+        const dimension = element("th:first-child");
+        const gap = (before: string, after: string) =>
+          element(after).getBoundingClientRect().top -
+          element(before).getBoundingClientRect().bottom;
+        const margin = (selector: string) =>
+          Number.parseFloat(getComputedStyle(element(selector)).marginTop);
+        const lineCount = (target: Element) => {
           const range = document.createRange();
-          range.selectNodeContents(element);
+          range.selectNodeContents(target);
           return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size;
         };
         const result = {
-          demographicsLineCount: lineCount(demographics),
+          demographicsLineCount: lineCount(element("td:first-child")),
           dimensionLineCount: lineCount(dimension),
           firstColumnWidth: dimension.getBoundingClientRect().width,
-          listToQuoteGap: quote.getBoundingClientRect().top - list.getBoundingClientRect().bottom,
-          quoteMargin: Number.parseFloat(getComputedStyle(quote).marginTop),
-          tableToCopyGap:
-            tableCopy.getBoundingClientRect().top - table.getBoundingClientRect().bottom,
-          tableCopyMargin: Number.parseFloat(getComputedStyle(tableCopy).marginTop),
-          taskListToDetailsGap:
-            details.getBoundingClientRect().top - taskList.getBoundingClientRect().bottom,
-          detailsMargin: Number.parseFloat(getComputedStyle(details).marginTop),
-          unorderedToOrderedGap:
-            ordered.getBoundingClientRect().top - unordered.getBoundingClientRect().bottom,
-          orderedMargin: Number.parseFloat(getComputedStyle(ordered).marginTop),
-          blockFontSize: Number.parseFloat(getComputedStyle(tableCopy).fontSize),
+          listToQuoteGap: gap(".probe-list", ".probe-quote"),
+          quoteMargin: margin(".probe-quote"),
+          tableToCopyGap: gap("table", ".probe-table-copy"),
+          tableCopyMargin: margin(".probe-table-copy"),
+          taskListToDetailsGap: gap(".probe-task-list", ".probe-details"),
+          detailsMargin: margin(".probe-details"),
+          unorderedToOrderedGap: gap(".probe-unordered", ".probe-ordered"),
+          orderedMargin: margin(".probe-ordered"),
+          blockFontSize: Number.parseFloat(getComputedStyle(element(".probe-table-copy")).fontSize),
         };
         probe.remove();
         return result;

@@ -1,7 +1,7 @@
 // Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
 import path from "node:path";
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -166,6 +166,22 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
   return { gateway, page };
 }
 
+const button = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
+const expectCount = async (locator: Locator, count: number) =>
+  expect.poll(() => locator.count()).toBe(count);
+const expectFocused = async (locator: Locator) =>
+  expect.poll(() => locator.evaluate((element) => document.activeElement === element)).toBe(true);
+
+async function expectSecretNotEchoed(page: Page, secret: string, markup = false) {
+  expect(await page.locator("body").textContent()).not.toContain(secret);
+  if (markup) {
+    expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
+      secret,
+    );
+  }
+}
+
 function panelFor(page: Page, prompt: string) {
   return page.locator("openclaw-chat-question-panel").filter({ hasText: prompt });
 }
@@ -230,6 +246,7 @@ suite.define(() => {
         isOther: false,
       },
     ]);
+
     await emitRequested(gateway, request);
     await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
     await expectQuestionAttention(page, request.questions[0]!.question);
@@ -243,7 +260,7 @@ suite.define(() => {
 
     await attention.tap();
     try {
-      await expect.poll(() => tooltip.count()).toBe(1);
+      await expectCount(tooltip, 1);
     } finally {
       await screenshot(page, "01-sidebar-attention-tapped.png");
     }
@@ -255,12 +272,12 @@ suite.define(() => {
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
     await attention.tap();
-    await expect.poll(() => tooltip.count()).toBe(0);
+    await expectCount(tooltip, 0);
     expect(await shell.getAttribute("class")).toContain("shell--nav-drawer-open");
     await attention.tap();
-    await expect.poll(() => tooltip.count()).toBe(1);
+    await expectCount(tooltip, 1);
     await page.keyboard.press("Escape");
-    await expect.poll(() => tooltip.count()).toBe(0);
+    await expectCount(tooltip, 0);
     expect(await shell.getAttribute("class")).toContain("shell--nav-drawer-open");
 
     await row.locator(".sidebar-recent-session__link").tap();
@@ -287,6 +304,7 @@ suite.define(() => {
         isOther: false,
       },
     ]);
+
     await emitRequested(gateway, request);
     const panel = panelFor(page, prompt);
     await panel.waitFor();
@@ -306,9 +324,7 @@ suite.define(() => {
     await panel.waitFor();
     await expectQuestionAttention(page, request.questions[0]!.question);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
-    expect(await panel.getByRole("button", { name: "Submit", exact: true }).isDisabled()).toBe(
-      true,
-    );
+    expect(await button(panel, "Submit").isDisabled()).toBe(true);
 
     await panel.getByRole("radio", { name: /I've completed this step/ }).click();
     // Opening the link with Enter must not trigger the panel's Enter-to-submit shortcut.
@@ -326,11 +342,11 @@ suite.define(() => {
       status: "answered",
       answers,
     } satisfies QuestionResolveResult);
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await button(panel, "Submit").click();
     const resolved = await gateway.waitForRequest("question.resolve");
     expect(resolved.params).toEqual({ id: request.id, answers });
     expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
-    await expect.poll(() => panel.count()).toBe(0);
+    await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
     await screenshot(page, "04-external-step-completed.png");
   });
@@ -443,16 +459,10 @@ suite.define(() => {
       .poll(() => page.locator(".chat-thread openclaw-chat-question-panel").count())
       .toBe(0);
     await expect.poll(() => panel.getByText("1/1", { exact: true }).count()).toBe(1);
-    await expect.poll(() => panel.getByPlaceholder("Type your own answer here").count()).toBe(1);
-    await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
-    await expect.poll(() => page.locator(".agent-chat__composer-footer").count()).toBe(0);
-    await expect
-      .poll(() =>
-        panel
-          .locator(".chat-question-panel")
-          .evaluate((element) => document.activeElement === element),
-      )
-      .toBe(true);
+    await expectCount(panel.getByPlaceholder("Type your own answer here"), 1);
+    await expectCount(page.locator(".agent-chat__input"), 0);
+    await expectCount(page.locator(".agent-chat__composer-footer"), 0);
+    await expectFocused(panel.locator(".chat-question-panel"));
 
     await expect
       .poll(async () => {
@@ -470,39 +480,23 @@ suite.define(() => {
     await page
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .hover();
-    await expect
-      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
-      .toBe(1);
+    await expectCount(page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open"), 1);
     await page.mouse.move(400, 50);
-    await expect
-      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
-      .toBe(0);
+    await expectCount(page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open"), 0);
     await page
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .focus();
-    await expect
-      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
-      .toBe(1);
-    await expect
-      .poll(() => page.locator('.session-progress-hovercard[data-open="true"]').count())
-      .toBe(0);
+    await expectCount(page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open"), 1);
+    await expectCount(page.locator('.session-progress-hovercard[data-open="true"]'), 0);
     await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();
     await composer.waitFor();
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
-    await expect
-      .poll(() => composer.evaluate((element) => document.activeElement === element))
-      .toBe(true);
+    await expectFocused(composer);
     await page.locator(".chat-question-panel__collapsed-button").click();
     await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
-    await expect
-      .poll(() =>
-        panel
-          .locator(".chat-question-panel")
-          .evaluate((element) => document.activeElement === element),
-      )
-      .toBe(true);
+    await expectFocused(panel.locator(".chat-question-panel"));
 
     const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
     await gateway.setMethodResponse("question.resolve", {
@@ -510,11 +504,11 @@ suite.define(() => {
       answers,
     } satisfies QuestionResolveResult);
     await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await button(panel, "Submit").click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({ id: request.id, answers });
 
-    await expect.poll(() => panel.count()).toBe(0);
+    await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
     const summary = page.locator(".chat-question-summary").filter({ hasText: "Deploy:" });
     await summary.waitFor();
@@ -523,9 +517,7 @@ suite.define(() => {
       .toBe(1);
     await composer.waitFor();
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
-    await expect
-      .poll(() => composer.evaluate((element) => document.activeElement === element))
-      .toBe(true);
+    await expectFocused(composer);
     await summary.scrollIntoViewIfNeeded();
     await screenshot(page, "02-question-answered.png");
     expect(
@@ -543,36 +535,33 @@ suite.define(() => {
     const panel = panelFor(page, "Provide the deployment API key");
     await panel.waitFor();
     await expect.poll(() => panel.getByText("Requested by main", { exact: false }).count()).toBe(1);
-    await expect.poll(() => panel.getByText("Publish the release artifacts.").count()).toBe(1);
+    await expectCount(panel.getByText("Publish the release artifacts."), 1);
     await expect
       .poll(() => panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }).count())
       .toBe(1);
     const secretInput = panel.getByLabel("API key", { exact: true });
-    await expect.poll(() => secretInput.count()).toBe(1);
+    await expectCount(secretInput, 1);
     expect(await secretInput.getAttribute("type")).toBe("password");
     expect(await secretInput.getAttribute("autocomplete")).toBe("off");
     expect(await secretInput.getAttribute("placeholder")).toBe("DEPLOY_API_KEY");
-    await expect.poll(() => panel.locator('[role="radiogroup"]').count()).toBe(0);
+    await expectCount(panel.locator('[role="radiogroup"]'), 0);
     const hostsInput = panel.locator(".chat-question-panel__hosts");
     expect(await hostsInput.inputValue()).toBe("api.example.test");
     await screenshot(page, "07-secret-store-pending.png");
 
     await secretInput.fill(fakeSecret);
     await hostsInput.fill("api.example.test, uploads.example.test extra.example.test");
-    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
-    expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
-      fakeSecret,
-    );
+    await expectSecretNotEchoed(page, fakeSecret, true);
     await screenshot(page, "08-secret-store-masked-input.png");
 
     await secretInput.focus();
     await page.keyboard.press("Tab");
-    const reveal = panel.getByRole("button", { name: "Show secret", exact: true });
+    const reveal = button(panel, "Show secret");
     expect(await reveal.evaluate((element) => element === document.activeElement)).toBe(true);
     await page.keyboard.press("Enter");
     expect(await secretInput.getAttribute("type")).toBe("text");
     expect(await secretInput.inputValue()).toBe(fakeSecret);
-    const hide = panel.getByRole("button", { name: "Hide secret", exact: true });
+    const hide = button(panel, "Hide secret");
     expect(await hide.getAttribute("aria-pressed")).toBe("true");
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
     await screenshot(page, "08-secret-store-visible-input.png");
@@ -581,19 +570,19 @@ suite.define(() => {
     expect(await secretInput.inputValue()).toBe(fakeSecret);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await button(panel, "Submit").click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({
       id: request.id,
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["api.example.test", "uploads.example.test", "extra.example.test"],
     });
-    await expect.poll(() => panel.count()).toBe(0);
+    await expectCount(panel, 0);
     const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
     await summary.waitFor();
     await expect.poll(() => summary.getByText("Answered", { exact: true }).count()).toBe(1);
     expect(await summary.textContent()).not.toContain("stored");
-    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    await expectSecretNotEchoed(page, fakeSecret);
     await screenshot(page, "09-secret-store-answered.png");
   });
 
@@ -612,18 +601,18 @@ suite.define(() => {
     const hostsInput = panel.locator(".chat-question-panel__hosts");
     await secretInput.fill(fakeSecret);
     await hostsInput.fill("bad-host.example.test");
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await button(panel, "Submit").click();
     await gateway.waitForRequest("question.resolve");
     await panel.getByText(validationMessage, { exact: false }).waitFor();
     await expect.poll(() => secretInput.isEnabled()).toBe(true);
     expect(await secretInput.inputValue()).toBe(fakeSecret);
-    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    await expectSecretNotEchoed(page, fakeSecret);
     await screenshot(page, "10-secret-store-validation-error.png");
 
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
     await hostsInput.fill("corrected.example.test");
     const previousRequestCount = (await gateway.getRequests("question.resolve")).length;
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await button(panel, "Submit").click();
     const retry = await gateway.waitForRequest("question.resolve", {
       after: previousRequestCount,
     });
@@ -633,7 +622,7 @@ suite.define(() => {
       secretStoreAllowedHosts: ["corrected.example.test"],
     });
     await expect.poll(() => panel.count()).toBe(0);
-    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    await expectSecretNotEchoed(page, fakeSecret);
   });
 
   it("loads a mounted /ask document and resolves its secret through the shared question card", async () => {
@@ -674,16 +663,13 @@ suite.define(() => {
     const secretInput = panel.getByLabel("API key", { exact: true });
     expect(await secretInput.getAttribute("type")).toBe("password");
     await secretInput.fill(fakeSecret);
-    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
-    expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
-      fakeSecret,
-    );
+    await expectSecretNotEchoed(page, fakeSecret, true);
     await screenshot(page, "12-secret-store-ask-masked-input.png");
-    await panel.getByRole("button", { name: "Show secret", exact: true }).click();
+    await button(panel, "Show secret").click();
     expect(await secretInput.getAttribute("type")).toBe("text");
     expect(await secretInput.inputValue()).toBe(fakeSecret);
     await screenshot(page, "12-secret-store-ask-visible-input.png");
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await button(panel, "Submit").click();
 
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({
@@ -714,6 +700,7 @@ suite.define(() => {
         isOther: true,
       },
     ]);
+
     const second = questionRecord("question-b-audience", [
       {
         questionId: "audience",
@@ -723,13 +710,14 @@ suite.define(() => {
         isOther: true,
       },
     ]);
+
     await emitRequested(gateway, first);
     await emitRequested(gateway, second);
     const panel = page.locator("openclaw-chat-question-panel");
     await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
-    await panel.getByRole("button", { name: "Next", exact: true }).click();
+    await button(panel, "Next").click();
     await panel.getByText("Who should read it?", { exact: true }).waitFor();
-    await panel.getByRole("button", { name: "Previous", exact: true }).click();
+    await button(panel, "Previous").click();
     await panel.getByText("Which format should I use?", { exact: true }).waitFor();
     try {
       expect(
@@ -762,10 +750,8 @@ suite.define(() => {
       const { gateway, page } = await openQuestionPage();
       await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-      await expect.poll(() => panes.count()).toBe(2);
-      await expect
-        .poll(() => panes.locator(".agent-chat__composer-combobox textarea").count())
-        .toBe(2);
+      await expectCount(panes, 2);
+      await expectCount(panes.locator(".agent-chat__composer-combobox textarea"), 2);
       expect(await gateway.getRequests("question.list")).toHaveLength(1);
 
       const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
@@ -776,9 +762,10 @@ suite.define(() => {
           options: [{ label: "Staging" }, { label: "Production" }],
         },
       ]);
+
       await emitRequested(gateway, request);
       const panels = panelFor(page, "Where should both panes deploy?");
-      await expect.poll(() => panels.count()).toBe(2);
+      await expectCount(panels, 2);
       await expectQuestionAttention(page, request.questions[0]!.question);
 
       const answers = { answers: { deploy_target: ["Staging"] } };
@@ -806,13 +793,13 @@ suite.define(() => {
       const remainingPanes = page.locator("openclaw-chat-pane");
       if (closeSubmittingPane) {
         await selectChatLayoutAction(submittingPane, "Close pane");
-        await expect.poll(() => remainingPanes.count()).toBe(1);
+        await expectCount(remainingPanes, 1);
         await expectQuestionAttention(page, request.questions[0]!.question);
         await gateway.resolveDeferred("question.resolve", result);
       }
       const remainingCount = closeSubmittingPane ? 1 : 2;
 
-      await expect.poll(() => panels.count()).toBe(0);
+      await expectCount(panels, 0);
       await expect
         .poll(() => remainingPanes.locator(".agent-chat__composer-combobox textarea").count())
         .toBe(remainingCount);
@@ -841,6 +828,7 @@ suite.define(() => {
         options: [{ label: "Staging" }, { label: "Production" }],
       },
     ]);
+
     await gateway.setMethodResponse("question.list", { questions: [request] });
     await emitRequested(gateway, request);
     const panel = panelFor(page, "Where should I deploy after reconnecting?");

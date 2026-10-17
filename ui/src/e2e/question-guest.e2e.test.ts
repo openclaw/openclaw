@@ -31,6 +31,12 @@ const suite = createControlUiE2eSuite({
 });
 const viewport = { width: 1440, height: 900 };
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const summaryReady = "I have the outline ready. I need your preference before continuing.";
+const settle = (turn: Promise<unknown>) =>
+  turn.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
 
 async function releaseQuestionBridge(page: Page, gateway: MockGatewayControls) {
   await gateway.waitForRequest("connect");
@@ -128,27 +134,15 @@ suite.define(() => {
             },
             {
               role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "I have the outline ready. I need your preference before continuing.",
-                },
-              ],
+              content: [{ type: "text", text: summaryReady }],
             },
           ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, guestQuestionSessionKey));
         await releaseQuestionBridge(page, gateway);
         await gateway.waitForRequest("chat.startup");
-        await page
-          .getByText("I have the outline ready. I need your preference before continuing.", {
-            exact: true,
-          })
-          .waitFor();
-        const result = fixture.ask("summary-format", run.signal).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+        await page.getByText(summaryReady, { exact: true }).waitFor();
+        const result = settle(fixture.ask("summary-format", run.signal));
         turns.push(result);
         const registered = await fixture.registration;
         await fixture.flushEvents();
@@ -200,10 +194,7 @@ suite.define(() => {
         expect(await panel.count()).toBe(0);
         await screenshot("ordinary-question-answered.png");
 
-        const cancelled = fixture.ask("cancelled-format", run.signal).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+        const cancelled = settle(fixture.ask("cancelled-format", run.signal));
         turns.push(cancelled);
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
         run.abort(new Error("Synthetic run stopped"));
