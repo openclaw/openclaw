@@ -56,7 +56,6 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
-import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult, type AnyAgentTool } from "../tools/common.js";
 import type { MessageToolOptions } from "../tools/message-tool-execution.types.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -89,9 +88,9 @@ let requestRefresh: (signal?: AbortSignal) => Promise<void>;
 let state: OpenClawTestState;
 
 function diagnosticText(value: unknown): string | undefined {
-  return value === undefined
-    ? undefined
-    : String(value instanceof Error ? value.message : value).slice(0, 512);
+  const text =
+    value instanceof Error ? value.message : typeof value === "string" ? value : undefined;
+  return text?.slice(0, 512);
 }
 
 // Prepared catalogs, auth and external I/O are fixture inputs. Keep the real
@@ -331,13 +330,34 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         }
       };
       const sentForGeneration = new Set<number>();
+      let previousCall: { id: string; name: string; generation: number } | undefined;
       providerStream.mockImplementation((_model, providerContext) => {
         const generation = messageTools.length;
-        const last = providerContext.messages.at(-1);
-        const details = last?.role === "toolResult" ? readToolResultDetails(last) : undefined;
+        const previous = previousCall;
+        // Provider projection strips private details and may append context after
+        // a tool result. Follow the matched visible control, not transcript position.
+        const last = previous
+          ? providerContext.messages.findLast(
+              (message) => message.role === "toolResult" && message.toolCallId === previous.id,
+            )
+          : undefined;
+        const controlText =
+          last?.role === "toolResult"
+            ? last.content.find((part) => part.type === "text")?.text
+            : undefined;
+        let details: Record<string, unknown> | undefined;
+        if (previous) {
+          expect(last).toMatchObject({ toolName: previous.name, isError: false });
+          expect(controlText).toBeTypeOf("string");
+          details = asOptionalRecord(JSON.parse(controlText ?? ""));
+          expect(details?.status).toMatch(/^(waiting|completed)$/);
+          if (previous.generation !== generation) {
+            expect(details?.status).toBe("completed");
+          }
+        }
         let call: { name: string; arguments: Record<string, unknown> } | undefined;
         if (details?.status === "waiting") {
-          expect(details.runId).toBeTypeOf("string");
+          expect(details.runId).toEqual(expect.stringMatching(/\S/));
           if (generation === 1) {
             parked.resolve();
           }
@@ -374,12 +394,16 @@ describe("ordinary source reply across deferred plugin refresh", () => {
                 : undefined,
           }),
         );
+        const toolCallId = `call-${generation}-${providerStream.mock.calls.length}`;
+        if (call) {
+          previousCall = { id: toolCallId, name: call.name, generation };
+        }
         const message = buildEmbeddedRunnerAssistant({
           content: call
             ? [
                 {
                   type: "toolCall",
-                  id: `call-${generation}-${providerStream.mock.calls.length}`,
+                  id: toolCallId,
                   ...call,
                 },
               ]
