@@ -44,22 +44,16 @@ suite.define(() => {
       const oldChildren = children.map((child, index) =>
         index === 8 ? { ...child, hasActiveRun: false, activeRunIds: [], status: "done" } : child,
       );
-      const cachedRoot = {
+      const rootSnapshot = (rows: typeof children, offset: number) => ({
         ...sessionsListResponse(
-          [parent, selected, ...oldChildren].map((row) =>
-            Object.assign({}, row, { snapshotAt: baseTime + 150 }),
+          [parent, selected, ...rows].map((row) =>
+            Object.assign({}, row, { snapshotAt: baseTime + offset }),
           ),
         ),
-        ts: baseTime + 150,
-      };
-      const initialRoot = {
-        ...sessionsListResponse(
-          [parent, selected, ...(initialPrimary === "stale" ? oldChildren : children)].map((row) =>
-            Object.assign({}, row, { snapshotAt: baseTime + 100 }),
-          ),
-        ),
-        ts: baseTime + 100,
-      };
+        ts: baseTime + offset,
+      });
+      const cachedRoot = rootSnapshot(oldChildren, 150);
+      const initialRoot = rootSnapshot(initialPrimary === "stale" ? oldChildren : children, 100);
       const freshChildren = { ...sessionsListResponse(children), ts: baseTime + 200 };
       const childMatch = { spawnedBy: parentKey };
       const responses = (root: typeof cachedRoot) => ({

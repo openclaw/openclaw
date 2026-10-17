@@ -7,7 +7,6 @@ import {
 import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Settings media permission lifetime");
-
 type MediaEvent = {
   type: "enumerate" | "resolve" | "reject" | "probe" | "stop" | "pointer";
   route: string;
@@ -29,10 +28,8 @@ async function installMediaBoundary(page: Page, holdRecoveryEnumeration: boolean
   await page.addInitScript(
     ({ holdRecovery }) => {
       const recordedEvents: MediaEvent[] = [];
-      const pending = new Map<
-        number,
-        { resolve: (devices: MediaDeviceInfo[]) => void; reject: () => void }
-      >();
+      type Pending = { resolve: (devices: MediaDeviceInfo[]) => void; reject: () => void };
+      const pending = new Map<number, Pending>();
       const granted = new Set<string>();
       let sequence = 0;
       const record = (event: Omit<MediaEvent, "route">) =>
@@ -97,24 +94,18 @@ async function installMediaBoundary(page: Page, holdRecoveryEnumeration: boolean
           }
           pending.delete(id);
           record({ type: reject ? "reject" : "resolve", id });
-          if (reject) {
-            operation.reject();
-          } else {
-            operation.resolve(devices());
-          }
+          return reject ? operation.reject() : operation.resolve(devices());
         },
       };
     },
     { holdRecovery: holdRecoveryEnumeration },
   );
 }
-
-async function events(page: Page) {
-  return page.evaluate(() => [...window.settingsMediaProof.events]);
-}
-
-async function eventCount(page: Page, type: MediaEvent["type"]) {
-  return (await events(page)).filter((event) => event.type === type).length;
+async function eventCount(page: Page, eventType: MediaEvent["type"]) {
+  return page.evaluate(
+    (type) => window.settingsMediaProof.events.filter((event) => event.type === type).length,
+    eventType,
+  );
 }
 
 async function settle(page: Page, enumerationId: number, rejectEnumeration = false) {
@@ -137,11 +128,9 @@ async function settle(page: Page, enumerationId: number, rejectEnumeration = fal
   );
 }
 
-async function renderedAfterMediaSettlement(page: Page) {
-  // The held API promises, immediate synthetic stream and re-enumeration are all
-  // microtasks. Cross a rendered frame after that finite chain; no product state
-  // or permission flag is read or changed to manufacture completion.
-  await page.evaluate(
+function renderedAfterMediaSettlement(page: Page) {
+  // Cross a rendered frame after the finite API microtask chain without changing state.
+  return page.evaluate(
     () =>
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -168,18 +157,14 @@ suite.define(() => {
           let { sidebar } = await waitForControlUiSettingsTakeover(page);
           const configOwner = await page.locator("openclaw-config-page").elementHandle();
           expect(configOwner).not.toBeNull();
-          const ownerConnectedAtGesture = await configOwner!.evaluate(
-            (element) => element.isConnected,
-          );
-          expect(ownerConnectedAtGesture).toBe(true);
+          expect(await configOwner!.evaluate((element) => element.isConnected)).toBe(true);
           await expect.poll(() => eventCount(page, "enumerate")).toBe(2);
           const picker = () => page.locator(`select[data-settings-${kind}]`);
           await picker().click();
           await page.keyboard.press("Escape");
           expect(new URL(page.url()).pathname).toBe("/settings/appearance");
           const target = kind === "microphone" ? 1 : 2;
-          const other = target === 1 ? 2 : 1;
-          await settle(page, other);
+          await settle(page, target === 1 ? 2 : 1);
           if (transition === "second await") {
             await settle(page, target, true);
             await expect.poll(() => eventCount(page, "enumerate")).toBe(3);
@@ -192,8 +177,7 @@ suite.define(() => {
           } else if (transition !== "stay") {
             await sidebar.locator('a[href="/settings/advanced"]').click();
             await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/advanced");
-            // History moves before the route module and view commit. Retire the
-            // actual Appearance surface before releasing its pending enumeration.
+            // Wait for view retirement, not just history, before releasing enumeration.
             const pageTitle = page.locator(
               "openclaw-config-page .content-header--settings .page-title",
             );
@@ -204,12 +188,11 @@ suite.define(() => {
           const ownerConnectedAfterExit = await configOwner!.evaluate(
             (element) => element.isConnected,
           );
-          if (transition === "disconnect") {
-            expect(ownerConnectedAfterExit).toBe(false);
+          if (transition !== "stay") {
+            expect(ownerConnectedAfterExit).toBe(transition !== "disconnect");
           }
           const settlementSurface = await settle(page, transition === "second await" ? 3 : target);
           if (transition === "route leave" || transition === "second await") {
-            expect(ownerConnectedAfterExit).toBe(true);
             expect(settlementSurface).toMatchObject({
               route: "/settings/advanced",
               ownerConnected: true,
@@ -234,12 +217,12 @@ suite.define(() => {
             await page.keyboard.press("Escape");
             await renderedAfterMediaSettlement(page);
           }
-          const rows = await events(page);
-          const probes = rows.filter((row) => row.type === "probe");
+          const rows = await page.evaluate(() => [...window.settingsMediaProof.events]);
           const pointers = rows.filter((row) => row.type === "pointer");
-          expect(pointers.length).toBe(transition === "stay" ? 1 : 2);
-          expect(pointers.every((row) => row.trusted)).toBe(true);
-          expect(probes.map((probe) => probe.constraints)).toEqual([
+          expect(pointers.map((row) => row.trusted)).toEqual(
+            transition === "stay" ? [true] : [true, true],
+          );
+          expect(rows.filter((row) => row.type === "probe").map((row) => row.constraints)).toEqual([
             kind === "microphone" ? { audio: true } : { video: true },
           ]);
           expect(rows.filter((row) => row.type === "stop")).toHaveLength(1);

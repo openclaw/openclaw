@@ -9,41 +9,25 @@ import {
   setSidebarProofTheme,
 } from "./sidebar-footer-proof.test-support.ts";
 
-const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const featureBuild: ControlUiBuildInfo = {
+  version: "2026.8.14",
+  commit: "0123456789abcdef0123456789abcdef01234567",
+  commitAt: "2026-08-14T12:00:00.000Z",
+  builtAt: "2026-08-14T12:00:00.000Z",
+  branch: "feat/sidebar-footer",
+  dirty: false,
+  release: false,
+  buildId: "sidebar-account-footer-feat-sidebar-footer",
+};
 
-function buildInfo(branch: string): ControlUiBuildInfo {
-  return {
-    version: "2026.8.14",
-    commit: COMMIT,
-    commitAt: "2026-08-14T12:00:00.000Z",
-    builtAt: "2026-08-14T12:00:00.000Z",
-    branch,
-    dirty: false,
-    release: false,
-    buildId: `sidebar-account-footer-${branch.replaceAll("/", "-")}`,
-  };
-}
-
-async function closeIdentityMenu(page: Page, sidebar: Locator) {
-  await page.keyboard.press("Escape");
-  await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(0);
-}
-
-async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
-  const identity = sidebar.locator(".sidebar-identity-card");
-  const parts = [identity.locator("openclaw-viewer-avatar"), identity];
-  for (const part of parts) {
-    await part.click();
-    await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(1);
-    await closeIdentityMenu(page, sidebar);
-  }
-}
-
-async function assertIdentityMenuContract(menu: Locator) {
-  expect(await menu.locator('[data-value="command:recent-activity"]').count()).toBe(0);
-  expect(
-    await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface") !== null),
-  ).toBe(false);
+async function openIdentityMenu(page: Page, sidebar: Locator) {
+  await setSidebarProofTheme(page, "dark");
+  await waitForControlUiGatewayReady(page);
+  await sidebar.locator(".sidebar-identity-card").click();
+  await page.mouse.move(0, 0);
+  const menu = sidebar.locator(".sidebar-identity-menu");
+  await menu.waitFor();
+  return menu;
 }
 
 async function expectRailConnectionStatus(footer: Locator, kind: string, label: string) {
@@ -70,7 +54,12 @@ async function expectRailConnectionStatus(footer: Locator, kind: string, label: 
 
 async function runAccountFooterProof(page: Page, sidebar: Locator) {
   const identity = sidebar.locator(".sidebar-identity-card");
-  await assertSingleAccountTarget(page, sidebar);
+  for (const part of [identity.locator("openclaw-viewer-avatar"), identity]) {
+    await part.click();
+    await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(1);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => sidebar.locator(".sidebar-identity-menu").count()).toBe(0);
+  }
 
   for (const theme of ["light", "dark"] as const) {
     await setSidebarProofTheme(page, theme);
@@ -80,14 +69,13 @@ async function runAccountFooterProof(page: Page, sidebar: Locator) {
     await page.keyboard.press("Enter");
     const menu = sidebar.locator(".sidebar-identity-menu");
     await menu.waitFor();
-    await assertIdentityMenuContract(menu);
+    expect(await menu.locator('[data-value="command:recent-activity"]').count()).toBe(0);
+    expect(await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface"))).toBeNull();
 
-    const buildLabel = (
-      await menu.getByRole("menuitem", { name: "Control UI build details" }).textContent()
-    )?.trim();
-    const buildPrefix = "feat/sidebar-f…@0123456";
-    expect(buildLabel?.startsWith(`${buildPrefix} · `)).toBe(true);
     const buildLink = menu.getByRole("menuitem", { name: "Control UI build details" });
+    expect((await buildLink.textContent())?.trim().startsWith("feat/sidebar-f…@0123456 · ")).toBe(
+      true,
+    );
     const buildTooltip = sidebar.locator(
       "openclaw-sidebar-build-chip openclaw-tooltip .tooltip-surface[popover]",
     );
@@ -151,7 +139,6 @@ async function runAccountFooterProof(page: Page, sidebar: Locator) {
   }
 }
 
-const featureBuild = buildInfo("feat/sidebar-footer");
 const gatewayBuild = {
   serverVersion: featureBuild.version ?? undefined,
   serverBuildId: featureBuild.buildId,
@@ -183,63 +170,54 @@ suite.define(() => {
         autoEnabled: false,
         target: { kind: "package" as const, version: "2.0.0" },
       };
-      const opened = await openSidebarFooterProofPage(suite, {
-        ...gatewayBuild,
-        operatorScopes: ["operator.read", "operator.admin"],
-        updateAvailable,
-        updateSchedule,
-      });
-      try {
-        const { gateway, page, sidebar } = opened;
-        await setSidebarProofTheme(page, "dark");
-        await waitForControlUiGatewayReady(page);
-        await sidebar.locator(".sidebar-identity-card").click();
-        await page.mouse.move(0, 0);
-        const menu = sidebar.locator(".sidebar-identity-menu");
-        const updates = menu.getByRole("menuitem", { name: /^Updates/ });
-        await updates.waitFor();
-        const badge = updates.getByText("Available", { exact: true });
-        await expect.poll(() => badge.count()).toBe(channel === "dev" ? 0 : 1);
-        await expect
-          .poll(() => sidebar.locator(".sidebar-issues-button__count").count())
-          .toBe(channel === "dev" ? 0 : 1);
-        if (channel === "stable") {
-          // The selected schedule wins over leftover availability from another channel.
-          await gateway.emitGatewayEvent("update.available", {
-            updateAvailable,
-            schedule: { ...updateSchedule, channel: "dev" },
-          });
-          await expect.poll(() => badge.count()).toBe(0);
-          await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(0);
-          await gateway.emitGatewayEvent("update.available", {
-            updateAvailable: { ...updateAvailable, channel: "beta" },
-            schedule: { ...updateSchedule, channel: "beta" },
-          });
-          await expect.poll(() => badge.count()).toBe(1);
-          await gateway.emitGatewayEvent("update.available", {
-            updateAvailable: { channel: "beta", currentVersion: "2.0.0", latestVersion: "2.0.0" },
-            schedule: { channel: "beta", autoEnabled: false },
-          });
-          await expect.poll(() => badge.count()).toBe(0);
-        }
-        await updates.click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      } finally {
-        await suite.closeBrowserContext(opened.context);
-      }
+      await withFooter(
+        async ({ gateway, page, sidebar }) => {
+          const menu = await openIdentityMenu(page, sidebar);
+          const updates = menu.getByRole("menuitem", { name: /^Updates/ });
+          await updates.waitFor();
+          const badge = updates.getByText("Available", { exact: true });
+          await expect.poll(() => badge.count()).toBe(channel === "dev" ? 0 : 1);
+          await expect
+            .poll(() => sidebar.locator(".sidebar-issues-button__count").count())
+            .toBe(channel === "dev" ? 0 : 1);
+          if (channel === "stable") {
+            // The selected schedule wins over leftover availability from another channel.
+            await gateway.emitGatewayEvent("update.available", {
+              updateAvailable,
+              schedule: { ...updateSchedule, channel: "dev" },
+            });
+            await expect.poll(() => badge.count()).toBe(0);
+            await expect
+              .poll(() => sidebar.locator(".sidebar-issues-button__count").count())
+              .toBe(0);
+            await gateway.emitGatewayEvent("update.available", {
+              updateAvailable: { ...updateAvailable, channel: "beta" },
+              schedule: { ...updateSchedule, channel: "beta" },
+            });
+            await expect.poll(() => badge.count()).toBe(1);
+            await gateway.emitGatewayEvent("update.available", {
+              updateAvailable: { channel: "beta", currentVersion: "2.0.0", latestVersion: "2.0.0" },
+              schedule: { channel: "beta", autoEnabled: false },
+            });
+            await expect.poll(() => badge.count()).toBe(0);
+          }
+          await updates.click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        },
+        {
+          ...gatewayBuild,
+          operatorScopes: ["operator.read", "operator.admin"],
+          updateAvailable,
+          updateSchedule,
+        },
+      );
     },
   );
 
   it("opens Updates settings from the account menu without starting an update", async () => {
-    await withFooter(async (opened) => {
-      const { gateway, page, sidebar } = opened;
-      await setSidebarProofTheme(page, "dark");
-      await waitForControlUiGatewayReady(page);
-      await sidebar.locator(".sidebar-identity-card").click();
-      await page.mouse.move(0, 0);
-      const menu = sidebar.locator(".sidebar-identity-menu");
-      await menu.waitFor();
+    await withFooter(async ({ gateway, page, sidebar }) => {
+      const menu = await openIdentityMenu(page, sidebar);
       await menu.getByRole("menuitem", { name: "Updates", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
       await expect.poll(() => menu.count()).toBe(0);
@@ -253,8 +231,7 @@ suite.define(() => {
 
   it("labels the lifecycle status on the account icon and retries through its menu", async () => {
     await withFooter(
-      async (opened) => {
-        const { gateway, page, sidebar } = opened;
+      async ({ gateway, page, sidebar }) => {
         const footer = sidebar.locator(".sidebar-footer-bar");
         await setSidebarProofTheme(page, "dark");
         await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
@@ -328,14 +305,13 @@ suite.define(() => {
   });
 
   it("keeps the feature account target, identity menu, and visual states coherent", async () => {
-    await withFooter(async (opened) => {
-      await runAccountFooterProof(opened.page, opened.sidebar);
+    await withFooter(async ({ page, sidebar }) => {
+      await runAccountFooterProof(page, sidebar);
     });
   });
 
   it("navigates from the build link without opening its hovercard", async () => {
-    await withFooter(async (opened) => {
-      const { page, sidebar } = opened;
+    await withFooter(async ({ page, sidebar }) => {
       await sidebar.locator(".sidebar-identity-card").click();
       const buildLink = sidebar.getByRole("menuitem", {
         name: "Control UI build details",
