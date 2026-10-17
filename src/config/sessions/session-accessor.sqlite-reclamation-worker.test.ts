@@ -25,10 +25,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
-import type {
-  SessionAccessScope,
-  SqliteSessionReclamationDiagnostics,
-} from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
@@ -48,33 +45,35 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 async function withState(run: (state: OpenClawTestState) => Promise<void>, fileLog = false) {
-  await withOpenClawTestState(
-    { scenario: "minimal", ...(fileLog ? { env: { OPENCLAW_TEST_FILE_LOG: "1" } } : {}) },
-    async (state) => {
-      try {
-        await run(state);
-      } finally {
-        vi.useRealTimers();
-        vi.restoreAllMocks();
-        if (fileLog) {
-          await flushLogger();
-          setLoggerOverride(null);
-        }
+  const options = {
+    scenario: "minimal" as const,
+    ...(fileLog ? { env: { OPENCLAW_TEST_FILE_LOG: "1" } } : {}),
+  };
+  await withOpenClawTestState(options, (state) =>
+    run(state).finally(async () => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      if (fileLog) {
+        await flushLogger();
+        setLoggerOverride(null);
       }
-    },
+    }),
   );
 }
 
 function createEntryFixture(
-  scope: SessionAccessScope & { sessionId: string },
-  databaseOptions: ReclamationDatabaseOptions,
+  state: OpenClawTestState,
+  sessionId: string,
+  databaseOptions = databaseFor(state),
+  env = state.env,
 ) {
-  ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const scope = seed(state, sessionId, 1, env);
   const entry = loadSessionEntry(scope);
   assert.ok(entry);
   return {
     scope,
     entry,
+    databaseOptions,
     plan: {
       kind: "entry",
       databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
@@ -89,14 +88,9 @@ function createEntryFixture(
   };
 }
 
-function entryFixtureFor(state: OpenClawTestState, sessionId: string, env = state.env) {
-  const scope = scopeFor(state, sessionId);
-  const databaseOptions = {
-    agentId: scope.agentId,
-    env,
-    path: openOpenClawAgentDatabase(scope).path,
-  };
-  return { ...createEntryFixture(scope, databaseOptions), databaseOptions };
+function databaseFor(state: OpenClawTestState, env = state.env) {
+  const options = { agentId: "main", env: state.env };
+  return { ...options, path: openOpenClawAgentDatabase(options).path, env };
 }
 
 function entries(
@@ -105,21 +99,22 @@ function entries(
   databaseOptions: ReclamationDatabaseOptions,
 ) {
   return Array.from({ length: 4 }, (_, index) =>
-    createEntryFixture(scopeFor(state, `${prefix}-${index}`), databaseOptions),
+    createEntryFixture(state, `${prefix}-${index}`, databaseOptions),
   );
 }
 
-function scopeFor(state: OpenClawTestState, sessionId: string) {
-  return {
+function seed(
+  state: OpenClawTestState,
+  sessionId: string,
+  updatedAt = Date.now(),
+  env = state.env,
+) {
+  const scope = {
     agentId: "main",
-    env: state.env,
+    env,
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
   };
-}
-
-function seed(state: OpenClawTestState, sessionId: string, updatedAt = Date.now()) {
-  const scope = scopeFor(state, sessionId);
   ensureSessionEntrySync(scope, { sessionId, updatedAt });
   return scope;
 }
@@ -141,11 +136,7 @@ const preservation = (providerKeys: string[] = []) => ({
 function maintenanceFixture(state: OpenClawTestState) {
   const active = seed(state, "active");
   const victim = seed(state, "victim", 1);
-  const databaseOptions = {
-    agentId: active.agentId,
-    env: state.env,
-    path: openOpenClawAgentDatabase(active).path,
-  };
+  const databaseOptions = databaseFor(state);
   const input = {
     activeSessionKeys: [active.sessionKey],
     archiveDirectory: state.path("archives"),
@@ -249,8 +240,7 @@ test("retires a retained Worker by the symlinked root its requester used", () =>
     // The Worker runs at the physical path; cleanup selects the lexical path the caller used.
     const options = { agentId: "main", env: { ...state.env, OPENCLAW_STATE_DIR: link } };
     const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
-    const scope = { ...options, sessionId: "linked", sessionKey: "agent:main:linked" };
-    const { plan } = createEntryFixture(scope, databaseOptions);
+    const { plan } = createEntryFixture(state, "linked", databaseOptions, options.env);
     const spawned = observeWorkers();
     await runSqliteSessionReclamation({ plan });
     expect(spawned).toHaveLength(1);
@@ -260,12 +250,10 @@ test("retires a retained Worker by the symlinked root its requester used", () =>
 
 test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", () =>
   withState(async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const databaseOptions = {
-      ...options,
-      path: openOpenClawAgentDatabase(options).path,
-      env: { ...state.env, OPENCLAW_STATE_DIR: state.statePath("reclamation-owner") },
-    };
+    const databaseOptions = databaseFor(state, {
+      ...state.env,
+      OPENCLAW_STATE_DIR: state.statePath("reclamation-owner"),
+    });
     const sharedAdmission = stateCache.captureOpenClawStateDatabaseReadAdmission(
       resolveOpenClawStateSqlitePath(databaseOptions.env),
     );
@@ -318,10 +306,10 @@ test.each(["established", "first-created"] as const)(
         sharedState === "first-created"
           ? { ...state.env, OPENCLAW_STATE_DIR: state.statePath("late-lease-owner") }
           : state.env;
-      const { scope, databaseOptions, entry, plan } = entryFixtureFor(
+      const { scope, databaseOptions, entry, plan } = createEntryFixture(
         state,
         "synthetic-late-lease",
-        env,
+        databaseFor(state, env),
       );
       const sharedPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
       const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
@@ -330,10 +318,8 @@ test.each(["established", "first-created"] as const)(
       const workers = observeWorkers((message) => {
         if (message.type === "lease") {
           // Native acquisition already committed, but its notification has not reached the owner.
-          const physical = readDatabasePathIdentitySync(sharedPath);
-          const receipt = message.receipt;
-          expect(receipt).toMatchObject({
-            sharedStateIdentity: physical.key,
+          expect(message.receipt).toMatchObject({
+            sharedStateIdentity: readDatabasePathIdentitySync(sharedPath).key,
             sharedStatePath: sharedPath,
             agentId: databaseOptions.agentId,
             path: databaseOptions.path,
@@ -364,7 +350,7 @@ test.each(["established", "first-created"] as const)(
 
 test("logs a native reclamation Worker throw with its cause, first frame and hashed session", () =>
   withState(async (state) => {
-    const { scope, entry, plan } = entryFixtureFor(state, "synthetic-reclamation-session");
+    const { scope, entry, plan } = createEntryFixture(state, "synthetic-reclamation-session");
     const file = await logTo(state, "reclamation.log");
     const secret = "synthetic-worker-credential";
     const worker = new Worker(
@@ -480,13 +466,13 @@ test.each(["active key", "provider"] as const)(
         expect(workerThreadIds).toHaveLength(1);
         expect(workerThreadIds[0]).toBeGreaterThan(0);
         const { records } = await readLogs(file);
-        const logged = (message: string) => expect.objectContaining({ message });
-        expect(records).not.toContainEqual(
-          logged("SQLite reclamation Worker superseded by newer inputs"),
-        );
-        expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
-        expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
-
+        for (const message of [
+          "SQLite reclamation Worker superseded by newer inputs",
+          "SQLite reclamation Worker failed",
+          "SQLite automatic session maintenance failed",
+        ]) {
+          expect(records).not.toContainEqual(expect.objectContaining({ message }));
+        }
         expect(plans.size).toBe(1);
       } finally {
         unregister();
