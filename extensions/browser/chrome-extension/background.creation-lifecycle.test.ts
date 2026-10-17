@@ -2,22 +2,19 @@ import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  cleanupBackgroundHarnesses,
-  loadBackground,
-  sendRuntimeMessage,
-  TEST_RELAY_KEY,
-} from "./background.test-harness.js";
-
-const config = (accessMode: "all" | "selected") => ({
-  relayUrl: "ws://127.0.0.1:18797/extension",
-  token: TEST_RELAY_KEY,
-  authVersion: 2,
-  accessMode,
-});
+  cdp,
+  createTab,
+  expectType,
+  expectUnused,
+  relayConfig,
+  runtime,
+  waitCalled,
+} from "./background.lifecycle-test-helpers.js";
+import { cleanupBackgroundHarnesses, loadBackground } from "./background.test-harness.js";
 
 async function setup(mode: "all" | "selected" = "all", deferSocketClose = false) {
   const harness = await loadBackground({
-    storedConfig: config(mode),
+    storedConfig: relayConfig(mode),
     deferSocketClose,
     initialTabs: [
       { id: 100, url: "https://example.com/unrelated", groupId: 7 },
@@ -56,11 +53,10 @@ async function setup(mode: "all" | "selected" = "all", deferSocketClose = false)
     });
   };
   const attach = async () => {
-    expect(await request({ type: "attach", tabId: 101 })).toMatchObject({ type: "result" });
+    expectType(await request({ type: "attach", tabId: 101 }));
   };
   return Object.assign(harness, { socket, request, frames, create, attach });
 }
-
 const releases: Array<() => void> = [];
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
@@ -89,13 +85,13 @@ describe("physical tab creation authority", () => {
         }
         return tab;
       });
-      expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
-        type: observation === "initial blank" ? "result" : "error",
-      });
-      expect(h.tabsRemove).not.toHaveBeenCalled();
+      expectType(
+        await h.request(createTab()),
+        observation === "initial blank" ? "result" : "error",
+      );
+      expectUnused(h.tabsRemove);
     },
   );
-
   it("keeps an HTTP creation revoked after group removal and restoration before its callback", async () => {
     const h = await setup("selected");
     const create = h.tabsCreate.getMockImplementation()!;
@@ -106,13 +102,12 @@ describe("physical tab creation authority", () => {
       }
       return tab;
     });
-    expect(
-      await h.request({ type: "createTab", url: "https://example.com/destination" }),
-    ).toMatchObject({ type: "error", message: "created tab is no longer available" });
-    expect(h.debuggerAttach).not.toHaveBeenCalled();
-    expect(h.tabsRemove).not.toHaveBeenCalled();
+    expect(await h.request(createTab("https://example.com/destination"))).toMatchObject({
+      type: "error",
+      message: "created tab is no longer available",
+    });
+    expectUnused(h.debuggerAttach, h.tabsRemove);
   });
-
   it.each(["initial loading snapshot", "same-group update"] as const)(
     "preserves selected navigation when the %s arrives after its root commit",
     async (event) => {
@@ -135,20 +130,14 @@ describe("physical tab creation authority", () => {
         }
         return { frameId: "main", loaderId: "destination" };
       });
-      const response = await h.request({
-        type: "cdp",
-        tabId: 101,
-        method: "Page.navigate",
-        params: { url },
-      });
+      const response = await h.request(cdp("Page.navigate", { url }));
       expect(response, JSON.stringify(response)).toMatchObject({
         type: "result",
         result: { frameId: "main", loaderId: "destination" },
       });
-      expect(h.debuggerDetach).not.toHaveBeenCalled();
+      expectUnused(h.debuggerDetach);
     },
   );
-
   it("keeps loading-snapshot authority revoked after group removal and restoration", async () => {
     const h = await setup("selected");
     await h.create();
@@ -165,12 +154,7 @@ describe("physical tab creation authority", () => {
       h.tabsUpdatedListener?.(101, { status: "loading" }, initialLoadingTab);
       return { frameId: "main", loaderId: "destination" };
     });
-    const response = await h.request({
-      type: "cdp",
-      tabId: 101,
-      method: "Page.navigate",
-      params: { url },
-    });
+    const response = await h.request(cdp("Page.navigate", { url }));
     expect(response, JSON.stringify(response)).toMatchObject({
       type: "error",
       message: expect.stringMatching(
@@ -179,7 +163,6 @@ describe("physical tab creation authority", () => {
     });
     expect(h.debuggerSendCommand).toHaveBeenCalledWith({ tabId: 101 }, "Page.navigate", { url });
   });
-
   it("restores fresh attachment authority without reviving a command admitted before a title change", async () => {
     const h = await setup("selected");
     h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
@@ -190,19 +173,12 @@ describe("physical tab creation authority", () => {
       h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
       return { frameId: "main" };
     });
-
     expect(
-      await h.request({
-        type: "cdp",
-        tabId: 101,
-        method: "Page.navigate",
-        params: { url: "https://example.com/destination" },
-      }),
+      await h.request(cdp("Page.navigate", { url: "https://example.com/destination" })),
     ).toMatchObject({
       type: "error",
       message: expect.stringContaining("access was revoked"),
     });
-
     await vi.waitFor(() => {
       h.debuggerEventListener?.({ tabId: 101 }, "Runtime.consoleAPICalled", { value: 1 });
       expect(
@@ -213,34 +189,25 @@ describe("physical tab creation authority", () => {
           ),
       ).toBe(true);
     });
-    expect(await h.request({ type: "cdp", tabId: 101, method: "Runtime.enable" })).toMatchObject({
-      type: "result",
-    });
+    expectType(await h.request(cdp("Runtime.enable")));
   });
-
   it("revokes group access during creation on removal", async () => {
     const h = await setup("selected");
     h.tabGroupsUpdate.mockImplementationOnce(async () => {
       h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
       h.tabGroupRemovedListener?.({ id: 7, title: "OpenClaw" });
     });
-    expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
-      type: "error",
-    });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
+    expectType(await h.request(createTab()), "error");
+    expectUnused(h.tabsRemove);
   });
-
   it("leaves a revoked Selected tab alone when the group lookup beats its event", async () => {
     const h = await setup("selected");
     h.tabGroupsUpdate.mockImplementationOnce(async () => {
       h.tabGroupsGet.mockResolvedValue({ id: 7, title: "Other", windowId: 1 });
     });
-    expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
-      type: "error",
-    });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
+    expectType(await h.request(createTab()), "error");
+    expectUnused(h.tabsRemove);
   });
-
   it.each(["removed", "pause"] as const)(
     "rechecks %s after the failure-cleanup lookup yields",
     async (reason) => {
@@ -264,27 +231,21 @@ describe("physical tab creation authority", () => {
         });
         throw new Error("attach failed");
       });
-      const attaching = h.request({ type: "createTab", url: "about:blank" });
+      const attaching = h.request(createTab());
       await vi.waitFor(() => expect(inspectingCleanup).toBe(true));
       let pausing: Promise<unknown> | undefined;
       if (reason === "removed") {
         h.tabsRemovedListener?.(101);
       } else {
-        pausing = sendRuntimeMessage(h, {
-          type: "toggleTabAccess",
-          accessMode: "all",
-          tabId: 101,
-          grant: false,
-        });
+        pausing = runtime(h, "toggleTabAccess", { accessMode: "all", tabId: 101, grant: false });
         await vi.waitFor(() => expect(h.sessionStorageValues.deniedTabIdsV1).toEqual([101]));
       }
       lookup.resolve(await h.tabsGet(101));
       await pausing;
       expect(await attaching).toMatchObject({ type: "error", message: "attach failed" });
-      expect(h.tabsRemove).not.toHaveBeenCalled();
+      expectUnused(h.tabsRemove);
     },
   );
-
   it.each(["selected"] as const)(
     "fences a %s revoke while grouping and leaves the user tab alone",
     async (mode) => {
@@ -297,22 +258,16 @@ describe("physical tab creation authority", () => {
         return await deferred.promise;
       });
       const creating = h.request({ type: "createTab", url: "about:blank", focus: true });
-      await vi.waitFor(() => expect(h.tabsGroup).toHaveBeenCalled());
-      const revoke = sendRuntimeMessage(h, {
-        type: "toggleTabAccess",
-        accessMode: mode,
-        tabId: 101,
-        grant: false,
-      });
-      await expect(revoke).resolves.toMatchObject({ ok: true });
+      await waitCalled(h.tabsGroup);
+      const revoke = runtime(h, "toggleTabAccess", { accessMode: mode, tabId: 101, grant: false });
+      expect(await revoke).toMatchObject({ ok: true });
       deferred.resolve(7);
       expect(await creating).toMatchObject({
         type: "error",
         message: expect.stringMatching(/revoked/),
       });
-      expect(h.windowsUpdate).not.toHaveBeenCalled();
-      expect(h.tabsRemove).not.toHaveBeenCalled();
-      expect(await h.request({ type: "attach", tabId: 101 })).toMatchObject({ type: "error" });
+      expectUnused(h.windowsUpdate, h.tabsRemove);
+      expectType(await h.request({ type: "attach", tabId: 101 }), "error");
     },
   );
 });

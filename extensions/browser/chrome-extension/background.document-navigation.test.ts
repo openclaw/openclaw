@@ -2,23 +2,19 @@ import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  cleanupBackgroundHarnesses,
-  loadBackground,
-  sendRuntimeMessage,
-  TEST_RELAY_KEY,
-} from "./background.test-harness.js";
-
+  cdp,
+  expectType,
+  expectUnused,
+  relayConfig,
+  runtime,
+} from "./background.lifecycle-test-helpers.js";
+import { cleanupBackgroundHarnesses, loadBackground } from "./background.test-harness.js";
 const originalUrl = "https://example.com/existing";
 const blankResult = { frameId: "root", loaderId: "blank-loader" };
 
 async function setup(mode: "all" | "selected" = "selected") {
   const h = await loadBackground({
-    storedConfig: {
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: TEST_RELAY_KEY,
-      authVersion: 2,
-      accessMode: mode,
-    },
+    storedConfig: relayConfig(mode),
     initialTabs: [
       { id: 7, url: originalUrl, groupId: 7, windowId: 1 },
       { id: 8, url: "about:blank", groupId: 7 },
@@ -35,7 +31,7 @@ async function setup(mode: "all" | "selected" = "selected") {
     await vi.waitFor(() => expect(frames().find((frame) => frame.seq === id)).toBeDefined());
     return frames().find((frame) => frame.seq === id);
   };
-  expect(await request({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
+  expectType(await request({ type: "attach", tabId: 7 }));
   const emit = (method: string, params: unknown) =>
     h.debuggerEventListener?.({ tabId: 7 }, method, params);
   const commitBlank = () => {
@@ -55,10 +51,9 @@ async function setup(mode: "all" | "selected" = "selected") {
     });
   };
   const navigate = (params: Record<string, unknown> = { url: "about:blank", frameId: "root" }) =>
-    request({ type: "cdp", tabId: 7, method: "Page.navigate", params });
+    request(cdp("Page.navigate", params, 7));
   return Object.assign(h, { socket, frames, request, emit, commitBlank, native, navigate });
 }
-
 const releases: Array<() => void> = [];
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
@@ -78,12 +73,7 @@ describe("commanded existing document navigation", () => {
     });
     h.socket.send.mockClear();
     expect(
-      await h.request({
-        type: "cdp",
-        tabId: 7,
-        method: "Page.navigate",
-        params: { url: "about:blank", frameId: "root" },
-      }),
+      await h.request(cdp("Page.navigate", { url: "about:blank", frameId: "root" }, 7)),
     ).toMatchObject({ type: "result", result: blankResult });
     expect(
       h
@@ -96,10 +86,8 @@ describe("commanded existing document navigation", () => {
       "Page.lifecycleEvent",
       "result",
     ]);
-    expect(await h.request({ type: "cdp", tabId: 7, method: "Tracing.start" })).toMatchObject({
-      type: "result",
-    });
-    expect(await h.request({ type: "attach", tabId: 8 })).toMatchObject({ type: "error" });
+    expectType(await h.request(cdp("Tracing.start", undefined, 7)));
+    expectType(await h.request({ type: "attach", tabId: 8 }), "error");
     h.debuggerSendCommand.mockImplementationOnce(async () => {
       const get = h.tabsGet.getMockImplementation()!;
       h.tabsGet.mockImplementationOnce(async (id) => {
@@ -112,25 +100,14 @@ describe("commanded existing document navigation", () => {
       });
       return { frameId: "root", loaderId: "return" };
     });
-    expect(
-      await h.request({
-        type: "cdp",
-        tabId: 7,
-        method: "Page.navigate",
-        params: { url: originalUrl },
-      }),
-    ).toMatchObject({ type: "result" });
-    expect(await h.request({ type: "cdp", tabId: 7, method: "Tracing.end" })).toMatchObject({
-      type: "result",
-    });
+    expectType(await h.request(cdp("Page.navigate", { url: originalUrl }, 7)));
+    expectType(await h.request(cdp("Tracing.end", undefined, 7)));
     h.updateTab(7, { url: "about:blank" });
-    expect(await sendRuntimeMessage(h, { type: "getTabAccess", tabId: 7 })).toMatchObject({
+    expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({
       accessible: false,
     });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
-    expect(h.tabsUpdate).not.toHaveBeenCalled();
+    expectUnused(h.tabsRemove, h.tabsUpdate);
   });
-
   it.each([
     { pendingUrl: "https://example.com/next", response: "result" },
     { pendingUrl: "chrome://settings", response: "error" },
@@ -148,22 +125,19 @@ describe("commanded existing document navigation", () => {
         });
         return blankResult;
       });
-      expect(await h.navigate()).toMatchObject({ type: response });
-      expect(h.tabsRemove).not.toHaveBeenCalled();
+      expectType(await h.navigate(), response);
+      expectUnused(h.tabsRemove);
       if (response === "result") {
-        expect(await h.request({ type: "closeTab", tabId: 7 })).toMatchObject({ type: "result" });
+        expectType(await h.request({ type: "closeTab", tabId: 7 }));
         expect(h.tabsRemove).toHaveBeenCalledExactlyOnceWith(7);
       }
     },
   );
-
   it("never mints selected access from an unowned or child blank", async () => {
     const h = await setup();
     h.native(async () => blankResult);
-    expect(await h.navigate({ url: "about:blank", frameId: "child" })).toMatchObject({
-      type: "result",
-    });
-    expect(
+    expectType(await h.navigate({ url: "about:blank", frameId: "child" }));
+    expectType(
       await h.request({
         type: "cdp",
         tabId: 7,
@@ -171,22 +145,15 @@ describe("commanded existing document navigation", () => {
         method: "Page.navigate",
         params: { url: "about:blank" },
       }),
-    ).toMatchObject({ type: "result" });
+    );
     h.updateTab(7, { url: "about:blank" });
-    expect(
+    expectType(
       await h.request({ type: "cdp", tabId: 7, method: "Tracing.start", authorized: true }),
-    ).toMatchObject({ type: "error" });
-    expect(
-      await h.request({
-        type: "cdp",
-        tabId: 8,
-        method: "Page.navigate",
-        params: { url: "about:blank" },
-      }),
-    ).toMatchObject({ type: "error" });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
+      "error",
+    );
+    expectType(await h.request(cdp("Page.navigate", { url: "about:blank" }, 8)), "error");
+    expectUnused(h.tabsRemove);
   });
-
   it("fences a selected reconnect before response without deleting or restoring the tab", async () => {
     const h = await setup();
     const result = createDeferred<Record<string, unknown>>();
@@ -215,11 +182,10 @@ describe("commanded existing document navigation", () => {
     // Closed sockets intentionally cannot receive the old response.
     await expect(navigating).rejects.toThrow();
     expect(h.frames().some((f) => f.type === "cdpEvent")).toBe(false);
-    expect(await sendRuntimeMessage(h, { type: "getTabAccess", tabId: 7 })).toMatchObject({
+    expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({
       accessible: false,
     });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
-    expect(h.tabsUpdate).not.toHaveBeenCalled();
+    expectUnused(h.tabsRemove, h.tabsUpdate);
   });
   it("discards a stale selected discovery snapshot of the source before consuming blank provenance", async () => {
     const h = await setup();
@@ -235,14 +201,12 @@ describe("commanded existing document navigation", () => {
       inspecting = true;
       return await lookup.promise;
     });
-    const status = sendRuntimeMessage(h, { type: "getStatus" });
+    const status = runtime(h, "getStatus");
     await vi.waitFor(() => expect(inspecting).toBe(true));
-    expect(await h.navigate()).toMatchObject({ type: "result" });
+    expectType(await h.navigate());
     lookup.resolve(staleTabs);
     expect(await status).toMatchObject({ accessibleTabCount: 1 });
-    expect(await h.request({ type: "cdp", tabId: 7, method: "Tracing.start" })).toMatchObject({
-      type: "result",
-    });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
+    expectType(await h.request(cdp("Tracing.start", undefined, 7)));
+    expectUnused(h.tabsRemove);
   });
 });

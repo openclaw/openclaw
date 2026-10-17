@@ -1,12 +1,17 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  expectType,
+  expectUnused,
+  relayConfig,
+  runtime,
+  waitCalled,
+} from "./background.lifecycle-test-helpers.js";
+import {
   cleanupBackgroundHarnesses,
   loadBackground,
-  sendRuntimeMessage,
   TEST_RELAY_KEY,
 } from "./background.test-harness.js";
-
 const releases: Array<() => void> = [];
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
@@ -20,12 +25,7 @@ afterEach(async () => {
 
 async function fixture() {
   const h = await loadBackground({
-    storedConfig: {
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: TEST_RELAY_KEY,
-      authVersion: 2,
-      accessMode: "all",
-    },
+    storedConfig: relayConfig("all"),
     initialTabs: [7, 8, 9].map((id) => ({ id, url: `https://example.com/${id}`, groupId: -1 })),
   });
   // Chrome's tab lookup and its extension client registry have different lifetimes.
@@ -131,23 +131,21 @@ describe("native debugger cleanup debt", () => {
     expect.soft(await f.command("attach", 7, next)).toMatchObject({ type: "result" });
     expect.soft(f.clients.has(oldA)).toBe(false);
   });
-
   it("retains the native client after NoTab and cleans by owned target identity", async () => {
     const f = await fixture();
     const old = await f.attach(7);
     f.tabs.delete(7);
     expect(f.clients.has(old)).toBe(true);
-    expect(await f.command("detach", 7)).toMatchObject({ type: "result" });
+    expectType(await f.command("detach", 7));
     await vi.waitFor(() => expect(f.clients.has(old)).toBe(false));
     expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: old });
   });
-
   it("drains an in-flight detach after authoritative native closure before a successor", async () => {
     const f = await fixture();
     const old = await f.attach(7);
     const gate = f.holdDetach(7);
     const detaching = f.command("detach", 7);
-    await vi.waitFor(() => expect(f.h.debuggerDetach).toHaveBeenCalled());
+    await waitCalled(f.h.debuggerDetach);
     f.clients.delete(old);
     f.h.debuggerDetachListener?.({ tabId: 7 }, "target_closed");
     let attached = false;
@@ -165,7 +163,6 @@ describe("native debugger cleanup debt", () => {
     expect.soft(f.clients.size).toBe(1);
     expect.soft(f.clients.has(old)).toBe(false);
   });
-
   it("rejects missing native identity and cleans its acquired client", async () => {
     const f = await fixture();
     f.h.debuggerGetTargets.mockResolvedValue([]);
@@ -180,17 +177,16 @@ describe("native debugger cleanup debt", () => {
       f.tabs.delete(7);
       throw new Error("No tab with given id 7.");
     });
-    expect(await f.command("attach", 7)).toMatchObject({ type: "error" });
+    expectType(await f.command("attach", 7), "error");
     const old = [...f.clients][0]!;
     expect(f.clients.has(old)).toBe(true);
-    expect(await f.command("attach", 7)).toMatchObject({ type: "error" });
+    expectType(await f.command("attach", 7), "error");
     await f.attach(8);
     f.clients.delete(old);
     f.h.debuggerDetachListener?.({ tabId: 7 }, "target_closed");
     await f.attach(7);
     expect(f.clients.size).toBe(2);
   });
-
   it("captures cleanup identity after native success overtaken by access loss", async () => {
     const f = await fixture();
     const gate = createDeferred<void>();
@@ -203,56 +199,46 @@ describe("native debugger cleanup debt", () => {
     const acquiring = f.command("attach", 7);
     await vi.waitFor(() => expect(f.clients.size).toBe(1));
     const old = f.tabs.get(7)!;
-    const pausing = sendRuntimeMessage(f.h, {
-      type: "toggleTabAccess",
-      tabId: 7,
-      accessMode: "all",
-      grant: false,
-    });
+    const pausing = runtime(f.h, "toggleTabAccess", { tabId: 7, accessMode: "all", grant: false });
     await vi.waitFor(async () =>
-      expect(await sendRuntimeMessage(f.h, { type: "getTabAccess", tabId: 7 })).toMatchObject({
+      expect(await runtime(f.h, "getTabAccess", { tabId: 7 })).toMatchObject({
         accessible: false,
       }),
     );
     expect(await f.h.tabsGet(7)).toMatchObject({ url: "https://example.com/7" });
-    expect(f.h.debuggerGetTargetInfo).not.toHaveBeenCalled();
+    expectUnused(f.h.debuggerGetTargetInfo);
     gate.resolve();
-    expect(await acquiring).toMatchObject({ type: "error" });
+    expectType(await acquiring, "error");
     expect(await pausing).toMatchObject({ ok: true, accessible: false, denied: true });
     expect(f.h.debuggerGetTargetInfo).toHaveBeenCalledWith({ tabId: 7 });
     expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: old });
     expect(f.clients.has(old)).toBe(false);
   });
-
   it("reports incomplete Disconnect and retries its retained native debt", async () => {
     const f = await fixture();
     const old = await f.attach(7);
     const detach = f.h.debuggerDetach.getMockImplementation()!;
     f.h.debuggerDetach.mockRejectedValue(new Error("native cleanup refused"));
-    expect(await sendRuntimeMessage(f.h, { type: "unpair" })).toMatchObject({
+    expect(await runtime(f.h, "unpair")).toMatchObject({
       ok: false,
       error: expect.stringContaining("native cleanup refused"),
     });
     expect(f.clients.has(old)).toBe(true);
     f.h.debuggerDetach.mockImplementation(detach);
-    expect(await sendRuntimeMessage(f.h, { type: "unpair" })).toMatchObject({ ok: true });
+    expect(await runtime(f.h, "unpair")).toMatchObject({ ok: true });
     expect(f.clients.has(old)).toBe(false);
   });
-
   it("fences inherited cleanup enumeration overtaken by re-pair and fresh acquisition", async () => {
     const h = await loadBackground({
       storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
+        ...relayConfig("all"),
         copilotSessionRegistryV1: {
           sessions: { 7: { creationPending: true } },
           pendingArchives: [],
         },
       },
     });
-    await sendRuntimeMessage(h, { type: "getStatus" });
+    await runtime(h, "getStatus");
     const gate = createDeferred<Array<{ tabId: number; id: string; attached: boolean }>>();
     releases.push(() => gate.resolve([]));
     let held = false;
@@ -261,12 +247,11 @@ describe("native debugger cleanup debt", () => {
       return await gate.promise;
     });
     h.storageValues.token = "invalid";
-    const status = sendRuntimeMessage(h, { type: "getStatus" });
+    const status = runtime(h, "getStatus");
     await vi.waitFor(() => expect(held).toBe(true));
-    expect(await sendRuntimeMessage(h, { type: "unpair" })).toMatchObject({ ok: true });
+    expect(await runtime(h, "unpair")).toMatchObject({ ok: true });
     expect(
-      await sendRuntimeMessage(h, {
-        type: "pair",
+      await runtime(h, "pair", {
         pairingString: `ws://127.0.0.1:18797/extension#${TEST_RELAY_KEY}`,
         accessMode: "all",
       }),
@@ -292,6 +277,6 @@ describe("native debugger cleanup debt", () => {
     gate.resolve([{ tabId: 7, id: "fresh-native", attached: true }]);
     expect(await status).toMatchObject({ ok: false, error: expect.stringContaining("superseded") });
     expect(live).toBe(true);
-    expect(h.debuggerDetach).not.toHaveBeenCalled();
+    expectUnused(h.debuggerDetach);
   });
 });

@@ -2,12 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
 import { FakeSocket } from "../src/browser/extension-relay/relay-bridge.test-support.js";
-import {
-  cleanupBackgroundHarnesses,
-  loadRelayCommandHarness,
-  sendRuntimeMessage,
-} from "./background.test-harness.js";
-
+import { runtime } from "./background.lifecycle-test-helpers.js";
+import { cleanupBackgroundHarnesses, loadRelayCommandHarness } from "./background.test-harness.js";
 type Frame = {
   id?: number;
   method?: string;
@@ -55,7 +51,6 @@ function deferred() {
   releases.add(finish);
   return { promise, resolve: finish };
 }
-
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
   for (const release of releases) {
@@ -252,7 +247,6 @@ async function assertReceiptAndContinuity(rig: Awaited<ReturnType<typeof setup>>
   expect(nativeCalls(rig)).toHaveLength(1);
   expect(rig.bridge.cdpClientCount).toBe(2);
 }
-
 // The native completion is the only fault-injected boundary. Real background
 // policy, Fetch lease/pause ownership, and both logical relay sessions participate.
 describe("Fetch continuation in selected mode", () => {
@@ -273,7 +267,6 @@ describe("Fetch continuation in selected mode", () => {
       await assertReceiptAndContinuity(rig, response);
     },
   );
-
   it.each(siblingContinuations)(
     "preserves $method receipt across an allowed document commit",
     async (operation) => {
@@ -284,7 +277,6 @@ describe("Fetch continuation in selected mode", () => {
       await assertReceiptAndContinuity(rig, await rig.owner.response(held.id));
     },
   );
-
   it.each([
     { method: "Fetch.enable", order: "commit-first" },
     { method: "Fetch.disable", order: "completion-first" },
@@ -317,18 +309,12 @@ describe("Fetch continuation in selected mode", () => {
       }
     },
   );
-
   it.each(["Fetch.enable"])(
     "rejects configuration %s completion after access revocation",
     async (method) => {
       const rig = await setupConfiguration(mode, method);
       const held = await holdNativeCompletion(rig);
-      await sendRuntimeMessage(rig.harness, {
-        type: "toggleTabAccess",
-        tabId: 101,
-        accessMode: mode,
-        grant: false,
-      });
+      await runtime(rig.harness, "toggleTabAccess", { tabId: 101, accessMode: mode, grant: false });
       held.complete();
       const response = await rig.owner.response(held.id);
       expect(response.error).toBeDefined();
@@ -337,7 +323,6 @@ describe("Fetch continuation in selected mode", () => {
       expect(nativeCalls(rig)).toHaveLength(1);
     },
   );
-
   it("rejects disable with an unresolved streamed response without retiring its owner", async () => {
     const operation = bodyReads.find((entry) => entry.method === "Fetch.takeResponseBodyAsStream");
     assert(operation);
@@ -356,7 +341,6 @@ describe("Fetch continuation in selected mode", () => {
     ).toHaveLength(0);
     await assertReceiptAndContinuity(rig, response);
   });
-
   it.each(bodyReads)("keeps $method data document-sensitive", async (operation) => {
     const rig = await setup(mode, operation);
     const held = await holdNativeCompletion(rig);
@@ -367,7 +351,6 @@ describe("Fetch continuation in selected mode", () => {
     expect(response).not.toHaveProperty("result");
     expect(nativeCalls(rig)).toHaveLength(1);
   });
-
   it.each(["attachment", "connection"] as const)(
     "rejects completion after genuine %s revocation",
     async (revocation) => {
