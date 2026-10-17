@@ -40,8 +40,9 @@ const graphs = (files: (name: string) => string[] = () => []) =>
     files: files(name),
   }));
 const additionalInventory = (files: string[]) =>
-  expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS).map((graph) => ({
-    ...graph,
+  expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS).map(({ name, config }) => ({
+    name,
+    config,
     roots: [],
     files,
   }));
