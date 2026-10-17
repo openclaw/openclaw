@@ -289,10 +289,7 @@ describe("Gateway install PATH preservation", () => {
       expectedPath: "/custom/go/bin:/usr/bin/:/usr/bin",
     },
   ])("preserves existing PATH order through install-plan audit: $name", async (testCase) => {
-    mocks.buildServiceEnvironment.mockReturnValue({
-      PATH: testCase.nextPath,
-      TMPDIR: "/tmp",
-    });
+    mocks.buildServiceEnvironment.mockReturnValue({ PATH: testCase.nextPath, TMPDIR: "/tmp" });
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["/opt/node/bin/node", "/opt/openclaw-b/dist/index.js", "gateway"],
     });

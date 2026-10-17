@@ -68,10 +68,7 @@ const wizardTestMocks = vi.hoisted(() => {
 
 vi.mock("../runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime.js")>();
-  return {
-    ...actual,
-    defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime },
-  };
+  return { ...actual, defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime } };
 });
 
 vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
@@ -173,9 +170,7 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardTestMocks.createClackPrompter,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: wizardTestMocks.note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: wizardTestMocks.note }));
 
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
@@ -220,9 +215,7 @@ vi.mock("./onboard-remote.js", async (importOriginal) => ({
   promptRemoteGatewayConfig: wizardTestMocks.promptRemoteGatewayConfig,
 }));
 
-vi.mock("./onboard-skills.js", () => ({
-  setupSkills: wizardTestMocks.setupSkills,
-}));
+vi.mock("./onboard-skills.js", () => ({ setupSkills: wizardTestMocks.setupSkills }));
 
 vi.mock("../wizard/setup.plugin-config.js", () => ({
   configurePluginConfig: wizardTestMocks.setupPluginConfig,
@@ -281,16 +274,7 @@ export function setupWizardTestDefaults() {
   wizardTestMocks.setupSkills.mockImplementation(async (config) => config);
 }
 
-export const EMPTY_CONFIG_SNAPSHOT = {
-  exists: false,
-  valid: true,
-  config: {},
-  issues: [],
-};
-
-export function createWizardTestRuntime() {
-  return wizardTestMocks.runtime;
-}
+export const EMPTY_CONFIG_SNAPSHOT = { exists: false, valid: true, config: {}, issues: [] };
 
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
