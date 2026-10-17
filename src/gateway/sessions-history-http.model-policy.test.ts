@@ -35,6 +35,7 @@ const readerEmail = "history-reader@example.test";
 const staffEmail = "history-staff@example.test";
 const secret = "history-fixture-shared-secret";
 const hiddenText = "example/historical remains ordinary message text";
+const historical = { provider: "example", model: "historical" };
 
 function record(value: unknown) {
   return expectDefined(asOptionalRecord(value), "history record");
@@ -228,7 +229,13 @@ describe("HTTP historical model disclosure", () => {
     const reader = expectDefined(response.body?.getReader(), "SSE reader");
     readers.add(reader);
     const buffer = { buffer: "" };
-    return { reader, next: () => readSseEvent(reader, buffer) };
+    return {
+      async next(event = "history") {
+        const result = await readSseEvent(reader, buffer);
+        expect(result.event).toBe(event);
+        return result.data;
+      },
+    };
   }
 
   const jsonHistory = (params?: Parameters<typeof requestHistory>[0]) =>
@@ -251,8 +258,7 @@ describe("HTTP historical model disclosure", () => {
       ...scope,
       updateMode,
       message: makeAgentAssistantMessage({
-        provider: "example",
-        model: "historical",
+        ...historical,
         content: [{ type: "text", text }],
       }),
     });
@@ -267,9 +273,7 @@ describe("HTTP historical model disclosure", () => {
     const json = await jsonHistory();
     const rows = expectRestrictedSnapshot(json, 4);
     const stream = await openStream();
-    const initial = await stream.next();
-    expect(initial.event).toBe("history");
-    expect(initial.data).toEqual(json);
+    expect(await stream.next()).toEqual(json);
 
     const updates: InternalSessionTranscriptUpdate[] = [];
     const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
@@ -279,14 +283,13 @@ describe("HTTP historical model disclosure", () => {
     } finally {
       unsubscribe();
     }
-    const inline = await stream.next();
-    expect(inline.event).toBe("message");
-    expect(inline.data).toMatchObject({
+    const inline = await stream.next("message");
+    expect(inline).toMatchObject({
       messageId: id,
       messageSeq: 5,
       message: { __openclaw: { id, seq: 5 } },
     });
-    expectPrivateText(record(inline.data).message, "inline private model reply");
+    expectPrivateText(record(inline).message, "inline private model reply");
     const stored = await loadTranscriptEvents(scope);
     emitSessionTranscriptUpdate(
       expectDefined(
@@ -294,29 +297,20 @@ describe("HTTP historical model disclosure", () => {
         "committed inline update",
       ),
     );
-    const repeated = await stream.next();
-    expect(repeated.event).toBe("history");
-    const repeatedRows = expectRestrictedSnapshot(repeated.data, 5);
+    const repeatedRows = expectRestrictedSnapshot(await stream.next(), 5);
     expectPrivateText(repeatedRows[4], "inline private model reply");
     expect(await loadTranscriptEvents(scope)).toEqual(stored);
     await append("refresh private model reply", "file-only");
-    const refreshed = await stream.next();
-    expect(refreshed.event).toBe("history");
-    const refreshedRows = expectRestrictedSnapshot(refreshed.data, 6);
+    const refreshedRows = expectRestrictedSnapshot(await stream.next(), 6);
     expect(refreshedRows.slice(0, 4)).toEqual(rows);
     expectHidden(refreshedRows[4]);
     expectHidden(refreshedRows[5]);
 
     const persisted = await loadTranscriptEvents(scope);
     expect(persisted.slice(0, saved.length)).toEqual(saved);
-    const staff = await jsonHistory({ email: staffEmail });
-    const staffRows = messages(staff, 6);
-    expect(staffRows[0]).toMatchObject({
-      provider: "example",
-      model: "historical",
-      content: hiddenText,
-    });
-    expect(staffRows[4]).toMatchObject({ provider: "example", model: "historical" });
+    const staffRows = messages(await jsonHistory({ email: staffEmail }), 6);
+    expect(staffRows[0]).toMatchObject({ ...historical, content: hiddenText });
+    expect(staffRows[4]).toMatchObject(historical);
     expect(await loadTranscriptEvents(scope)).toEqual(persisted);
     const page = await jsonHistory({ query: "?limit=2&cursor=5" });
     expect(messages(page, 2)).toEqual(rows.slice(2));
@@ -330,7 +324,7 @@ describe("HTTP historical model disclosure", () => {
       const fromSnapshot = vi.spyOn(historyState.SessionHistorySseState, "fromSnapshot");
       const stream = kind === "refresh SSE" ? await openStream() : undefined;
       if (stream) {
-        expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
+        expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
       }
       const { entered, release, hold } = heldRead();
       if (stream) {
@@ -348,10 +342,10 @@ describe("HTTP historical model disclosure", () => {
         );
       }
       const pending = stream
-        ? append("held refresh reply", "file-only").then(async () => (await stream.next()).data)
+        ? append("held refresh reply", "file-only").then(() => stream.next())
         : kind === "JSON"
           ? jsonHistory()
-          : openStream().then(async (opened) => (await opened.next()).data);
+          : openStream().then((opened) => opened.next());
       try {
         await Promise.race([
           entered.promise,
@@ -375,7 +369,7 @@ describe("HTTP historical model disclosure", () => {
   it("uses a policy committed during final current-profile acquisition", async () => {
     publishConfig(config(["example/*"]));
     const stream = await openStream();
-    expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
+    expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
     publishConfig(config(), false);
     const { entered, release, hold } = heldRead();
     const original = profileAuthority.prepareUserProfileRoleAuthority;
@@ -390,42 +384,32 @@ describe("HTTP historical model disclosure", () => {
       release.resolve();
       await appended;
     }
-    const inline = await stream.next();
-    expect(inline.event).toBe("message");
-    expectPrivateText(record(inline.data).message, "publication after committed narrowing");
+    expectPrivateText(
+      record(await stream.next("message")).message,
+      "publication after committed narrowing",
+    );
     const rows = expectRestrictedSnapshot(await jsonHistory(), 5);
     expectHidden(rows[4]);
   });
 
   it("keeps committed restriction during tentative widening, then publishes committed widening", async () => {
     const stream = await openStream();
-    expectRestrictedSnapshot((await stream.next()).data, 4);
+    expectRestrictedSnapshot(await stream.next(), 4);
     publishConfig(config(["example/*"]), false);
     expectRestrictedSnapshot(await jsonHistory(), 4);
     await append("tentative widening inline");
-    const hidden = await stream.next();
-    expect(hidden.event).toBe("message");
-    expectHidden(record(hidden.data).message);
+    expectHidden(record(await stream.next("message")).message);
     committed = current;
     await append("committed widening inline");
-    const visible = await stream.next();
-    expect(visible.event).toBe("message");
-    expect(record(visible.data).message).toMatchObject({
-      provider: "example",
-      model: "historical",
-    });
+    expect(record(await stream.next("message")).message).toMatchObject(historical);
   });
 
   it("preserves intentionally broad shared-secret owner history", async () => {
     const next = config();
     next.gateway = { ...next.gateway, auth: { mode: "token", token: secret } };
     publishConfig(next);
-    const response = await requestHistory({ owner: true });
-    expect(messages(await response.json(), 4)[0]).toMatchObject({
-      provider: "example",
-      model: "historical",
-    });
+    expect(messages(await jsonHistory({ owner: true }), 4)[0]).toMatchObject(historical);
     const stream = await openStream({ owner: true });
-    expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
+    expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
   });
 });

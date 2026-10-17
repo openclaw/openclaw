@@ -7,6 +7,8 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
+const history = (messages: unknown[] = []) => ({ items: [], nextCursor: null, messages });
+
 class FixtureState {
   onUpdate?: (update: InternalSessionTranscriptUpdate) => void;
   authRevoked = false;
@@ -78,21 +80,15 @@ vi.mock("./http-utils.js", () => ({
     const unconfigured =
       fixture.gatewayConfig.trustedProxies === undefined &&
       fixture.gatewayConfig.allowRealIpFallback === undefined;
-    if (
-      fixture.authRevoked ||
-      (unconfigured &&
-        params.trustedProxies === undefined &&
-        params.allowRealIpFallback === undefined)
-    ) {
-      return {
-        ok: false as const,
-        authResult: {
-          ok: false,
-          reason: fixture.authRevoked
-            ? "trusted_proxy_user_not_allowed"
-            : "trusted_proxy_no_proxies_configured",
-        },
-      };
+    const reason = fixture.authRevoked
+      ? "trusted_proxy_user_not_allowed"
+      : unconfigured &&
+          params.trustedProxies === undefined &&
+          params.allowRealIpFallback === undefined
+        ? "trusted_proxy_no_proxies_configured"
+        : undefined;
+    if (reason) {
+      return { ok: false as const, authResult: { ok: false, reason } };
     }
     return {
       ok: true as const,
@@ -153,7 +149,7 @@ vi.mock("./session-history-state.js", () => ({
     }
     await fixture.beforeRead?.();
     return {
-      history: { items: [], nextCursor: null, messages: [] },
+      history: history(),
       rawTranscriptSeq: 0,
       turnBoundaryPending: false,
       assistantErrorPending: false,
@@ -161,8 +157,8 @@ vi.mock("./session-history-state.js", () => ({
   },
   SessionHistorySseState: {
     fromSnapshot: (_params: unknown) => ({
-      snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
-      retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
+      snapshot: () => history(),
+      retainRecentMessages: () => history(),
       prepareInlineMessage: async ({
         message,
         messageId,
@@ -176,11 +172,7 @@ vi.mock("./session-history-state.js", () => ({
       shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => {
         await fixture.beforeRefresh?.();
-        return {
-          items: [],
-          nextCursor: null,
-          messages: [{ role: "assistant", content: "private refreshed history" }],
-        };
+        return history([{ role: "assistant", content: "private refreshed history" }]);
       },
     }),
   },
@@ -321,13 +313,8 @@ async function withRealStream(
     throw new Error("expected TCP test server address");
   }
   const response = new Promise<IncomingMessage>((resolve, reject) => {
-    get(
-      `http://127.0.0.1:${address.port}${SESSION_HISTORY_URL}`,
-      {
-        headers: new MockReq().headers,
-      },
-      resolve,
-    ).once("error", reject);
+    const url = `http://127.0.0.1:${address.port}${SESSION_HISTORY_URL}`;
+    get(url, { headers: new MockReq().headers }, resolve).once("error", reject);
   });
   const pair = await connected.promise;
   const client = await response;
@@ -381,12 +368,24 @@ function emitTranscriptTextUpdate(
 
 async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
   await vi.waitFor(() => expect(res.writableEnded).toBe(true));
-
   expect(res.writes.join("")).not.toContain("event: message");
   expect(res.writes.join("")).not.toContain(text);
 }
 
 beforeEach(() => setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig }));
+
+const frames = (res: MockRes) => res.writes.filter((frame) => frame.startsWith("event:"));
+const frameNames = (res: MockRes) => frames(res).map((frame) => frame.split("\n")[0]);
+const changes = {
+  revocation: { visible: false },
+  sharing: { visible: false },
+  replacement: { sessionId: "replacement" },
+  reset: { lifecycleRevision: "after-reset" },
+  "ingress policy": { authorityCurrent: false },
+  authentication: { authRevoked: true },
+  close: {},
+  failure: {},
+};
 
 afterEach(() => {
   fixture = new FixtureState();
@@ -398,59 +397,45 @@ describe("session history SSE auth revocation", () => {
     fixture.profile = guestProfile;
     fixture.visible = false;
 
-    const { res } = await openStream({
-      expectSubscribed: false,
-    });
+    const { res } = await openStream({ expectSubscribed: false });
 
     expect(res.statusCode).toBe(404);
     expect(res.writes.join("")).toContain("Session not found");
   });
 
   it.each([
-    { accept: "application/json", change: "revocation" },
-    { accept: "text/event-stream", change: "replacement" },
-    { accept: "application/json", change: "reset" },
-    { accept: "text/event-stream", change: "authentication" },
-    { accept: "application/json", change: "ingress policy" },
-  ] as const)(
-    "withholds initial $accept history after $change during its read",
-    async ({ accept, change }) => {
-      fixture.profile = guestProfile;
-      const { entered, release, wait } = readBarrier();
-      fixture.beforeRead = wait;
-      const req = new MockReq();
-      req.headers.accept = accept;
-      const res = new MockRes();
-      const pending = handle(req, res);
-      try {
-        await Promise.race([entered.promise, pending]);
-        expect(res.writes).toEqual([]);
-        if (change === "revocation") {
-          fixture.visible = false;
-        } else if (change === "replacement") {
-          fixture.sessionId = "replacement";
-        } else if (change === "reset") {
-          fixture.lifecycleRevision = "after-reset";
-          fixture.sessionStartedAt = 2;
-        } else if (change === "ingress policy") {
-          fixture.authorityCurrent = false;
-        } else {
-          fixture.authRevoked = true;
-        }
-      } finally {
-        release.resolve();
-        await pending;
+    ["application/json", "revocation"],
+    ["text/event-stream", "replacement"],
+    ["application/json", "reset"],
+    ["text/event-stream", "authentication"],
+    ["application/json", "ingress policy"],
+  ] as const)("withholds initial %s history after %s during its read", async (accept, change) => {
+    fixture.profile = guestProfile;
+    const { entered, release, wait } = readBarrier();
+    fixture.beforeRead = wait;
+    const req = new MockReq();
+    req.headers.accept = accept;
+    const res = new MockRes();
+    const pending = handle(req, res);
+    try {
+      await Promise.race([entered.promise, pending]);
+      expect(res.writes).toEqual([]);
+      Object.assign(fixture, changes[change]);
+      if (change === "reset") {
+        fixture.sessionStartedAt = 2;
       }
-      try {
-        expect(res.statusCode).toBe(404);
-        expect(res.writes.join("")).not.toContain("event: history");
-        expect(res.writes.join("")).not.toContain('"messages"');
-        expect(fixture.onUpdate).toBeUndefined();
-      } finally {
-        res.end();
-      }
-    },
-  );
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    try {
+      expect(res.statusCode).toBe(404);
+      expect(res.writes.join("")).not.toMatch(/event: history|"messages"/);
+      expect(fixture.onUpdate).toBeUndefined();
+    } finally {
+      res.end();
+    }
+  });
 
   it("withholds an SSE refresh after profile revocation while its read is pending", async () => {
     fixture.profile = guestProfile;
@@ -489,16 +474,16 @@ describe("session history SSE auth revocation", () => {
       fixture.onUpdate?.({ sessionFile: SESSION_FILE });
       fixture.onUpdate?.({ sessionFile: SESSION_FILE });
       release.resolve();
-
       await vi.waitFor(() =>
         expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(3),
       );
       expect(refreshCount).toBe(2);
-      expect(
-        res.writes
-          .filter((frame) => frame.startsWith("event:"))
-          .map((frame) => frame.split("\n")[0]),
-      ).toEqual(["event: history", "event: history", "event: message", "event: history"]);
+      expect(frameNames(res)).toEqual([
+        "event: history",
+        "event: history",
+        "event: message",
+        "event: history",
+      ]);
       expect(res.writes.join("")).toContain("inline between refreshes");
     } finally {
       release.resolve();
@@ -521,13 +506,8 @@ describe("session history SSE auth revocation", () => {
       const closed = once(res, "close");
       emitTranscriptTextUpdate("pending inline content");
       await barrier.entered.promise;
-      if (change === "sharing") {
-        fixture.visible = false;
-      } else if (change === "replacement") {
-        fixture.sessionId = "successor";
-      } else if (change === "reset") {
-        fixture.lifecycleRevision = "after-reset";
-      } else if (change === "close") {
+      Object.assign(fixture, changes[change]);
+      if (change === "close") {
         res.end();
       }
       barrier.release.resolve();
@@ -547,18 +527,17 @@ describe("session history SSE auth revocation", () => {
       await barrier.entered.promise;
       emitTranscriptTextUpdate("second queued append");
       fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-      expect(res.writes.filter((frame) => frame.startsWith("event:"))).toHaveLength(1);
+      expect(frames(res)).toHaveLength(1);
       barrier.release.resolve();
       await refreshed;
-      const frames = res.writes.filter((frame) => frame.startsWith("event:"));
-      expect(frames.map((frame) => frame.split("\n")[0])).toEqual([
+      expect(frameNames(res)).toEqual([
         "event: history",
         "event: message",
         "event: message",
         "event: history",
       ]);
-      expect(frames[1]).toContain("first queued append");
-      expect(frames[2]).toContain("second queued append");
+      expect(frames(res)[1]).toContain("first queued append");
+      expect(frames(res)[2]).toContain("second queued append");
     } finally {
       barrier.release.resolve();
       res.end();

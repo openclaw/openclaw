@@ -20,7 +20,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
   observedDirectories: [] as Array<{
     directory: string;
@@ -54,21 +57,44 @@ import {
 
 const linkType = process.platform === "win32" ? "junction" : "dir";
 type SourceParams = Parameters<typeof prepareGatewaySessionStoreReadSources>[0];
-function mainSources(state: { env: NodeJS.ProcessEnv }) {
+let state: OpenClawTestState;
+const withState = (run: () => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+    state = fixture;
+    try {
+      await run();
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    }
+  });
+const defaults = { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } };
+const source = ({ agentId, path: storePath }: { agentId: string; path: string }) => ({
+  agentId,
+  path: storePath,
+});
+function sourceParams(
+  currentSource: SourceParams["currentSource"],
+  cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } },
+  env = state.env,
+): SourceParams {
+  return { cfg, currentSource, env, registryPath: openOpenClawStateDatabase().path };
+}
+function expectRegistered(
+  prepared: Awaited<ReturnType<typeof prepareGatewaySessionStoreReadSourcesAsync>>,
+  database: { agentId: string; path: string },
+) {
+  expect(prepared.request?.registeredDatabases).toEqual(
+    expect.arrayContaining([expect.objectContaining(source(database))]),
+  );
+}
+function mainSources() {
   const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  const params: SourceParams = {
-    cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
-    currentSource: { agentId: "main", path: main.path },
-    env: state.env,
-    registryPath: openOpenClawStateDatabase().path,
-  };
-  return { main, params };
+  return { main, params: sourceParams(source(main)) };
 }
 
-function aliasSources(
-  state: Parameters<typeof mainSources>[0] & { path: (...parts: string[]) => string },
-) {
-  const { main, params } = mainSources(state);
+function aliasSources() {
+  const { main, params } = mainSources();
   const alias = state.path("source-alias");
   const replacement = state.path("replacement");
   fs.mkdirSync(replacement);
@@ -84,6 +110,11 @@ function notifyAlias(alias: string) {
       entry.notify(path.basename(alias));
     }
   }
+}
+function replaceAlias(alias: string, replacement: string) {
+  fs.unlinkSync(alias);
+  fs.symlinkSync(replacement, alias, linkType);
+  notifyAlias(alias);
 }
 
 function holdRegistryRead() {
@@ -110,7 +141,7 @@ function holdRegistryRead() {
 it.each([false, true])(
   "bounds discovery and refreshes only the next roster (fixed: %s)",
   async (fixed) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async () => {
       const storeDir = state.path("stores");
       fs.mkdirSync(storeDir);
       const agentIds = [
@@ -130,24 +161,17 @@ it.each([false, true])(
         agents: {
           ownership: "explicit",
           entries,
-          ...(fixed
-            ? { defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } } }
-            : {}),
+          ...(fixed ? { defaults } : {}),
         },
         ...(fixed ? { session: { store: path.join(storeDir, "shared.json") } } : {}),
       };
+      const fixedStore = (agentId: string) =>
+        path.join(storeDir, `shared${agentId === "main" ? "" : `.${agentId}`}.sqlite`);
       const openStore = (agentId: string) =>
         openOpenClawAgentDatabase({
           agentId,
           env: state.env,
-          ...(fixed
-            ? {
-                path: path.join(
-                  storeDir,
-                  agentId === "main" ? "shared.sqlite" : `shared.${agentId}.sqlite`,
-                ),
-              }
-            : {}),
+          ...(fixed ? { path: fixedStore(agentId) } : {}),
         });
       const databases = (fixed ? agentIds : ["main"]).map(openStore);
       const currentSource = { agentId: "main", path: databases[0]!.path };
@@ -156,23 +180,13 @@ it.each([false, true])(
       syncBuiltinESMExports();
       const prepare = () => {
         entryReads = 0;
-        const prepared = prepareGatewaySessionStoreReadSources({
-          cfg,
-          currentSource,
-          env: state.env,
-          registryPath: openOpenClawStateDatabase().path,
-        });
+        const prepared = prepareGatewaySessionStoreReadSources(sourceParams(currentSource, cfg));
         expect(Object.keys(prepared.sources)).toEqual(Object.keys(entries));
         expect(prepared.sources.main?.[0]).toBe(currentSource);
         expect(entryReads).toBeLessThan(Object.keys(entries).length * 16);
         if (fixed) {
           expect(prepared.sources).toEqual(
-            Object.fromEntries(
-              databases.map(({ agentId, path: storePath }) => [
-                agentId,
-                [{ agentId, path: storePath }],
-              ]),
-            ),
+            Object.fromEntries(databases.map((database) => [database.agentId, [source(database)]])),
           );
           const paths = new Set(databases.map(({ path: storePath }) => storePath));
           const reads = realpath.mock.calls.flatMap(([name]) =>
@@ -186,38 +200,27 @@ it.each([false, true])(
         }
         return prepared;
       };
-      try {
-        const first = prepare();
-        entries.added = {};
-        if (fixed) {
-          databases.push(openStore("added"));
-        }
-        readdir.mockClear();
-        realpath.mockClear();
-        const second = prepare();
-        expect(Object.keys(first.sources)).toEqual(agentIds);
-        expect(Object.keys(second.sources)).toEqual([...agentIds, "added"]);
-      } finally {
-        readdir.mockRestore();
-        realpath.mockRestore();
-        syncBuiltinESMExports();
+      const first = prepare();
+      entries.added = {};
+      if (fixed) {
+        databases.push(openStore("added"));
       }
+      readdir.mockClear();
+      realpath.mockClear();
+      const second = prepare();
+      expect(Object.keys(first.sources)).toEqual(agentIds);
+      expect(Object.keys(second.sources)).toEqual([...agentIds, "added"]);
     });
   },
 );
 
 it("binds source addresses before asynchronous callers yield", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const currentSource = { agentId: database.agentId, path: database.path };
+  await withState(async () => {
+    const { main } = mainSources();
+    const currentSource = source(main);
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const env = { ...state.env };
-    const prepared = prepareGatewaySessionStoreReadSources({
-      cfg,
-      currentSource,
-      env,
-      registryPath: openOpenClawStateDatabase().path,
-    });
+    const prepared = prepareGatewaySessionStoreReadSources(sourceParams(currentSource, cfg, env));
 
     await Promise.resolve();
     cfg.session = { store: path.join(state.stateDir, "moved", "{agentId}", "sessions.json") };
@@ -235,7 +238,7 @@ it("binds source addresses before asynchronous callers yield", async () => {
 it.each(["alias", "missing-parent"] as const)(
   "rejects replacement of a captured %s after registry refresh",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async () => {
       const parent = state.path("source-parent");
       const replacement = state.path("replacement-store");
       fs.mkdirSync(replacement);
@@ -253,12 +256,12 @@ it.each(["alias", "missing-parent"] as const)(
         currentSource = { agentId: "main", path: path.join(parent, "sessions.sqlite") };
       }
       const registryPath = openOpenClawStateDatabase().path;
-      const prepared = prepareGatewaySessionStoreReadSources({
-        cfg: kind === "alias" ? {} : { session: { store: currentSource.path } },
-        currentSource,
-        env: state.env,
-        registryPath,
-      });
+      const prepared = prepareGatewaySessionStoreReadSources(
+        sourceParams(
+          currentSource,
+          kind === "alias" ? {} : { session: { store: currentSource.path } },
+        ),
+      );
       expect(prepared.sources.main?.[0]).toBe(currentSource);
       if (kind === "alias") {
         fs.unlinkSync(parent);
@@ -274,34 +277,25 @@ it.each(["alias", "missing-parent"] as const)(
 );
 
 it("captures fixed, missing, and retired routing without main-thread SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withState(async () => {
     const storeDir = state.path("stores");
     fs.mkdirSync(storeDir, { recursive: true });
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
         entries: { main: { name: "not-a-routing-field" }, ops: {}, future: {} },
-        defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+        defaults,
       },
       session: { store: path.join(storeDir, "shared.json") },
     };
-    const main = openOpenClawAgentDatabase({
-      agentId: "main",
-      env: state.env,
-      path: path.join(storeDir, "shared.sqlite"),
-    });
-    const ops = openOpenClawAgentDatabase({
-      agentId: "ops",
-      env: state.env,
-      path: path.join(storeDir, "shared.ops.sqlite"),
-    });
-    const retired = openOpenClawAgentDatabase({
-      agentId: "retired",
-      env: state.env,
-      path: state.path("retired-location", "history.sqlite"),
-    });
-    const currentSource = { agentId: main.agentId, path: main.path };
-    const registryPath = openOpenClawStateDatabase().path;
+    const open = (agentId: string, storePath: string) =>
+      openOpenClawAgentDatabase({ agentId, env: state.env, path: storePath });
+    const main = open("main", path.join(storeDir, "shared.sqlite"));
+    const ops = open("ops", path.join(storeDir, "shared.ops.sqlite"));
+    const retired = open("retired", state.path("retired-location", "history.sqlite"));
+    const currentSource = source(main);
+    const params = sourceParams(currentSource, cfg);
+    const registryPath = params.registryPath;
     invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
     // Retire fixture writers so their checkpoint timers cannot enter the read-only SQL probe.
     await closeOpenClawAgentDatabasesAsync();
@@ -310,12 +304,7 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
     let prepared: Awaited<ReturnType<typeof prepareGatewaySessionStoreReadSourcesAsync>>;
     try {
       sql.calibrate();
-      prepared = await prepareGatewaySessionStoreReadSourcesAsync({
-        cfg,
-        currentSource,
-        env: state.env,
-        registryPath,
-      });
+      prepared = await prepareGatewaySessionStoreReadSourcesAsync(params);
       prepared.assertCurrent();
       sql.expectIdle();
     } finally {
@@ -338,7 +327,7 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
 it.each([false, true])(
   "keeps failed auxiliary discovery isolated (recovers after yield: %s)",
   async (recovers) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async () => {
       const storeDir = state.path("stores");
       fs.mkdirSync(storeDir, { recursive: true });
       const blockedPath = path.join(storeDir, "blocked");
@@ -347,7 +336,7 @@ it.each([false, true])(
         agents: {
           ownership: "explicit",
           entries: { main: {}, blocked: {} },
-          defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+          defaults,
         },
         session: { store: path.join(storeDir, "{agentId}", "history.json") },
       };
@@ -356,12 +345,7 @@ it.each([false, true])(
         env: state.env,
         path: path.join(storeDir, "main", "history.sqlite"),
       });
-      const pending = prepareGatewaySessionStoreReadSourcesAsync({
-        cfg,
-        env: state.env,
-        registryPath: openOpenClawStateDatabase().path,
-        currentSource: { agentId: main.agentId, path: main.path },
-      });
+      const pending = prepareGatewaySessionStoreReadSourcesAsync(sourceParams(source(main), cfg));
       if (recovers) {
         fs.unlinkSync(blockedPath);
         fs.mkdirSync(blockedPath);
@@ -380,71 +364,60 @@ it.each([false, true])(
 );
 
 it("retains source preparation until directory or registry ownership changes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { main, params, alias, replacement } = aliasSources(state);
+  await withState(async () => {
+    const { main, params, alias, replacement } = aliasSources();
     const first = await prepareGatewaySessionStoreReadSourcesAsync(params);
     const realpath = vi.spyOn(fs.realpathSync, "native");
     const stat = vi.spyOn(fs, "statSync");
     const readdir = vi.spyOn(fs, "readdirSync");
     syncBuiltinESMExports();
-    try {
-      const warm = await prepareGatewaySessionStoreReadSourcesAsync(params);
-      first.assertCurrent();
-      warm.assertCurrent();
-      expect(warm.request).toEqual(first.request);
-      expect(realpath).not.toHaveBeenCalled();
-      expect(stat).not.toHaveBeenCalled();
-      expect(readdir).not.toHaveBeenCalled();
+    const warm = await prepareGatewaySessionStoreReadSourcesAsync(params);
+    first.assertCurrent();
+    warm.assertCurrent();
+    expect(warm.request).toEqual(first.request);
+    expect(realpath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(readdir).not.toHaveBeenCalled();
 
-      const directory = observedDirectories.find(
-        (entry) => entry.active && entry.directory === path.dirname(main.path),
-      );
-      expect(directory).toBeDefined();
-      directory!.notify("unrelated.txt");
-      expect(first.assertCurrent).not.toThrow();
-      directory!.notify(path.basename(main.path));
-      expect(first.assertCurrent).not.toThrow();
-      const revalidationReads = realpath.mock.calls.length;
-      for (const entry of observedDirectories) {
-        if (entry.active && entry.directory.startsWith(state.root)) {
-          entry.notify();
-        }
+    const directory = observedDirectories.find(
+      (entry) => entry.active && entry.directory === path.dirname(main.path),
+    );
+    expect(directory).toBeDefined();
+    directory!.notify("unrelated.txt");
+    expect(first.assertCurrent).not.toThrow();
+    directory!.notify(path.basename(main.path));
+    expect(first.assertCurrent).not.toThrow();
+    const revalidationReads = realpath.mock.calls.length;
+    for (const entry of observedDirectories) {
+      if (entry.active && entry.directory.startsWith(state.root)) {
+        entry.notify();
       }
-      expect(realpath.mock.calls.length).toBe(revalidationReads);
-      await Promise.resolve();
-      fs.unlinkSync(alias);
-      fs.symlinkSync(replacement, alias, linkType);
-      notifyAlias(alias);
-      expect(first.assertCurrent).toThrow("Session store changed");
-      const refreshed = await prepareGatewaySessionStoreReadSourcesAsync(params);
-      refreshed.assertCurrent();
-      expect(realpath).toHaveBeenCalled();
-
-      const ops = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
-      expect(refreshed.assertCurrent).toThrow("Session store changed");
-      const registered = await prepareGatewaySessionStoreReadSourcesAsync(params);
-      expect(registered.request?.registeredDatabases).toEqual(
-        expect.arrayContaining([expect.objectContaining({ agentId: "ops", path: ops.path })]),
-      );
-    } finally {
-      readdir.mockRestore();
-      stat.mockRestore();
-      realpath.mockRestore();
-      syncBuiltinESMExports();
     }
+    expect(realpath.mock.calls.length).toBe(revalidationReads);
+    await Promise.resolve();
+    replaceAlias(alias, replacement);
+    expect(first.assertCurrent).toThrow("Session store changed");
+    const refreshed = await prepareGatewaySessionStoreReadSourcesAsync(params);
+    refreshed.assertCurrent();
+    expect(realpath).toHaveBeenCalled();
+
+    const ops = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
+    expect(refreshed.assertCurrent).toThrow("Session store changed");
+    const registered = await prepareGatewaySessionStoreReadSourcesAsync(params);
+    expectRegistered(registered, ops);
   });
 });
 
-async function prepareMainSources(state: { env: NodeJS.ProcessEnv }) {
-  const { main, params } = mainSources(state);
+async function prepareMainSources() {
+  const { main, params } = mainSources();
   const prepared = await prepareGatewaySessionStoreReadSourcesAsync(params);
   releasedDirectories.length = 0;
   return { main, params, prepared, registryPath: params.registryPath };
 }
 
 it("retains source preparation when another state database closes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { main, prepared, registryPath } = await prepareMainSources(state);
+  await withState(async () => {
+    const { main, prepared, registryPath } = await prepareMainSources();
     const other = openOpenClawStateDatabase({ path: state.path("other-state", "state.sqlite") });
     await closeOpenClawStateDatabaseByPathAsync(other.path);
     expect(prepared.assertCurrent).not.toThrow();
@@ -461,26 +434,22 @@ it("retains source preparation when another state database closes", async () => 
 });
 
 it("keeps shared directories observed while a registry generation refreshes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { params, prepared } = await prepareMainSources(state);
+  await withState(async () => {
+    const { params, prepared } = await prepareMainSources();
     const ops = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
     expect(prepared.assertCurrent).toThrow("Session store changed");
     const registered = await prepareGatewaySessionStoreReadSourcesAsync(params);
-    expect(registered.request?.registeredDatabases).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "ops", path: ops.path })]),
-    );
+    expectRegistered(registered, ops);
     expect(releasedDirectories).toEqual([]);
   });
 });
 
 it("keeps shared directories observed after a source path changes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { params, alias, replacement } = aliasSources(state);
+  await withState(async () => {
+    const { params, alias, replacement } = aliasSources();
     const first = await prepareGatewaySessionStoreReadSourcesAsync(params);
     releasedDirectories.length = 0;
-    fs.unlinkSync(alias);
-    fs.symlinkSync(replacement, alias, linkType);
-    notifyAlias(alias);
+    replaceAlias(alias, replacement);
     expect(first.assertCurrent).toThrow("Session store changed");
     const refreshed = await prepareGatewaySessionStoreReadSourcesAsync(params);
     refreshed.assertCurrent();
@@ -489,17 +458,13 @@ it("keeps shared directories observed after a source path changes", async () => 
 });
 
 it("does not resume directory observation after its root closes during preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { params } = mainSources(state);
+  await withState(async () => {
+    const { params } = mainSources();
     const { entered, resume, spy } = holdRegistryRead();
     const pending = prepareGatewaySessionStoreReadSourcesAsync(params);
     void pending.catch(() => undefined);
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "Source preparation did not await registry rows",
-      );
+      await awaitGateBeforeSettlement(entered.promise, pending, "Registry read not reached");
       await closeOpenClawStateDatabaseAsync();
       const observationCount = observedDirectories.length;
       expect(observedDirectories.some((entry) => entry.active)).toBe(false);
@@ -515,8 +480,8 @@ it("does not resume directory observation after its root closes during preparati
 });
 
 it("cancels one waiter while retaining shared source preparation", async ({ signal }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { main, params } = mainSources(state);
+  await withState(async () => {
+    const { main, params } = mainSources();
     const { entered, resume, spy } = holdRegistryRead();
     const controller = new AbortController();
     const first = prepareGatewaySessionStoreReadSourcesAsync(params, controller.signal);
@@ -524,11 +489,7 @@ it("cancels one waiter while retaining shared source preparation", async ({ sign
     let second: ReturnType<typeof prepareGatewaySessionStoreReadSourcesAsync> | undefined;
     try {
       await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          first,
-          "Source preparation did not await registry rows",
-        ),
+        awaitGateBeforeSettlement(entered.promise, first, "Registry read not reached"),
         signal,
       );
       second = prepareGatewaySessionStoreReadSourcesAsync(params);
@@ -537,9 +498,7 @@ it("cancels one waiter while retaining shared source preparation", async ({ sign
       await withinTest(expect(first).rejects.toBe(reason), signal);
       resume.resolve();
       const prepared = await withinTest(second, signal);
-      expect(prepared.request?.registeredDatabases).toEqual(
-        expect.arrayContaining([expect.objectContaining({ agentId: "main", path: main.path })]),
-      );
+      expectRegistered(prepared, main);
       prepared.assertCurrent();
       expect(spy).toHaveBeenCalledOnce();
     } finally {

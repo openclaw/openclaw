@@ -22,20 +22,33 @@ import {
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
-async function withSession(
-  run: (fixture: {
-    cfg: OpenClawConfig;
-    key: string;
-    env: NodeJS.ProcessEnv;
-    scope: { agentId: string; sessionKey: string; env: NodeJS.ProcessEnv };
-  }) => Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:freshness";
-    await run({ cfg, key, env, scope: { agentId: "main", sessionKey: key, env } });
-  });
+const sessionEntry = { sessionId: "same-session", updatedAt: 1 };
+const memberIds = (rows: readonly { identityId: string }[] | undefined) =>
+  rows?.map(({ identityId }) => identityId).toSorted();
+
+function makeSession(env: NodeJS.ProcessEnv) {
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
+  const key = "agent:main:freshness";
+  const scope = { agentId: "main", sessionKey: key, env };
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  return {
+    cfg,
+    key,
+    env,
+    scope,
+    database,
+    commit: (write: () => void) =>
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, write),
+    write: (label: string, updatedAt: number) =>
+      writeSessionEntry(database, key, { ...sessionEntry, label, updatedAt }),
+    member: (identityId: string, addedAt = 1) =>
+      addSessionMember(scope, { identityId, addedBy: "owner", addedAt }),
+  };
+}
+
+async function withSession(run: (fixture: ReturnType<typeof makeSession>) => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal" }, ({ env }) => run(makeSession(env)));
 }
 
 async function qualify(cfg: OpenClawConfig, key: string, env: NodeJS.ProcessEnv) {
@@ -54,14 +67,14 @@ async function qualify(cfg: OpenClawConfig, key: string, env: NodeJS.ProcessEnv)
 }
 
 it("reads current qualified facts and recovers lifecycle timestamps only when requested", async () => {
-  await withSession(async ({ cfg, key, env, scope }) => {
+  await withSession(async ({ cfg, key, env, scope, member }) => {
     const sessionId = "qualified-lifecycle";
     const entry = { sessionId, updatedAt: 2_000, lastInteractionAt: 1_500 };
     await replaceSessionEntry(scope, { ...entry, label: "before" });
     await replaceTranscriptEvents({ ...scope, sessionId }, [
       { type: "session", id: sessionId, version: 3, timestamp: "1970-01-01T00:00:01.000Z" },
     ]);
-    addSessionMember(scope, { identityId: "first-member", addedBy: "owner", addedAt: 1 });
+    member("first-member");
     const { selected, qualified } = await qualify(cfg, key, env);
     const read = (includeLifecycle = false) =>
       withQualifiedGatewaySessionEntry({
@@ -76,10 +89,7 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
           assertCurrent();
           return {
             label: current.entry?.label,
-            members: members
-              .get(key)
-              ?.map((member) => member.identityId)
-              .toSorted(),
+            members: memberIds(members.get(key)),
             timestamps: current.lifecycleTimestamps,
           };
         },
@@ -90,7 +100,7 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
       timestamps: {},
     });
     await replaceSessionEntry(scope, { ...entry, label: "after" });
-    addSessionMember(scope, { identityId: "second-member", addedBy: "owner", addedAt: 2 });
+    member("second-member", 2);
     await expect(read()).resolves.toEqual({
       label: "after",
       members: ["first-member", "second-member"],
@@ -107,95 +117,71 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
 it.for(["membership", "explicit", "qualified"] as const)(
   "consumes facts committed before its %s-ordered snapshot",
   async (ordering) => {
-    await withSession(async ({ cfg, key, env, scope }) => {
-      await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
+    await withSession(async ({ cfg, key, env, scope, commit, write, member }) => {
+      await replaceSessionEntry(scope, sessionEntry);
       const { selected, qualified } = ordering === "qualified" ? await qualify(cfg, key, env) : {};
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
       const committedValues: string[] = [];
       const pendingValues = ["first-value", "second-value"];
       const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-      const read = vi
+      using _ = vi
         .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
         .mockImplementation(async (inputs, consume, options) => {
           const value = pendingValues.shift();
           if (value) {
             // Real writes win the FIFO before the reader starts its snapshot.
-            await runOpenClawAgentWriteAdmission(
-              { agentId: "main", path: database.path, env },
-              () => {
-                if (ordering !== "explicit") {
-                  addSessionMember(scope, { identityId: value, addedBy: "owner", addedAt: 1 });
-                } else {
-                  writeSessionEntry(database, key, {
-                    sessionId: "same-session",
-                    updatedAt: 2,
-                    label: value,
-                  });
-                }
-                committedValues.push(value);
-              },
-            );
+            await commit(() => {
+              if (ordering !== "explicit") {
+                member(value);
+              } else {
+                write(value, 2);
+              }
+              committedValues.push(value);
+            });
           }
           return readEntries(inputs, consume, options);
         });
       let consumptions = 0;
-      try {
-        const consume: Parameters<
-          typeof withQualifiedGatewaySessionStoreTarget<{ members?: string[]; label?: string }>
-        >[0]["consume"] = (target, membership, assertCurrent) => {
-          consumptions += 1;
-          assertCurrent();
-          expect(target.store[key]?.sessionId).toBe("same-session");
-          return ordering !== "explicit"
-            ? {
-                members: membership
-                  .get(key)
-                  ?.map((member) => member.identityId)
-                  .toSorted(),
-              }
-            : { label: target.store[key]?.label };
-        };
-        const result =
-          qualified && selected
-            ? await withQualifiedGatewaySessionStoreTarget({
-                target: qualified,
-                logicalStorePath: selected.storePath,
+      const consume: Parameters<typeof withQualifiedGatewaySessionStoreTarget>[0]["consume"] = (
+        target,
+        membership,
+        assertCurrent,
+      ) => {
+        consumptions += 1;
+        assertCurrent();
+        expect(target.store[key]?.sessionId).toBe("same-session");
+        return ordering !== "explicit" ? memberIds(membership.get(key)) : target.store[key]?.label;
+      };
+      const result =
+        qualified && selected
+          ? await withQualifiedGatewaySessionStoreTarget({
+              target: qualified,
+              logicalStorePath: selected.storePath,
+              env,
+              includeMembership: true,
+              consume,
+            })
+          : await withGatewaySessionStoreTarget(
+              {
+                cfg,
+                key,
                 env,
-                includeMembership: true,
-                consume,
-              })
-            : await withGatewaySessionStoreTarget(
-                {
-                  cfg,
-                  key,
-                  env,
-                  includeMembership: ordering === "membership",
-                  ordered: ordering === "explicit",
-                },
-                consume,
-              );
-        expect(result).toEqual(
-          ordering !== "explicit"
-            ? { members: committedValues.toSorted() }
-            : { label: committedValues.at(-1) },
-        );
-        expect(committedValues).toContain("first-value");
-        expect(consumptions).toBe(1);
-      } finally {
-        read.mockRestore();
-      }
+                includeMembership: ordering === "membership",
+                ordered: ordering === "explicit",
+              },
+              consume,
+            );
+      expect(result).toEqual(
+        ordering !== "explicit" ? committedValues.toSorted() : committedValues.at(-1),
+      );
+      expect(committedValues).toContain("first-value");
+      expect(consumptions).toBe(1);
     });
   },
 );
 
 it("consumes a fresh metadata snapshot before the next queued writer", async () => {
-  await withSession(async ({ cfg, key, env, scope }) => {
-    replaceSessionEntrySync(scope, {
-      sessionId: "same-session",
-      updatedAt: 1,
-      label: "initial",
-    });
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  await withSession(async ({ cfg, key, env, scope, database, commit, write }) => {
+    replaceSessionEntrySync(scope, { ...sessionEntry, label: "initial" });
     const events: string[] = [];
     const writes: Promise<void>[] = [];
     const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
@@ -211,19 +197,12 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
             const revision = writes.length + 1;
             const label = `write-${revision}`;
             // Commit after snapshot capture, or queue behind a reader that owns the FIFO.
-            const write = runOpenClawAgentWriteAdmission(
-              { agentId: "main", path: database.path, env },
-              () => {
-                writeSessionEntry(database, key, {
-                  sessionId: "same-session",
-                  updatedAt: revision + 1,
-                  label,
-                });
-                events.push(label);
-              },
-            );
-            writes.push(write);
-            void write.catch(() => {});
+            const pending = commit(() => {
+              write(label, revision + 1);
+              events.push(label);
+            });
+            writes.push(pending);
+            void pending.catch(() => {});
             return consume(prepared);
           },
           options,
@@ -252,22 +231,21 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
 it.each(["during", "repeated", "consume"] as const)(
   "consumes an ordered sharing snapshot with a native write %s admission",
   async (timing) => {
-    await withSession(async ({ cfg, key, env, scope }) => {
-      await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    await withSession(async ({ cfg, key, env, scope, database, member }) => {
+      await replaceSessionEntry(scope, sessionEntry);
       const committedMembers: string[] = [];
       const pendingMembers =
         timing === "repeated" ? ["first-member", "second-member"] : ["first-member"];
       let reads = 0;
       const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-      const read = vi
+      using _ = vi
         .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
         .mockImplementation(async (inputs, consume, options) => {
           reads += 1;
           const write = () => {
             const identityId = pendingMembers.shift();
             if (identityId) {
-              addSessionMember(scope, { identityId, addedBy: "owner", addedAt: 1 });
+              member(identityId);
               committedMembers.push(identityId);
             }
           };
@@ -282,37 +260,28 @@ it.each(["during", "repeated", "consume"] as const)(
           });
         });
       let consumptions = 0;
-      try {
-        const reading = withGatewaySessionStoreTarget(
-          { cfg, key, env, includeMembership: true },
-          (target, membership, assertCurrent) => {
-            consumptions += 1;
-            if (timing === "consume") {
-              database.db
-                .prepare(
-                  "UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?",
-                )
-                .run(key);
-            }
-            assertCurrent();
-            expect(target.store[key]?.sessionId).toBe("same-session");
-            return membership
-              .get(key)
-              ?.map((member) => member.identityId)
-              .toSorted();
-          },
-        );
-        if (timing === "repeated" || timing === "consume") {
-          await expect(reading).rejects.toThrow("Session entry changed during read");
-          expect(reads).toBe(timing === "repeated" ? 2 : 1);
-          expect(consumptions).toBe(timing === "consume" ? 1 : 0);
-        } else {
-          expect(await reading).toEqual(committedMembers.toSorted());
-          expect(reads).toBe(2);
-          expect(consumptions).toBe(1);
-        }
-      } finally {
-        read.mockRestore();
+      const reading = withGatewaySessionStoreTarget(
+        { cfg, key, env, includeMembership: true },
+        (target, membership, assertCurrent) => {
+          consumptions += 1;
+          if (timing === "consume") {
+            database.db
+              .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+              .run(key);
+          }
+          assertCurrent();
+          expect(target.store[key]?.sessionId).toBe("same-session");
+          return memberIds(membership.get(key));
+        },
+      );
+      if (timing === "repeated" || timing === "consume") {
+        await expect(reading).rejects.toThrow("Session entry changed during read");
+        expect(reads).toBe(timing === "repeated" ? 2 : 1);
+        expect(consumptions).toBe(timing === "consume" ? 1 : 0);
+      } else {
+        expect(await reading).toEqual(committedMembers.toSorted());
+        expect(reads).toBe(2);
+        expect(consumptions).toBe(1);
       }
     });
   },

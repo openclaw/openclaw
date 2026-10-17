@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -28,12 +29,19 @@ function assistantMessage(text: string) {
   return makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 }
 
-async function appendMessage(storePath: string, text: string, key = sessionKey) {
+type AppendOptions = Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0];
+async function appendMessage(
+  storePath: string,
+  text: string,
+  key = sessionKey,
+  expected: Pick<AppendOptions, "expectedSessionId" | "expectedLifecycleRevision"> = {},
+) {
   const result = await appendExactAssistantMessageToSessionTranscript({
     agentId: "main",
     sessionKey: key,
     storePath,
     message: assistantMessage(text),
+    ...expected,
   });
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -44,13 +52,11 @@ async function appendMessage(storePath: string, text: string, key = sessionKey) 
 
 async function captureAppend(storePath: string, text: string, key: string) {
   const updates: InternalSessionTranscriptUpdate[] = [];
-  const stop = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-  try {
-    const id = await appendMessage(storePath, text, key);
-    return updates.find((update) => update.messageId === id);
-  } finally {
-    stop();
-  }
+  using _ = {
+    [Symbol.dispose]: onInternalSessionTranscriptUpdate((update) => updates.push(update)),
+  };
+  const id = await appendMessage(storePath, text, key);
+  return updates.find((update) => update.messageId === id);
 }
 
 const historyMessage = (text: string) => ({ content: [{ text }] });
@@ -71,15 +77,9 @@ describe("session history SSE source ownership", () => {
       const entries = {
         [requestedKey]: { sessionId, updatedAt: 1, lifecycleRevision: "copied-history-owner" },
       };
-      await writeSessionStore({
-        storePath,
-        entries,
-      });
+      await writeSessionStore({ storePath, entries });
       if (mismatch === "physical store") {
-        await writeSessionStore({
-          storePath: otherStorePath,
-          entries,
-        });
+        await writeSessionStore({ storePath: otherStorePath, entries });
         await appendMessage(otherStorePath, "other store first row", requestedKey);
         await appendMessage(otherStorePath, "other store second row", requestedKey);
       }
@@ -98,15 +98,12 @@ describe("session history SSE source ownership", () => {
           signal: abort.signal,
         });
         expect(response.status).toBe(200);
-        reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error("expected the session history event stream");
-        }
+        reader = expectDefined(response.body?.getReader(), "session history event stream");
         const stream = { buffer: "" };
         const initial = await readSseEvent(reader, stream);
-        expect(initial.event).toBe("history");
-        expect(initial.data).toMatchObject({
-          messages: [historyMessage("bound initial message")],
+        expect(initial).toMatchObject({
+          event: "history",
+          data: { messages: [historyMessage("bound initial message")] },
         });
         if (mismatch === "lifecycle owner") {
           const reset = await resetSessionEntryLifecycle({
@@ -115,13 +112,11 @@ describe("session history SSE source ownership", () => {
             target: { canonicalKey: requestedKey, storeKeys: [requestedKey] },
             resetBoundary: { context: "clear", reason: "reset", cwd: root },
             buildNextEntry: ({ currentEntry }) => {
-              if (!currentEntry) {
-                throw new Error("expected the current lifecycle owner");
-              }
+              const current = expectDefined(currentEntry, "current lifecycle owner");
               return {
-                ...currentEntry,
+                ...current,
                 lifecycleRevision: "after-reset",
-                updatedAt: currentEntry.updatedAt + 1,
+                updatedAt: current.updatedAt + 1,
               };
             },
           });
@@ -132,22 +127,13 @@ describe("session history SSE source ownership", () => {
             5_000,
           );
           const replacementText = "replacement lifecycle message";
-          const appended = await appendExactAssistantMessageToSessionTranscript({
-            agentId: "main",
-            sessionKey: requestedKey,
-            storePath,
+          await appendMessage(storePath, replacementText, requestedKey, {
             expectedSessionId: sessionId,
             expectedLifecycleRevision: "after-reset",
-            message: assistantMessage(replacementText),
           });
-          expect(appended.ok).toBe(true);
           let remaining = stream.buffer;
           const decoder = new TextDecoder();
-          while (true) {
-            const chunk = await reader.read();
-            if (chunk.done) {
-              break;
-            }
+          for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
             remaining += decoder.decode(chunk.value, { stream: true });
           }
           expect(remaining).not.toContain(replacementText);
@@ -160,17 +146,17 @@ describe("session history SSE source ownership", () => {
         const foreignText = `unrelated payload from ${mismatch}`;
         if (mismatch === "physical store") {
           const foreignUpdate = await captureAppend(otherStorePath, foreignText, requestedKey);
-          expect(foreignUpdate).toMatchObject({
+          const owner = {
             target: {
               agentId: initialUpdate.target.agentId,
               sessionId: initialUpdate.target.sessionId,
               sessionKey: initialUpdate.target.sessionKey,
+              storePath: expect.any(String),
             },
             lifecycleRevision: "copied-history-owner",
-          });
-          expect(initialUpdate.lifecycleRevision).toBe("copied-history-owner");
-          expect(initialUpdate.target.storePath).toBeTypeOf("string");
-          expect(foreignUpdate?.target?.storePath).toBeTypeOf("string");
+          };
+          expect(initialUpdate).toMatchObject(owner);
+          expect(foreignUpdate).toMatchObject(owner);
           expect(foreignUpdate?.target?.storePath).not.toBe(initialUpdate.target.storePath);
           expect(foreignUpdate?.messageSeq).toBeGreaterThan(initialUpdate.messageSeq);
         } else {
@@ -190,14 +176,11 @@ describe("session history SSE source ownership", () => {
         const visibleText = "bound message after unrelated update";
         await appendMessage(storePath, visibleText, requestedKey);
         // The committed bound append is an ordering barrier, so no quiet-period timer is needed.
-        while (true) {
-          const event = await readSseEvent(reader, stream);
-          const serialized = JSON.stringify(event.data);
-          expect(serialized).not.toContain(foreignText);
-          if (serialized.includes(visibleText)) {
-            break;
-          }
-        }
+        let published = "";
+        do {
+          published = JSON.stringify((await readSseEvent(reader, stream)).data);
+          expect(published).not.toContain(foreignText);
+        } while (!published.includes(visibleText));
         const history = await fetch(url, { headers });
         expect(history.status).toBe(200);
         expect(await history.json()).toMatchObject({
