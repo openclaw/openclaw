@@ -249,18 +249,32 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     const manager = new AcpSessionManager(deps);
     try {
       await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
-      for (const discardPersistentState of [false, true]) {
+      // Retained discard and ordinary close still reject. Owner repair must not
+      // become a way to rewrite resume identifiers while the row survives.
+      for (const close of [
+        { clearMeta: false, discardPersistentState: true },
+        { discardPersistentState: true },
+        { clearMeta: true, discardPersistentState: false },
+      ] as const) {
         await expect(
           manager.closeSession({
             ...target,
             reason: "reset",
-            clearMeta: true,
-            discardPersistentState,
+            ...close,
             allowBackendUnavailable: true,
           }),
         ).rejects.toBe(repairError);
         expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
       }
+      // Explicit metadata deletion proceeds past the verdict and removes the row.
+      await manager.closeSession({
+        ...target,
+        reason: "delete",
+        clearMeta: true,
+        discardPersistentState: true,
+        allowBackendUnavailable: true,
+      });
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toBeUndefined();
       expect(runtime.close).not.toHaveBeenCalled();
     } finally {
       await disposeAcpSessionManagerInstance(manager, "test-complete");
