@@ -72,7 +72,7 @@ import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   private readonly notify = () => this.invalidate();
 
-  readProviderReviewState() {
+  readState() {
     return this.state;
   }
 

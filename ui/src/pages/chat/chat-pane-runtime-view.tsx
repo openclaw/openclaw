@@ -28,6 +28,7 @@ import {
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
@@ -116,6 +117,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const state = runtime.readState();
+    const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const boardProvider = createMemo(() => {
       revision();
@@ -181,6 +184,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         revision();
         progress.read();
         projects.read();
+        workspace?.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
@@ -191,7 +195,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createMemo(() => lifecycle.snapshot());
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
-      readState: () => runtime.readProviderReviewState(),
+      readState: () => runtime.readState(),
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
