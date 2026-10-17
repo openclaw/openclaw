@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -62,15 +62,13 @@ type RequestAuth = NonNullable<
   Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>
 >["requestAuth"];
 
-function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
-  return {
-    trustDeclaredOperatorScopes: false,
-    hasCurrentClientAuthority: () => true,
-    assertCurrent: () => {},
-    revalidate: async () => {},
-    ...overrides,
-  };
-}
+const authorizedRequest = (overrides: Partial<RequestAuth> = {}): RequestAuth => ({
+  trustDeclaredOperatorScopes: false,
+  hasCurrentClientAuthority: () => true,
+  assertCurrent: () => {},
+  revalidate: async () => {},
+  ...overrides,
+});
 
 let serverPort = 0;
 let resolveGatewayContext: GatewayContextResolver | undefined;
@@ -94,16 +92,14 @@ afterAll(() => server.close());
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
   resolveGatewayContext = undefined;
-  lifecycle.authorize.mockReset();
-  lifecycle.authorize.mockResolvedValue({
+  lifecycle.authorize.mockReset().mockResolvedValue({
     cfg: {},
     requestAuth: authorizedRequest(),
     operatorScopes: [],
   });
   lifecycle.beforeHook.mockClear();
   lifecycle.handled.mockReset();
-  lifecycle.execute.mockReset();
-  lifecycle.execute.mockResolvedValue({ ok: true });
+  lifecycle.execute.mockReset().mockResolvedValue({ ok: true });
 });
 
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -134,214 +130,200 @@ function abortableProbe(release: () => void) {
   };
 }
 
-describe("POST /tools/invoke request cancellation", () => {
-  it("rejects a tool when policy authority changes during its awaited hook", async () => {
-    const hookStarted = createDeferred();
-    const releaseHook = createDeferred();
-    let current = true;
-    lifecycle.authorize.mockResolvedValueOnce({
-      cfg: {},
-      requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
-      operatorScopes: [],
+it("rejects a tool when policy authority changes during its awaited hook", async () => {
+  const hookStarted = createDeferred();
+  const releaseHook = createDeferred();
+  let current = true;
+  lifecycle.authorize.mockResolvedValueOnce({
+    cfg: {},
+    requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
+    operatorScopes: [],
+  });
+  lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
+    hookStarted.resolve();
+    await releaseHook.promise;
+    return { blocked: false, params };
+  });
+  const pending = invokeAbortProbe();
+  try {
+    await hookStarted.promise;
+    current = false;
+    releaseHook.resolve();
+    const response = await pending;
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { message: "Gateway requester authority changed" },
     });
-    lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
-      hookStarted.resolve();
-      await releaseHook.promise;
-      return { blocked: false, params };
-    });
-    const pending = invokeAbortProbe();
-    try {
-      await hookStarted.promise;
-      current = false;
-      releaseHook.resolve();
-      const response = await pending;
-      expect(response.status).toBe(403);
-      expect(await response.json()).toMatchObject({
-        ok: false,
-        error: { message: "Gateway requester authority changed" },
+    expect(lifecycle.execute).not.toHaveBeenCalled();
+  } finally {
+    releaseHook.resolve();
+    await pending;
+  }
+});
+
+it.each(["authorization", "policy hook"])(
+  "does not start a tool after the client disconnects during %s",
+  async (phase) => {
+    const started = createDeferred<IncomingMessage | AbortSignal | undefined>();
+    const released = createDeferred();
+    if (phase === "authorization") {
+      lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
+        started.resolve(req);
+        await released.promise;
+        return { cfg: {}, requestAuth: authorizedRequest(), operatorScopes: [] };
       });
-      expect(lifecycle.execute).not.toHaveBeenCalled();
+    } else {
+      lifecycle.beforeHook.mockImplementationOnce(async ({ params, signal }) => {
+        started.resolve(signal);
+        await released.promise;
+        return { blocked: false, params };
+      });
+    }
+    await using probe = abortableProbe(released.resolve);
+    const source = await started.promise;
+    if (phase === "policy hook") {
+      expect(source).toBeInstanceOf(AbortSignal);
+    }
+    await probe.disconnect(() =>
+      source instanceof AbortSignal ? source.aborted : source?.socket.destroyed === true,
+    );
+    released.resolve();
+    await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
+    expect(lifecycle.execute).not.toHaveBeenCalled();
+  },
+);
+
+it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
+  const revoked = vi.fn();
+  lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
+    // Observe while the tool owns the signal: Node 24 composites retain weak
+    // sources until subscribed, so a later getter can lose an aborted source to GC.
+    signal?.addEventListener("abort", revoked, { once: true });
+    return { ok: true };
+  });
+  const response = await invokeAbortProbe();
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+  expect(lifecycle.execute).toHaveBeenCalledTimes(1);
+
+  const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
+  expect(toolSignal).toBeInstanceOf(AbortSignal);
+  expect(revoked).toHaveBeenCalledTimes(1);
+  expect(toolSignal?.aborted).toBe(true);
+  expect(lifecycle.beforeHook).toHaveBeenCalledWith(
+    expect.objectContaining({ signal: toolSignal }),
+  );
+});
+
+it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
+  const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
+  await withOpenClawTestState(stateOptions, async () => {
+    const writer = {
+      sessions: { others: "write" as const },
+      agents: ["main"],
+      scopes: ["operator.write"],
+    };
+    const cfg: OpenClawConfig = {
+      gateway: { roles: { default: "writer", definitions: { writer } } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const { id, displayName, updatedAt } = ensureProfileForEmail("http-tool-operator@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const context = createGatewayRequestContext(makeContextParams());
+    resolveGatewayContext = () => context;
+    context.resolveGatewayContext = resolveGatewayContext;
+    const originalGrant = new AbortController();
+    const replacementGrant = new AbortController();
+    const admissions: ReturnType<typeof prepareSystemAgentRunAdmission>[] = [];
+    const captures: {
+      scope: NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>;
+      admitted: AdmittedRunContext;
+    }[] = [];
+    lifecycle.execute.mockImplementation(async () => {
+      const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "Tool request scope");
+      const authority = expectDefined(
+        scope.client?.internal?.operatorRunAuthority,
+        "Original operator authority",
+      );
+      expect(scope.context).toBe(context);
+      expect(scope.resolveGatewayContext).toBe(resolveGatewayContext);
+      expect(scope.hasCurrentClientAuthority?.()).toBe(true);
+      const admission = prepareSystemAgentRunAdmission(
+        cfg,
+        `http-tool-child-${admissions.length}`,
+        "main",
+        "http-tool-child-test",
+        undefined,
+        authority,
+      );
+      admissions.push(admission);
+      captures.push({ scope, admitted: await admission.admit("embedded") });
+      return { ok: true };
+    });
+
+    try {
+      for (const grant of [originalGrant, replacementGrant]) {
+        lifecycle.authorize.mockResolvedValueOnce({
+          cfg,
+          operatorScopes: ["operator.write"],
+          requestAuth: authorizedRequest({
+            authMethod: "trusted-proxy",
+            trustDeclaredOperatorScopes: true,
+            authenticatedUserProfile: { profileId: id, displayName, hasAvatar: false, updatedAt },
+            operatorAccessAuthority: {
+              signal: grant.signal,
+              assertCurrent: () => grant.signal.throwIfAborted(),
+            },
+          }),
+        });
+        const response = await invokeAbortProbe();
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+        const capture = expectDefined(captures.at(-1), "Tool admitted its child");
+        expect(capture.scope.signal?.aborted).toBe(true);
+        expect(capture.scope.hasCurrentClientAuthority?.()).toBe(false);
+        const authority = readAdmittedRunOperatorAuthority(capture.admitted);
+        expect(authority).toBe(capture.scope.client?.internal?.operatorRunAuthority);
+        expect(authority?.profileId).toBe(id);
+        expect(authority?.scopes).toEqual(["operator.write"]);
+        expect(authority?.signal?.aborted).toBe(false);
+        expect(() => authority?.assertCurrent()).not.toThrow();
+      }
+
+      const original = expectDefined(captures[0], "Original child");
+      const replacement = expectDefined(captures[1], "Replacement child");
+      const originalAuthority = readAdmittedRunOperatorAuthority(original.admitted);
+      const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
+      expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);
+      originalGrant.abort(new Error("Original guest grant ended"));
+      expect(originalAuthority?.signal?.aborted).toBe(true);
+      expect(() => originalAuthority?.assertCurrent()).toThrow("Original guest grant ended");
+      expect(() => readAdmittedRunOperatorAuthority(original.admitted)).toThrow("no longer active");
+      expect(replacementAuthority?.signal?.aborted).toBe(false);
+      expect(() => replacementAuthority?.assertCurrent()).not.toThrow();
+      expect(readAdmittedRunOperatorAuthority(replacement.admitted)).toBe(replacementAuthority);
     } finally {
-      releaseHook.resolve();
-      await pending;
+      admissions.forEach((admission) => admission.close());
+      originalGrant.abort();
+      replacementGrant.abort();
+      resolveGatewayContext = undefined;
     }
   });
+});
 
-  it.each(["authorization", "policy hook"])(
-    "does not start a tool after the client disconnects during %s",
-    async (phase) => {
-      const started = createDeferred<IncomingMessage | AbortSignal | undefined>();
-      const released = createDeferred();
-      if (phase === "authorization") {
-        lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
-          started.resolve(req);
-          await released.promise;
-          return { cfg: {}, requestAuth: authorizedRequest(), operatorScopes: [] };
-        });
-      } else {
-        lifecycle.beforeHook.mockImplementationOnce(async ({ params, signal }) => {
-          started.resolve(signal);
-          await released.promise;
-          return { blocked: false, params };
-        });
-      }
-      await using probe = abortableProbe(released.resolve);
-      const source = await started.promise;
-      if (phase === "policy hook") {
-        expect(source).toBeInstanceOf(AbortSignal);
-      }
-      await probe.disconnect(() =>
-        source instanceof AbortSignal ? source.aborted : source?.socket.destroyed === true,
-      );
-      released.resolve();
-      await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
-      expect(lifecycle.execute).not.toHaveBeenCalled();
-    },
-  );
-
-  it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
-    const revoked = vi.fn();
-    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
-      // Observe while the tool owns the signal: Node 24 composites retain weak
-      // sources until subscribed, so a later getter can lose an aborted source to GC.
-      signal?.addEventListener("abort", revoked, { once: true });
-      return { ok: true };
-    });
-    const response = await invokeAbortProbe();
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
-    expect(lifecycle.execute).toHaveBeenCalledTimes(1);
-
-    const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
-    expect(toolSignal).toBeInstanceOf(AbortSignal);
-    expect(revoked).toHaveBeenCalledTimes(1);
-    expect(toolSignal?.aborted).toBe(true);
-    expect(lifecycle.beforeHook).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: toolSignal }),
-    );
+it("aborts the running tool when its HTTP client disconnects", async () => {
+  const started = createDeferred<AbortSignal | undefined>();
+  const released = createDeferred();
+  lifecycle.execute.mockImplementation(async (_toolCallId, _args, signal) => {
+    started.resolve(signal);
+    signal?.addEventListener("abort", () => released.resolve(), { once: true });
+    await released.promise;
+    return { ok: true };
   });
-
-  it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
-    const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
-    await withOpenClawTestState(stateOptions, async () => {
-      const writer = {
-        sessions: { others: "write" as const },
-        agents: ["main"],
-        scopes: ["operator.write"],
-      };
-      const cfg: OpenClawConfig = {
-        gateway: { roles: { default: "writer", definitions: { writer } } },
-      };
-      setRuntimeConfigSnapshot(cfg);
-      const person = ensureProfileForEmail("http-tool-operator@example.test");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const context = createGatewayRequestContext(makeContextParams());
-      resolveGatewayContext = () => context;
-      context.resolveGatewayContext = resolveGatewayContext;
-      const originalGrant = new AbortController();
-      const replacementGrant = new AbortController();
-      const requestEnded = vi.fn();
-      const admissions: ReturnType<typeof prepareSystemAgentRunAdmission>[] = [];
-      const captures: {
-        scope: NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>;
-        admitted: AdmittedRunContext;
-      }[] = [];
-      lifecycle.execute.mockImplementation(async () => {
-        const scope = getPluginRuntimeGatewayRequestScope();
-        const authority = scope?.client?.internal?.operatorRunAuthority;
-        if (!scope?.signal || !scope.hasCurrentClientAuthority || !authority) {
-          throw new Error("Tool did not receive the original operator authority");
-        }
-        expect(scope.context).toBe(context);
-        expect(scope.resolveGatewayContext).toBe(resolveGatewayContext);
-        expect(scope.hasCurrentClientAuthority()).toBe(true);
-        scope.signal.addEventListener("abort", requestEnded, { once: true });
-        const admission = prepareSystemAgentRunAdmission(
-          cfg,
-          `http-tool-child-${admissions.length}`,
-          "main",
-          "http-tool-child-test",
-          undefined,
-          authority,
-        );
-        admissions.push(admission);
-        captures.push({ scope, admitted: await admission.admit("embedded") });
-        return { ok: true };
-      });
-
-      try {
-        for (const grant of [originalGrant, replacementGrant]) {
-          lifecycle.authorize.mockResolvedValueOnce({
-            cfg,
-            operatorScopes: ["operator.write"],
-            requestAuth: authorizedRequest({
-              authMethod: "trusted-proxy",
-              trustDeclaredOperatorScopes: true,
-              authenticatedUserProfile: {
-                profileId: person.id,
-                displayName: person.displayName,
-                hasAvatar: false,
-                updatedAt: person.updatedAt,
-              },
-              operatorAccessAuthority: {
-                signal: grant.signal,
-                assertCurrent: () => grant.signal.throwIfAborted(),
-              },
-            }),
-          });
-          const response = await invokeAbortProbe();
-          expect(response.status).toBe(200);
-          await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
-          const capture = expectDefined(captures.at(-1), "Tool admitted its child");
-          expect(capture.scope.signal?.aborted).toBe(true);
-          expect(capture.scope.hasCurrentClientAuthority?.()).toBe(false);
-          const authority = readAdmittedRunOperatorAuthority(capture.admitted);
-          expect(authority).toBe(capture.scope.client?.internal?.operatorRunAuthority);
-          expect(authority?.profileId).toBe(person.id);
-          expect(authority?.scopes).toEqual(["operator.write"]);
-          expect(authority?.signal?.aborted).toBe(false);
-          expect(() => authority?.assertCurrent()).not.toThrow();
-        }
-
-        expect(requestEnded).toHaveBeenCalledTimes(2);
-        const original = expectDefined(captures[0], "Original child");
-        const replacement = expectDefined(captures[1], "Replacement child");
-        const originalAuthority = readAdmittedRunOperatorAuthority(original.admitted);
-        const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
-        expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);
-        originalGrant.abort(new Error("Original guest grant ended"));
-        expect(originalAuthority?.signal?.aborted).toBe(true);
-        expect(() => originalAuthority?.assertCurrent()).toThrow("Original guest grant ended");
-        expect(() => readAdmittedRunOperatorAuthority(original.admitted)).toThrow(
-          "no longer active",
-        );
-        expect(replacementAuthority?.signal?.aborted).toBe(false);
-        expect(() => replacementAuthority?.assertCurrent()).not.toThrow();
-        expect(readAdmittedRunOperatorAuthority(replacement.admitted)).toBe(replacementAuthority);
-      } finally {
-        for (const admission of admissions) {
-          admission.close();
-        }
-        originalGrant.abort();
-        replacementGrant.abort();
-        resolveGatewayContext = undefined;
-      }
-    });
-  });
-
-  it("aborts the running tool when its HTTP client disconnects", async () => {
-    const started = createDeferred<AbortSignal | undefined>();
-    const released = createDeferred();
-    lifecycle.execute.mockImplementation(async (_toolCallId, _args, signal) => {
-      started.resolve(signal);
-      signal?.addEventListener("abort", () => released.resolve(), { once: true });
-      await released.promise;
-      return { ok: true };
-    });
-    await using probe = abortableProbe(released.resolve);
-    const toolSignal = await started.promise;
-    expect(toolSignal).toBeInstanceOf(AbortSignal);
-    await probe.disconnect(() => toolSignal?.aborted === true);
-  });
+  await using probe = abortableProbe(released.resolve);
+  const toolSignal = await started.promise;
+  expect(toolSignal).toBeInstanceOf(AbortSignal);
+  await probe.disconnect(() => toolSignal?.aborted === true);
 });

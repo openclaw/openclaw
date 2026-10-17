@@ -82,7 +82,7 @@ afterEach(async () => {
   await scheduler.stop();
 });
 
-function createDeferredState() {
+async function startWatcher({ running = false, elapsedMs = 0 } = {}) {
   const { db } = openOpenClawStateDatabase();
   const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   // The runner tests cover the v15 rewrite; this fixture starts at its committed result.
@@ -91,7 +91,25 @@ function createDeferredState() {
   db.exec(`PRAGMA user_version = 15;
     UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
   closeOpenClawStateDatabaseForTest();
-  return { db: openOpenClawStateDatabase().db, runId: run.runId };
+  const reopened = openOpenClawStateDatabase().db;
+  if (!running) {
+    finishUpdateRun(run.runId, { status: "succeeded" });
+  }
+  clock.setTime(now + elapsedMs);
+  const log = { warn: vi.fn() };
+  const observed = createDeferredCore();
+  const broadcast = vi.fn<GatewayBroadcastFn>(() => observed.resolve());
+  const scheduled = nextSchedule();
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
+  await scheduled;
+  if (running) {
+    await observed.promise;
+    expect(broadcast).toHaveBeenCalledWith(
+      "update.run.changed",
+      expect.objectContaining({ runId: run.runId }),
+    );
+  }
+  return { db: reopened, runId: run.runId, log, broadcast };
 }
 
 function expectVersion(db: SqlConnection, version: number) {
@@ -123,37 +141,16 @@ function nextSchedule(atMs?: number) {
   return scheduled.promise;
 }
 
-async function startWatcher(runningRunId?: string) {
-  const log = { warn: vi.fn() };
-  const observed = createDeferredCore();
-  const broadcast = vi.fn<GatewayBroadcastFn>(() => observed.resolve());
-  const scheduled = nextSchedule();
-  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
-  await scheduled;
-  if (runningRunId) {
-    await observed.promise;
-    expect(broadcast).toHaveBeenCalledWith(
-      "update.run.changed",
-      expect.objectContaining({ runId: runningRunId }),
-    );
-  }
-  return { log, broadcast };
-}
-
 describe("Gateway schema publication timer", () => {
   it("anchors a restarted watcher's timer to the existing terminal timestamp", async () => {
-    const { db, runId } = createDeferredState();
-    finishUpdateRun(runId, { status: "succeeded" });
-    clock.setTime(now + 2 * 60_000);
-    const { log } = await startWatcher();
+    const { db, log } = await startWatcher({ elapsedMs: 2 * 60_000 });
     expectVersion(db, 15);
     await expectPublicationAt(db, 3 * 60_000);
     expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("publishes after observing the old updater finish without another database open", async () => {
-    const { db, runId } = createDeferredState();
-    const { log, broadcast } = await startWatcher(runId);
+    const { db, runId, log, broadcast } = await startWatcher({ running: true });
     const terminalObserved = createDeferredCore();
     broadcast.mockImplementationOnce(() => terminalObserved.resolve());
     clock.setTime(now + 10_000);
@@ -169,9 +166,7 @@ describe("Gateway schema publication timer", () => {
   });
 
   it("rechecks new running rows at the deadline and reschedules for their terminal grace", async () => {
-    const { db, runId } = createDeferredState();
-    finishUpdateRun(runId, { status: "succeeded" });
-    const { log } = await startWatcher();
+    const { db, log } = await startWatcher();
     await clock.advanceBy(graceMs - 1);
     const next = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
     // No wake: the already scheduled timer must discover this new driver itself.
@@ -186,9 +181,7 @@ describe("Gateway schema publication timer", () => {
   });
 
   it("cancels pending publication when the watcher stops", async () => {
-    const { db, runId } = createDeferredState();
-    finishUpdateRun(runId, { status: "succeeded" });
-    const { log } = await startWatcher();
+    const { db, log } = await startWatcher();
     await watcher?.stop();
     wakeUpdateRunWatcher();
     await clock.advanceBy(graceMs + 1);

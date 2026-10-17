@@ -256,15 +256,8 @@ beforeEach(() => {
   lastCreateOpenClawToolsContext = undefined;
   hookMocks.uploadToolExecute.mockClear();
   sessionEntries.clear();
-  hookMocks.resolveToolLoopDetectionConfig.mockClear();
-  hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
-  hookMocks.runBeforeToolCallHook.mockClear();
-  hookMocks.runBeforeToolCallHook.mockImplementation(
-    async (args: RunBeforeToolCallHookArgs): Promise<RunBeforeToolCallHookResult> => ({
-      blocked: false,
-      params: args.params,
-    }),
-  );
+  hookMocks.resolveToolLoopDetectionConfig.mockReset();
+  hookMocks.runBeforeToolCallHook.mockReset();
   vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true });
 });
 
@@ -273,15 +266,11 @@ const gatewayAdminHeaders = () => ({ "x-openclaw-scopes": "operator.admin" });
 const authenticateOnce = (method: "trusted-proxy" | "token") =>
   vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({ ok: true, method });
 
-const postToolsInvoke = async (params: {
-  port: number;
-  headers?: Record<string, string>;
-  body: Record<string, unknown>;
-}) =>
-  await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+const postToolsInvoke = async (body: Record<string, unknown>, headers: Record<string, string>) =>
+  await fetch(`http://127.0.0.1:${sharedPort}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
-    body: JSON.stringify(params.body),
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
   });
 
 const invokeTool = async (params: {
@@ -297,11 +286,7 @@ const invokeTool = async (params: {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.action ? { action: params.action } : {}),
   };
-  return await postToolsInvoke({
-    port: sharedPort,
-    headers: params.headers ?? gatewayAuthHeaders(),
-    body,
-  });
+  return await postToolsInvoke(body, params.headers ?? gatewayAuthHeaders());
 };
 const invokeToolAuthed = invokeTool;
 
@@ -312,24 +297,8 @@ const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
     sessionKey: params.sessionKey,
   });
 
-const invokeAgentsListBearer = async () =>
-  await invokeTool({
-    headers: {
-      authorization: "Bearer secret",
-      "content-type": "application/json",
-    },
-    tool: "agents_list",
-    action: "json",
-    sessionKey: "main",
-  });
-
-const firstHookCallArg = () => {
-  const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected before-tool-call hook");
-  }
-  return call[0];
-};
+const firstHookCallArg = () =>
+  expectDefined(hookMocks.runBeforeToolCallHook.mock.calls[0], "before-tool-call hook")[0];
 
 const invokeToolsRpc = async (
   params: Record<string, unknown>,
@@ -426,8 +395,7 @@ describe("POST /tools/invoke", () => {
     },
     setMethodRegistry: server.setMethodRegistry,
     hookMocks,
-    postAdmin: (body) =>
-      postToolsInvoke({ port: sharedPort, headers: gatewayAdminHeaders(), body }),
+    postAdmin: (body) => postToolsInvoke(body, gatewayAdminHeaders()),
     invokeToolsRpc,
     setMainAllowedTools,
     invokeToolAuthed,
@@ -624,10 +592,7 @@ describe("POST /tools/invoke", () => {
   });
 
   registerToolsInvokeErrorTests({
-    getConfig: () => cfg,
-    setConfig: (config) => {
-      cfg = config;
-    },
+    setMainAllowedTools,
     invokeToolAuthed,
   });
 
@@ -655,7 +620,12 @@ describe("POST /tools/invoke", () => {
     allowAgentsListForMain();
     authenticateOnce("token");
 
-    const res = await invokeAgentsListBearer();
+    const res = await invokeTool({
+      headers: { authorization: "Bearer secret", "content-type": "application/json" },
+      tool: "agents_list",
+      action: "json",
+      sessionKey: "main",
+    });
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
@@ -847,37 +817,31 @@ describe("tools.invoke Gateway RPC", () => {
 
   it("requires an operation-local marker for direct conversation reads", async () => {
     allowAgentsListForMain();
-
-    await invokeToolsRpc(
-      {
-        name: "agents_list",
-        args: {},
-        sessionKey: "main",
-        conversationReadOrigin: "direct-operator",
-      },
-      ["operator.write"],
-      {
-        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-      ["tool-events", "inline-widgets"],
-    );
-    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
-    expect(lastCreateOpenClawToolsContext?.clientCaps).toEqual(["tool-events", "inline-widgets"]);
-
-    await invokeToolsRpc(
-      {
-        name: "agents_list",
-        args: {},
-        sessionKey: "main",
-      },
-      ["operator.write"],
-      {
-        id: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      },
-    );
-    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
+    for (const direct of [true, false]) {
+      const caps = direct ? ["tool-events", "inline-widgets"] : undefined;
+      await invokeToolsRpc(
+        {
+          name: "agents_list",
+          args: {},
+          sessionKey: "main",
+          ...(direct ? { conversationReadOrigin: "direct-operator" } : {}),
+        },
+        ["operator.write"],
+        direct
+          ? { id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT, mode: GATEWAY_CLIENT_MODES.BACKEND }
+          : { id: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI },
+        caps,
+      );
+      expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe(
+        direct ? "direct-operator" : "delegated",
+      );
+      if (direct) {
+        expect(lastCreateOpenClawToolsContext?.clientCaps).toEqual([
+          "tool-events",
+          "inline-widgets",
+        ]);
+      }
+    }
   });
 
   it("keeps owner-only tools unavailable to non-owner RPC callers despite gateway.tools.allow", async () => {

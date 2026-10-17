@@ -344,7 +344,7 @@ describe("Gateway update run watcher", () => {
     }
   });
 
-  it("wakes for admission, broadcasts changed rows, and stops polling after the terminal event", async () => {
+  it("wakes for admission, observes a terminal repair after a long pause, and stops polling", async () => {
     const initialRead = nextLedgerRead("status");
     const requested = nextBroadcast();
     const staging = nextBroadcast();
@@ -367,12 +367,31 @@ describe("Gateway update run watcher", () => {
     await clock.advanceBy(2_000);
     await staging;
     expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    await nextPollSchedule();
+    const beforeSleep = ledger.reads.mock.calls.length;
+    const entered = nextLedgerRead("run");
+    const rearmed = nextPollSchedule();
+    const catchUp = clock.advanceBy(46 * 60_000);
+    await entered;
+    expect(ledger.reads).toHaveBeenCalledTimes(beforeSleep + 1);
+    await catchUp;
+    await rearmed;
+    const delivered = createDeferredCore();
+    ledger.notice.mockImplementationOnce(async () => delivered.resolve());
     const idle = nextLedgerRead("status");
-    ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 3 };
+    ledger.run = {
+      ...ledger.run!,
+      phase: "finished",
+      status: "failed",
+      updatedAtMs: 3,
+      steps: [{ step: "notice:ack", status: "completed" }],
+    };
     await clock.advanceBy(2_000);
     await terminal;
+    await delivered.promise;
     await idle;
     expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    expect(ledger.notice).toHaveBeenCalledExactlyOnceWith(ledger.run);
     const reads = ledger.reads.mock.calls.length;
     await clock.advanceBy(60_000);
     expect(ledger.reads).toHaveBeenCalledTimes(reads);
@@ -437,35 +456,6 @@ describe("Gateway update run watcher", () => {
       }
     },
   );
-
-  it("broadcasts a terminal repair after an update has remained running for over 45 minutes", async () => {
-    beginRun();
-    ledger.run!.steps = [{ step: "notice:ack", status: "completed" }];
-    const initial = nextBroadcast();
-    const delivered = createDeferredCore();
-    ledger.notice.mockImplementationOnce(async () => delivered.resolve());
-    watcher = startWatcher();
-    await initial;
-    await nextPollSchedule();
-    const beforeSleep = ledger.reads.mock.calls.length;
-    const entered = nextLedgerRead("run");
-    const rearmed = nextPollSchedule();
-    const catchUp = clock.advanceBy(46 * 60_000);
-    await entered;
-    expect(ledger.reads).toHaveBeenCalledTimes(beforeSleep + 1);
-    await catchUp;
-    await rearmed;
-    const idle = nextLedgerRead("status");
-    ledger.run = { ...ledger.run!, phase: "finished", status: "failed", updatedAtMs: 2 };
-    await clock.advanceBy(2_000);
-    await delivered.promise;
-    await idle;
-    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
-    expect(ledger.notice).toHaveBeenCalledExactlyOnceWith(ledger.run);
-    const reads = ledger.reads.mock.calls.length;
-    await clock.advanceBy(60_000);
-    expect(ledger.reads).toHaveBeenCalledTimes(reads);
-  });
 
   it("stops polling and cannot be woken after teardown while sibling jobs remain live", async () => {
     beginRun();

@@ -25,6 +25,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 type ToolPolicySuite = {
   getConfig: () => Record<string, unknown>;
   setConfig: (config: Record<string, unknown>) => void;
+  setMainAllowedTools: (params: { allow: string[] }) => void;
   invokeToolAuthed: (params: {
     tool: string;
     args?: Record<string, unknown>;
@@ -57,7 +58,6 @@ export function registerToolsInvokeUploadTests({
     | [boolean, { ok?: boolean; toolName?: string; output?: unknown; error?: unknown }?, unknown?]
     | undefined
   >;
-  setMainAllowedTools: (params: { allow: string[] }) => void;
   expectOkInvokeResponse: (res: Response) => Promise<unknown>;
 }): void {
   const dirs = useAutoCleanupTempDirTracker(afterAll);
@@ -207,23 +207,12 @@ export function registerToolsInvokeUploadTests({
   });
 
   it.each([
-    {
-      label: "enabled",
-      enabled: true,
-      tool: "workboard_attachment_add",
-      args: { contentBase64: "cHJvb2Y=" },
-    },
-    {
-      label: "existing-output",
-      enabled: false,
-      tool: "message",
-      args: { action: "send", media: "https://example.test/generated.png" },
-    },
-  ])("preserves $label tool use", async ({ enabled, tool, args }) => {
+    [true, "workboard_attachment_add", { contentBase64: "cHJvb2Y=" }],
+    [false, "message", { action: "send", media: "https://example.test/generated.png" }],
+  ] as const)("preserves tool use (uploads=%s): %s", async (enabled, tool, args) => {
     setMainAllowedTools({ allow: [tool, "upload-fixture"] });
     enableUploads(enabled);
-    const res = await invokeToolAuthed({ tool, args });
-    await expectOkInvokeResponse(res);
+    await expectOkInvokeResponse(await invokeToolAuthed({ tool, args }));
     const rpc = await invokeToolsRpc({ name: tool, args });
     expect(rpc?.[1]?.ok).toBe(true);
     expect(hookMocks.uploadToolExecute).toHaveBeenCalledTimes(2);
@@ -287,26 +276,19 @@ export function registerToolsInvokeUploadTests({
 }
 
 export function registerToolsInvokeErrorTests({
-  getConfig,
-  setConfig,
+  setMainAllowedTools,
   invokeToolAuthed,
-}: ToolPolicySuite): void {
+}: Pick<ToolPolicySuite, "setMainAllowedTools" | "invokeToolAuthed">): void {
   it("maps tool input/auth errors to 400/403 and unexpected execution errors to 500", async () => {
-    setConfig({
-      ...getConfig(),
-      agents: { entries: { main: { tools: { allow: ["tools_invoke_test"] } } } },
-    });
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+    const request = { tool: "tools_invoke_test", sessionKey: "main" };
 
     for (const [mode, status, message] of [
       ["input", 400, "mode invalid"],
       ["auth", 403, "mode forbidden"],
       ["crash", 500, "tool execution failed"],
     ] as const) {
-      const res = await invokeToolAuthed({
-        tool: "tools_invoke_test",
-        args: { mode },
-        sessionKey: "main",
-      });
+      const res = await invokeToolAuthed({ ...request, args: { mode } });
       expect(res.status).toBe(status);
       expect(await res.json()).toMatchObject({
         ok: false,
@@ -317,19 +299,19 @@ export function registerToolsInvokeErrorTests({
 }
 
 export function createUploadToolFixtures(execute: AnyAgentTool["execute"]) {
-  const uploadTools = ["file_write", "workboard_attachment_add", "message"].map((name) => ({
-    name,
-    label: name,
-    description: "Upload boundary fixture",
-    parameters: Type.Object({}, { additionalProperties: true }),
-    execute,
-  }));
-  for (const tool of uploadTools) {
-    if (tool.name !== "message") {
+  return ["file_write", "workboard_attachment_add", "message"].map((name) => {
+    const tool = {
+      name,
+      label: name,
+      description: "Upload boundary fixture",
+      parameters: Type.Object({}, { additionalProperties: true }),
+      execute,
+    };
+    if (name !== "message") {
       setPluginToolMeta(tool, { pluginId: "upload-fixture", optional: true });
     }
-  }
-  return uploadTools;
+    return tool;
+  });
 }
 
 export function createClientUploadToolFixture(context: OpenClawPluginToolContext): AnyAgentTool {
