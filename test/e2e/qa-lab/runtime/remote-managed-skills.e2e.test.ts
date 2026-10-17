@@ -34,18 +34,14 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const ignore = () => {};
 async function writeResourceSkill(
   root: string,
   name: string,
   host: "Gateway project" | "Node agent",
 ) {
   const dir = path.join(root, "skills", name);
-  await writeSkill({
-    dir,
-    name,
-    description: `${host === "Gateway project" ? "Canonical project" : "Remote agent"} skill`,
-    body: `${host} instructions`,
-  });
+  await writeSkill({ dir, name, description: `${host} skill`, body: `${host} instructions` });
   await fs.writeFile(path.join(dir, "resource.txt"), `${host} resource`);
 }
 afterEach(async () => {
@@ -56,8 +52,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-// Release composition: real managed Git source -> reply skill preparation -> registered
-// file-transfer service -> real node policy/helper, before inference is admitted.
+// Real managed Git -> reply preparation -> file-transfer service -> node policy.
 it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
   "prepares %s canonical skills on their owning host",
   async (kind) => {
@@ -80,15 +75,8 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       await requireGit(source, ["init", "-b", "main"]);
       await writeResourceSkill(source, "project-only", "Gateway project");
       await requireGit(source, ["add", "."]);
-      await requireGit(source, [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "-m",
-        "Fixture",
-      ]);
+      const identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"];
+      await requireGit(source, [...identity, "commit", "-m", "Fixture"]);
     }
     const worktree =
       kind === "empty"
@@ -162,14 +150,13 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         workspaceDir: local,
         cfg: config,
         isFirstTurnInSession,
-        ...(sessionEntry
-          ? { sessionEntry, executionWorkspaceDir: sessionEntry.worktree!.canonicalWorkspaceDir }
-          : {}),
+        sessionEntry,
+        executionWorkspaceDir: sessionEntry?.worktree?.canonicalWorkspaceDir,
       });
     try {
       const control = await snapshot();
-      expect(control.skillsSnapshot?.skills.some((skill) => skill.name === "agent-only")).toBe(
-        true,
+      expect(control.skillsSnapshot?.skills).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "agent-only" })]),
       );
       for (const isFirstTurnInSession of [true, false]) {
         const result = await snapshot(entry, isFirstTurnInSession);
@@ -189,11 +176,11 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         }
         const delivery = await prepareSkillResourceDelivery(
           result.skillsSnapshot,
-          () => {},
+          ignore,
           [],
           local,
         );
-        const materialized = await materializeSkillResources(delivery!, () => {});
+        const materialized = await materializeSkillResources(delivery!, ignore);
         try {
           for (const skill of materialized.snapshot.resolvedSkills!.filter((s) =>
             ["agent-only", "project-only"].includes(s.name),

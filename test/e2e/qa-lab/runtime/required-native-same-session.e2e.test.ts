@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../../../src/agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
@@ -45,6 +45,13 @@ import {
 const execFileAsync = promisify(execFile);
 const [providerId, modelId] = MODEL_REF.split("/");
 const QUIESCENCE_NONCE = "0".repeat(32);
+const workspaceCommands = [
+  "workspace.skills",
+  "workspace.memory",
+  "file.stat",
+  "file.fetch",
+  "dir.list",
+];
 const REMOTE_WORKSPACE_QUIESCE_JS = workspaceQuiescenceArgv(
   "/synthetic-workspace",
   { action: "acquire", nonce: QUIESCENCE_NONCE, timeoutMs: 1 },
@@ -63,6 +70,13 @@ type Session = {
   placement?: { state: string; workspaceResultReconciling?: boolean };
 };
 type Changed = { sessionKey?: string; session?: Session; phase?: string; reason?: string };
+type Placement = NonNullable<ReturnType<typeof readSettlement>["placement"]>;
+
+function expectCursorAdvance(current: Placement, previous?: Placement) {
+  for (const cursor of ["last_transcript_ack_cursor", "last_live_event_ack_cursor"] as const) {
+    expect(current[cursor]).toBeGreaterThan(previous ? previous[cursor]! : 0);
+  }
+}
 
 function readSettlement(gateway: WireGateway, key: string) {
   return withOpenClawStateDatabaseReadOnly(
@@ -102,8 +116,6 @@ function readPendingInput(gateway: WireGateway, key: string, runId: string) {
   );
 }
 
-// Release E2E: no helper can prove required admission -> physical native process ->
-// finishing ACK -> SQLite result fence -> projected clear -> SAME-session cursor reuse.
 it.skipIf(process.platform === "win32")(
   "settles required native empty workspaces and same-session follow-ups through public RPC",
   async (context) => {
@@ -113,23 +125,9 @@ it.skipIf(process.platform === "win32")(
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const observationFailure = createDeferred<never>();
-    // Observers only inspect/call through. Surface their first failed assertion
-    // instead of leaving the test suspended at a later gate.
-    const checkpoint = async (promise: PromiseLike<void>, message: string) => {
-      try {
-        return await withinTest(Promise.race([promise, observationFailure.promise]), signal);
-      } catch (error) {
-        if (signal.aborted) {
-          throw new Error(message, { cause: error });
-        }
-        throw error;
-      }
-    };
-    const startedAt = Date.now();
-    const record = (boundary: string, detail: unknown) => {
-      const entry = { ms: Date.now() - startedAt, boundary, detail };
-      process.stderr.write(`required-native-boundary ${JSON.stringify(entry)}\n`);
-    };
+    // Fail immediately when an asynchronous observer's assertion fails.
+    const checkpoint = (promise: PromiseLike<void>) =>
+      withinTest(Promise.race([promise, observationFailure.promise]), signal);
     let onNativeRequest: ((marker: string) => void) | undefined;
     let nativeServer: ReturnType<typeof createServer> | undefined;
     let node: PairedNodeWorkerHost | undefined;
@@ -244,23 +242,8 @@ it.skipIf(process.platform === "win32")(
           mutateConfig: (config) => {
             // The node registry alone owns inference credentials; even QA placeholders
             // must not hide an accidental Gateway inference/auth dependency.
-            config.gateway = {
-              ...config.gateway,
-              nodes: {
-                ...config.gateway?.nodes,
-                commands: {
-                  ...config.gateway?.nodes?.commands,
-                  allow: [
-                    ...(config.gateway?.nodes?.commands?.allow ?? []),
-                    "workspace.skills",
-                    "workspace.memory",
-                    "file.stat",
-                    "file.fetch",
-                    "dir.list",
-                  ],
-                },
-              },
-            };
+            const commands = (((config.gateway ??= {}).nodes ??= {}).commands ??= {});
+            commands.allow = [...(commands.allow ?? []), ...workspaceCommands];
             config.plugins = {
               ...config.plugins,
               allow: [...(config.plugins?.allow ?? []), "file-transfer"],
@@ -348,7 +331,7 @@ it.skipIf(process.platform === "win32")(
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
             OPENCLAW_STATE_DIR: path.join(root, "node-state"),
           },
-          commands: ["workspace.skills", "workspace.memory", "file.stat", "file.fetch", "dir.list"],
+          commands: workspaceCommands,
         });
         expect(pluginRuntime.manifest.commands).toContain("workspace.skills");
         node = await createPairedNodeWorkerHost({
@@ -369,23 +352,6 @@ it.skipIf(process.platform === "win32")(
           },
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
-        const nodeRequests = vi.spyOn(node.client!, "request");
-        context.onTestFinished(() => nodeRequests.mockRestore());
-        const nodeFailureEvidence = () => ({
-          failedNodeResults: nodeRequests.mock.calls.flatMap(([method, params]) =>
-            method === "node.invoke.result" &&
-            params !== null &&
-            typeof params === "object" &&
-            "ok" in params &&
-            params.ok === false
-              ? [params]
-              : [],
-          ),
-          skillInvokeIds: node!.frames
-            .filter((frame) => frame.command === "workspace.skills")
-            .map((frame) => frame.id),
-          nodeInvokeErrors: node!.invokeErrors.map(String),
-        });
         const describe = async (key: string) =>
           (await operator!.request<{ session: Session }>("sessions.describe", { key })).session;
         const history = (key: string) =>
@@ -402,11 +368,6 @@ it.skipIf(process.platform === "win32")(
             )
             .then((result) => {
               if (result.status !== "ok") {
-                record("required-native-dispatch-error", {
-                  runId,
-                  ...nodeFailureEvidence(),
-                  gatewayLog: gateway.logs().slice(-24_000),
-                });
                 observationFailure.reject(new Error("agent.wait: " + JSON.stringify(result)));
               }
               return result;
@@ -416,22 +377,12 @@ it.skipIf(process.platform === "win32")(
           return pending;
         };
         const send = async (key: string, marker: string) => {
-          const result = await operator!
-            .request("chat.send", {
-              sessionKey: key,
-              message: "Hello. Reply exactly: " + marker,
-              deliver: false,
-              idempotencyKey: marker,
-            })
-            .catch((error: unknown) => {
-              record("chat-send-rejected", {
-                marker,
-                error: String(error),
-                ...nodeFailureEvidence(),
-                gatewayLog: gateway.logs().slice(-12_000),
-              });
-              throw error;
-            });
+          const result = await operator!.request("chat.send", {
+            sessionKey: key,
+            message: "Hello. Reply exactly: " + marker,
+            deliver: false,
+            idempotencyKey: marker,
+          });
           expect(result).toMatchObject({ runId: marker, status: "started" });
           return result;
         };
@@ -465,22 +416,14 @@ it.skipIf(process.platform === "win32")(
             let bRun: string | undefined;
             let finishReleased = false;
             let sawClear = false;
-            let quiesced = false;
-            let resumed = false;
+            const observedPhases = { acquire: false, release: false };
             onChanged = (event) => {
               if ((event.sessionKey ?? event.session?.key) !== key) {
                 return;
               }
               const placement = event.session?.placement;
               if (event.phase === "error" || event.reason === "chat.dispatch-error") {
-                // A queued follow-up's execution run ID is known only at native HTTP entry.
-                // Fail on its published error instead of waiting for the test timeout.
-                record("required-native-dispatch-error", {
-                  creation,
-                  timing,
-                  ...nodeFailureEvidence(),
-                  gatewayLog: gateway.logs().slice(-24_000),
-                });
+                // Queued follow-up execution IDs are not known until native HTTP entry.
                 throw new Error(`${creation} ${timing} run failed before settlement`);
               }
               if (
@@ -501,9 +444,11 @@ it.skipIf(process.platform === "win32")(
                 return;
               }
               const input = parseNodeWorkerWorkspaceExecInput(frame.paramsJSON);
+              const script = input.argv[2];
+              const phase = script === REMOTE_WORKSPACE_QUIESCE_JS ? "acquire" : "release";
               if (
-                input.argv[2] !== REMOTE_WORKSPACE_QUIESCE_JS &&
-                input.argv[2] !== REMOTE_WORKSPACE_RESUME_JS
+                (script !== REMOTE_WORKSPACE_QUIESCE_JS && script !== REMOTE_WORKSPACE_RESUME_JS) ||
+                observedPhases[phase]
               ) {
                 return;
               }
@@ -512,19 +457,21 @@ it.skipIf(process.platform === "win32")(
               if (input.sessionId !== readSettlement(gateway, key).placement?.session_id) {
                 return;
               }
-              if (!quiesced && input.argv[2] === REMOTE_WORKSPACE_QUIESCE_JS) {
-                quiesced = true;
-                const state = readSettlement(gateway, key);
+              observedPhases[phase] = true;
+              const state = readSettlement(gateway, key);
+              const acquiring = phase === "acquire";
+              if (acquiring) {
                 aClaim = state.placement?.turn_claim_id ?? undefined;
                 aRun = state.placement?.turn_claim_run_id ?? undefined;
-                expect(state.pending).toMatchObject({
-                  claim_id: aClaim,
-                  run_id: aRun,
-                  workspace_accepted_at_ms: null,
-                  staged_result_ref: null,
-                });
-                expect(state.placement?.last_transcript_ack_cursor).toBeGreaterThan(0);
-                expect(state.placement?.last_live_event_ack_cursor).toBeGreaterThan(0);
+              }
+              expect(state.pending).toMatchObject({
+                claim_id: aClaim,
+                run_id: aRun,
+                staged_result_ref: null,
+                workspace_accepted_at_ms: acquiring ? null : expect.any(Number),
+              });
+              if (acquiring) {
+                expectCursorAdvance(state.placement!);
                 const launch = host.frames
                   .filter((item) => item.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND)
                   .map((item) => parseNodeWorkerLaunchInput(item.paramsJSON))
@@ -536,15 +483,7 @@ it.skipIf(process.platform === "win32")(
                 });
                 atQuiesce.resolve();
                 await continueQuiesce.promise;
-              } else if (!resumed && input.argv[2] === REMOTE_WORKSPACE_RESUME_JS) {
-                resumed = true;
-                const state = readSettlement(gateway, key);
-                expect(state.pending).toMatchObject({
-                  claim_id: aClaim,
-                  run_id: aRun,
-                  staged_result_ref: null,
-                  workspace_accepted_at_ms: expect.any(Number),
-                });
+              } else {
                 atResume.resolve();
                 await continueResume.promise;
               }
@@ -566,10 +505,7 @@ it.skipIf(process.platform === "win32")(
             };
             await send(key, markers.A);
             const aWait = wait(markers.A);
-            await checkpoint(
-              atQuiesce.promise,
-              "A never reached physical terminal receipt / quiescence",
-            );
+            await checkpoint(atQuiesce.promise);
             expect(await aWait).toMatchObject({ status: "ok" });
             const current = await describe(key);
             expect(current.placement).toMatchObject({
@@ -582,14 +518,11 @@ it.skipIf(process.platform === "win32")(
             ).toBe(true);
             const placed = readSettlement(gateway, key).placement!;
             if (retained) {
-              expect(placed.session_id).toBe(retained.session_id);
-              expect(placed.environment_id).toBe(retained.environment_id);
-              expect(placed.last_transcript_ack_cursor).toBeGreaterThan(
-                retained.last_transcript_ack_cursor!,
-              );
-              expect(placed.last_live_event_ack_cursor).toBeGreaterThan(
-                retained.last_live_event_ack_cursor!,
-              );
+              expect(placed).toMatchObject({
+                session_id: retained.session_id,
+                environment_id: retained.environment_id,
+              });
+              expectCursorAdvance(placed, retained);
             }
             // An owned empty worktree has a real HEAD, but no source origin or user files.
             const workspace = current.workspaceDir!;
@@ -609,16 +542,15 @@ it.skipIf(process.platform === "win32")(
               });
               const pendingHistory = (await history(key)).pendingInputs;
               expect(pendingHistory.items).toContainEqual(
-                // queued is an optional in-memory chatQueuedTurns hint. The
-                // canonical queued receipt, then actual native HTTP entry, own this proof.
+                // The optional in-memory queued hint is not the authoritative receipt.
                 expect.objectContaining({ runId: markers.B, state: "queued" }),
               );
             }
             continueQuiesce.resolve();
-            await checkpoint(atResume.promise, "A never accepted its unchanged workspace result");
+            await checkpoint(atResume.promise);
             finishReleased = true;
             continueResume.resolve();
-            await checkpoint(changedClear.promise, "settled placement never published clear");
+            await checkpoint(changedClear.promise);
             if (timing === "after-agent-wait") {
               const settled = readSettlement(gateway, key);
               expect(settled.pending).toBeUndefined();
@@ -629,33 +561,10 @@ it.skipIf(process.platform === "win32")(
               retained = settled.placement;
               await send(key, markers.B);
             }
-            await checkpoint(bEntered.promise, "B never entered native HTTP on retained session");
-            // A queued follow-up has its own execution runId. The original chat.send
-            // id owns queue cancellation and returns "pending" until adoption settles.
-            // Wait on the exact real claim observed at native HTTP admission.
+            await checkpoint(bEntered.promise);
+            // Wait on the adopted execution claim, not chat.send's queue-cancellation ID.
             expect(await wait(bRun!)).toMatchObject({ status: "ok" });
-            try {
-              await settlement.wait(operator, key, signal);
-            } catch (error) {
-              record("workspace-settlement-stopped", {
-                creation,
-                timing,
-                commands: node.frames.slice(-8).map((frame) => frame.command),
-                gatewayLog: gateway.logs().slice(-12_000),
-              });
-              try {
-                record("workspace-settlement-state", readSettlement(gateway, key));
-              } catch (diagnosticError) {
-                throw new AggregateError(
-                  [error, diagnosticError],
-                  "Workspace settlement diagnostics failed",
-                  {
-                    cause: diagnosticError,
-                  },
-                );
-              }
-              throw error;
-            }
+            await settlement.wait(operator, key, signal);
             const final = readSettlement(gateway, key);
             expect(final.pending).toBeUndefined();
             expect(final.placement).toMatchObject({
@@ -664,12 +573,7 @@ it.skipIf(process.platform === "win32")(
               session_id: placed.session_id,
               environment_id: placed.environment_id,
             });
-            expect(final.placement!.last_transcript_ack_cursor).toBeGreaterThan(
-              placed.last_transcript_ack_cursor!,
-            );
-            expect(final.placement!.last_live_event_ack_cursor).toBeGreaterThan(
-              placed.last_live_event_ack_cursor!,
-            );
+            expectCursorAdvance(final.placement!, placed);
             expect((await describe(key)).placement?.workspaceResultReconciling).not.toBe(true);
             const messages = (await history(key)).messages;
             for (const marker of Object.values(markers)) {
@@ -693,7 +597,6 @@ it.skipIf(process.platform === "win32")(
         expect(providerErrors).toEqual([]);
         expect(node.invokeErrors).toEqual([]);
         expect(await node.supervisor.hasActiveWork()).toBe(false);
-        record("proof-complete", { requests, pairs: 4, sameNode: node.identity.deviceId });
       },
       async () => {
         for (const barrier of barriers) {
@@ -711,7 +614,6 @@ it.skipIf(process.platform === "win32")(
       },
       () => (nativeServer ? closeWireServer(nativeServer) : undefined),
     );
-    record("cleanup-complete", { nodeStopped: true, gatewayStopped: true, providerClosed: true });
   },
   PROOF_TIMEOUT_MS + 180_000,
 );

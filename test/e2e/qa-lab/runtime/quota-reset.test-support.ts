@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { setTimeout as delay } from "node:timers/promises";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
@@ -88,6 +89,30 @@ type HeldProviderResponse = {
 };
 type ResponseHold = { arrived: Deferred<HeldProviderResponse>; released: Deferred };
 
+function responseGate(label: string) {
+  let next: ResponseHold | undefined;
+  const captures: HeldProviderResponse[] = [];
+  return {
+    captures,
+    take() {
+      const hold = next;
+      next = undefined;
+      return hold;
+    },
+    arm() {
+      if (next) {
+        throw new Error(`A ${label} response hold is already armed`);
+      }
+      const hold = {
+        arrived: createDeferredCore<HeldProviderResponse>(),
+        released: createDeferredCore(),
+      };
+      next = hold;
+      return { arrived: hold.arrived.promise, release: () => hold.released.resolve() };
+    },
+  };
+}
+
 function fixtureModel(id: string, name = id, maxTokens = 4096) {
   return {
     id,
@@ -138,10 +163,8 @@ export async function startQuotaProvider(
 ) {
   let phase: Phase = "healthy";
   let nextSuccessObserver: { observe: () => void; model: string; path: string } | undefined;
-  let nextUsageHold: ResponseHold | undefined;
-  let nextCatalogHold: ResponseHold | undefined;
-  const heldUsageResponses: HeldProviderResponse[] = [];
-  const heldCatalogResponses: HeldProviderResponse[] = [];
+  const usageGate = responseGate("usage");
+  const catalogGate = responseGate("catalog");
   const resetAt = Math.floor(Date.now() / 1000) + 5 * 86_400;
   const requests: RequestRecord[] = [];
   const upgrades: Array<{ atMs: number; path: string }> = [];
@@ -223,45 +246,34 @@ export async function startQuotaProvider(
         phase === "workspace-exhaustion" ? { type: "workspace_owner_credits_depleted" } : null,
     };
   };
-  const failure = () => {
-    const headers: Record<string, string> =
-      primaryExhausted() && source === "codex_rate_limits"
-        ? {
-            "x-codex-primary-used-percent": "100",
-            "x-codex-primary-window-minutes": "300",
-            "x-codex-primary-reset-at": String(resetAt),
-            "x-codex-secondary-used-percent": "100",
-            "x-codex-secondary-window-minutes": "10080",
-            "x-codex-secondary-reset-at": String(resetAt),
-          }
-        : {};
-    return {
-      type: "error",
-      status: phase === "revoked" ? 401 : 429,
-      error:
-        phase === "revoked"
-          ? {
-              type: "invalid_request_error",
-              code: "invalid_api_key",
-              message: "Invalid authentication token",
-            }
-          : phase === "ordinary-rate-limit" ||
-              phase === "ordinary-rate-limit-with-capacity" ||
-              phase === "ordinary-rate-limit-with-exhausted-usage"
-            ? {
-                type: "rate_limit_error",
-                code: "rate_limit_exceeded",
-                message: "Too many requests",
-              }
-            : {
-                type: "usage_limit_reached",
-                message: "The usage limit has been reached",
-                plan_type: "pro",
-                ...(source === "codex_rate_limits" ? { resets_at: resetAt } : {}),
-              },
-      headers,
-    };
+  const quotaHeaders: Record<string, string> = {
+    "x-codex-primary-used-percent": "100",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-at": String(resetAt),
+    "x-codex-secondary-used-percent": "100",
+    "x-codex-secondary-window-minutes": "10080",
+    "x-codex-secondary-reset-at": String(resetAt),
   };
+  const failure = () => ({
+    type: "error",
+    status: phase === "revoked" ? 401 : 429,
+    error:
+      phase === "revoked"
+        ? {
+            type: "invalid_request_error",
+            code: "invalid_api_key",
+            message: "Invalid authentication token",
+          }
+        : phase.startsWith("ordinary-rate-limit")
+          ? { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Too many requests" }
+          : {
+              type: "usage_limit_reached",
+              message: "The usage limit has been reached",
+              plan_type: "pro",
+              ...(source === "codex_rate_limits" ? { resets_at: resetAt } : {}),
+            },
+    headers: primaryExhausted() && source === "codex_rate_limits" ? quotaHeaders : {},
+  });
   const successEvents = (request: RequestRecord, marker = responseText) => {
     const observer = nextSuccessObserver;
     if (observer && new URL(request.path, "http://127.0.0.1").pathname === observer.path) {
@@ -321,165 +333,160 @@ export async function startQuotaProvider(
       { type: "response.completed", response },
     ];
   };
-  const server = tls ? createHttpsServer(tls) : createServer();
-  server.on("request", (request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
+  async function handleRequest(request: IncomingMessage, response: ServerResponse) {
+    const bodyBytes = await buffer(request);
+    const encoding = request.headers["content-encoding"];
+    const decoded =
+      encoding === undefined
+        ? bodyBytes
+        : encoding === "zstd"
+          ? zstdDecompressSync(bodyBytes)
+          : undefined;
+    const recorded = recordRequest(request, decoded?.toString(), "http", bodyBytes);
+    const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const json = (
+      status: number,
+      value: unknown,
+      headers: Record<string, string> = {},
+      responsePhase = phase,
+    ) => {
+      responses.push({
+        atMs: Date.now(),
+        status,
+        transport: "http",
+        phase: responsePhase,
+        path: requestPath,
+        value,
+        headers,
+      });
+      response.writeHead(status, { "content-type": "application/json", ...headers });
+      response.end(JSON.stringify(value));
+    };
+    const heldJson = async (
+      value: unknown,
+      hold: ResponseHold,
+      captures: HeldProviderResponse[],
+      deadlineMs?: number,
+    ) => {
+      const captured: HeldProviderResponse = {
+        phase,
+        path: requestPath,
+        status: 200,
+        body: JSON.stringify(value),
+        capturedAt: Date.now(),
+      };
+      captures.push(captured);
+      hold.arrived.resolve(captured);
+      const interrupted = createDeferredCore<"deadline" | "aborted">();
+      const timer =
+        deadlineMs === undefined
+          ? undefined
+          : setTimeout(() => interrupted.resolve("deadline"), deadlineMs);
+      const onClose = () => interrupted.resolve("aborted");
+      response.once("close", onClose);
+      try {
+        captured.releaseReason = await Promise.race([
+          hold.released.promise.then(() => "explicit" as const),
+          interrupted.promise,
+        ]);
+        captured.releasedAt = Date.now();
+        if (captured.releaseReason !== "aborted") {
+          json(captured.status, value, {}, captured.phase);
+        }
+      } finally {
+        clearTimeout(timer);
+        response.off("close", onClose);
       }
-      const bodyBytes = Buffer.concat(chunks);
-      const encoding = request.headers["content-encoding"];
-      const decoded =
-        encoding === undefined
-          ? bodyBytes
-          : encoding === "zstd"
-            ? zstdDecompressSync(bodyBytes)
-            : undefined;
-      const recorded = recordRequest(request, decoded?.toString(), "http", bodyBytes);
-      const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-      const json = (
-        status: number,
-        value: unknown,
-        headers: Record<string, string> = {},
-        responsePhase = phase,
-      ) => {
-        responses.push({
-          atMs: Date.now(),
-          status,
-          transport: "http",
-          phase: responsePhase,
-          path: requestPath,
-          value,
-          headers,
-        });
-        response.writeHead(status, { "content-type": "application/json", ...headers });
-        response.end(JSON.stringify(value));
-      };
-      const heldJson = async (
-        value: unknown,
-        hold: ResponseHold,
-        captures: HeldProviderResponse[],
-        deadlineMs?: number,
-      ) => {
-        const captured: HeldProviderResponse = {
-          phase,
-          path: requestPath,
-          status: 200,
-          body: JSON.stringify(value),
-          capturedAt: Date.now(),
-        };
-        captures.push(captured);
-        hold.arrived.resolve(captured);
-        const interrupted = createDeferredCore<"deadline" | "aborted">();
-        const timer =
-          deadlineMs === undefined
-            ? undefined
-            : setTimeout(() => interrupted.resolve("deadline"), deadlineMs);
-        const onClose = () => interrupted.resolve("aborted");
-        response.once("close", onClose);
-        try {
-          captured.releaseReason = await Promise.race([
-            hold.released.promise.then(() => "explicit" as const),
-            interrupted.promise,
-          ]);
-          captured.releasedAt = Date.now();
-          if (captured.releaseReason !== "aborted") {
-            json(captured.status, value, {}, captured.phase);
-          }
-        } finally {
-          clearTimeout(timer);
-          response.off("close", onClose);
-        }
-      };
-      if (requestPath === "/backend-api/wham/accounts/check") {
-        json(200, {
-          accounts: [ACCOUNT_ID, "quota-alternate-account"].map((id) => ({
-            id,
-            workspace_backend_origin: "NO_CONSTRAINT",
-            account_routing_override: "NO_CONSTRAINT",
-          })),
-          default_account_id: ACCOUNT_ID,
-        });
-      } else if (requestPath === "/core-wham/usage" || requestPath === "/backend-api/wham/usage") {
-        // Preserve the native block source only on the original quota failure.
-        if (
-          requestPath === "/core-wham/usage" &&
-          ((source === "codex_rate_limits" && phase === "initial-exhaustion") ||
-            phase === "ordinary-rate-limit")
-        ) {
-          json(503, { error: { message: "Usage view temporarily unavailable" } });
-        } else if (phase === "revoked") {
-          json(403, { error: { message: "Account deactivated" } });
-        } else {
-          const value = usage();
-          const hold = requestPath === "/core-wham/usage" ? nextUsageHold : undefined;
-          if (hold) {
-            nextUsageHold = undefined;
-            await heldJson(value, hold, heldUsageResponses, 2800);
-          } else {
-            json(200, value);
-          }
-        }
-      } else if (requestPath === "/oauth/token") {
-        if (phase === "revoked") {
-          json(400, { error: "invalid_grant", error_description: "Refresh token revoked" });
-        } else {
-          json(200, {
-            access_token: syntheticAccessToken(),
-            refresh_token: "synthetic-rotated-refresh",
-            // Quota recovery should not introduce the CLI's one-day expiry warning.
-            // Expiry scenarios control the original credential with expiresDuringBlock.
-            expires_in: 2 * 86_400,
-          });
-        }
-      } else if (requestPath === "/catalog/models") {
-        const value = {
-          models: [
-            {
-              slug: "gpt-5.5",
-              display_name: "Quota fixture model",
-              visibility: "list",
-              show_in_picker: true,
-              context_window: 128_000,
-              max_output_tokens: 4096,
-            },
-          ],
-        };
-        const hold = nextCatalogHold;
+    };
+    if (requestPath === "/backend-api/wham/accounts/check") {
+      json(200, {
+        accounts: [ACCOUNT_ID, "quota-alternate-account"].map((id) => ({
+          id,
+          workspace_backend_origin: "NO_CONSTRAINT",
+          account_routing_override: "NO_CONSTRAINT",
+        })),
+        default_account_id: ACCOUNT_ID,
+      });
+    } else if (requestPath === "/core-wham/usage" || requestPath === "/backend-api/wham/usage") {
+      // Preserve the native block source only on the original quota failure.
+      if (
+        requestPath === "/core-wham/usage" &&
+        ((source === "codex_rate_limits" && phase === "initial-exhaustion") ||
+          phase === "ordinary-rate-limit")
+      ) {
+        json(503, { error: { message: "Usage view temporarily unavailable" } });
+      } else if (phase === "revoked") {
+        json(403, { error: { message: "Account deactivated" } });
+      } else {
+        const value = usage();
+        const hold = requestPath === "/core-wham/usage" ? usageGate.take() : undefined;
         if (hold) {
-          nextCatalogHold = undefined;
-          await heldJson(value, hold, heldCatalogResponses);
+          await heldJson(value, hold, usageGate.captures, 2800);
         } else {
           json(200, value);
         }
-      } else if (requestPath.endsWith("/models")) {
-        json(200, { models: [] });
-      } else if (requestPath.endsWith("/responses")) {
-        const backup = requestPath === BACKUP_RESPONSES_PATH;
-        if (!backup && (exhausted() || phase === "revoked")) {
-          const event = failure();
-          json(event.status, { error: event.error }, event.headers);
-        } else {
-          const events = successEvents(recorded, backup ? BACKUP_MARKER : responseText);
-          responses.push({
-            atMs: Date.now(),
-            status: 200,
-            transport: "http",
-            phase,
-            path: requestPath,
-            value: events,
-          });
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          for (const event of events) {
-            response.write(`data: ${JSON.stringify(event)}\n\n`);
-          }
-          response.end();
-        }
-      } else {
-        json(404, { error: { message: "No synthetic fixture for this route" } });
       }
-    })().catch((error: unknown) => {
+    } else if (requestPath === "/oauth/token") {
+      if (phase === "revoked") {
+        json(400, { error: "invalid_grant", error_description: "Refresh token revoked" });
+      } else {
+        json(200, {
+          access_token: syntheticAccessToken(),
+          refresh_token: "synthetic-rotated-refresh",
+          // Quota recovery should not introduce the CLI's one-day expiry warning.
+          // Expiry scenarios control the original credential with expiresDuringBlock.
+          expires_in: 2 * 86_400,
+        });
+      }
+    } else if (requestPath === "/catalog/models") {
+      const value = {
+        models: [
+          {
+            slug: "gpt-5.5",
+            display_name: "Quota fixture model",
+            visibility: "list",
+            show_in_picker: true,
+            context_window: 128_000,
+            max_output_tokens: 4096,
+          },
+        ],
+      };
+      const hold = catalogGate.take();
+      if (hold) {
+        await heldJson(value, hold, catalogGate.captures);
+      } else {
+        json(200, value);
+      }
+    } else if (requestPath.endsWith("/models")) {
+      json(200, { models: [] });
+    } else if (requestPath.endsWith("/responses")) {
+      const backup = requestPath === BACKUP_RESPONSES_PATH;
+      if (!backup && (exhausted() || phase === "revoked")) {
+        const event = failure();
+        json(event.status, { error: event.error }, event.headers);
+      } else {
+        const events = successEvents(recorded, backup ? BACKUP_MARKER : responseText);
+        responses.push({
+          atMs: Date.now(),
+          status: 200,
+          transport: "http",
+          phase,
+          path: requestPath,
+          value: events,
+        });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of events) {
+          response.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      }
+    } else {
+      json(404, { error: { message: "No synthetic fixture for this route" } });
+    }
+  }
+  const server = tls ? createHttpsServer(tls) : createServer();
+  server.on("request", (request, response) => {
+    void handleRequest(request, response).catch((error: unknown) => {
       errors.push(String(error));
       if (!response.headersSent) {
         response.writeHead(500);
@@ -528,8 +535,8 @@ export async function startQuotaProvider(
     requests,
     upgrades,
     responses,
-    heldUsageResponses,
-    heldCatalogResponses,
+    heldUsageResponses: usageGate.captures,
+    heldCatalogResponses: catalogGate.captures,
     errors,
     setPhase(next: Phase) {
       phase = next;
@@ -537,28 +544,8 @@ export async function startQuotaProvider(
     observeNextSuccess(observe: () => void, request: { model: string; path: string }) {
       nextSuccessObserver = { observe, ...request };
     },
-    holdNextUsage() {
-      if (nextUsageHold) {
-        throw new Error("A usage response hold is already armed");
-      }
-      const hold = {
-        arrived: createDeferredCore<HeldProviderResponse>(),
-        released: createDeferredCore(),
-      };
-      nextUsageHold = hold;
-      return { arrived: hold.arrived.promise, release: () => hold.released.resolve() };
-    },
-    holdNextCatalog() {
-      if (nextCatalogHold) {
-        throw new Error("A catalog response hold is already armed");
-      }
-      const hold = {
-        arrived: createDeferredCore<HeldProviderResponse>(),
-        released: createDeferredCore(),
-      };
-      nextCatalogHold = hold;
-      return { arrived: hold.arrived.promise, release: () => hold.released.resolve() };
-    },
+    holdNextUsage: usageGate.arm,
+    holdNextCatalog: catalogGate.arm,
     async stop() {
       await dispatcher.destroy();
       for (const socket of sockets.clients) {
@@ -774,6 +761,23 @@ export async function createQuotaResetFixture(
   const access = syntheticAccessToken(expires);
   const alternateProfileId = "openai:quota-alternate";
   const alternateAccess = syntheticAccessToken(expires, "quota-alternate-account");
+  const oauthProfile = (token: string, refresh: string, accountId: string) => ({
+    type: "oauth" as const,
+    provider: "openai",
+    access: token,
+    refresh,
+    expires,
+    accountId,
+  });
+  const profiles: Record<string, ReturnType<typeof oauthProfile>> = {};
+  if (includeAlternateProfile) {
+    profiles[alternateProfileId] = oauthProfile(
+      alternateAccess,
+      "synthetic-alternate-refresh",
+      "quota-alternate-account",
+    );
+  }
+  profiles[PROFILE_ID] = oauthProfile(access, "synthetic-refresh", ACCOUNT_ID);
   const { saveAuthProfileStoreWithPreparedOwner } = createAuthProfileStoreRuntime(
     createExternalAuthRuntime(() => []),
   );
@@ -783,32 +787,7 @@ export async function createQuotaResetFixture(
     undefined,
     (database, owner) =>
       saveAuthProfileStoreWithPreparedOwner(
-        {
-          version: 1,
-          profiles: {
-            ...(includeAlternateProfile
-              ? {
-                  [alternateProfileId]: {
-                    type: "oauth",
-                    provider: "openai",
-                    access: alternateAccess,
-                    refresh: "synthetic-alternate-refresh",
-                    expires,
-                    accountId: "quota-alternate-account",
-                  },
-                }
-              : {}),
-            [PROFILE_ID]: {
-              type: "oauth",
-              provider: "openai",
-              access,
-              refresh: "synthetic-refresh",
-              expires,
-              accountId: ACCOUNT_ID,
-            },
-          },
-          order: { openai: [PROFILE_ID] },
-        },
+        { version: 1, profiles, order: { openai: [PROFILE_ID] } },
         undefined,
         { filterExternalAuthProfiles: false, syncExternalCli: false },
         database,
