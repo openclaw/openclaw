@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -15,6 +14,7 @@ import {
 } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runProcess, writeJson, writeExecutable } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const parser = createNativeTypeScriptParser();
@@ -42,11 +42,11 @@ const original = {
     transcript: [{ session_id: "target", seq: 1, event_json: "original bytes", created_at: 10 }],
   },
 };
-function migrated() {
+function migrated(workspace = "/fixture/project") {
   const result = structuredClone(original);
   const row = result.agent.sessions[0]!;
   const entry = JSON.parse(row.entry_json);
-  entry.worktree.canonicalWorkspaceDir = "/fixture/project";
+  entry.worktree.canonicalWorkspaceDir = workspace;
   row.entry_json = JSON.stringify(entry);
   return result;
 }
@@ -104,61 +104,35 @@ export { ${schemaSymbol} as t };
 const schemaForwarder = `import { t as ${schemaSymbol} } from "./doctor-owner-real.mjs";
 export { ${schemaSymbol} };
 `;
-function doctorOwnerFixture(files: Record<string, string>) {
+function doctorOwnerFixture(chunks: string[], definition = schemaDefinition) {
   const root = tempDirs.make("openclaw-doctor-owner-binding-");
   mkdirSync(path.join(root, "dist"));
-  writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
-  );
+  writeJson(path.join(root, "package.json"), { name: "openclaw", version: "0.0.0-test" });
   writeFileSync(path.join(root, "openclaw.mjs"), "// synthetic package identity\n");
-  writeFileSync(
-    path.join(root, "dist/build-info.json"),
-    JSON.stringify({ version: "0.0.0-test", commit: "1".repeat(40) }),
-  );
-  for (const [name, source] of Object.entries(files)) {
-    writeFileSync(path.join(root, "dist", name), source);
+  writeJson(path.join(root, "dist/build-info.json"), {
+    version: "0.0.0-test",
+    commit: "1".repeat(40),
+  });
+  for (const name of chunks) {
+    writeFileSync(
+      path.join(root, "dist", `doctor-owner-${name}.mjs`),
+      name === "entry" ? schemaForwarder : definition,
+    );
   }
   return { root, identity: readWorkerCellPackageIdentity(root) };
 }
 
 describe("published project-worktree Doctor ownership evidence", () => {
-  it.each<[string, Record<string, string>, RegExp?, boolean?]>([
-    [
-      "forwarded owner",
-      {
-        "doctor-owner-entry.mjs": schemaForwarder,
-        "doctor-owner-real.mjs": schemaDefinition,
-      },
-    ],
-    [
-      "two defining owners",
-      {
-        "doctor-owner-real.mjs": schemaDefinition,
-        "doctor-owner-other.mjs": schemaDefinition,
-      },
-      /one installed defining/,
-    ],
-    [
-      "forwarder without a definition",
-      { "doctor-owner-entry.mjs": schemaForwarder },
-      /one installed defining/,
-    ],
-    [
-      "malformed definition",
-      { "doctor-owner-real.mjs": `function ${schemaSymbol}( {` },
-      /Cannot parse package owner/,
-    ],
-    [
-      "changed candidate bytes",
-      { "doctor-owner-real.mjs": schemaDefinition },
-      /Package owner changed/,
-      true,
-    ],
+  it.each<[string, string[], RegExp?, string?, boolean?]>([
+    ["forwarded owner", ["entry", "real"]],
+    ["two defining owners", ["real", "other"], /one installed defining/],
+    ["forwarder without a definition", ["entry"], /one installed defining/],
+    ["malformed definition", ["real"], /Cannot parse package owner/, `function ${schemaSymbol}( {`],
+    ["changed candidate bytes", ["real"], /Package owner changed/, undefined, true],
   ])(
     "resolves only an unchanged defining Doctor chunk: %s",
-    async (_name, files, error, changed) => {
-      const { root, identity } = doctorOwnerFixture(files);
+    async (_name, chunks, error, definition, changed) => {
+      const { root, identity } = doctorOwnerFixture(chunks, definition);
       if (changed) {
         writeFileSync(
           path.join(root, "dist/doctor-owner-real.mjs"),
@@ -191,11 +165,11 @@ describe("published project-worktree Doctor ownership evidence", () => {
     const artifacts = path.join(root, "artifacts");
     const runtime = path.join(root, "runtime");
     const events = path.join(root, "events");
-    mkdirSync(bin);
-    mkdirSync(artifacts);
-    mkdirSync(runtime);
+    for (const dir of [bin, artifacts, runtime]) {
+      mkdirSync(dir);
+    }
     // This orchestration unit test replaces package operations, not the runner's phase sequence.
-    writeFileSync(
+    writeExecutable(
       path.join(bin, "openclaw"),
       `#!/bin/bash
 set -eu
@@ -210,7 +184,6 @@ else
   printf '{}\\n'
 fi
 `,
-      { mode: 0o755 },
     );
     const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
     const helpers = source.slice(
@@ -221,11 +194,9 @@ fi
       source.indexOf('if [ "$WORKER_CELL" = "1" ]; then\n  phase worker-baseline-identity'),
       source.indexOf('\nif [ "$SCENARIO" = "workshop-doctor-recovery" ]; then\n  phase '),
     );
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
-        `set -eu
+    const result = runProcess("/bin/bash", [
+      "-c",
+      `set -eu
 source scripts/lib/openclaw-e2e-instance.sh
 SCENARIO=projects-startup-migration
 WORKER_CELL=1
@@ -303,11 +274,9 @@ phase() {
 ${helpers}
 ${scenario}
 `,
-        "project-worktree-doctor-order",
-        root,
-      ],
-      { encoding: "utf8" },
-    );
+      "project-worktree-doctor-order",
+      root,
+    ]);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const first = path.join(runtime, "state-home/.openclaw");
     const second = path.join(runtime, "worktree-startup-state/.openclaw");
@@ -333,17 +302,18 @@ ${scenario}
   });
 
   it("preserves imported bytes and permits only the Doctor-owned workspace repair", () => {
+    const check = (actual: typeof original, workspace?: string) => () =>
+      assertProjectWorktreeStartupPreservation(actual, original, workspace);
     for (const [actual, workspace, accepted] of [
       [original, undefined, true],
       [migrated(), "/fixture/project", true],
       [migrated(), undefined, false],
       [original, "/fixture/project", false],
     ] as const) {
-      const check = () => assertProjectWorktreeStartupPreservation(actual, original, workspace);
       if (accepted) {
-        expect(check).not.toThrow();
+        expect(check(actual, workspace)).not.toThrow();
       } else {
-        expect(check).toThrow();
+        expect(check(actual, workspace)).toThrow();
       }
     }
     const corruptions: Array<(value: typeof original) => void> = [
@@ -353,26 +323,19 @@ ${scenario}
       (value) => (value.shared.project[0]!.id = "other"),
       (value) => (value.agent.sessions[1]!.entry_json = '{"changed":true}'),
       (value) => value.agent.sessions.pop(),
-      (value) => {
-        const row = value.agent.sessions[0]!;
-        const entry = JSON.parse(row.entry_json);
-        entry.worktree.canonicalWorkspaceDir = "/fixture/agent-default";
-        row.entry_json = JSON.stringify(entry);
-      },
+      (value) =>
+        (value.agent.sessions[0]!.entry_json =
+          migrated("/fixture/agent-default").agent.sessions[0]!.entry_json),
     ];
     for (const corrupt of corruptions) {
       const value = migrated();
       corrupt(value);
-      expect(() =>
-        assertProjectWorktreeStartupPreservation(value, original, "/fixture/project"),
-      ).toThrow();
+      expect(check(value, "/fixture/project")).toThrow();
     }
     const rewritten = structuredClone(original);
     const row = rewritten.agent.sessions[0]!;
     row.entry_json = JSON.stringify(JSON.parse(row.entry_json), null, 2);
-    expect(() =>
-      assertProjectWorktreeStartupPreservation(rewritten, original, undefined),
-    ).toThrow();
+    expect(check(rewritten)).toThrow();
   });
 
   it.each([
@@ -393,14 +356,12 @@ ${scenario}
       const closed = `${shutdownPrefix} completed cleanly in 19ms`;
       const warned = `${shutdownPrefix} completed in 19ms with warnings: database drain`;
       const failed = `${shutdownPrefix} failed in 19ms`;
-      expect(assertProjectWorktreeStartupLog(closed, "first")).toEqual({
-        backfills: [],
-        cleanShutdown: true,
-      });
-      expect(assertProjectWorktreeStartupLog(closed, "second")).toEqual({
-        backfills: [],
-        cleanShutdown: true,
-      });
+      for (const start of ["first", "second"]) {
+        expect(assertProjectWorktreeStartupLog(closed, start)).toEqual({
+          backfills: [],
+          cleanShutdown: true,
+        });
+      }
       for (const log of [
         "gateway ready",
         migration,
@@ -421,57 +382,47 @@ ${scenario}
     const check = ({ report, dryRun, manifest }: ReturnType<typeof publishedImportEvidence>) =>
       assertProjectWorktreeImportReport(report, report.targets[0]!.storePath, dryRun, manifest);
     expect(check(valid)).toEqual(valid.report.targets[0]);
-    for (const { select, changes } of [
-      {
-        select: (e: typeof valid) => e.report.targets[0]!,
-        changes: [
-          { agentId: "other" },
-          { importedEntries: 1 },
-          { importedTranscriptEvents: 3 },
-          { sqliteEntries: 1 },
-          { legacyEntries: 1 },
-          { referencedTranscriptFiles: 1 },
-          { validatedEntries: 1 },
-          { validatedTranscriptEvents: 1 },
-          { issues: [{ code: "transcript_missing" }] },
-        ],
-      },
-      {
-        select: (e: typeof valid) => e.dryRun.targets[0]!,
-        changes: [
-          { validatedEntries: 1 },
-          { validatedTranscriptEvents: 3 },
-          { sqlitePath: "/fixture/other.sqlite" },
-          { issues: [{ code: "transcript_malformed" }] },
-        ],
-      },
-      {
-        select: (e: typeof valid) => e.manifest.targets[0]!,
-        changes: [
-          { validationBeforeArchive: "not_run" },
-          { validationBeforeArchive: "failed" },
-          { validationBeforeArchive: undefined },
-          { agentId: "other" },
-          { storePath: "/fixture/other.json" },
-          { sqlitePath: "/fixture/other.sqlite" },
-          { issues: [{ code: "sqlite_entry_missing" }] },
-        ],
-      },
-      {
-        select: (e: typeof valid) => e.manifest,
-        changes: [
-          { completedAt: undefined },
-          { failedAt: valid.manifest.completedAt },
-          { runId: "other-run" },
-          { targets: [valid.manifest.targets[0], valid.manifest.targets[0]] },
-        ],
-      },
-    ]) {
-      for (const change of changes) {
-        const evidence = publishedImportEvidence();
-        Object.assign(select(evidence), change);
-        expect(() => check(evidence)).toThrow();
+    const rejectChanges = (
+      select: (e: typeof valid) => object,
+      fields: Record<string, unknown[]>,
+    ) => {
+      for (const [key, values] of Object.entries(fields)) {
+        for (const value of values) {
+          const evidence = publishedImportEvidence();
+          Object.assign(select(evidence), { [key]: value });
+          expect(() => check(evidence)).toThrow();
+        }
       }
-    }
+    };
+    rejectChanges((e) => e.report.targets[0]!, {
+      agentId: ["other"],
+      importedEntries: [1],
+      importedTranscriptEvents: [3],
+      sqliteEntries: [1],
+      legacyEntries: [1],
+      referencedTranscriptFiles: [1],
+      validatedEntries: [1],
+      validatedTranscriptEvents: [1],
+      issues: [[{ code: "transcript_missing" }]],
+    });
+    rejectChanges((e) => e.dryRun.targets[0]!, {
+      validatedEntries: [1],
+      validatedTranscriptEvents: [3],
+      sqlitePath: ["/fixture/other.sqlite"],
+      issues: [[{ code: "transcript_malformed" }]],
+    });
+    rejectChanges((e) => e.manifest.targets[0]!, {
+      validationBeforeArchive: ["not_run", "failed", undefined],
+      agentId: ["other"],
+      storePath: ["/fixture/other.json"],
+      sqlitePath: ["/fixture/other.sqlite"],
+      issues: [[{ code: "sqlite_entry_missing" }]],
+    });
+    rejectChanges((e) => e.manifest, {
+      completedAt: [undefined],
+      failedAt: [valid.manifest.completedAt],
+      runId: ["other-run"],
+      targets: [[valid.manifest.targets[0], valid.manifest.targets[0]]],
+    });
   });
 });

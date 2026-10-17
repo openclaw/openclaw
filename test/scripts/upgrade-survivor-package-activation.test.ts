@@ -8,18 +8,35 @@ import { afterEach, describe, expect, it } from "vitest";
 import { assertPackageRecoveryEvidence } from "../../scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
+import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const recoveryScript = "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs";
 const faultScript = path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs");
-const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 const runNode = (args: string[], env: NodeJS.ProcessEnv = {}) =>
-  spawnSync(process.execPath, args, {
-    encoding: "utf8",
-    timeout: 10_000,
-    env: { ...process.env, ...env },
-  });
+  runProcess(process.execPath, args, { ...process.env, ...env }, 10_000);
+function faultFixture(cut: "publication-complete" | "verification", preload: string[] = []) {
+  const root = fs.realpathSync(dirs.make("package-activation-fault-"));
+  const evidence = path.join(root, "cut.json");
+  const journal = path.join(root, "operation.sqlite");
+  const previousRoot = path.join(root, "previous");
+  const spec = path.join(root, "fault.json");
+  writeJson(spec, { cut, evidence, ...(cut === "verification" ? { previousRoot } : { journal }) });
+  const run = (code: string, ...args: string[]) =>
+    runNode(
+      [
+        ...preload,
+        "--import",
+        pathToFileURL(faultScript).href,
+        "--input-type=module",
+        "-e",
+        code,
+        ...args,
+      ],
+      { OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
+    );
+  return { evidence, journal, previousRoot, run };
+}
 function writePackage(root: string, version: string, build: { buildId: string }) {
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   writeJson(path.join(root, "package.json"), { version });
@@ -70,20 +87,8 @@ describe("release package interruption fixture", () => {
   it.each(["run", "all"])(
     "kills only after the selected real SQLite commit through %s",
     (method) => {
-      const root = fs.realpathSync(dirs.make("package-activation-fault-"));
-      const journal = path.join(root, "operation.sqlite");
-      const evidence = path.join(root, "cut.json");
-      const hook = pathToFileURL(faultScript).href;
-      const spec = path.join(root, "fault.json");
-      writeJson(spec, { journal, evidence, cut: "publication-complete" });
-      const result = runNode(
-        [
-          "--import=tsx",
-          "--import",
-          hook,
-          "--input-type=module",
-          "-e",
-          `
+      const { journal, evidence, run } = faultFixture("publication-complete", ["--import=tsx"]);
+      const result = run(`
       import fs from 'node:fs';
       import { DatabaseSync } from 'node:sqlite';
       import { executeSqliteQuerySync, getNodeSqliteKysely } from './src/infra/kysely-sync.ts';
@@ -101,10 +106,7 @@ describe("release package interruption fixture", () => {
       executeSqliteQuerySync(db, ${JSON.stringify(method)} === 'all' ? query.returningAll() : query);
       db.exec('COMMIT');
       throw new Error('fault did not terminate the updater');
-    `,
-        ],
-        { OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
-      );
+    `);
       expect(result.error).toBeUndefined();
       expect(result.signal, result.stderr).toBe("SIGKILL");
       const cut = readJson(evidence);
@@ -118,32 +120,16 @@ describe("release package interruption fixture", () => {
     },
   );
   it("changes retained rollback bytes inside the Doctor child before reporting failure", () => {
-    const root = fs.realpathSync(dirs.make("package-activation-doctor-"));
-    const evidence = path.join(root, "cut.json");
-    const previousRoot = path.join(root, "previous");
+    const { evidence, previousRoot, run } = faultFixture("verification");
     fs.mkdirSync(previousRoot);
     const manifest = path.join(previousRoot, "package.json");
     fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
     fs.writeFileSync(evidence, "{}");
-    const spec = path.join(root, "fault.json");
-    writeJson(spec, { cut: "verification", evidence, previousRoot });
-    const result = runNode(
-      [
-        "--import",
-        faultScript,
-        "--input-type=module",
-        "-e",
-        "throw new Error('Doctor body must not run')",
-        "doctor",
-      ],
-      { OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
-    );
+    const result = run("throw new Error('Doctor body must not run')", "doctor");
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(1);
     expect(fs.readFileSync(manifest, "utf8")).toBe('{"version":"2026.9.8"}\n');
-    expect(readJson(`${evidence}.doctor`)).toMatchObject({
-      exitCode: 1,
-    });
+    expect(readJson(`${evidence}.doctor`)).toMatchObject({ exitCode: 1 });
   });
 });
 
@@ -199,32 +185,34 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
     configPath,
     authoredSettings: { gateway, pluginsEnabled: false },
   });
-  const run = (command: string, exit: string) =>
-    runNode([recoveryScript, command, artifacts, exit]);
-  const interrupted = run("interrupted", "137");
-  expect(interrupted.status, interrupted.stderr).toBe(0);
+  const run = (command: string, exit: string, error?: string) => {
+    const result = runNode([recoveryScript, command, artifacts, exit]);
+    if (error) {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(error);
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+    }
+  };
+  run("interrupted", "137");
   const retained = `${anchor}.superseded-fixture-operation`;
   fs.renameSync(anchor, retained);
   fs.renameSync(`${anchor}.control`, path.join(retained, "control"));
-  const repaired = run("repaired", "0");
-  expect(repaired.status, repaired.stderr).toBe(0);
+  run("repaired", "0");
   writeSettings(true);
-  const changedSettings = run("repaired", "0");
-  expect(changedSettings.status).not.toBe(0);
-  expect(changedSettings.stderr).toContain("authored settings changed");
+  run("repaired", "0", "authored settings changed");
   writeSettings(false);
   for (const tree of [root, path.join(retained, "previous")]) {
     const runtime = path.join(tree, "dist/runtime.mjs");
     fs.writeFileSync(runtime, "damaged runtime bytes");
-    const rejected = run("repaired", "0");
-    expect(rejected.status).not.toBe(0);
-    expect(rejected.stderr).toContain("package tree changed");
+    run("repaired", "0", "package tree changed");
     fs.writeFileSync(runtime, "retained runtime bytes");
   }
 });
 
 function completeEvidence() {
   const installed = { version: "2026.9.11", build: { buildId: "next" }, manifest: "next-manifest" };
+  const preserved = { exitCode: 0, retainedBytesPreserved: true, settingsPreserved: true };
   return {
     status: "passed",
     baseline: { version: "2026.9.8", build: { buildId: "published" } },
@@ -239,55 +227,43 @@ function completeEvidence() {
       writerVersion: "2026.9.8",
       helperPreserved: true,
     },
-    repair: {
-      exitCode: 0,
-      retainedBytesPreserved: true,
-      candidateUnchanged: true,
-      settingsPreserved: true,
-    },
+    repair: { ...preserved, candidateUnchanged: true },
     repeatRepair: { exitCode: 0, settingsPreserved: true },
     nextUpdate: {
-      exitCode: 0,
+      ...preserved,
       expected: installed,
       installed,
-      retainedBytesPreserved: true,
-      settingsPreserved: true,
     },
     targetSelector: "installed-candidate",
   };
 }
 
-describe("release package recovery evidence", () => {
-  it("requires a distinct real next update and preservation, not just successful repair", () => {
-    expect(() => assertPackageRecoveryEvidence(completeEvidence())).not.toThrow();
-    const missingNext = completeEvidence();
-    missingNext.nextUpdate.installed = {
-      ...missingNext.nextUpdate.installed,
-      version: "2026.9.10",
-    };
-    expect(() => assertPackageRecoveryEvidence(missingNext)).toThrow();
-    const removedEvidence = completeEvidence();
-    removedEvidence.nextUpdate.retainedBytesPreserved = false;
-    expect(() => assertPackageRecoveryEvidence(removedEvidence)).toThrow();
-    const substitutedWriter = completeEvidence();
-    substitutedWriter.interruption.writerVersion = "2026.9.10";
-    expect(() => assertPackageRecoveryEvidence(substitutedWriter)).toThrow();
-    const stranded = {
-      status: "passed",
-      baseline: { version: "2026.9.7" },
-      candidate: { version: "2026.9.8" },
-      interruption: { writerVersion: "2026.9.7", phase: "publication-complete" },
-      targetSelector: "unmodified-released-9.8",
-      firstHop: {
-        status: "blocked-before-staging",
-        reason: "update-recovery-pending",
-        installedVersion: "2026.9.8",
-        targetWasAbsent: true,
-        candidateCodeInvoked: false,
-      },
-    };
-    expect(() => assertPackageRecoveryEvidence(stranded)).not.toThrow();
-    stranded.firstHop.reason = "package-install-failed";
-    expect(() => assertPackageRecoveryEvidence(stranded)).toThrow();
-  });
+it("requires a distinct real next update and preservation, not just successful repair", () => {
+  expect(() => assertPackageRecoveryEvidence(completeEvidence())).not.toThrow();
+  let evidence = completeEvidence();
+  evidence.nextUpdate.installed = { ...evidence.nextUpdate.installed, version: "2026.9.10" };
+  expect(() => assertPackageRecoveryEvidence(evidence)).toThrow();
+  evidence = completeEvidence();
+  evidence.nextUpdate.retainedBytesPreserved = false;
+  expect(() => assertPackageRecoveryEvidence(evidence)).toThrow();
+  evidence = completeEvidence();
+  evidence.interruption.writerVersion = "2026.9.10";
+  expect(() => assertPackageRecoveryEvidence(evidence)).toThrow();
+  const stranded = {
+    status: "passed",
+    baseline: { version: "2026.9.7" },
+    candidate: { version: "2026.9.8" },
+    interruption: { writerVersion: "2026.9.7", phase: "publication-complete" },
+    targetSelector: "unmodified-released-9.8",
+    firstHop: {
+      status: "blocked-before-staging",
+      reason: "update-recovery-pending",
+      installedVersion: "2026.9.8",
+      targetWasAbsent: true,
+      candidateCodeInvoked: false,
+    },
+  };
+  expect(() => assertPackageRecoveryEvidence(stranded)).not.toThrow();
+  stranded.firstHop.reason = "package-install-failed";
+  expect(() => assertPackageRecoveryEvidence(stranded)).toThrow();
 });

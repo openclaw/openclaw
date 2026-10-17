@@ -1,5 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,11 +7,41 @@ import {
   readEnabledPolicyPlugins,
 } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  readJson,
+  runProcess,
+  writeExecutable,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const policyScript = "scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs";
 const run = (command: string, args: string[], env: NodeJS.ProcessEnv = {}) =>
-  spawnSync(command, args, { encoding: "utf8", env: { ...process.env, ...env } });
+  runProcess(command, args, { ...process.env, ...env });
+const runPolicyShell = (body: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) =>
+  run(
+    "bash",
+    [
+      "-euo",
+      "pipefail",
+      "-c",
+      `source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh\n${body}`,
+      "policy-cell",
+      ...args,
+    ],
+    env,
+  );
+function policyPaths() {
+  const root = tempDirs.make("openclaw-policy-");
+  const [source, artifacts, prefix] = ["source", "artifacts", "npm-prefix"].map((p) =>
+    join(root, p),
+  );
+  const packageRoot = join(prefix, "lib/node_modules/openclaw");
+  for (const directory of [source, artifacts, packageRoot, join(prefix, "bin")]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  return { root, source, artifacts, prefix, packageRoot, configPath: join(root, "openclaw.json") };
+}
 
 const hooks = { enabled: true, path: "/survivor-hooks", token: "synthetic-survivor-hook-token" };
 const specimen = { hooks, plugins: { slots: { memory: "memory-core" } } };
@@ -27,51 +56,41 @@ const policy = () => ({
   hooks,
 });
 const baselineInventory = () => ({
-  plugins: [
-    { id: "memory-core", installed: true, enabled: true, state: "enabled" },
-    { id: "telegram", installed: true, enabled: true, state: "enabled" },
-    { id: "device-pair", installed: true, enabled: false, state: "disabled" },
-  ],
+  plugins: ["memory-core", "telegram", "device-pair"].map((id) => ({
+    id,
+    installed: true,
+    enabled: id !== "device-pair",
+    state: id === "device-pair" ? "disabled" : "enabled",
+  })),
 });
-const candidateInventory = () => ({
+const candidateInventory = (active: { state: string | undefined } = { state: "active" }) => ({
   plugins: baselineInventory().plugins.map((plugin) =>
-    Object.assign({}, plugin, {
-      runtime: { state: plugin.id === "memory-core" ? "active" : "unloaded" },
+    Object.assign(plugin, {
+      runtime: plugin.id === "memory-core" ? active : { state: "unloaded" },
     }),
   ),
 });
 
 describe("sole-plugin upgrade acceptance", () => {
   it("authors the isolated baseline with the existing explicit survivor model route", () => {
-    const root = tempDirs.make("openclaw-policy-route-");
-    const source = join(root, "source");
-    const artifacts = join(root, "artifacts");
-    const prefix = join(root, "npm-prefix");
-    const packageRoot = join(prefix, "lib/node_modules/openclaw");
-    const configPath = join(root, "openclaw.json");
-    for (const directory of [source, artifacts, packageRoot, join(prefix, "bin")]) {
-      mkdirSync(directory, { recursive: true });
-    }
+    const { root, source, artifacts, prefix, packageRoot, configPath } = policyPaths();
     const provider = {
       baseUrl: "http://127.0.0.1:18888/v1",
       api: "openai-completions",
       apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       models: [{ id: "gpt-5.6-luna" }],
     };
-    writeFileSync(
-      join(source, "legacy-operator-webhooks.json"),
-      JSON.stringify({
-        seeded: true,
-        baselineVersion: "2026.9.2",
-        entry: { enabled: true },
-        hooks,
-        model: "survivor/gpt-5.6-luna",
-        provider,
-      }),
-    );
-    writeFileSync(join(packageRoot, "package.json"), '{"name":"openclaw","version":"2026.9.2"}');
-    writeFileSync(configPath, "{}");
-    writeFileSync(
+    writeJson(join(source, "legacy-operator-webhooks.json"), {
+      seeded: true,
+      baselineVersion: "2026.9.2",
+      entry: { enabled: true },
+      hooks,
+      model: "survivor/gpt-5.6-luna",
+      provider,
+    });
+    writeJson(join(packageRoot, "package.json"), { name: "openclaw", version: "2026.9.2" });
+    writeJson(configPath, {});
+    writeExecutable(
       join(packageRoot, "openclaw.mjs"),
       `#!${process.execPath}
 import fs from "node:fs";
@@ -86,7 +105,6 @@ if (args[0] === "config" && args[1] === "set") {
   throw new Error("unexpected fixture command");
 }
 `,
-      { mode: 0o755 },
     );
     symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", join(prefix, "bin/openclaw"));
     const result = run(process.execPath, [policyScript, "seed", source, "2026.9.2"], {
@@ -97,36 +115,23 @@ if (args[0] === "config" && args[1] === "set") {
       OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    const authored = JSON.parse(readFileSync(configPath, "utf8"));
+    const authored = readJson(configPath);
     expect(authored.models.providers.survivor).toEqual(provider);
     expect(authored.agents.defaults.model.primary).toBe("survivor/gpt-5.6-luna");
     expect(authored.plugins.allow).toEqual(["webhooks"]);
   });
 
   it("isolates inherited Discord discovery from policy authoring and Gateway startup", () => {
-    const root = tempDirs.make("openclaw-policy-env-");
-    const artifacts = join(root, "artifacts");
-    const prefix = join(root, "npm-prefix");
-    mkdirSync(artifacts);
-    mkdirSync(prefix);
-    writeFileSync(join(artifacts, "legacy-operator-webhooks.json"), '{"seeded":true}');
-    const result = run(
-      "bash",
-      [
-        "-euo",
-        "pipefail",
-        "-c",
-        `source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh
-ARTIFACT_ROOT="$1"
+    const { root, artifacts, prefix } = policyPaths();
+    writeJson(join(artifacts, "legacy-operator-webhooks.json"), { seeded: true });
+    const result = runPolicyShell(
+      `ARTIFACT_ROOT="$1"
 RUNTIME_ROOT="$2"
 npm_config_prefix="$3"
 baseline_version=2026.9.2
 candidate_version=2026.9.6
 assert_policy_env() {
-  if [ -n "\${DISCORD_BOT_TOKEN+x}" ]; then
-    printf 'inherited Discord discovery reached isolated policy boundary\\n' >&2
-    return 1
-  fi
+  [ -z "\${DISCORD_BOT_TOKEN+x}" ] || return 1
   [ "$GATEWAY_AUTH_TOKEN_REF" = synthetic-gateway-hook-token ]
   [ "$TELEGRAM_BOT_TOKEN" = synthetic-telegram-token ]
 }
@@ -147,11 +152,7 @@ legacy_operator_plugin_policy verify
 [ "$DISCORD_BOT_TOKEN" = synthetic-discord-token ]
 printf 'main-preserved\\n'
 `,
-        "policy-cell",
-        artifacts,
-        join(root, "runtime"),
-        prefix,
-      ],
+      [artifacts, join(root, "runtime"), prefix],
       {
         DISCORD_BOT_TOKEN: "synthetic-discord-token",
         GATEWAY_AUTH_TOKEN_REF: "synthetic-gateway-hook-token",
@@ -167,43 +168,43 @@ printf 'main-preserved\\n'
   it.each(["2026.9.3", "2026.9.4"])(
     "leaves the %s historical migration cell with its existing owner",
     (baselineVersion) => {
-      const result = run("bash", [
-        "-c",
-        'set -euo pipefail; source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh; ARTIFACT_ROOT=unused; RUNTIME_ROOT=unused; npm_config_prefix=unused; baseline_version="$1"; node() { return 97; }; legacy_operator_plugin_policy verify',
-        "policy-cell",
-        baselineVersion,
-      ]);
+      const result = runPolicyShell(
+        'ARTIFACT_ROOT=unused; RUNTIME_ROOT=unused; npm_config_prefix=unused; baseline_version="$1"; node() { return 97; }; legacy_operator_plugin_policy verify',
+        [baselineVersion],
+      );
       expect(result.status, result.stdout + result.stderr).toBe(0);
     },
   );
 
   it("preserves channel and slot policy while rejecting retired or widened permissions", () => {
     const config = policy();
-    const check = (value: unknown) => assertSolePluginPolicy(value, specimen, baseline);
+    const check = (plugins: object = {}, overrides: object = {}) =>
+      assertSolePluginPolicy(
+        { ...config, ...overrides, plugins: { ...config.plugins, ...plugins } },
+        specimen,
+        baseline,
+      );
     for (const allow of [["telegram"], ["memory-core"], ["memory-core", "telegram"]]) {
-      expect(() => check({ ...config, plugins: { ...config.plugins, allow } })).not.toThrow();
+      expect(() => check({ allow })).not.toThrow();
     }
     for (const [patch, error] of [
-      [
-        { plugins: { ...config.plugins, enabled: false } },
-        "disabled permitted channel or slot plugins",
-      ],
+      [{ enabled: false }, "disabled permitted channel or slot plugins"],
       ...[[], ["memory-core", "telegram", "unrelated"]].map(
-        (allow) =>
-          [{ plugins: { ...config.plugins, allow } }, "restrictive plugin allowlist"] as const,
+        (allow) => [{ allow }, "restrictive plugin allowlist"] as const,
       ),
       ...[{ entries: { webhooks: { enabled: true } } }, { deny: ["webhooks", "device-pair"] }].map(
-        (retained) => [{ plugins: { ...config.plugins, ...retained } }, "retired"] as const,
+        (retained) => [retained, "retired"] as const,
       ),
-      [{ hooks: { ...hooks, enabled: false } }, "ordinary hooks changed"],
-      [{ plugins: { ...config.plugins, deny: [] } }, "unrelated plugin denial was removed"],
-      [{ channels: { telegram: { enabled: false } } }, "configured Telegram channel was disabled"],
-      [
-        { plugins: { ...config.plugins, slots: { memory: "none" } } },
-        "selected memory slot changed",
-      ],
+      [{ deny: [] }, "unrelated plugin denial was removed"],
+      [{ slots: { memory: "none" } }, "selected memory slot changed"],
     ] as const) {
-      expect(() => check({ ...config, ...patch })).toThrow(error);
+      expect(() => check(patch)).toThrow(error);
+    }
+    for (const [patch, error] of [
+      [{ hooks: { ...hooks, enabled: false } }, "ordinary hooks changed"],
+      [{ channels: { telegram: { enabled: false } } }, "configured Telegram channel was disabled"],
+    ] as const) {
+      expect(() => check({}, patch)).toThrow(error);
     }
   });
 
@@ -217,39 +218,26 @@ printf 'main-preserved\\n'
     expect(() => readEnabledPolicyPlugins({ plugins: [] })).toThrow(
       "omitted or duplicated installed plugin",
     );
-    rejects(candidateInventory(), "widened or lost plugin activation", {
-      ...baseline,
-      enabledPlugins: [],
-    });
+    for (const enabledPlugins of [[], [...baseline.enabledPlugins, "missing-survivor"]]) {
+      rejects(candidateInventory(), "widened or lost plugin activation", {
+        ...baseline,
+        enabledPlugins,
+      });
+    }
     for (const id of ["memory-core", "telegram", "device-pair"]) {
       const changed = candidateInventory();
       const plugin = changed.plugins.find((entry) => entry.id === id)!;
       plugin.enabled = !plugin.enabled;
       rejects(changed, "wrong activation policy");
     }
-    rejects(candidateInventory(), "widened or lost plugin activation", {
-      ...baseline,
-      enabledPlugins: [...baseline.enabledPlugins, "missing-survivor"],
-    });
     const widened = candidateInventory();
-    widened.plugins.push({
-      id: "unrelated",
-      installed: true,
-      enabled: true,
-      state: "enabled",
-      runtime: { state: "unloaded" },
-    });
+    widened.plugins.push({ ...candidateInventory().plugins[1]!, id: "unrelated" });
     rejects(widened, "widened or lost plugin activation");
     widened.plugins.at(-1)!.enabled = false;
     widened.plugins.at(-1)!.runtime.state = "active";
     rejects(widened, "activated forbidden plugin unrelated");
     for (const state of ["service-failed", undefined]) {
-      const broken = {
-        plugins: candidateInventory().plugins.map((plugin, index) =>
-          index === 0 ? Object.assign({}, plugin, { runtime: { state } }) : plugin,
-        ),
-      };
-      rejects(broken, "failed or is unknown");
+      rejects(candidateInventory({ state }), "failed or is unknown");
     }
   });
 });
