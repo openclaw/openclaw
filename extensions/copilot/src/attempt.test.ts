@@ -1636,10 +1636,10 @@ describe("runCopilotAttempt", () => {
     it.each(["hidden", "blocked"] as const)(
       "keeps the %s user policy when pre-journal setup fails",
       async (mode) => {
-        const current = userMessage(
-          mode === "blocked" ? "blocked" : "hello",
-          mode === "blocked" ? { idempotencyKey: "run-1:user" } : {},
-        );
+        const current = {
+          ...userMessage(mode === "blocked" ? "blocked" : "hello"),
+          ...(mode === "blocked" ? { idempotencyKey: "run-1:user" } : {}),
+        };
         const recorder = makeUserTurnRecorder(current);
         if (mode === "blocked") {
           recorder.markBlocked();

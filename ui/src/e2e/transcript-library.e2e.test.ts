@@ -49,7 +49,10 @@ const transcriptPage = (utterances: TranscriptsGetResult["utterances"]) => ({
 });
 const expectParams = (gateway: MockGatewayControls, method: string, params: object) =>
   expect.poll(async () => (await gateway.getRequests(method)).at(-1)?.params).toMatchObject(params);
-async function expectSource(gateway: MockGatewayControls, source: object & { title: string }) {
+async function expectSource(
+  gateway: MockGatewayControls,
+  source: Record<string, unknown> & { title: string },
+) {
   await expectParams(gateway, "config.set", { raw: expect.stringContaining(source.title) });
   const write = (await gateway.getRequests("config.set")).at(-1)?.params as { raw: string };
   expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([source]);

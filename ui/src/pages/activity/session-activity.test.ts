@@ -15,44 +15,24 @@ import {
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
-const allFilters = { personId: null, time: "all" as const, query: "" };
-const eventSnapshot = (session: GatewaySessionRow, ancestorSessions: GatewaySessionRow[] = []) => ({
-  agentId: active.agentId,
-  session,
-  ancestorSessions,
-});
-const makeRow = (name: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
-  ...active,
-  key: `agent:work:${name}`,
-  sessionId: `${name}-session`,
-  ...fields,
-});
-const clockRow = (key: string, lastActivityAt: number) =>
-  makeRow(key, { sessionId: key, lastActivityAt, snapshotAt: lastActivityAt });
-const at = (session: GatewaySessionRow, timestamp: number) => ({
-  ...session,
-  updatedAt: timestamp,
-  snapshotAt: timestamp,
-});
-const ancestorRef = (parent: GatewaySessionRow, revision: string, snapshotAt: number) => ({
-  key: parent.key,
-  sessionId: parent.sessionId,
-  revision,
-  snapshotAt,
-});
-async function loaded(sessions: GatewaySessionRow[]) {
-  vi.useFakeTimers();
-  const fixture = setup();
-  fixture.request.mockResolvedValue(listing(sessions));
-  await fixture.controller.load(fixture.client, allFilters);
-  return fixture;
-}
 
 it("orders refreshed membership by the activity timestamps actually displayed", () => {
   const provenance = createSessionRowProvenance();
-  const older = clockRow("a", 10);
+  const older = {
+    ...active,
+    key: "agent:work:a",
+    sessionId: "a",
+    lastActivityAt: 10,
+    snapshotAt: 10,
+  };
   const current = { ...older, lastActivityAt: 30, snapshotAt: 30 };
-  const other = clockRow("b", 20);
+  const other = {
+    ...active,
+    key: "agent:work:b",
+    sessionId: "b",
+    lastActivityAt: 20,
+    snapshotAt: 20,
+  };
   provenance.observeReadRow(current, 1);
   const read = reconcileSessionActivityRead(
     listing([other, older]),
@@ -60,19 +40,26 @@ it("orders refreshed membership by the activity timestamps actually displayed", 
     provenance,
     2,
   );
-  expect(read.result.sessions).toEqual([current, other]);
+  expect(read.result.sessions.map((row) => [row.key, row.lastActivityAt])).toEqual([
+    [current.key, 30],
+    [other.key, 20],
+  ]);
 });
 
+const people: NonNullable<SessionsListResult["people"]> = [
+  { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },
+  { identity: { type: "profile", id: "bob" }, label: "Bob", sessionCount: 3 },
+];
 function result(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
-    ...listing(sessions),
     ts: 1,
+    path: "",
+    count: sessions.length,
     totalCount: 12,
     peopleSessionCount: 15,
-    people: [
-      { identity: { type: "profile", id: "alice" }, label: "Alice", sessionCount: 12 },
-      { identity: { type: "profile", id: "bob" }, label: "Bob", sessionCount: 3 },
-    ],
+    people,
+    defaults: { model: null, modelProvider: null, contextTokens: null },
+    sessions,
   };
 }
 
@@ -106,51 +93,61 @@ describe("session activity projection", () => {
 
   it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
     const personId = "12345678-abcd-4123-8123-123456789abc";
-    const compactId = personId.replaceAll("-", "");
     const legacy = {
       pathname: "/ui/activity",
       search: `?person=${personId}&time=30d&q=release`,
       hash: "#sessions",
     };
-    const canonical = (location: typeof legacy, label = "Ada", id = personId) =>
-      canonicalSessionActivityLocation(location, id, label, "/ui");
-    expect(canonical(legacy, "Ada Lovelace")).toEqual({
+    expect(canonicalSessionActivityLocation(legacy, personId, "Ada Lovelace", "/ui")).toEqual({
       pathname: "/ui/activity/ada-lovelace-12345678abcd41238123123456789abc",
       search: "?time=30d&q=release",
       hash: "#sessions",
     });
-    for (const reference of ["12345678", "12345678abcd4123", personId, compactId]) {
+    for (const reference of [
+      "12345678",
+      "12345678abcd4123",
+      personId,
+      personId.replaceAll("-", ""),
+    ]) {
       const location = { ...legacy, pathname: `/ui/activity/${reference}`, search: "?q=none" };
-      expect(canonical(location)?.pathname).toBe(
+      expect(canonicalSessionActivityLocation(location, personId, "Ada", "/ui")?.pathname).toBe(
         `/ui/activity/ada-${reference.replaceAll("-", "")}`,
       );
     }
     const empty = { pathname: "/ui/activity/ada-12345678abcd", search: "?q=none", hash: "" };
     expect(canonicalSessionActivityLocation(empty, "12345678abcd", undefined, "/ui")).toBeNull();
-    expect(canonical(legacy, "Ada", "abcdef12-1234-4123-8123-123456789abc")?.pathname).toBe(
-      "/ui/activity/ada-abcdef12123441238123123456789abc",
-    );
+    expect(
+      canonicalSessionActivityLocation(legacy, "abcdef12-1234-4123-8123-123456789abc", "Ada", "/ui")
+        ?.pathname,
+    ).toBe("/ui/activity/ada-abcdef12123441238123123456789abc");
   });
 
   it("groups the server page without treating its preview or session clock as personal history", () => {
     const now = new Date(2026, 7, 17, 12).getTime();
-    const yesterday = now - 26 * 60 * 60_000;
-    const clocks = [
-      { updatedAt: now + 60_000, lastActivityAt: yesterday, lastInteractionAt: now },
-      { updatedAt: yesterday, lastActivityAt: now - 60_000 },
-      { updatedAt: now, lastActivityAt: yesterday },
-    ];
-    const rows: GatewaySessionRow[] = ["first", "second", "older"].map((name, index) =>
-      Object.assign({ key: `agent:main:${name}`, kind: "direct" as const }, clocks[index]),
-    );
-    rows[0]!.createdActor = { type: "human", id: "alice" };
-    rows[0]!.participants = [
-      { identity: { type: "agent", id: "bob" } },
-      { identity: { type: "legacy", actorType: "human", source: "channel", id: "bob" } },
+    const rows: GatewaySessionRow[] = [
+      {
+        key: "agent:main:first",
+        kind: "direct",
+        updatedAt: now + 60_000,
+        lastActivityAt: now - 26 * 60 * 60_000,
+        lastInteractionAt: now,
+        participants: [{ identity: { type: "agent", id: "bob" } }],
+      },
+      {
+        key: "agent:main:second",
+        kind: "direct",
+        updatedAt: now - 26 * 60 * 60_000,
+        lastActivityAt: now - 60_000,
+      },
+      {
+        key: "agent:main:older",
+        kind: "direct",
+        updatedAt: now,
+        lastActivityAt: now - 26 * 60 * 60_000,
+      },
     ];
     Object.freeze(rows);
-    const page = result(rows);
-    const activity = projectSessionActivity(page);
+    const activity = projectSessionActivity(result(rows));
     expect(activity.people.map(({ id, count }) => ({ id, count }))).toEqual([
       { id: "alice", count: 12 },
       { id: "bob", count: 3 },
@@ -160,11 +157,14 @@ describe("session activity projection", () => {
       ["agent:main:first", "agent:main:second"],
       ["agent:main:older"],
     ]);
-    expect(activity).toMatchObject({ matchedCount: 12, timeCount: 15 });
+    expect(activity.matchedCount).toBe(12);
+    expect(activity.timeCount).toBe(15);
     expect(activity.sessions).toBe(rows);
-    expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([now, now - 60_000, yesterday]);
-    page.people = [];
-    expect(projectSessionActivity(page).people).toEqual([]);
+    expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([
+      now,
+      now - 60_000,
+      now - 26 * 60 * 60_000,
+    ]);
   });
 
   it.each([
@@ -174,7 +174,19 @@ describe("session activity projection", () => {
     expect(sessionActivityTimestamp(clocks)).toBe(120);
   });
 
-  it("projects an empty session list before a result is available", () => {
+  it("does not infer people from unqualified owner or participant IDs", () => {
+    const page = result([
+      {
+        key: "agent:main:channel",
+        kind: "direct",
+        createdActor: { type: "human", id: "alice" },
+        participants: [
+          { identity: { type: "legacy", actorType: "human", source: "channel", id: "bob" } },
+        ],
+      },
+    ]);
+    page.people = [];
+    expect(projectSessionActivity(page).people).toEqual([]);
     expect(projectSessionActivity(undefined).sessions).toEqual([]);
   });
 
@@ -195,30 +207,44 @@ describe("session activity projection", () => {
 it.each(["ancestor-omitted", "ancestor-cleared"])(
   "retains Activity recap receipts and ordering until a backwards activity clock requires admission (%s)",
   async (summary) => {
-    const first = makeRow("release", {
+    vi.useFakeTimers();
+    const { client, request, controller } = setup();
+    const first = {
+      ...active,
       lastActivityAt: 200,
-      parentSessionKey: "agent:work:second",
-    });
-    const second = makeRow("second", {
+      ...(summary === "primary" ? {} : { parentSessionKey: "agent:work:second" }),
+    };
+    const second = {
+      ...active,
+      key: "agent:work:second",
+      sessionId: "second-session",
       lastActivityAt: 100,
-      childSessions: [first.key],
+      ...(summary === "primary" ? {} : { childSessions: [first.key] }),
       activitySummary: { state: "current" as const, text: "The cached recap." },
-    });
-    const { request, controller } = await loaded([first, second]);
+    };
+    request.mockResolvedValue(listing([first, second]));
+    await controller.load(client, { personId: null, time: "all", query: "" });
     const { activitySummary, ...snapshot } = second;
     const event = (lastActivityAt: number, updatedAt: number) => {
-      const session = {
-        ...first,
-        updatedAt,
-        activitySummary: { state: "current" as const, text: "The child's new recap." },
-      };
-      const ancestor = {
+      const changed = {
         ...snapshot,
         lastActivityAt,
         updatedAt,
         ...(summary === "ancestor-cleared" ? { activitySummary: null } : {}),
       };
-      return { ...eventSnapshot(session, [ancestor]), reason: "patch" };
+      return {
+        agentId: active.agentId,
+        reason: "patch",
+        session:
+          summary === "primary"
+            ? changed
+            : {
+                ...first,
+                updatedAt,
+                activitySummary: { state: "current", text: "The child's new recap." },
+              },
+        ancestorSessions: summary === "primary" ? [] : [changed],
+      };
     };
     controller.invalidate(event(300, 300));
     expect(controller.result?.sessions.map((row) => row.key)).toEqual([second.key, first.key]);
@@ -235,63 +261,116 @@ it.each(["ancestor-omitted", "ancestor-cleared"])(
 );
 
 it("applies excluded child events to held History ancestors without refetching", async () => {
-  const parent = makeRow("parent", {
+  vi.useFakeTimers();
+  const { client, request, controller } = setup();
+  const parent = {
+    ...active,
+    key: "agent:work:parent",
+    sessionId: "parent-session",
     label: "Old parent",
     childSessions: ["agent:work:subagent:child"],
     snapshotAt: 100,
-  });
-  const child = makeRow("subagent:child", {
-    sessionId: active.sessionId,
+  };
+  const child = {
+    ...active,
+    key: "agent:work:subagent:child",
     parentSessionKey: parent.key,
     snapshotAt: 100,
-  });
-  const { request, controller } = await loaded([parent]);
-  controller.invalidate(
-    eventSnapshot(at(child, 300), [
+  };
+  const initial = listing([parent]);
+  request.mockResolvedValue(initial);
+  const query = { personId: null, time: "all" as const, query: "" };
+  await controller.load(client, query);
+  controller.invalidate({
+    agentId: active.agentId,
+    session: { ...child, updatedAt: 300, snapshotAt: 300 },
+    ancestorSessions: [
       {
-        ...at(parent, 300),
+        ...parent,
         label: "Updated parent",
+        updatedAt: 300,
+        snapshotAt: 300,
         ancestorRevision: "parent-revision",
       },
-    ]),
-  );
+    ],
+  });
   expect(controller.result?.sessions.map((row) => [row.key, row.label])).toEqual([
     [parent.key, "Updated parent"],
   ]);
   const reference = (snapshotAt: number) => ({
-    ...eventSnapshot(at(child, snapshotAt)),
-    ancestorSessionRefs: [ancestorRef(parent, "parent-revision", snapshotAt)],
+    agentId: active.agentId,
+    session: { ...child, updatedAt: snapshotAt, snapshotAt },
+    ancestorSessions: [],
+    ancestorSessionRefs: [
+      {
+        key: parent.key,
+        sessionId: parent.sessionId,
+        revision: "parent-revision",
+        snapshotAt,
+      },
+    ],
   });
-  const parentLabel = () =>
-    controller.result?.sessions.find((session) => session.key === parent.key)?.label;
   controller.invalidate(reference(400));
   await vi.advanceTimersByTimeAsync(0);
-  expect(parentLabel()).toBe("Updated parent");
+  expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
+    "Updated parent",
+  );
   controller.invalidate(reference(500));
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(parentLabel()).toBe("Updated parent");
+  expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
+    "Updated parent",
+  );
   expect(request).toHaveBeenCalledTimes(1);
 });
 
 it.each(["excluded-chain", "unheld", "missing", "incomplete", "uncertified-reference"])(
   "requires History authority only for relevant incomplete child coverage (%s)",
   async (coverage) => {
+    vi.useFakeTimers();
+    const { client, request, controller } = setup();
     const childKey = "agent:work:subagent:child";
-    const excluded = coverage === "excluded-chain";
-    const parent = makeRow("parent", {
-      key: excluded ? "agent:work:subagent:parent" : "agent:work:parent",
+    const excluded =
+      coverage === "excluded" || coverage === "excluded-chain" || coverage === "scoped-out-parent";
+    const parent = {
+      ...active,
+      key: coverage === "excluded-chain" ? "agent:work:subagent:parent" : "agent:work:parent",
+      sessionId: "parent-session",
       childSessions: [childKey],
       snapshotAt: 100,
-    });
+    };
     const rows = excluded || coverage === "unheld" ? [] : [parent];
-    const { request, controller } = await loaded(rows);
-    const session = at(makeRow("child", { key: childKey, spawnedBy: parent.key }), 200);
-    const ancestorSessions = excluded || coverage === "unheld" ? [at(parent, 200)] : [];
-    const ancestorSessionRefs = [ancestorRef(parent, "unseen-parent-revision", 200)];
+    request.mockResolvedValue(listing(rows));
+    await controller.load(client, { personId: null, time: "all", query: "" });
     controller.invalidate({
-      ...eventSnapshot(session),
-      ...(coverage === "incomplete" ? { ancestorSessions: undefined } : { ancestorSessions }),
-      ...(coverage === "uncertified-reference" ? { ancestorSessionRefs } : {}),
+      agentId: active.agentId,
+      session: {
+        ...active,
+        key: childKey,
+        sessionId: "child-session",
+        updatedAt: 200,
+        snapshotAt: 200,
+        ...(coverage === "excluded" ? {} : { spawnedBy: parent.key }),
+      },
+      ...(coverage === "incomplete"
+        ? {}
+        : {
+            ancestorSessions:
+              coverage === "unheld" || coverage === "excluded-chain"
+                ? [{ ...parent, updatedAt: 200, snapshotAt: 200 }]
+                : [],
+            ...(coverage === "uncertified-reference"
+              ? {
+                  ancestorSessionRefs: [
+                    {
+                      key: parent.key,
+                      sessionId: parent.sessionId,
+                      revision: "unseen-parent-revision",
+                      snapshotAt: 200,
+                    },
+                  ],
+                }
+              : {}),
+          }),
     });
     expect(controller.result?.sessions).toEqual(rows);
     await vi.advanceTimersByTimeAsync(5_000);

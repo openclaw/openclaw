@@ -20,6 +20,7 @@ const artUrl = "/__openclaw__/plugin-theme-art/northstar/workspace/icon/compass?
 const artwork = { icons: { compass: { url: artUrl } } };
 const definition: ThemeDefinition = {
   name: "Northstar",
+  description: "Synthetic Northstar branding fixture",
   brandName: "Northstar",
   mascot: "none",
   brandIcon: "compass",

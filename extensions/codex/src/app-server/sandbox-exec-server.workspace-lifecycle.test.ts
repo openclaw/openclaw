@@ -63,7 +63,7 @@ function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {
     child,
     server,
     processes,
-    prepareCleanup(terminate: () => Promise<void>) {
+    prepareCleanup: (terminate: () => Promise<void>) => {
       sandbox.backend!.prepareProcessCleanup = (env) => {
         assertCurrent();
         return { env, terminate, interrupt: async () => false };

@@ -623,7 +623,7 @@ describe("gateway run option collisions", () => {
   it("leaves legacy config environment inactive and requires fresh selection after repair", async () => {
     const selectedStateDir = "/tmp/openclaw-stable-upgrade-state";
     await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
-      const stableConfig = {
+      const stableConfig: OpenClawConfig = {
         meta: { lastTouchedVersion: "2026.7.1-2" },
         env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
         gateway: { mode: "local" },

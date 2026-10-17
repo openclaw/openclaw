@@ -168,7 +168,7 @@ it("syncs explicit None and reports saved only after the profile acknowledgement
     }
     return delayed.promise;
   });
-  writer.canPatch = false;
+  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
   await refreshServerPrefsProfile(writer, profileId, config);
   patchSettings({ background: none });
   const committed = createDeferred();
@@ -201,7 +201,7 @@ it("acknowledges theme and tab icon separately, retaining only a failed backgrou
     }
     return { status: "ok" };
   });
-  writer.canPatch = false;
+  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
   patchSettings({ theme: "rose", tabIcon: "agent", background: custom });
   pushServerUiPrefs(writer, { theme: "rose", tabIcon: "agent", background: custom }, writeOptions);
   await waitForFast(() =>

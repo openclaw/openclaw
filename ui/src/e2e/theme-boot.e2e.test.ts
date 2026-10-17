@@ -139,7 +139,12 @@ async function checkStartup({
   mode,
   saved,
   width,
-}: (typeof variants)[number] & { width: number }) {
+}: {
+  system: "light" | "dark";
+  mode: "light" | "dark" | "system";
+  saved: boolean;
+  width: number;
+}) {
   let releaseAppScripts = () => {};
   await suite.withPage(
     {

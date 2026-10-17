@@ -77,7 +77,8 @@ process.send('ready');`,
     });
 
     const finalizeExec = vi.fn(async () => undefined);
-    const runShellCommand = vi.fn(createSandboxContext({}).backend!.runShellCommand);
+    const backend = createSandboxContext({}).backend!;
+    const runShellCommand = vi.fn(backend.runShellCommand.bind(backend));
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({
         argv: [process.execPath, parentScript, descendantScript, releaseFile],

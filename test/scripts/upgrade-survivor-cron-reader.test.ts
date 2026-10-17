@@ -94,6 +94,7 @@ it.each(["2026.9.4", "2026.9.6"])(
       }
       if (args[1] === "run") {
         expect(args).toEqual(["cron", "run", args[2], "--wait"]);
+        assert(args[2], "missing Cron job ID");
         ran.add(args[2]);
         const job = jobs.find((candidate) => candidate.id === args[2])!;
         fs.appendFileSync(
@@ -108,6 +109,7 @@ it.each(["2026.9.4", "2026.9.6"])(
       }
       expect(args[1]).toBe("runs");
       const id = args[args.indexOf("--id") + 1];
+      assert(id, "missing Cron history job ID");
       expect(ran.has(id)).toBe(true);
       return reply(page(entries.filter((entry) => entry.jobId === id)));
     });
@@ -181,7 +183,9 @@ it.each([
         "--expect-url",
         "ws://127.0.0.1:18789",
       ]);
-      const request = JSON.parse(args[args.indexOf("--params") + 1]);
+      const params = args[args.indexOf("--params") + 1];
+      assert(params, "missing Cron history parameters");
+      const request = JSON.parse(params);
       const index = jobs.findIndex((job) => job.id === request.id);
       const job = jobs[index];
       const entry = entries[index];

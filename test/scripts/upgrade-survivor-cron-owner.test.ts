@@ -163,8 +163,11 @@ ${source.slice(start, end)}
     const phases = readFileSync(events, "utf8").trim().split("\n");
     const ordered = (...names: string[]) => {
       names.forEach((name, index) => {
+        const previous = names[index - 1];
         expect(phases.indexOf(name)).toBeGreaterThanOrEqual(0);
-        expect(phases.indexOf(name)).toBeGreaterThan(index ? phases.indexOf(names[index - 1]) : -1);
+        expect(phases.indexOf(name)).toBeGreaterThan(
+          previous === undefined ? -1 : phases.indexOf(previous),
+        );
       });
     };
     ordered(
