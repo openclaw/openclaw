@@ -43,8 +43,12 @@ describe("readPostCompactionContext", () => {
     return readPostCompactionContext(tmpDir, { agentId: options.agentId, cfg });
   }
 
-  it("returns null when no AGENTS.md exists", async () => {
-    expect(await readRules()).toBeNull();
+  it.each([
+    undefined,
+    "# My Agent\n\nSome content.\n",
+    `## Session Startup\n\n${"x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}`,
+  ])("returns null for absent, irrelevant, or oversized AGENTS.md: %#", async (content) => {
+    expect(await readRules(content)).toBeNull();
   });
 
   it.each(["available", "revoked", "oversized"] as const)(
@@ -85,15 +89,6 @@ describe("readPostCompactionContext", () => {
     },
   );
 
-  it("returns null when AGENTS.md has no relevant sections", async () => {
-    expect(await readRules("# My Agent\n\nSome content.\n")).toBeNull();
-  });
-
-  it("returns null when AGENTS.md exceeds the byte read limit", async () => {
-    const oversized = `## Session Startup\n\n` + "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
-    expect(await readRules(oversized)).toBeNull();
-  });
-
   it("keeps truncated post-compaction context UTF-16 safe", async () => {
     const prefix = "A".repeat(159);
     const result = await readRules(`## Session Startup\n\n${prefix}😀tail`, { maxChars: 180 });
@@ -113,20 +108,9 @@ describe("readPostCompactionContext", () => {
   });
 
   it("skips sections inside code blocks", async () => {
-    const content = `# Rules
-
-\`\`\`markdown
-## Session Startup
-This is inside a code block and should NOT be extracted.
-\`\`\`
-
-## Red Lines
-
-Real red lines here.
-
-## Other
-`;
-    const result = await readRules(content);
+    const result = await readRules(
+      "```markdown\n## Session Startup\ninside a code block\n```\n## Red Lines\nReal red lines here\n## Other",
+    );
     expect(result).toContain("Real red lines here");
     expect(result).not.toContain("inside a code block");
   });
@@ -148,15 +132,12 @@ Real red lines here.
     expect(result).not.toContain("[truncated]");
   });
 
-  describe("agents.defaults.compaction.postCompactionSections", () => {
-    it("uses custom section names from config instead of defaults", async () => {
-      const content = `## Session Startup\n\nDo startup.\n\n## Critical Rules\n\nMy custom rules.\n\n## Red Lines\n\nDefault section.\n`;
-      const result = await readRules(content, { sections: ["Critical Rules"] });
-      expect(result).toContain("Critical Rules");
-      expect(result).toContain("My custom rules");
-      expect(result).not.toContain("Do startup");
-      expect(result).not.toContain("Default section");
-      expect(result).not.toContain("Session Startup");
-    });
+  it("uses custom section names from config instead of defaults", async () => {
+    const result = await readRules(
+      "## Session Startup\nDo startup\n## Critical Rules\nMy custom rules\n## Red Lines\nDefault section",
+      { sections: ["Critical Rules"] },
+    );
+    expect(result).toContain("Critical Rules\nMy custom rules");
+    expect(result).not.toMatch(/Do startup|Default section|Session Startup/);
   });
 });

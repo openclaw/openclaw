@@ -33,7 +33,24 @@ function buildModelConfig(route: Partial<ModelDefinitionConfig>): ModelDefinitio
   };
 }
 
-function buildHostConfig(params: {
+function providerConfig(
+  provider: string,
+  api: ModelDefinitionConfig["api"],
+  models: ModelDefinitionConfig[],
+  baseUrl = "https://api.openai.com/v1",
+): OpenClawConfig["models"] {
+  return { providers: { [provider]: { api, baseUrl, models } } };
+}
+
+function buildHostConfig({
+  provider,
+  api,
+  baseUrl,
+  compat,
+  contextTokens,
+  contextWindow = TEST_CONTEXT_WINDOW,
+  extraParams,
+}: {
   provider: string;
   api: ModelDefinitionConfig["api"];
   baseUrl?: string;
@@ -42,23 +59,13 @@ function buildHostConfig(params: {
   contextWindow?: number;
   extraParams?: Record<string, unknown>;
 }): OpenClawConfig {
-  const modelEntry = {
-    [modelKey(params.provider, TEST_MODEL_ID)]: { params: params.extraParams },
-  };
-  if (params.baseUrl === undefined) {
-    return { agents: { defaults: { models: modelEntry } } };
-  }
-  const {
-    provider,
-    api,
-    baseUrl,
-    compat,
-    contextTokens,
-    contextWindow = TEST_CONTEXT_WINDOW,
-  } = params;
+  const modelEntry = { [modelKey(provider, TEST_MODEL_ID)]: { params: extraParams } };
   const route = { api, baseUrl, compat, contextTokens, contextWindow };
   return {
-    models: { providers: { [provider]: { api, baseUrl, models: [buildModelConfig(route)] } } },
+    models:
+      baseUrl === undefined
+        ? undefined
+        : providerConfig(provider, api, [buildModelConfig(route)], baseUrl),
     agents: { defaults: { models: modelEntry } },
   };
 }
@@ -202,15 +209,11 @@ describe("configured model consumer parity", () => {
       };
       const cfg: OpenClawConfig = {
         plugins: { enabled: false },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              models: modelId === "MODEL" ? [upper] : reverse ? [lower, upper] : [upper, lower],
-            },
-          },
-        },
+        models: providerConfig(
+          "openai",
+          "openai-responses",
+          modelId === "MODEL" ? [upper] : reverse ? [lower, upper] : [upper, lower],
+        ),
       };
       const { run } = createMockFollowupRun({
         run: { config: cfg, provider: "openai", model: modelId },
@@ -260,51 +263,27 @@ describe("Anthropic server compaction host threshold", () => {
     ["uses the minimum for small windows", enabled, 32_000, 50_000],
     ["clamps low thresholds", { ...enabled, anthropicCompactThreshold: 42_000 }, 200_000, 50_000],
     ["uses custom thresholds", { ...enabled, anthropicCompactThreshold: 80_000 }, 200_000, 80_000],
+    ["uses a prepared-only window for its enabled server floor", enabled, undefined, 700_000],
   ] as const)("%s", (_name, params, contextWindowTokens, expected) => {
     const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          anthropic: {
-            api: "anthropic-messages",
-            baseUrl: "https://api.anthropic.com/v1",
-            models: [
-              buildModelConfig({ id: modelId, name: modelId, contextWindow: contextWindowTokens }),
-            ],
-          },
-        },
-      },
+      models: providerConfig(
+        "anthropic",
+        "anthropic-messages",
+        contextWindowTokens === undefined
+          ? []
+          : [buildModelConfig({ id: modelId, name: modelId, contextWindow: contextWindowTokens })],
+        "https://api.anthropic.com/v1",
+      ),
       agents: { defaults: { params } },
     };
 
     expect(
       resolveResponsesServerCompactionThreshold({
-        contextWindowTokens: 100_000,
+        contextWindowTokens: contextWindowTokens === undefined ? 1_000_000 : 100_000,
         cfg,
         provider: "anthropic",
-        modelId,
+        modelId: contextWindowTokens === undefined ? "claude-opus-4-6" : modelId,
       }),
     ).toBe(expected);
   });
-});
-
-it("uses a prepared-only Anthropic window for its enabled server floor", () => {
-  expect(
-    resolveResponsesServerCompactionThreshold({
-      contextWindowTokens: 1_000_000,
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              api: "anthropic-messages",
-              baseUrl: "https://api.anthropic.com/v1",
-              models: [],
-            },
-          },
-        },
-        agents: { defaults: { params: { anthropicServerCompaction: true } } },
-      },
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-    }),
-  ).toBe(700_000);
 });
