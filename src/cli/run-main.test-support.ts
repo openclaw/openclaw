@@ -40,6 +40,14 @@ type CliExecutionBootstrapOptions = {
 };
 
 const mocks = vi.hoisted(() => {
+  const defaults: Array<() => void> = [];
+  function value<T>(read: () => T) {
+    const mock = vi.fn(read);
+    defaults.push(() => {
+      mock.mockReturnValue(read());
+    });
+    return mock;
+  }
   const progressDoneMock = vi.fn();
   return {
     tryRouteCli: vi.fn(),
@@ -51,27 +59,27 @@ const mocks = vi.hoisted(() => {
     assertRuntime: vi.fn(async () => {}),
     isCurrentRuntimeSupported: vi.fn(async () => true),
     closeActiveMemorySearchManagers: vi.fn(async () => {}),
-    hasMemoryRuntime: vi.fn(() => false),
-    listRegisteredAgentHarnesses: vi.fn((): unknown[] => []),
+    hasMemoryRuntime: value(() => false),
+    listRegisteredAgentHarnesses: value((): unknown[] => []),
     disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
-    hasProviderTransportDispatcherPool: vi.fn(() => false),
+    hasProviderTransportDispatcherPool: value(() => false),
     stopManagedProviderLocalServices: vi.fn(),
     closeProviderTransportDispatcherPool: vi.fn(async () => {}),
     getActiveMcpLoopbackRuntime: vi.fn<() => { port: number } | undefined>(() => undefined),
     closeMcpLoopbackServer: vi.fn(async () => {}),
     outputRootHelp: vi.fn(),
-    outputPrecomputedRootHelpText: vi.fn(() => false),
-    outputPrecomputedBrowserHelpText: vi.fn(() => false),
-    outputPrecomputedSecretsHelpText: vi.fn(() => false),
-    outputPrecomputedNodesHelpText: vi.fn(() => false),
-    outputPrecomputedSubcommandHelpText: vi.fn(() => false),
+    outputPrecomputedRootHelpText: value(() => false),
+    outputPrecomputedBrowserHelpText: value(() => false),
+    outputPrecomputedSecretsHelpText: value(() => false),
+    outputPrecomputedNodesHelpText: value(() => false),
+    outputPrecomputedSubcommandHelpText: value(() => false),
     loadRootHelpRenderOptionsForConfigSensitivePlugins: vi.fn<
       () => Promise<RootHelpRenderOptions | null>
     >(async () => null),
     tryOutputSetupOnboardConfigureHelp: vi.fn(async () => true),
     buildProgram: vi.fn(),
     parkCurrentLaunchAgentForMaintenance: vi.fn(async () => true),
-    getProgramContext: vi.fn(() => null),
+    getProgramContext: value(() => null),
     registerCoreCliByName: vi.fn(),
     registerSubCliByName: vi.fn(),
     registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => ({})),
@@ -95,7 +103,7 @@ const mocks = vi.hoisted(() => {
     resolveManifestToolOwner: vi.fn(),
     resolveManifestCliCommandSurfaceOwner: vi.fn(),
     restoreRuntimeTerminalState: vi.fn(),
-    hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
+    hasEnvHttpProxyAgentConfigured: value(() => false),
     ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
     readConfigFileSnapshot: vi.fn<
       (options?: ConfigSnapshotReadOptions) => Promise<ConfigSnapshotStub>
@@ -124,7 +132,7 @@ const mocks = vi.hoisted(() => {
       ok: false,
       error: "gateway tls is disabled",
     })),
-    resolveControlUiLinks: vi.fn(() => ({
+    resolveControlUiLinks: value(() => ({
       httpUrl: "http://127.0.0.1:18789/",
       wsUrl: "ws://127.0.0.1:18789",
     })),
@@ -147,6 +155,7 @@ const mocks = vi.hoisted(() => {
     stopProxy: vi.fn<(handle: unknown) => Promise<void>>(async () => {}),
     flushExitAfterOneShotOutput: vi.fn(),
     requestExitAfterOneShotOutput: vi.fn(),
+    resetDefaults: () => defaults.forEach((reset) => reset()),
     maybeRunCliInContainer: vi.fn<
       (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
     >((argv: string[]) => ({ handled: false, argv })),
@@ -480,7 +489,6 @@ export {
 
 export function installRunMainTestHooks(): void {
   beforeAll(async () => {
-    expect(mocks.dotenvModuleImportState.count).toBe(0);
     const runMainModule = await import("./run-main.js");
     expect(mocks.dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
@@ -502,6 +510,7 @@ export function installRunMainTestHooks(): void {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     mocks.existsSyncOverride.value = undefined;
     vi.clearAllMocks();
+    mocks.resetDefaults();
     vi.spyOn(startupConfig, "readConfigSnapshotForEngineSelection").mockResolvedValue(
       createSnapshot({ hash: "fixture", sourceConfig: {} }),
     );
@@ -512,25 +521,11 @@ export function installRunMainTestHooks(): void {
     mocks.inspectGatewayTlsCertificate
       .mockReset()
       .mockResolvedValue({ ok: false, error: "gateway tls is disabled" });
-    mocks.resolveControlUiLinks.mockReturnValue({
-      httpUrl: "http://127.0.0.1:18789/",
-      wsUrl: "ws://127.0.0.1:18789",
-    });
-    mocks.hasMemoryRuntime.mockReturnValue(false);
-    mocks.listRegisteredAgentHarnesses.mockReturnValue([]);
-    mocks.hasProviderTransportDispatcherPool.mockReturnValue(false);
-    mocks.outputPrecomputedBrowserHelpText.mockReturnValue(false);
-    mocks.outputPrecomputedNodesHelpText.mockReturnValue(false);
-    mocks.outputPrecomputedRootHelpText.mockReturnValue(false);
-    mocks.outputPrecomputedSecretsHelpText.mockReturnValue(false);
-    mocks.outputPrecomputedSubcommandHelpText.mockReturnValue(false);
     mocks.loadRootHelpRenderOptionsForConfigSensitivePlugins.mockResolvedValue(null);
     mocks.tryOutputSetupOnboardConfigureHelp.mockResolvedValue(true);
-    mocks.hasEnvHttpProxyAgentConfigured.mockReturnValue(false);
     mocks.loadConfig.mockReturnValue({});
     mocks.startProxy.mockResolvedValue(null);
     mocks.stopProxy.mockResolvedValue(undefined);
-    mocks.getProgramContext.mockReturnValue(null);
     mocks.loadPluginCliDescriptors.mockReset().mockResolvedValue([]);
     mocks.resolvePluginCliRootOwnerIds.mockImplementation(
       ({ primaryCommand }: { primaryCommand?: string }) =>

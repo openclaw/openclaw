@@ -1,10 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveManifestCommandAliasOwnerInRegistry,
-  type PluginManifestCommandAliasRegistry,
-} from "../plugins/manifest-command-aliases.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import { rewriteUpdateFlagArgv } from "./argv.js";
@@ -97,7 +94,7 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
   });
 
   it.each(["node run", "node worker", "worker"])(
-    "admits the long-lived host before CLI bootstrap: %j",
+    "admits hosts before bootstrap: %s",
     async (args) => {
       const stopped = new Error("SQLite admission reached before host bootstrap");
       sqliteAdmission.initialize.mockRejectedValueOnce(stopped);
@@ -120,7 +117,7 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
   });
 
   it.each(["--update-canary --no-color run", "run --update-canary --no-color"])(
-    "accepts no-color beside a boolean flag: %s",
+    "accepts adjacent no-color: %s",
     async (args) => {
       await runCli(cliArgs(`gateway ${args} --token=--no-color`));
       expect(process.exitCode).toBeUndefined();
@@ -132,74 +129,59 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
   );
 });
 
-describe("Gateway argv boundaries", () => {
-  it.each([
-    [true, "gateway"],
-    [true, "gateway --force"],
-    [true, "gateway --port 18789"],
-    [true, "gateway --auth=none"],
-    [true, "--no-color gateway --bind loopback"],
-    [true, "gateway run"],
-    [false, "gateway --log-level debug run"],
-    [false, "gateway call health"],
-    [false, "gateway --help"],
-    [false, "gateway --port"],
-    [false, "gateway --unknown"],
-    [false, "gateway --update-canary=true"],
-  ] as const)("foreground admission is %s for %s", (expected, args) => {
-    expect(isGatewayRunFastPathArgv(cliArgs(args))).toBe(expected);
-  });
-
-  it.each([
-    ["--log-level debug gateway run --force --reset", true],
-    ["gateway --token --force", false],
-  ] as const)("resolves destructive flags without consuming values: %s", (args, enabled) => {
-    expect(resolveGatewayRunPreBootstrapOptions(cliArgs(args))).toEqual({
-      force: enabled,
-      reset: enabled,
-    });
-  });
-
-  it.each([
-    ["-- gateway --force", "gateway --force"],
-    ["gateway -- run --force", "gateway run"],
-    ["gateway run -- --reset", "gateway run"],
-  ])("preserves literal commands without destructive flags: %s", (args, commandPath) => {
-    const argv = cliArgs(args);
-    expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath.split(" "));
-    const options = resolveGatewayRunPreBootstrapOptions(argv);
-    expect(options?.force).not.toBe(true);
-    expect(options?.reset).not.toBe(true);
-  });
-});
-
-describe("root startup policy", () => {
-  it.each([
-    ["--profile p --update", "--profile p update"],
-    ["-- --update", "-- --update"],
-    ["config set update.channel --update", "config set update.channel --update"],
-  ])("rewrites only a root update flag: %s", (args, expected) => {
-    expect(rewriteUpdateFlagArgv(cliArgs(args))).toEqual(cliArgs(expected));
-  });
-
-  it.each([
-    [true, "--help"],
-    [true, "help --help"],
-    [true, "tools --help"],
-    [false, "status --help"],
-    [false, "--help status"],
-    [false, "help gateway"],
-  ] as const)("root help is %s for %s", (expected, args) => {
-    expect(shouldUseRootHelpFastPath(cliArgs(args))).toBe(expected);
-  });
-});
-
-function commandResolvers(registry: PluginManifestCommandAliasRegistry) {
-  return {
-    resolveCommandAliasOwner: ({ command }: { command: string | undefined }) =>
-      resolveManifestCommandAliasOwnerInRegistry({ command, registry }),
-  };
+function argvCases(resolve: (argv: string[]) => unknown, cases: Record<string, unknown>) {
+  return Object.entries(cases).map(([args, expected]) => ({ resolve, args, expected }));
 }
+it.each([
+  ...argvCases(isGatewayRunFastPathArgv, {
+    gateway: true,
+    "gateway --force": true,
+    "gateway --port 18789": true,
+    "gateway --auth=none": true,
+    "--no-color gateway --bind loopback": true,
+    "gateway run": true,
+    "gateway --log-level debug run": false,
+    "gateway call health": false,
+    "gateway --help": false,
+    "gateway --port": false,
+    "gateway --unknown": false,
+    "gateway --update-canary=true": false,
+  }),
+  ...argvCases(resolveGatewayRunPreBootstrapOptions, {
+    "--log-level debug gateway run --force --reset": { force: true, reset: true },
+    "gateway --token --force": { force: false, reset: false },
+  }),
+  ...argvCases(rewriteUpdateFlagArgv, {
+    "--profile p --update": cliArgs("--profile p update"),
+    "-- --update": cliArgs("-- --update"),
+    "config set update.channel --update": cliArgs("config set update.channel --update"),
+  }),
+  ...argvCases(shouldUseRootHelpFastPath, {
+    "--help": true,
+    "help --help": true,
+    "tools --help": true,
+    "status --help": false,
+    "--help status": false,
+    "help gateway": false,
+  }),
+  ...argvCases(resolveGatewayCatalogCommandPath, {
+    "gateway --log-level debug run": ["gateway", "run"],
+    "gateway --log-level=debug restart-handoff capabilities": ["gateway", "restart-handoff"],
+  }),
+])("$resolve.name: $args", ({ resolve, args, expected }) => {
+  expect(resolve(cliArgs(args))).toEqual(expected);
+});
+it.each([
+  ["-- gateway --force", "gateway --force"],
+  ["gateway -- run --force", "gateway run"],
+  ["gateway run -- --reset", "gateway run"],
+])("preserves literal commands without destructive flags: %s", (args, commandPath) => {
+  const argv = cliArgs(args);
+  expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath.split(" "));
+  const options = resolveGatewayRunPreBootstrapOptions(argv);
+  expect(options?.force).not.toBe(true);
+  expect(options?.reset).not.toBe(true);
+});
 
 describe("plugin command policy", () => {
   it("reports a disabled root without an alias record", () => {
@@ -218,22 +200,14 @@ describe("plugin command policy", () => {
     const config = {
       plugins: enabledByDefault ? { allow: [id] } : { entries: { [id]: { enabled: true } } },
     };
+    const registry = { plugins: [plugin] };
     expect(
-      resolveMissingPluginCommandMessage(command, config, commandResolvers({ plugins: [plugin] })),
+      resolveMissingPluginCommandMessage(command, config, {
+        resolveCommandAliasOwner: ({ command: requested }) =>
+          resolveManifestCommandAliasOwnerInRegistry({ command: requested, registry }),
+      }),
     ).toBeNull();
   });
-});
-
-it("keeps post-root log levels out of the gateway command path", () => {
-  expect(resolveGatewayCatalogCommandPath(cliArgs("gateway --log-level debug run"))).toEqual([
-    "gateway",
-    "run",
-  ]);
-  expect(
-    resolveGatewayCatalogCommandPath(
-      cliArgs("gateway --log-level=debug restart-handoff capabilities"),
-    ),
-  ).toEqual(["gateway", "restart-handoff"]);
 });
 
 it("keeps reserved non-plugin roots out of plugin allowlist diagnostics", () => {

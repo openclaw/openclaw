@@ -13,7 +13,6 @@ const execFileAsync = promisify(execFile);
 const missingPlan = path.join(os.tmpdir(), "openclaw-secrets-cli-missing-plan.json");
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
-  const runtime = createCliRuntimeMock(vi);
   return {
     callGatewayFromCli: vi.fn(),
     runSecretsAudit: vi.fn(),
@@ -21,7 +20,7 @@ const mocks = await vi.hoisted(async () => {
     runSecretsConfigureInteractive: vi.fn(),
     runSecretsApply: vi.fn(),
     confirm: vi.fn(),
-    ...runtime,
+    ...createCliRuntimeMock(vi),
   };
 });
 
@@ -309,9 +308,7 @@ describe("secrets CLI", () => {
   it.skipIf(process.platform === "win32")(
     "rejects FIFO secrets plan paths without blocking",
     async () => {
-      await withPlanFile(async (planPath) => {
-        await runSecrets("apply", "--from", planPath, "--dry-run");
-      });
+      await withPlanFile((planPath) => runSecrets("apply", "--from", planPath, "--dry-run"));
       runSecretsApply.mockReset();
       runtimeLogs.length = 0;
       runtimeErrors.length = 0;

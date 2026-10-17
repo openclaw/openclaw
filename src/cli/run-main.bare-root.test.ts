@@ -17,10 +17,7 @@ const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 const LOCAL_URL = "ws://127.0.0.1:18789";
 const SESSION_URL = "https://gateway.example/dashboard/main/movies-a1166b81";
 const LOCAL_MODEL = { defaults: { model: { primary: "openai/local-only-model" } } };
-const MISSING_MODEL = {
-  kind: "missing-configured-model",
-  detail: "Gateway default agent has no configured model",
-} as const;
+const MISSING_MODEL = { kind: "missing-configured-model", detail: "no model" } as const;
 const DIRECT_AUTH = {
   token: "direct-token",
   password: "direct-password",
@@ -32,13 +29,8 @@ const directArgs = (inline: boolean) =>
     password: DIRECT_AUTH.password,
     "tls-fingerprint": DIRECT_AUTH.tlsFingerprint,
   }).flatMap(([key, value]) => (inline ? [`--${key}=${value}`] : [`--${key}`, value]));
-function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
-  return withCliTty(true, fn);
-}
-
-function runBareCli(): Promise<void> {
-  return withInteractiveTty(() => cli.runCli(cli.cliArgs()));
-}
+const withInteractiveTty = (fn: () => Promise<void>) => withCliTty(true, fn);
+const runBareCli = () => withInteractiveTty(() => cli.runCli(cli.cliArgs()));
 
 function expectBoundTui(expected: TuiBoundGateway): void {
   expect(cli.runTuiMock).toHaveBeenCalledWith(
@@ -58,16 +50,11 @@ function remoteConfig(
 }
 const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
 
-function expectNoCalls(...mocks: unknown[]): void {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
+const expectNoCalls = (...mocks: unknown[]) => {
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
+};
 
-async function expectNonInteractiveBareCliError(
-  message: string,
-  assert?: () => void,
-): Promise<void> {
+const expectNonInteractiveBareCliError = async (message: string, assert?: () => void) => {
   const previousExitCode = process.exitCode;
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   process.exitCode = undefined;
@@ -80,34 +67,32 @@ async function expectNonInteractiveBareCliError(
     errorSpy.mockRestore();
     process.exitCode = previousExitCode;
   }
-}
+};
 
 cli.installRunMainTestHooks();
 
-it.each([
-  {
-    label: "before the URL with split values",
-    args: [...directArgs(false), SESSION_URL, "--deliver", "--message", "continue here"],
-  },
-  {
-    label: "before the URL with inline values",
-    args: [...directArgs(true), "--message=continue here", SESSION_URL, "--deliver"],
-  },
-])("forwards bare-root TUI options $label without an environment handoff", async ({ args }) => {
-  await withEnvAsync(
-    {
-      OPENCLAW_GATEWAY_TOKEN: "ambient-token",
-      OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
-    },
-    () => withInteractiveTty(() => cli.runCli(cli.cliArgs(...args))),
-  );
+it.each(["split", "inline"])(
+  "forwards %s bare-root options without an environment handoff",
+  async (form) => {
+    const args =
+      form === "inline"
+        ? [...directArgs(true), "--message=continue here", SESSION_URL, "--deliver"]
+        : [...directArgs(false), SESSION_URL, "--deliver", "--message", "continue here"];
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+      },
+      () => withInteractiveTty(() => cli.runCli(cli.cliArgs(...args))),
+    );
 
-  expect(cli.runTuiCliActionMock).toHaveBeenCalledWith(SESSION_URL, {
-    ...DIRECT_AUTH,
-    deliver: true,
-    message: "continue here",
-  });
-});
+    expect(cli.runTuiCliActionMock).toHaveBeenCalledWith(SESSION_URL, {
+      ...DIRECT_AUTH,
+      deliver: true,
+      message: "continue here",
+    });
+  },
+);
 
 it.each([
   ["unknown inline option", ["--typo=do-not-print-me"]],
