@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
-import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mts";
+import { resolvePnpmRunner } from "../../../scripts/pnpm-runner.mts";
 import { type FileLockOptions, withFileLock } from "../../../src/infra/file-lock.js";
 import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
@@ -20,10 +20,7 @@ type PackageManifest = {
   [key: string]: unknown;
 };
 
-type PackedPackage = {
-  manifest: PackageManifest;
-  tarball: string;
-};
+type PackedPackage = { manifest: PackageManifest; tarball: string };
 type CommandOptions = { cwd: string; timeoutMs?: number } & Pick<
   SpawnOptionsWithoutStdio,
   "env" | "shell" | "windowsVerbatimArguments"
@@ -40,15 +37,13 @@ const SDK_PACKAGE_BUILD_LOCK_OPTIONS = {
   stale: 20 * 60_000,
 } satisfies FileLockOptions;
 
-function createCommandEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    CI: process.env.CI ?? "true",
-    npm_config_audit: "false",
-    npm_config_fund: "false",
-    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-  };
-}
+const createCommandEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  CI: process.env.CI ?? "true",
+  npm_config_audit: "false",
+  npm_config_fund: "false",
+  PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+});
 
 export function signalCommandProcess(
   child: ReturnType<typeof spawn>,
@@ -63,10 +58,7 @@ export function signalCommandProcess(
         return;
       }
     }
-    child.kill("SIGKILL");
-    return;
-  }
-  if (typeof child.pid === "number") {
+  } else if (typeof child.pid === "number") {
     try {
       process.kill(-child.pid, "SIGKILL");
       return;
@@ -79,42 +71,39 @@ export function signalCommandProcess(
   child.kill("SIGKILL");
 }
 
-function runCommand(command: string, args: string[], options: CommandOptions): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const { timeoutMs = 120_000, ...spawnOptions } = options;
-    const commandLine = [command, ...args].join(" ");
-    const child = spawn(command, args, {
-      ...spawnOptions,
-      detached: process.platform !== "win32",
-      env: options.env ?? createCommandEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const timer = setTimeout(() => {
-      signalCommandProcess(child);
-      reject(new Error(`command timed out after ${timeoutMs}ms: ${commandLine}`));
-    }, timeoutMs);
-    child.stdout?.setEncoding("utf8").on("data", (chunk) => stdout.push(String(chunk)));
-    child.stderr?.setEncoding("utf8").on("data", (chunk) => stderr.push(String(chunk)));
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `command failed (${String(code ?? signal)}): ${commandLine}\n` +
-            `--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
-        ),
-      );
-    });
+async function runCommand(command: string, args: string[], options: CommandOptions): Promise<void> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const { timeoutMs = 120_000, env = createCommandEnv(), ...spawnOptions } = options;
+  const commandLine = [command, ...args].join(" ");
+  const child = spawn(command, args, {
+    ...spawnOptions,
+    env,
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  child.stdout?.setEncoding("utf8").on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr?.setEncoding("utf8").on("data", (chunk) => stderr.push(String(chunk)));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const [code, signal] = await Promise.race([
+      once(child, "exit"),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          signalCommandProcess(child);
+          reject(new Error(`command timed out after ${timeoutMs}ms: ${commandLine}`));
+        }, timeoutMs);
+      }),
+    ]);
+    if (code !== 0) {
+      throw new Error(
+        `command failed (${String(code ?? signal)}): ${commandLine}\n` +
+          `--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
+      );
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function runPackageCommand(
@@ -123,18 +112,18 @@ function runPackageCommand(
   cwd: string,
   timeoutMs?: number,
 ): Promise<void> {
-  const options = { cwd, timeoutMs };
   const env = createCommandEnv();
-  if (manager === "pnpm") {
-    const spec = createPnpmRunnerSpawnSpec({ cwd: options.cwd, env, pnpmArgs: args });
-    return runCommand(spec.command, spec.args, {
-      ...options,
-      ...spec.options,
-      cwd: typeof spec.options.cwd === "string" ? spec.options.cwd : options.cwd,
-    });
-  }
-  const runner = resolveNpmRunner({ env, npmArgs: args });
-  return runCommand(runner.command, runner.args, { ...options, ...runner, env: runner.env ?? env });
+  const runner: ReturnType<typeof resolveNpmRunner> =
+    manager === "pnpm"
+      ? resolvePnpmRunner({ cwd, env, pnpmArgs: args })
+      : resolveNpmRunner({ env, npmArgs: args });
+  return runCommand(runner.command, runner.args, {
+    cwd,
+    timeoutMs,
+    env: runner.env ?? env,
+    shell: runner.shell,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
+  });
 }
 
 function resolveWorkspacePackageRoot(repoRoot: string, packageName: string): string {
@@ -145,24 +134,10 @@ function resolveWorkspacePackageRoot(repoRoot: string, packageName: string): str
   return path.join(repoRoot, "packages", packageName.slice(prefix.length));
 }
 
-async function readPackageManifest(
-  packageRoot: string,
-  normalize = false,
-): Promise<PackageManifest> {
-  const manifest = JSON.parse(
+async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+  return JSON.parse(
     await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
   ) as PackageManifest;
-  const dependencies = manifest.dependencies;
-  if (!normalize || !dependencies) {
-    return manifest;
-  }
-  for (const [name, spec] of Object.entries(dependencies)) {
-    if (name.startsWith("@openclaw/") && spec.startsWith("workspace:")) {
-      const root = resolveWorkspacePackageRoot(path.resolve(packageRoot, "..", ".."), name);
-      dependencies[name] = (await readPackageManifest(root)).version;
-    }
-  }
-  return manifest;
 }
 
 async function collectWorkspacePackageRoots(repoRoot: string): Promise<string[]> {
@@ -199,7 +174,14 @@ function writeJson(root: string, file: string, value: unknown): Promise<void> {
 }
 
 async function packPackage(packageRoot: string, destinationRoot: string): Promise<PackedPackage> {
-  const manifest = await readPackageManifest(packageRoot, true);
+  const manifest = await readPackageManifest(packageRoot);
+  const dependencies = manifest.dependencies ?? {};
+  for (const [name, spec] of Object.entries(dependencies)) {
+    if (name.startsWith("@openclaw/") && spec.startsWith("workspace:")) {
+      const root = resolveWorkspacePackageRoot(path.resolve(packageRoot, "..", ".."), name);
+      dependencies[name] = (await readPackageManifest(root)).version;
+    }
+  }
   const packageSlug = manifest.name.replace(/^@/, "").replace("/", "-");
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
@@ -242,18 +224,13 @@ async function startOpenClawRegistry(packages: PackedPackage[]) {
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
+    const { manifest, tarball } = pkg;
+    const dist = { tarball: `${origin}/tarballs/${encodeURIComponent(path.basename(tarball))}` };
     res.end(
       JSON.stringify({
-        name: pkg.manifest.name,
-        "dist-tags": { latest: pkg.manifest.version },
-        versions: {
-          [pkg.manifest.version]: {
-            ...pkg.manifest,
-            dist: {
-              tarball: `${origin}/tarballs/${encodeURIComponent(path.basename(pkg.tarball))}`,
-            },
-          },
-        },
+        name: manifest.name,
+        "dist-tags": { latest: manifest.version },
+        versions: { [manifest.version]: { ...manifest, dist } },
       }),
     );
   });
@@ -264,10 +241,7 @@ async function startOpenClawRegistry(packages: PackedPackage[]) {
     await close();
     throw new Error("registry server did not bind to a TCP port");
   }
-  return {
-    registryUrl: `http://127.0.0.1:${address.port}/`,
-    close,
-  };
+  return { registryUrl: `http://127.0.0.1:${address.port}/`, close };
 }
 
 export async function createPackedSdkConsumer() {
