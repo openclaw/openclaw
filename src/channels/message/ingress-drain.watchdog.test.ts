@@ -51,11 +51,41 @@ async function deferNext(
   };
 }
 
-describe("channel ingress drain watchdog", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+async function withDeferred(
+  id: string,
+  run: (
+    queue: ReturnType<typeof createTestIngressQueue>,
+    owner: Awaited<ReturnType<typeof deferNext>>,
+    abort: AbortController,
+  ) => Promise<void>,
+) {
+  await withTempState(async (stateDir) => {
+    const queue = createTestIngressQueue(stateDir);
+    await queue.enqueue(id, { text: "deferred" }, { laneKey: "lane" });
+    const abort = new AbortController();
+    const owner = await deferNext(queue, abort.signal);
+    try {
+      await run(queue, owner, abort);
+    } finally {
+      owner.drain.dispose();
+    }
   });
+}
 
+function createDebouncer(
+  dispatch: (lifecycle: ChannelIngressDispatchLifecycle) => Promise<void>,
+  onError: (error: unknown) => void = () => undefined,
+) {
+  return createInboundDebouncer<{ lifecycle: ChannelIngressDispatchLifecycle }>({
+    debounceMs: 0,
+    buildKey: () => "shared",
+    onFlush: (entries, createFlush) => createFlush({ lifecycle: entries[0]?.lifecycle, dispatch }),
+    onError,
+  });
+}
+
+describe("channel ingress drain watchdog", () => {
+  beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
@@ -129,23 +159,18 @@ describe("channel ingress drain watchdog", () => {
   });
 
   it("keeps adoption finalization paused across deferred heartbeats", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("finalizing", { text: "x" }, { laneKey: "l1" });
-      const { drain, lifecycle, heartbeat } = await deferNext(queue);
+    await withDeferred("finalizing", async (queue, { lifecycle, heartbeat }) => {
       lifecycle.onAdoptionFinalizing();
-      try {
-        await vi.advanceTimersByTimeAsync(333);
-        heartbeat();
-        await vi.advanceTimersByTimeAsync(1_100);
-        expect(lifecycle.abortSignal.aborted).toBe(false);
-        expect(await queue.listClaims()).toMatchObject([{ id: "finalizing", attempts: 0 }]);
-        await lifecycle.onAdopted();
-        expect(await queue.listClaims()).toEqual([]);
-        expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      } finally {
-        drain.dispose();
-      }
+      await vi.advanceTimersByTimeAsync(333);
+      heartbeat();
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(lifecycle.abortSignal.aborted).toBe(false);
+      expect(await queue.listClaims()).toMatchObject([{ id: "finalizing", attempts: 0 }]);
+      await lifecycle.onAdopted();
+      expect([await queue.listClaims(), await queue.listPending({ limit: "all" })]).toEqual([
+        [],
+        [],
+      ]);
     });
   });
 
@@ -258,40 +283,30 @@ describe("channel ingress drain watchdog", () => {
     { stop: "dispose", heartbeat: "late" },
     { stop: "abort", heartbeat: "reentrant" },
   ])("preserves retry facts after $stop (heartbeat: $heartbeat)", async ({ stop, heartbeat }) => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("retired", { text: "deferred" }, { laneKey: "lane" });
-      const abort = new AbortController();
-      const owner = await deferNext(queue, abort.signal);
-      try {
-        const before = await queue.listClaims();
-        expect(before).toHaveLength(1);
-        if (heartbeat === "reentrant") {
-          owner.lifecycle.abortSignal.addEventListener("abort", owner.heartbeat, { once: true });
-        }
-        if (stop === "dispose") {
-          owner.drain.dispose();
-        } else {
-          abort.abort(new Error("monitor stopped"));
-        }
-        expect(owner.lifecycle.abortSignal.aborted).toBe(true);
-        const stoppedTimers = vi.getTimerCount();
-        if (heartbeat === "late") {
-          owner.heartbeat();
-        }
-        const lateTimers = vi.getTimerCount();
-        await vi.advanceTimersByTimeAsync(1_100);
-        expect(await queue.listClaims()).toEqual(before);
-        expect(await queue.listPending()).toEqual([]);
-        expect(await queue.listFailed?.()).toEqual([]);
-        expect(lateTimers).toBe(stoppedTimers);
-
-        // A real late adoption still commits; stopping only retires watchdog work.
-        await owner.lifecycle.onAdopted();
-        expect((await queue.enqueue("retired", { text: "duplicate" })).kind).toBe("completed");
-      } finally {
-        owner.drain.dispose();
+    await withDeferred("retired", async (queue, owner, abort) => {
+      const before = await queue.listClaims();
+      expect(before).toHaveLength(1);
+      if (heartbeat === "reentrant") {
+        owner.lifecycle.abortSignal.addEventListener("abort", owner.heartbeat, { once: true });
       }
+      if (stop === "dispose") {
+        owner.drain.dispose();
+      } else {
+        abort.abort(new Error("monitor stopped"));
+      }
+      expect(owner.lifecycle.abortSignal.aborted).toBe(true);
+      const stoppedTimers = vi.getTimerCount();
+      if (heartbeat === "late") {
+        owner.heartbeat();
+      }
+      const lateTimers = vi.getTimerCount();
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(await queue.listClaims()).toEqual(before);
+      expect([await queue.listPending(), await queue.listFailed?.()]).toEqual([[], []]);
+      expect(lateTimers).toBe(stoppedTimers);
+
+      await owner.lifecycle.onAdopted();
+      expect((await queue.enqueue("retired", { text: "duplicate" })).kind).toBe("completed");
     });
   });
 
@@ -302,41 +317,30 @@ describe("channel ingress drain watchdog", () => {
   ])(
     "records a late $terminal outcome after disposal",
     async ({ terminal, attempts, lastError }) => {
-      await withTempState(async (stateDir) => {
-        const queue = createTestIngressQueue(stateDir);
-        await queue.enqueue("terminal", { text: "deferred" }, { laneKey: "lane" });
-        const owner = await deferNext(queue);
-        try {
-          owner.drain.dispose();
-          if (terminal === "cancelled") {
-            await expectDefined(owner.lifecycle.onCancelled, "cancel callback")();
-          } else if (terminal === "abandoned") {
-            await owner.lifecycle.onAbandoned();
-          } else {
-            await expectDefined(
-              owner.lifecycle.onFailed,
-              "failure callback",
-            )(new Error("provider failed"));
-          }
-          owner.heartbeat();
-          await vi.advanceTimersByTimeAsync(1_100);
-          expect(await queue.listClaims()).toEqual([]);
-          const pending = await queue.listPending();
-          expect(pending).toHaveLength(1);
-          expect(pending[0]?.attempts).toBe(attempts);
-          expect(pending[0]?.lastError).toBe(lastError);
-        } finally {
-          owner.drain.dispose();
+      await withDeferred("terminal", async (queue, owner) => {
+        owner.drain.dispose();
+        if (terminal === "cancelled") {
+          await expectDefined(owner.lifecycle.onCancelled, "cancel callback")();
+        } else if (terminal === "abandoned") {
+          await owner.lifecycle.onAbandoned();
+        } else {
+          await expectDefined(
+            owner.lifecycle.onFailed,
+            "failure callback",
+          )(new Error("provider failed"));
         }
+        owner.heartbeat();
+        await vi.advanceTimersByTimeAsync(1_100);
+        expect(await queue.listClaims()).toEqual([]);
+        const pending = await queue.listPending();
+        expect(pending).toHaveLength(1);
+        expect(pending[0]).toMatchObject({ attempts, lastError });
       });
     },
   );
 
   it("keeps a successor claim fenced from retired callbacks", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("replacement", { text: "deferred" }, { laneKey: "lane" });
-      const old = await deferNext(queue);
+    await withDeferred("replacement", async (queue, old) => {
       const retired = await queue.listClaims();
       old.drain.dispose();
       const next = await deferNext(queue, undefined, 60_000);
@@ -352,7 +356,6 @@ describe("channel ingress drain watchdog", () => {
         await next.lifecycle.onAdopted();
         expect((await queue.enqueue("replacement", { text: "duplicate" })).kind).toBe("completed");
       } finally {
-        old.drain.dispose();
         next.drain.dispose();
       }
     });
@@ -449,8 +452,10 @@ describe("channel ingress drain restart-recovery tombstone", () => {
           expect([...lifecycles.keys()]).toEqual(["evt-head", "evt-follower"]),
         );
         await expectDefined(lifecycles.get("evt-follower"), "follower lifecycle").onAdopted();
-        expect(await queue.listPending({ limit: "all" })).toEqual([]);
-        expect(await queue.listClaims()).toEqual([]);
+        expect([await queue.listPending({ limit: "all" }), await queue.listClaims()]).toEqual([
+          [],
+          [],
+        ]);
         drain.dispose();
         closeOpenClawStateDatabaseForTest();
 
@@ -497,30 +502,20 @@ describe("channel ingress drain debounce failures", () => {
       await queue.enqueue(
         "debounced-retry",
         { text: "retry me" },
-        {
-          laneKey: "shared",
-          receivedAt: clock,
-        },
+        { laneKey: "shared", receivedAt: clock },
       );
       const sessionError = new Error("Session changed while starting work. Retry.");
       const reportedErrors: unknown[] = [];
       let attempt = 0;
-      const debouncer = createInboundDebouncer<{ lifecycle: ChannelIngressDispatchLifecycle }>({
-        debounceMs: 0,
-        buildKey: () => "shared",
-        onFlush: (entries, createFlush) =>
-          createFlush({
-            lifecycle: entries[0]?.lifecycle,
-            dispatch: async (lifecycle) => {
-              attempt += 1;
-              if (attempt === 1) {
-                throw sessionError;
-              }
-              await lifecycle.onAdopted();
-            },
-          }),
-        onError: (error) => reportedErrors.push(error),
-      });
+      const debouncer = createDebouncer(
+        async (lifecycle) => {
+          if (++attempt === 1) {
+            throw sessionError;
+          }
+          await lifecycle.onAdopted();
+        },
+        (error) => reportedErrors.push(error),
+      );
       const drain = createChannelIngressDrain<Payload>({
         queue,
         now: () => clock,
@@ -546,9 +541,11 @@ describe("channel ingress drain debounce failures", () => {
 
       expect(attempt).toBe(2);
       expect(reportedErrors).toEqual([sessionError]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      expect([
+        await queue.listPending(),
+        await queue.listClaims(),
+        await queue.listFailed?.(),
+      ]).toEqual([[], [], []]);
       expect(await queue.enqueue("debounced-retry", { text: "retry me" })).toMatchObject({
         kind: "completed",
       });
@@ -572,17 +569,8 @@ describe("channel ingress drain debounce failures", () => {
       const log = vi.fn();
 
       const sessionError = new Error("Session changed while starting work. Retry.");
-      const debouncer = createInboundDebouncer<{ lifecycle: ChannelIngressDispatchLifecycle }>({
-        debounceMs: 0,
-        buildKey: () => "shared",
-        onFlush: (entries, createFlush) =>
-          createFlush({
-            lifecycle: entries[0]?.lifecycle,
-            dispatch: async () => {
-              throw sessionError;
-            },
-          }),
-        onError: () => undefined,
+      const debouncer = createDebouncer(async () => {
+        throw sessionError;
       });
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -621,9 +609,7 @@ describe("channel ingress drain debounce failures", () => {
 });
 
 describe("channel ingress drain async work ownership", () => {
-  afterEach(() => {
-    resetGatewayWorkAdmission();
-  });
+  afterEach(() => resetGatewayWorkAdmission());
 
   it("tracks a monitor delivery after its webhook pump closes and a queued followup after delivery settles", async () => {
     await withTempState(async (stateDir) => {
@@ -649,11 +635,7 @@ describe("channel ingress drain async work ownership", () => {
         retention: "standard",
         runPumpTask: (work) =>
           runDetachedWebhookWork(async () => {
-            const signal = getAsyncWorkSignal();
-            expect(signal).toBeDefined();
-            if (signal) {
-              pumpSignals.push(signal);
-            }
+            pumpSignals.push(expectDefined(getAsyncWorkSignal(), "pump work signal"));
             await work();
           }),
         deliver: async (_raw, lifecycle) => {
