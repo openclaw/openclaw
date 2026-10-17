@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { ProviderAuthMethod } from "../plugins/provider-authentication.types.js";
@@ -32,12 +33,10 @@ function accountOwner(email: string) {
 function tokenCredential(token: string) {
   return { type: "token" as const, provider: "synthetic", token };
 }
-async function withService(
-  run: (service: Service) => Promise<void>,
-  options: Parameters<typeof createModelAccountConnectService>[0] = { getConfig: () => ({}) },
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const service = createModelAccountConnectService(options);
+const linked = (authProfileId: string) => ({ links: [{ provider: "synthetic", authProfileId }] });
+function withService(run: (service: Service) => Promise<void>, onChanged?: () => void) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const service = createModelAccountConnectService({ getConfig: () => ({}), onChanged });
     try {
       await run(service);
     } finally {
@@ -46,7 +45,7 @@ async function withService(
   });
 }
 
-it("keeps released account methods synchronous with immediate persistence and current owner authority", async () =>
+it("keeps synchronous account methods owner-authorized and immediately persisted", async () =>
   withService(async (service) => {
     const { owner } = accountOwner("compat-owner@example.test");
     const other = accountOwner("compat-other@example.test");
@@ -65,18 +64,12 @@ it("keeps released account methods synchronous with immediate persistence and cu
         .authProfileId;
     const first = connect();
     const second = connect();
-    expect(service.listLinks(action)).toMatchObject({
-      links: [{ provider: "synthetic", authProfileId: second }],
-    });
+    expect(service.listLinks(action)).toMatchObject(linked(second));
     expect(service.unlink(action, "synthetic")).toEqual({ links: [] });
     expect(listUserProfileAuthLinks(owner)).toEqual([]);
-    expect(service.link(action, first)).toMatchObject({
-      links: [{ provider: "synthetic", authProfileId: first }],
-    });
+    expect(service.link(action, first)).toMatchObject(linked(first));
     expect(listUserProfileAuthLinks(owner)).toMatchObject([{ authProfileId: first }]);
-    expect(service.select(action, second)).toMatchObject({
-      links: [{ provider: "synthetic", authProfileId: second }],
-    });
+    expect(service.select(action, second)).toMatchObject(linked(second));
     expect(listUserProfileAuthLinks(owner)).toMatchObject([{ authProfileId: second }]);
     const inventory = service.list(action);
     expect(inventory).toMatchObject({
@@ -111,109 +104,94 @@ it("keeps released account methods synchronous with immediate persistence and cu
     expect(listUserProfileAuthLinks(owner)).toMatchObject([{ authProfileId: second }]);
   }));
 
-it("returns pending, cancelled, expired and connected sign-in results synchronously without disclosing another owner's operation", async ({
-  signal,
-}) => {
+it("keeps synchronous sign-in states private to their owner", async ({ signal }) => {
   const connected = createDeferredCore();
-  await withService(
-    async (service) => {
-      const action = accountOwner("compat-signin@example.test");
-      const other = accountOwner("compat-stranger@example.test");
-      let prompted = createDeferredCore();
-      let settled = createDeferredCore();
-      const method: ProviderAuthMethod = {
-        id: "token",
-        label: "Synthetic token",
-        kind: "token",
-        async run(context) {
-          const answer = context.prompter.text({ message: "Synthetic token", sensitive: true });
-          prompted.resolve();
-          const token = await answer;
-          return {
-            profiles: [{ profileId: "ignored-shared-id", credential: tokenCredential(token) }],
-          };
-        },
-      };
-      resolveMethod.mockResolvedValue(method);
-      // oxlint-disable-next-line typescript/unbound-method -- Called with the observed real Wizard receiver.
-      const cancel = WizardSession.prototype.cancel;
-      vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (
-        this: WizardSession,
-      ) {
-        settled.resolve(this.whenSettled());
-        return cancel.call(this);
-      });
-      const waitFor = (gate: Promise<void>) =>
-        withinTest(
-          awaitGateBeforeSettlement(
-            gate,
-            settled.promise,
-            "Personal sign-in settled before reaching its client checkpoint",
-          ),
-          signal,
-        );
-      const startPending = async () => {
-        prompted = createDeferredCore();
-        settled = createDeferredCore();
-        const flow = await service.start(action, "synthetic", "token");
-        await waitFor(prompted.promise);
-        const pending = service.status(action, flow.connectId);
-        expect(pending).toMatchObject({
-          status: "pending",
-          step: { type: "text", sensitive: true },
-        });
-        if (pending.status !== "pending" || !pending.step) {
-          throw new Error("Expected a synchronous pending sign-in step");
-        }
-        return { ...flow, stepId: pending.step.id };
-      };
-      const cancelled = await startPending();
-      expect(service.status(other, cancelled.connectId)).toEqual({ status: "expired" });
-      expect(service.cancel(other, cancelled.connectId)).toEqual({ status: "expired" });
-      expect(service.status(action, cancelled.connectId)).toMatchObject({ status: "pending" });
-      expect(service.cancel(action, cancelled.connectId)).toEqual({ status: "cancelled" });
-      await withinTest(settled.promise, signal);
-      expect(service.status(action, cancelled.connectId)).toEqual({ status: "cancelled" });
-      expect(listUserProfileAuthLinks(action.owner)).toEqual([]);
-
-      const expired = await startPending();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(expired.expiresAtMs + 1);
-      try {
-        expect(service.status(action, expired.connectId)).toEqual({ status: "expired" });
-        expect(service.cancel(action, expired.connectId)).toEqual({ status: "expired" });
-      } finally {
-        clock.mockRestore();
-      }
-      await withinTest(settled.promise, signal);
-
-      const successful = await startPending();
-      await service.answer(
-        action,
-        successful.connectId,
-        successful.stepId,
-        "synthetic-compat-signin-token",
+  const signinToken = "synthetic-compat-signin-token";
+  await withService(async (service) => {
+    const action = accountOwner("compat-signin@example.test");
+    const other = accountOwner("compat-stranger@example.test");
+    let prompted = createDeferredCore();
+    let settled = createDeferredCore();
+    const method: ProviderAuthMethod = {
+      id: "token",
+      label: "Synthetic token",
+      kind: "token",
+      async run(context) {
+        const answer = context.prompter.text({ message: "Synthetic token", sensitive: true });
+        prompted.resolve();
+        const token = await answer;
+        return {
+          profiles: [{ profileId: "ignored-shared-id", credential: tokenCredential(token) }],
+        };
+      },
+    };
+    resolveMethod.mockResolvedValue(method);
+    // oxlint-disable-next-line typescript/unbound-method -- Called with the observed real Wizard receiver.
+    const cancel = WizardSession.prototype.cancel;
+    vi.spyOn(WizardSession.prototype, "cancel").mockImplementation(function (this: WizardSession) {
+      settled.resolve(this.whenSettled());
+      return cancel.call(this);
+    });
+    const waitFor = (gate: Promise<void>) =>
+      withinTest(
+        awaitGateBeforeSettlement(
+          gate,
+          settled.promise,
+          "Personal sign-in settled before reaching its client checkpoint",
+        ),
+        signal,
       );
-      await waitFor(connected.promise);
-      await withinTest(settled.promise, signal);
-      const result = service.status(action, successful.connectId);
-      expect(result).toMatchObject({
-        status: "connected",
-        authProfileId: expect.any(String),
-        links: [{ provider: "synthetic" }],
+    const startPending = async () => {
+      prompted = createDeferredCore();
+      settled = createDeferredCore();
+      const flow = await service.start(action, "synthetic", "token");
+      await waitFor(prompted.promise);
+      const pending = service.status(action, flow.connectId);
+      expect(pending).toMatchObject({
+        status: "pending",
+        step: { type: "text", sensitive: true },
       });
-      if (result.status !== "connected") {
-        throw new Error("Expected a synchronous connected account result");
-      }
-      expect(readUserModelAuthProfile(result.authProfileId)?.credential).toEqual(
-        tokenCredential("synthetic-compat-signin-token"),
-      );
-      expect(service.unlink(action, "synthetic")).toEqual({ links: [] });
-      const replay = { status: "connected", authProfileId: result.authProfileId, links: [] };
-      expect(service.status(action, successful.connectId)).toEqual(replay);
-      expect(service.cancel(action, successful.connectId)).toEqual(replay);
-      expect(service.status(other, successful.connectId)).toEqual({ status: "expired" });
-      expect(JSON.stringify(result)).not.toContain("synthetic-compat-signin-token");
-    },
-    { getConfig: () => ({}), onChanged: connected.resolve },
-  );
+      assert(pending.status === "pending" && pending.step, "Expected pending sign-in step");
+      return { ...flow, stepId: pending.step.id };
+    };
+    const cancelled = await startPending();
+    expect(service.status(other, cancelled.connectId)).toEqual({ status: "expired" });
+    expect(service.cancel(other, cancelled.connectId)).toEqual({ status: "expired" });
+    expect(service.status(action, cancelled.connectId)).toMatchObject({ status: "pending" });
+    expect(service.cancel(action, cancelled.connectId)).toEqual({ status: "cancelled" });
+    await withinTest(settled.promise, signal);
+    expect(service.status(action, cancelled.connectId)).toEqual({ status: "cancelled" });
+    expect(listUserProfileAuthLinks(action.owner)).toEqual([]);
+
+    const expired = await startPending();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(expired.expiresAtMs + 1);
+    try {
+      expect(service.status(action, expired.connectId)).toEqual({ status: "expired" });
+      expect(service.cancel(action, expired.connectId)).toEqual({ status: "expired" });
+    } finally {
+      clock.mockRestore();
+    }
+    await withinTest(settled.promise, signal);
+
+    const successful = await startPending();
+    await service.answer(action, successful.connectId, successful.stepId, signinToken);
+    await waitFor(connected.promise);
+    await withinTest(settled.promise, signal);
+    const result = service.status(action, successful.connectId);
+    expect(result).toMatchObject({
+      status: "connected",
+      authProfileId: expect.any(String),
+      links: [{ provider: "synthetic" }],
+    });
+    assert(result.status === "connected", "Expected connected account result");
+    expect(readUserModelAuthProfile(result.authProfileId)?.credential).toEqual(
+      tokenCredential(signinToken),
+    );
+    expect(service.unlink(action, "synthetic")).toEqual({ links: [] });
+    const replay = { status: "connected", authProfileId: result.authProfileId, links: [] };
+    expect(service.status(action, successful.connectId)).toEqual(replay);
+    expect(service.cancel(action, successful.connectId)).toEqual(replay);
+    expect(service.status(other, successful.connectId)).toEqual({ status: "expired" });
+    expect(JSON.stringify(result)).not.toContain(signinToken);
+  }, connected.resolve);
 });

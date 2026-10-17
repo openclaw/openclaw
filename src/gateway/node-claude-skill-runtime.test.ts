@@ -77,7 +77,6 @@ async function fixture(
   const executable = path.join(root, "claude.cjs");
   await fs.writeFile(executable, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   const profile = ensureProfileForEmail("requester@example.test");
-  ensureProfileForEmail("collaborator@example.test");
   const registry = new NodeRegistry({
     resolveCurrentPairingState: options.resolveCurrentPairingState,
   });
@@ -488,25 +487,19 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
 it("authors through the node MCP proxy using the actual host capability without a preselected skill", async () => {
   await using f = await fixture(authorScript, { authoring: true });
   expect((await f.execute()).result.exitCode).toBe(0);
-  expect(JSON.parse(f.output())).toMatchObject({
-    listed: {
-      result: {
-        tools: [
-          {
-            name: "skill_workshop",
-            inputSchema: {
-              properties: {
-                action: {
-                  type: "string",
-                  enum: expect.arrayContaining(["create", "update"]),
-                },
-              },
-            },
+  expect(JSON.parse(f.output()).listed.result.tools).toMatchObject([
+    {
+      name: "skill_workshop",
+      inputSchema: {
+        properties: {
+          action: {
+            type: "string",
+            enum: expect.arrayContaining(["create", "update"]),
           },
-        ],
+        },
       },
     },
-  });
+  ]);
   const entries = (await listSkillLibrary(f.authority)).entries;
   expect(entries).toHaveLength(1);
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);
