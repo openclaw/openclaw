@@ -2491,7 +2491,6 @@
 ["src/agents/model-auth.profiles.test.ts","../plugins/providers.js","a7ceeb873025d42d3bc60e5c69fb50c6187f58c8a70dcb0e70563c5dd3399a82",1]
 ["src/agents/model-auth.profiles.test.ts","../plugins/setup-registry.js","27dd73708c1c6ba00d5e901c63e075cd0041a0e3cce17bee8141ea5ce96e0fb9",1]
 ["src/agents/model-auth.profiles.test.ts","./cli-credentials.js","1f6358febab24bd8806554262617ce3c279548a349e4216a36f358a05bdb7b95",1]
-["src/agents/model-auth.profiles.test.ts","./model-auth-env-vars.js","6fd57bc51167c5e45e6dbc202d5d7fe7fe3cb7883763ea7cc2dc5638e6f50eca",1]
 ["src/agents/model-auth.test.ts","../plugins/manifest-metadata-scan.js","99510c13754cfe4f43fcfbadf2c84bfcba30bff1e26b9bd88125f77cd52df244",1]
 ["src/agents/model-auth.test.ts","../plugins/provider-runtime.js","103a7b46eb0d8d1aac8153b8e3b402fda6128589ea47475dcd476f0ad4cbf669",1]
 ["src/agents/model-auth.test.ts","../plugins/providers.js","ab1594c641aef9e097176e52d10f51d8ee2a84aa434774b0b4101d1cdde5f13b",1]
