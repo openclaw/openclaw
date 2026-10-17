@@ -27,16 +27,18 @@ vi.mock("./queue/enqueue.js", () => ({
   getFollowupQueueDepth: vi.fn(() => 0),
 }));
 
-const identity = {
-  sessionId: "goal-session",
-  lifecycleRevision: "revision-2",
-  goalId: "goal-1",
-};
+const identity = { sessionId: "goal-session", lifecycleRevision: "revision-2", goalId: "goal-1" };
 const normal: EmbeddedAgentRunResult = {
   meta: { durationMs: 0, stopReason: "end_turn" },
   payloads: [{ text: "More work remains." }],
 };
-function entry(): SessionEntry {
+type OutcomePatch = Partial<Omit<EmbeddedAgentRunResult, "meta">> & {
+  meta?: Partial<EmbeddedAgentRunResult["meta"]>;
+};
+function entry(
+  overrides: Partial<SessionEntry> = {},
+  goal: Partial<NonNullable<SessionEntry["goal"]>> = {},
+): SessionEntry {
   return {
     sessionId: identity.sessionId,
     lifecycleRevision: "revision-2",
@@ -51,7 +53,9 @@ function entry(): SessionEntry {
       tokenStart: 0,
       tokensUsed: 0,
       continuationTurns: 0,
+      ...goal,
     },
+    ...overrides,
   };
 }
 async function expectNoContinuation(params: Parameters<typeof enqueueGoalContinuation>[0]) {
@@ -112,56 +116,47 @@ afterEach(() => {
 });
 
 describe("Goal continuation eligibility", () => {
-  it("does not resume paused goals", () => {
-    const current = entry();
-    current.goal!.status = "paused";
-    expect(isGoalContinuationCurrent(identity, current)).toBe(false);
-  });
-  it("rejects replaced, cleared, reset, stopped and external-runtime sessions", () => {
-    const current = entry();
-    expect(isGoalContinuationCurrent(identity, current)).toBe(true);
-    for (const replacement of [
-      undefined,
-      { ...current, goal: undefined },
-      { ...current, sessionId: "replacement" },
-      { ...current, lifecycleRevision: "revision-3" },
-      { ...current, abortedLastRun: true },
-      { ...current, agentHarnessId: "codex" },
-      { ...current, goal: { ...current.goal!, id: "new-goal" } },
-    ]) {
-      expect(isGoalContinuationCurrent(identity, replacement)).toBe(false);
-    }
-    const refreshed = { ...current, goal: { ...current.goal!, updatedAt: 3000 } };
-    expect(isGoalContinuationCurrent(identity, refreshed)).toBe(true);
-  });
-  it("observes fresh token exhaustion before scheduling another turn", () => {
-    const current = entry();
-    current.goal!.tokenBudget = 50;
-    current.totalTokens = 50;
-    current.totalTokensFresh = true;
-    current.totalTokensVersion = 1;
-    expect(isGoalContinuationCurrent(identity, current)).toBe(false);
-    expect(current.goal!.status).toBe("active");
-  });
   it.each([
-    { aborted: true },
-    { yielded: true },
-    { continuationPending: true as const },
-    { timeoutPhase: "provider" as const },
-    { error: { kind: "hook_block" as const, message: "Blocked" } },
-    { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] },
-    { stopReason: "refusal" },
-  ])("preserves an existing continuation or failure owner: %j", async (meta) => {
-    const f = fixture();
-    f.params.result = { ...normal, meta: { ...normal.meta, ...meta } };
-    await expectNoContinuation(f.params);
+    ["active", () => entry(), true],
+    ["refreshed", () => entry({}, { updatedAt: 3000 }), true],
+    ["missing", () => undefined, false],
+    ["cleared", () => entry({ goal: undefined }), false],
+    ["replaced session", () => entry({ sessionId: "replacement" }), false],
+    ["reset", () => entry({ lifecycleRevision: "revision-3" }), false],
+    ["stopped", () => entry({ abortedLastRun: true }), false],
+    ["external runtime", () => entry({ agentHarnessId: "codex" }), false],
+    ["replaced goal", () => entry({}, { id: "new-goal" }), false],
+    ["paused", () => entry({}, { status: "paused" }), false],
+    [
+      "exhausted",
+      () =>
+        entry(
+          { totalTokens: 50, totalTokensFresh: true, totalTokensVersion: 1 },
+          { tokenBudget: 50 },
+        ),
+      false,
+    ],
+  ] as const)("checks %s goal eligibility", (kind, makeEntry, eligible) => {
+    const current = makeEntry();
+    expect(isGoalContinuationCurrent(identity, current)).toBe(eligible);
+    if (kind === "exhausted") {
+      expect(current?.goal?.status).toBe("active");
+    }
   });
-  it("does not nudge deterministic approval prompts or returned errors", async () => {
+  it.each<OutcomePatch>([
+    { meta: { aborted: true } },
+    { meta: { yielded: true } },
+    { meta: { continuationPending: true } },
+    { meta: { timeoutPhase: "provider" } },
+    { meta: { error: { kind: "hook_block", message: "Blocked" } } },
+    { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
+    { meta: { stopReason: "refusal" } },
+    { didSendDeterministicApprovalPrompt: true },
+    { payloads: [{ text: "failed", isError: true }] },
+  ])("leaves an existing continuation or failure owner in charge: %j", async (patch) => {
     const f = fixture();
-    f.params.result = { ...normal, didSendDeterministicApprovalPrompt: true };
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    f.params.result = { ...normal, payloads: [{ text: "failed", isError: true }] };
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+    f.params.result = { ...normal, ...patch, meta: { ...normal.meta, ...patch.meta } };
+    await expectNoContinuation(f.params);
   });
 });
 

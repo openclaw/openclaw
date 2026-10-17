@@ -37,20 +37,19 @@ describe("inbound context contract (providers + extensions)", () => {
     expect(ctx.Surface).toBeUndefined();
   });
 
-  it("preserves a typed wake without inventing a transport", () => {
-    const ctx = finalizeInboundContext({ Body: "Background work", InternalTurnSource: "exec" });
-    expect(ctx.InternalTurnSource).toBe("exec");
-    expect(ctx.Provider).toBeUndefined();
-    expect(ctx.OriginatingChannel).toBeUndefined();
-  });
-
-  it("removes a legacy wake label from the reply channel", () => {
-    const ctx = finalizeInboundContextForSdk({
-      Body: "Background work",
-      Provider: "cron-event",
-      OriginatingChannel: "cron-event",
-    });
-    expect(ctx.InternalTurnSource).toBe("cron");
+  it.each(["typed", "legacy"] as const)("does not invent a transport for a %s wake", (kind) => {
+    const ctx =
+      kind === "typed"
+        ? finalize({ InternalTurnSource: "exec" })
+        : finalizeInboundContextForSdk({
+            Body: "hello",
+            Provider: "cron-event",
+            OriginatingChannel: "cron-event",
+          });
+    expect(ctx.InternalTurnSource).toBe(kind === "typed" ? "exec" : "cron");
+    if (kind === "typed") {
+      expect(ctx.Provider).toBeUndefined();
+    }
     expect(ctx.OriginatingChannel).toBeUndefined();
   });
 
@@ -109,35 +108,25 @@ describe("inbound context contract (providers + extensions)", () => {
   });
 
   it("preserves an explicitly empty raw projection", () => {
-    const ctx = finalize({
-      Body: "fallback body",
-      BodyForCommands: "/new payload",
-      RawBody: "",
-    });
+    const ctx = finalize({ Body: "fallback body", BodyForCommands: "/new payload", RawBody: "" });
 
     expect(ctx).toMatchObject({ commandText: "/new payload", agentText: "", rawText: "" });
   });
   it("restores legacy media projections only for the shipped SDK adapter", () => {
-    const ctx = finalizeInboundContextForSdk({
-      Body: "hello",
+    const legacy = {
       MediaPath: "/tmp/photo.jpg",
       MediaUrl: "file:///tmp/photo.jpg",
       MediaType: "image/jpeg",
       MediaDir: "/tmp/media",
       MediaWorkspaceDir: "/tmp/workspace",
       MediaStaged: true,
-    });
-
+    };
+    const ctx = finalizeInboundContextForSdk({ Body: "hello", ...legacy });
     expect(ctx).toMatchObject({
-      MediaPath: "/tmp/photo.jpg",
-      MediaUrl: "file:///tmp/photo.jpg",
-      MediaType: "image/jpeg",
-      MediaPaths: ["/tmp/photo.jpg"],
-      MediaUrls: ["file:///tmp/photo.jpg"],
-      MediaTypes: ["image/jpeg"],
-      MediaDir: "/tmp/media",
-      MediaWorkspaceDir: "/tmp/workspace",
-      MediaStaged: true,
+      ...legacy,
+      MediaPaths: [legacy.MediaPath],
+      MediaUrls: [legacy.MediaUrl],
+      MediaTypes: [legacy.MediaType],
     });
   });
 

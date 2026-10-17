@@ -34,50 +34,55 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(() => resetPluginRuntimeStateForTest());
 
 async function resolveTextSlashDirective(
   body: string,
-  options?: {
+  options: {
     botUsername?: string;
     commandsText?: boolean;
     surface?: string;
     authorized?: boolean;
     admin?: boolean;
-  },
+  } = {},
 ) {
   const storePath = path.join(tempDirs.make("openclaw-text-slash-directive-"), "sessions.json");
-  const surface = options?.surface ?? "webchat";
+  const {
+    surface = "webchat",
+    authorized = true,
+    botUsername,
+    commandsText,
+    admin = true,
+  } = options;
   const sessionKey = `agent:main:${surface}:direct:user-1`;
   const ctx = buildTestCtx({
     Body: body,
     BodyForAgent: body,
     CommandBody: body,
     CommandSource: "text",
-    CommandAuthorized: options?.authorized ?? true,
+    CommandAuthorized: authorized,
     CommandTurn: {
       kind: "text-slash",
       source: "text",
-      authorized: options?.authorized ?? true,
+      authorized,
       commandName: body.slice(1).split(/\s+/, 1)[0],
       body,
     },
     Provider: surface,
     Surface: surface,
-    BotUsername: options?.botUsername,
-    GatewayClientScopes: options?.admin === false ? [] : ["operator.admin"],
+    BotUsername: botUsername,
+    GatewayClientScopes: admin ? ["operator.admin"] : [],
     SessionKey: sessionKey,
   });
   const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
   await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-  const storedBefore = loadExactSessionEntry({ sessionKey, storePath })?.entry;
+  const read = () => loadExactSessionEntry({ sessionKey, storePath })?.entry;
+  const storedBefore = read();
   const result = await resolveReplyDirectives({
     ctx,
     cfg: markCompleteReplyConfig({
       session: { store: storePath },
-      commands: options?.commandsText === undefined ? undefined : { text: options.commandsText },
+      commands: commandsText === undefined ? undefined : { text: commandsText },
     }),
     agentId: "main",
     agentDir: "/tmp/agent",
@@ -93,7 +98,7 @@ async function resolveTextSlashDirective(
     isGroup: false,
     triggerBodyNormalized: body,
     resetTriggered: false,
-    commandAuthorized: options?.authorized ?? true,
+    commandAuthorized: authorized,
     defaultProvider: "openai",
     defaultModel: "gpt-5.5",
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
@@ -102,7 +107,7 @@ async function resolveTextSlashDirective(
     hasResolvedHeartbeatModelOverride: false,
     typing: createTypingController({}),
   });
-  return { result, sessionKey, storePath, storedBefore };
+  return { result, read, storedBefore };
 }
 
 function resolveAddressed(body: string) {
@@ -116,10 +121,10 @@ describe("text slash directive ownership", () => {
     "/model status -a -g Review this",
   ])("ignores mixed model information metadata: %s", async (body) => {
     for (const authorized of [true, false]) {
-      const { result, sessionKey, storePath, storedBefore } = await resolveTextSlashDirective(
-        body,
-        { admin: false, authorized },
-      );
+      const { result, read, storedBefore } = await resolveTextSlashDirective(body, {
+        admin: false,
+        authorized,
+      });
       expect(result).toMatchObject({
         kind: "continue",
         result: {
@@ -135,25 +140,24 @@ describe("text slash directive ownership", () => {
           },
         },
       });
-      expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toEqual(storedBefore);
+      expect(read()).toEqual(storedBefore);
     }
   });
 
-  it("keeps an indented addressed exec task with its per-turn policy", async () => {
-    const task = "Review  this:\n```python\n    print('a  b')\n```";
-    const { result } = await resolveAddressed(`  /exec@openclaw security=full ask=off\n${task}`);
-
+  it.each([
+    [
+      "  /exec@openclaw security=full ask=off\n",
+      "Review  this:\n```python\n    print('a  b')\n```",
+      { security: "full", ask: "off" },
+    ],
+    ["", "/unknown@openclaw explain  this\n    unchanged", undefined],
+    ["/verbose@openclaw:\r\n", "    if ready:\n        run('a  b')  \n", undefined],
+  ] as const)("preserves addressed task bytes after %s", async (prefix, task, execOverrides) => {
+    const { result } = await resolveAddressed(`${prefix}${task}`);
     expect(result).toMatchObject({
       kind: "continue",
-      result: { cleanedBody: task, execOverrides: { security: "full", ask: "off" } },
+      result: { cleanedBody: task, ...(execOverrides ? { execOverrides } : {}) },
     });
-  });
-
-  it("preserves unknown addressed command text for the model", async () => {
-    const body = "/unknown@openclaw explain  this\n    unchanged";
-    const { result } = await resolveAddressed(body);
-
-    expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
   });
 
   it.each([
@@ -163,7 +167,7 @@ describe("text slash directive ownership", () => {
     "preserves a task after %s with separator %j",
     async (directive, separator, field, expected) => {
       const task = "Please inspect this code:\n```python\nif True:\n    print('a  b')\n```";
-      const { result, sessionKey, storePath, storedBefore } = await resolveAddressed(
+      const { result, read, storedBefore } = await resolveAddressed(
         `${directive}${separator}${task}`,
       );
 
@@ -172,25 +176,20 @@ describe("text slash directive ownership", () => {
         throw new Error("expected the directive task to continue");
       }
       const levels = await result.result.resolveModelLevels();
-      expect({ ...result.result, ...levels }).toMatchObject({
-        cleanedBody: task,
-        ...expected,
-      });
-      expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toEqual(storedBefore);
-      expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).not.toHaveProperty(field);
+      expect({ ...result.result, ...levels }).toMatchObject({ cleanedBody: task, ...expected });
+      expect(read()).toEqual(storedBefore);
+      expect(read()).not.toHaveProperty(field);
     },
   );
 
   it("preserves addressed exec key/value arguments", async () => {
-    const { result, sessionKey, storePath } = await resolveAddressed(
-      "/exec@openclaw: host=gateway",
-    );
+    const { result, read } = await resolveAddressed("/exec@openclaw: host=gateway");
 
     expect(result).toMatchObject({
       kind: "reply",
       reply: { text: expect.stringContaining("Exec defaults set (host=gateway).") },
     });
-    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBe("gateway");
+    expect(read()?.execHost).toBe("gateway");
   });
 
   it("rejects positional exec arguments addressed to the current bot", async () => {
@@ -203,32 +202,20 @@ describe("text slash directive ownership", () => {
   });
 
   it("applies all text directives separated by newlines", async () => {
-    const { result, sessionKey, storePath } = await resolveTextSlashDirective(
-      "/verbose full\n/reasoning off",
-    );
+    const { result, read } = await resolveTextSlashDirective("/verbose full\n/reasoning off");
 
     expect(result).toMatchObject({ kind: "reply" });
-    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toMatchObject({
-      verboseLevel: "full",
-      reasoningLevel: "off",
-    });
-  });
-
-  it("preserves task whitespace after addressed verbose directive", async () => {
-    const task = "    if ready:\n        run('a  b')  \n";
-    const { result } = await resolveAddressed(`/verbose@openclaw:\r\n${task}`);
-
-    expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: task } });
+    expect(read()).toMatchObject({ verboseLevel: "full", reasoningLevel: "off" });
   });
 
   it("preserves text exec commands when text routing is disabled on a native surface", async () => {
     const body = "/exec host=gateway";
-    const { result, sessionKey, storePath } = await resolveTextSlashDirective(body, {
+    const { result, read } = await resolveTextSlashDirective(body, {
       commandsText: false,
       surface: "discord",
     });
 
     expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
-    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBeUndefined();
+    expect(read()?.execHost).toBeUndefined();
   });
 });
