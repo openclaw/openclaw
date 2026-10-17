@@ -20,14 +20,9 @@ const cleanups: Array<() => Promise<void>> = [];
 type LeasedEnvironmentRecord = Extract<WorkerEnvironmentRecord, { leaseId: string }>;
 
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  void promise.catch(() => undefined);
-  return { promise, reject, resolve };
+  const result = createDeferred<T>();
+  void result.promise.catch(() => undefined);
+  return result;
 }
 
 function nodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
@@ -566,27 +561,12 @@ describe("worker node desktop carrier", () => {
   });
 
   it.each([
-    { name: "ready", payloadJSON: '{"status":"ready"}', stale: undefined, error: undefined },
-    { name: "missing receipt", payloadJSON: null, stale: undefined, error: /invalid result/u },
-    {
-      name: "open receipt",
-      payloadJSON: '{"status":"ready","extra":true}',
-      stale: undefined,
-      error: /invalid result/u,
-    },
-    {
-      name: "stale durable owner",
-      payloadJSON: '{"status":"ready"}',
-      stale: "durable owner",
-      error: "launch owner changed",
-    },
-    {
-      name: "stale pairing proof",
-      payloadJSON: '{"status":"ready"}',
-      stale: "pairing proof",
-      error: "launch owner changed",
-    },
-  ])("validates the node launcher $name result", async ({ name, payloadJSON, stale, error }) => {
+    ["ready", '{"status":"ready"}', undefined, undefined],
+    ["missing receipt", null, undefined, /invalid result/u],
+    ["open receipt", '{"status":"ready","extra":true}', undefined, /invalid result/u],
+    ["stale durable owner", '{"status":"ready"}', "durable owner", "launch owner changed"],
+    ["stale pairing proof", '{"status":"ready"}', "pairing proof", "launch owner changed"],
+  ] as const)("validates the node launcher %s result", async (name, payloadJSON, stale, error) => {
     const record = await support.seedReadyNodeDesktop(
       `worker-node-desktop-${name.replaceAll(" ", "-")}`,
     );

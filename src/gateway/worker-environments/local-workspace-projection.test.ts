@@ -39,12 +39,24 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 let root: string;
 let stateRoot: string;
+let repo: string;
+let canonical: string;
 let owner: LocalWorkspaceOwner;
 let revoked = false;
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
 const podmanFixture = createFixtureLifetime();
 const readText = (directory: string, ...parts: string[]) =>
   fs.readFile(path.join(directory, ...parts), "utf8");
+const prepare = () => withLocalWorkspaceProjection(owner, (state) => state.prepare());
+const synchronize = () =>
+  withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+const settleProjection = () => withLocalWorkspaceProjection(owner, (state) => state.settle());
+const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
+const writeText = (directory: string, relative: string, data: string) =>
+  fs.writeFile(path.join(directory, relative), data);
+async function expectText(directory: string, relative: string, expected: string) {
+  expect(await readText(directory, relative)).toBe(expected);
+}
 async function expectMissing(directory: string, ...parts: string[]) {
   await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
 }
@@ -85,18 +97,18 @@ beforeEach(async () => {
   vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
   vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
   setRuntimeConfigSnapshot({});
-  const repo = path.join(root, "source");
-  const checkout = path.join(root, "canonical");
+  repo = path.join(root, "source");
+  canonical = path.join(root, "canonical");
   await fs.mkdir(repo);
   await git(repo, "init", "--quiet", "-b", "main");
   await git(repo, "config", "user.name", "Test");
   await git(repo, "config", "user.email", "test@example.invalid");
-  await fs.writeFile(path.join(repo, "source.txt"), "original\n");
-  await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
+  await writeText(repo, "source.txt", "original\n");
+  await writeText(repo, ".gitignore", ".env.local\n");
   await git(repo, "add", ".");
   await git(repo, "commit", "--quiet", "-m", "base");
-  await git(repo, "worktree", "add", "--quiet", "-b", "openclaw/guest", checkout);
-  await fs.writeFile(path.join(checkout, ".env.local"), "host-only-secret");
+  await git(repo, "worktree", "add", "--quiet", "-b", "openclaw/guest", canonical);
+  await writeText(canonical, ".env.local", "host-only-secret");
   await git(repo, "config", "credential.helper", "!echo host-credential");
   revoked = false;
   const sessionKey = `agent:main:dashboard:guest-${randomUUID()}`;
@@ -115,7 +127,7 @@ beforeEach(async () => {
       name: "guest",
       repoFingerprint: "test",
       repoRoot: repo,
-      path: checkout,
+      path: canonical,
       branch: "openclaw/guest",
       baseRef: "main",
       ownerKind: "session",
@@ -190,10 +202,10 @@ describe("local sandbox workspace reconciliation", () => {
     const sql = observeLocalWorkspaceStoreSql();
     try {
       sql.calibrate();
-      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-      await fs.writeFile(path.join(projection, "source.txt"), "worker-persisted edit\n");
-      await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-      expect(await readText(owner.worktree.path, "source.txt")).toBe("worker-persisted edit\n");
+      const projection = await prepare();
+      await writeText(projection, "source.txt", "worker-persisted edit\n");
+      await synchronize();
+      await expectText(canonical, "source.txt", "worker-persisted edit\n");
       const baseline = await withLocalWorkspaceStore(
         { worktreeId: owner.worktree.id },
         async (store) => {
@@ -248,7 +260,7 @@ describe("local sandbox workspace reconciliation", () => {
       .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
       .get();
     expect(tableExists(db, "local_workspace_projections")).toBe(false);
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    await prepare();
     expect(
       db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
     ).toEqual(version);
@@ -262,63 +274,53 @@ describe("local sandbox workspace reconciliation", () => {
       }),
     ).not.toThrow();
     await closeOpenClawStateDatabaseAsync();
-    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.session_id).toBe(
-      owner.sessionId,
-    );
+    expect((await readProjection())?.session_id).toBe(owner.sessionId);
   });
 
   it("seeds independent source-only Git and reconciles edits without host metadata or ignored secrets", async () => {
-    await fs.mkdir(path.join(owner.worktree.path, "src/lib"), { recursive: true });
-    await fs.writeFile(path.join(owner.worktree.path, "src/lib/source.ts"), "nested seed");
-    await git(owner.worktree.path, "add", "src/lib/source.ts");
-    await git(owner.worktree.path, "commit", "--quiet", "-m", "nested seed");
-    await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "canonical edit\n");
-    await fs.writeFile(path.join(owner.worktree.path, "untracked.txt"), "admitted source\n");
+    await fs.mkdir(path.join(canonical, "src/lib"), { recursive: true });
+    await writeText(canonical, "src/lib/source.ts", "nested seed");
+    await git(canonical, "add", "src/lib/source.ts");
+    await git(canonical, "commit", "--quiet", "-m", "nested seed");
+    await writeText(canonical, "source.txt", "canonical edit\n");
+    await writeText(canonical, "untracked.txt", "admitted source\n");
     const manifests = await import("./workspace-manifest-worker.js");
     const capture = vi.spyOn(manifests, "captureWorkspaceSnapshot");
     let projection: string;
     try {
-      projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      projection = await prepare();
       // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
-      expect(
-        capture.mock.calls.filter(([input]) => input.root !== owner.worktree.path),
-      ).toHaveLength(1);
+      expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
     } finally {
       capture.mockRestore();
     }
-    expect(await readText(projection, "src/lib/source.ts")).toBe("nested seed");
-    expect(await readText(projection, "source.txt")).toBe("canonical edit\n");
-    expect(await readText(projection, "untracked.txt")).toBe("admitted source\n");
+    await expectText(projection, "src/lib/source.ts", "nested seed");
+    await expectText(projection, "source.txt", "canonical edit\n");
+    await expectText(projection, "untracked.txt", "admitted source\n");
     expect((await fs.lstat(path.join(projection, ".git"))).isDirectory()).toBe(true);
     expect(await git(projection, "rev-parse", "--git-common-dir")).toBe(".git");
     await expectMissing(projection, ".env.local");
     expect(await readText(projection, ".git", "config")).not.toContain("credential");
     await expectMissing(projection, ".git", "objects", "info", "alternates");
-    await fs.writeFile(path.join(projection, "source.txt"), "guest edit\n");
-    expect(await withLocalWorkspaceProjection(owner, (state) => state.prepare())).toBe(projection);
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("guest edit\n");
-    expect(await readText(owner.worktree.repoRoot, "source.txt")).toBe("original\n");
+    await writeText(projection, "source.txt", "guest edit\n");
+    expect(await prepare()).toBe(projection);
+    await expectText(canonical, "source.txt", "guest edit\n");
+    await expectText(repo, "source.txt", "original\n");
     expect(await git(projection, "status", "--porcelain")).toContain("source.txt");
   });
 
   it("never admits nested host secrets after guest de-ignore", async () => {
     const prefix = "nested/";
-    await fs.mkdir(path.join(owner.worktree.path, prefix), { recursive: true });
+    await fs.mkdir(path.join(canonical, prefix), { recursive: true });
     const ignore = prefix + ".gitignore";
-    await fs.writeFile(path.join(owner.worktree.path, ignore), ".env.local\n.env.later\n");
-    await fs.writeFile(
-      path.join(owner.worktree.path, prefix + ".env.local"),
-      "synthetic host secret",
-    );
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    await fs.writeFile(path.join(canonical, ignore), ".env.local\n.env.later\n");
+    await fs.writeFile(path.join(canonical, prefix + ".env.local"), "synthetic host secret");
+    const projection = await prepare();
     await fs.writeFile(path.join(projection, ignore), "");
-    await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-    await fs.writeFile(
-      path.join(owner.worktree.path, prefix + ".env.later"),
-      "new synthetic provisioning",
-    );
+    await synchronize();
+    await fs.writeFile(path.join(canonical, prefix + ".env.later"), "new synthetic provisioning");
     await closeOpenClawStateDatabaseAsync();
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    await prepare();
     for (const name of [".env.local", ".env.later"]) {
       await expectMissing(projection, prefix + name);
     }
@@ -336,15 +338,15 @@ describe("local sandbox workspace reconciliation", () => {
     ]);
     const service = new ManagedWorktreeService();
     owner.worktree.repoFingerprint = (
-      await service.resolveRepositoryIdentity(owner.worktree.path)
+      await service.resolveRepositoryIdentity(canonical)
     ).fingerprint;
     await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
-    await git(owner.worktree.repoRoot, "config", "--unset-all", "credential.helper");
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, ".gitignore"), "");
-    await fs.writeFile(path.join(projection, "guest-new.txt"), "guest source");
-    await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-    await fs.writeFile(path.join(projection, "source.txt"), "retained guest edit\n");
+    await git(repo, "config", "--unset-all", "credential.helper");
+    const projection = await prepare();
+    await writeText(projection, ".gitignore", "");
+    await writeText(projection, "guest-new.txt", "guest source");
+    await synchronize();
+    await writeText(projection, "source.txt", "retained guest edit\n");
     const removed = await service.remove({
       id: owner.worktree.id,
       reason: "de-ignore archive",
@@ -355,17 +357,17 @@ describe("local sandbox workspace reconciliation", () => {
     await service.restore({ id: owner.worktree.id });
     await closeOpenClawStateDatabaseAsync();
     // Canonical archives retain host data, but restoring it is not guest admission.
-    expect(await readText(owner.worktree.path, ".env.local")).toBe("host-only-secret");
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("retained guest edit\n");
-    expect(await withLocalWorkspaceProjection(owner, (state) => state.prepare())).toBe(projection);
+    await expectText(canonical, ".env.local", "host-only-secret");
+    await expectText(canonical, "source.txt", "retained guest edit\n");
+    expect(await prepare()).toBe(projection);
     await expectMissing(projection, ".env.local");
-    const paths = await git(owner.worktree.repoRoot, "ls-tree", "-r", "--name-only", tree);
+    const paths = await git(repo, "ls-tree", "-r", "--name-only", tree);
     expect(paths).toContain(".env.local");
     const publication = await captureGitHubPublicationWorkspaceSnapshot({
-      cwd: owner.worktree.path,
+      cwd: canonical,
     });
     expect(
-      await git(owner.worktree.repoRoot, "ls-tree", "-r", "--name-only", publication.workspaceTree),
+      await git(repo, "ls-tree", "-r", "--name-only", publication.workspaceTree),
     ).not.toContain(".env.local");
     expect(paths).toContain("guest-new.txt");
   });
@@ -374,27 +376,25 @@ describe("local sandbox workspace reconciliation", () => {
     "rejects non-UTF-8 path aliases before guest capture: %s",
     async (when) => {
       const ignored = "private-\uFFFD";
-      await fs.writeFile(path.join(owner.worktree.path, ".gitignore"), ignored + "\n");
-      await fs.writeFile(path.join(owner.worktree.path, ignored), "synthetic ignored host secret");
+      await fs.writeFile(path.join(canonical, ".gitignore"), ignored + "\n");
+      await fs.writeFile(path.join(canonical, ignored), "synthetic ignored host secret");
       if (when === "later index") {
-        await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+        await prepare();
       }
       // Git indexes preserve raw path bytes even when the host filesystem rejects them.
-      const blob = await requireGit(owner.worktree.path, ["hash-object", "-w", "--stdin"], {
+      const blob = await requireGit(canonical, ["hash-object", "-w", "--stdin"], {
         input: "ordinary source with an invalid filename",
       });
-      await requireGit(owner.worktree.path, ["update-index", "-z", "--index-info"], {
+      await requireGit(canonical, ["update-index", "-z", "--index-info"], {
         input: Buffer.concat([Buffer.from(`100644 ${blob}\tprivate-`), Buffer.from([0xff, 0])]),
       });
-      await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
-        "UTF-8",
-      );
+      await expect(prepare()).rejects.toThrow("UTF-8");
     },
   );
 
   it("rejects an untracked non-UTF-8 path before initial guest capture", async ({ skip }) => {
     const name = Buffer.concat([Buffer.from("private-"), Buffer.from([0xff])]);
-    const raw = Buffer.concat([Buffer.from(owner.worktree.path + path.sep), name]);
+    const raw = Buffer.concat([Buffer.from(canonical + path.sep), name]);
     try {
       await fs.writeFile(raw, "ordinary untracked source", { flag: "wx" });
     } catch (error) {
@@ -403,115 +403,97 @@ describe("local sandbox workspace reconciliation", () => {
       }
       throw error;
     }
-    const names = await fs.readdir(owner.worktree.path, { encoding: "buffer" });
+    const names = await fs.readdir(canonical, { encoding: "buffer" });
     if (!names.some((entry) => entry.equals(name))) {
       skip("filesystem does not preserve raw filename bytes");
     }
     const ignored = "private-\uFFFD";
-    await fs.writeFile(path.join(owner.worktree.path, ".gitignore"), ignored + "\n");
-    await fs.writeFile(path.join(owner.worktree.path, ignored), "synthetic ignored host secret");
-    await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
-      "UTF-8",
-    );
+    await fs.writeFile(path.join(canonical, ".gitignore"), ignored + "\n");
+    await fs.writeFile(path.join(canonical, ignored), "synthetic ignored host secret");
+    await expect(prepare()).rejects.toThrow("UTF-8");
   });
 
   it("admits exact canonical source and host-staged new paths without trusting guest Git", async () => {
-    await fs.writeFile(path.join(owner.worktree.path, "initial.txt"), "initial untracked source");
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await readText(projection, "initial.txt")).toBe("initial untracked source");
-    await fs.writeFile(path.join(owner.worktree.path, "initial.txt"), "later canonical edit");
-    await fs.writeFile(path.join(owner.worktree.path, "new.txt"), "new canonical source");
-    await fs.writeFile(path.join(owner.worktree.path, ".env.new"), "new host-only provisioning");
-    await fs.writeFile(path.join(projection, ".gitignore"), "*.ignored\n");
-    await fs.writeFile(path.join(projection, "guest.ignored"), "guest-owned ignored bytes");
-    await fs.writeFile(path.join(projection, ".env.new"), "guest collision");
+    await writeText(canonical, "initial.txt", "initial untracked source");
+    const projection = await prepare();
+    await expectText(projection, "initial.txt", "initial untracked source");
+    await writeText(canonical, "initial.txt", "later canonical edit");
+    await writeText(canonical, "new.txt", "new canonical source");
+    await writeText(canonical, ".env.new", "new host-only provisioning");
+    await writeText(projection, ".gitignore", "*.ignored\n");
+    await writeText(projection, "guest.ignored", "guest-owned ignored bytes");
+    await writeText(projection, ".env.new", "guest collision");
     await git(projection, "add", ".env.new");
-    await expect(
-      withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical")),
-    ).rejects.toThrow("conflict");
+    await expect(synchronize()).rejects.toThrow("conflict");
     // The conflict owner preserves both versions. Resolve this fixture by restoring
     // the guest's captured base, not by enrolling the host's colliding bytes.
-    await fs.rm(path.join(owner.worktree.path, ".env.new"));
-    await withLocalWorkspaceProjection(owner, (state) => state.settle());
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await readText(projection, "initial.txt")).toBe("later canonical edit");
+    await fs.rm(path.join(canonical, ".env.new"));
+    await settleProjection();
+    await prepare();
+    await expectText(projection, "initial.txt", "later canonical edit");
     await expectMissing(projection, "new.txt");
-    await git(owner.worktree.path, "add", "new.txt");
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await readText(projection, "new.txt")).toBe("new canonical source");
-    expect(await readText(projection, "guest.ignored")).toBe("guest-owned ignored bytes");
+    await git(canonical, "add", "new.txt");
+    await prepare();
+    await expectText(projection, "new.txt", "new canonical source");
+    await expectText(projection, "guest.ignored", "guest-owned ignored bytes");
   });
 
   it.skipIf(process.platform === "win32")(
     "never executes source repository helpers while seeding missing objects",
     async () => {
-      const blob = await git(owner.worktree.path, "rev-parse", "HEAD:source.txt");
-      const object = path.join(
-        owner.worktree.repoRoot,
-        ".git/objects",
-        blob.slice(0, 2),
-        blob.slice(2),
-      );
+      const blob = await git(canonical, "rev-parse", "HEAD:source.txt");
+      const object = path.join(repo, ".git/objects", blob.slice(0, 2), blob.slice(2));
       const bytes = await fs.readFile(object);
       const helper = path.join(root, "ssh-probe");
       await fs.writeFile(helper, '#!/bin/sh\nprintf invoked > "$0.ran"\nexit 1\n', { mode: 0o700 });
-      await git(
-        owner.worktree.repoRoot,
-        "config",
-        "remote.origin.url",
-        "ssh://fixture.invalid/repository",
-      );
-      await git(owner.worktree.repoRoot, "config", "remote.origin.promisor", "true");
-      await git(owner.worktree.repoRoot, "config", "core.sshCommand", helper);
+      await git(repo, "config", "remote.origin.url", "ssh://fixture.invalid/repository");
+      await git(repo, "config", "remote.origin.promisor", "true");
+      await git(repo, "config", "core.sshCommand", helper);
       await fs.rm(object);
-      await expect(
-        withLocalWorkspaceProjection(owner, (state) => state.prepare()),
-      ).rejects.toThrow();
+      await expect(prepare()).rejects.toThrow();
       expect(existsSync(helper + ".ran")).toBe(false);
       await fs.writeFile(object, bytes);
-      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-      expect(await readText(projection, "source.txt")).toBe("original\n");
+      const projection = await prepare();
+      await expectText(projection, "source.txt", "original\n");
       expect(existsSync(helper + ".ran")).toBe(false);
     },
   );
 
   it("keeps eligible nested project content and accepted empty directories across turns", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    const projection = await prepare();
     await fs.mkdir(path.join(projection, ".openclaw/sandbox-skills/skills"), { recursive: true });
     await fs.mkdir(path.join(projection, "src/empty"), { recursive: true });
-    await fs.writeFile(path.join(projection, ".openclaw/project.json"), "project content");
-    await fs.writeFile(path.join(projection, "src/nested.ts"), "nested content");
-    await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await readText(projection, ".openclaw/project.json")).toBe("project content");
-    expect(await readText(projection, "src/nested.ts")).toBe("nested content");
+    await writeText(projection, ".openclaw/project.json", "project content");
+    await writeText(projection, "src/nested.ts", "nested content");
+    await synchronize();
+    await prepare();
+    await expectText(projection, ".openclaw/project.json", "project content");
+    await expectText(projection, "src/nested.ts", "nested content");
     expect((await fs.stat(path.join(projection, "src/empty"))).isDirectory()).toBe(true);
-    await expectMissing(owner.worktree.path, ".openclaw/sandbox-skills");
+    await expectMissing(canonical, ".openclaw/sandbox-skills");
   });
 
   it("retains both sides and a durable pending result when edits conflict", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, "source.txt"), "guest conflict\n");
-    await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "human conflict\n");
-    await expect(
-      withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical")),
-    ).rejects.toThrow("conflict");
-    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeTruthy();
-    expect(await readText(projection, "source.txt")).toBe("guest conflict\n");
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("human conflict\n");
-    await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "original\n");
-    await withLocalWorkspaceProjection(owner, (state) => state.settle());
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("guest conflict\n");
-    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeNull();
+    const projection = await prepare();
+    await writeText(projection, "source.txt", "guest conflict\n");
+    await writeText(canonical, "source.txt", "human conflict\n");
+    await expect(synchronize()).rejects.toThrow("conflict");
+    expect((await readProjection())?.pending_ref).toBeTruthy();
+    await expectText(projection, "source.txt", "guest conflict\n");
+    await expectText(canonical, "source.txt", "human conflict\n");
+    await writeText(canonical, "source.txt", "original\n");
+    await settleProjection();
+    await expectText(canonical, "source.txt", "guest conflict\n");
+    expect((await readProjection())?.pending_ref).toBeNull();
   });
 
   it.each(["acceptance", "accepted-result cleanup"] as const)(
     "recovers durable state when authority closes during %s",
     async (phase) => {
-      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      const projection = await prepare();
       const edit = "interrupted guest edit\n";
       const accepted = phase === "accepted-result cleanup";
-      await fs.writeFile(path.join(projection, "source.txt"), edit);
+      await writeText(projection, "source.txt", edit);
       const acknowledgement = accepted
         ? observeAcknowledgedUpdate((row) => {
             if (row.pending_ref && row.pending_target === null) {
@@ -522,10 +504,7 @@ describe("local sandbox workspace reconciliation", () => {
       const interrupted = {
         ...owner,
         assertCurrent: () => {
-          if (
-            !accepted &&
-            readFileSync(path.join(owner.worktree.path, "source.txt"), "utf8") === edit
-          ) {
+          if (!accepted && readFileSync(path.join(canonical, "source.txt"), "utf8") === edit) {
             revoked = true;
           }
           owner.assertCurrent();
@@ -536,38 +515,32 @@ describe("local sandbox workspace reconciliation", () => {
       ).rejects.toThrow(accepted ? "revoked" : undefined);
       acknowledgement?.mockRestore();
       if (accepted) {
-        expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+        expect(await readProjection()).toMatchObject({
           pending_ref: expect.any(String),
           pending_target: null,
           journal_json: null,
         });
-        await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "later human edit\n");
+        await writeText(canonical, "source.txt", "later human edit\n");
       } else {
-        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.journal_json).toBeTruthy();
-        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeTruthy();
+        expect((await readProjection())?.journal_json).toBeTruthy();
+        expect((await readProjection())?.pending_ref).toBeTruthy();
       }
       revoked = false;
       if (accepted) {
-        const pendingRef = (await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref;
+        const pendingRef = (await readProjection())?.pending_ref;
         const preservedProjection = projection + "-preserved";
         await fs.rename(projection, preservedProjection);
         try {
-          await expect(
-            withLocalWorkspaceProjection(owner, (state) => state.prepare()),
-          ).rejects.toThrow();
-          expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(
-            pendingRef,
-          );
+          await expect(prepare()).rejects.toThrow();
+          expect((await readProjection())?.pending_ref).toBe(pendingRef);
         } finally {
           await fs.rename(preservedProjection, projection);
         }
       }
       closeOpenClawStateDatabase();
-      await withLocalWorkspaceProjection(owner, (state) => state.settle());
-      expect(await readText(owner.worktree.path, "source.txt")).toBe(
-        accepted ? "later human edit\n" : edit,
-      );
-      expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+      await settleProjection();
+      await expectText(canonical, "source.txt", accepted ? "later human edit\n" : edit);
+      expect(await readProjection()).toMatchObject({
         journal_json: null,
         pending_ref: null,
       });
@@ -600,7 +573,7 @@ describe("local sandbox workspace reconciliation", () => {
       cfg: { worktreeAcceleration: false },
       agentId: owner.agentId,
       sessionKey: owner.sessionKey,
-      workspaceDir: owner.worktree.path,
+      workspaceDir: canonical,
       sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
     });
     if (!projection) {
@@ -729,45 +702,34 @@ describe("local sandbox workspace reconciliation", () => {
       ]);
       const service = new ManagedWorktreeService();
       owner.worktree.repoFingerprint = (
-        await service.resolveRepositoryIdentity(owner.worktree.path)
+        await service.resolveRepositoryIdentity(canonical)
       ).fingerprint;
       await insertRegistryWorktree(process.env, owner.worktree, {
         provisionedPaths: [".env.allowed"],
       });
-      await fs.writeFile(
-        path.join(owner.worktree.path, ".env.allowed"),
-        "original provisioned bytes",
-      );
-      await fs.chmod(path.join(owner.worktree.path, ".env.allowed"), 0o600);
-      await fs.writeFile(
-        path.join(owner.worktree.path, ".gitignore"),
-        ".env.local\n.env.allowed\nguest-ignored/\n",
-      );
-      await fs.mkdir(path.join(owner.worktree.path, "guest-ignored"));
-      await fs.writeFile(
-        path.join(owner.worktree.path, "guest-ignored/host-secret"),
-        "not guest custody",
-      );
-      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      await writeText(canonical, ".env.allowed", "original provisioned bytes");
+      await fs.chmod(path.join(canonical, ".env.allowed"), 0o600);
+      await writeText(canonical, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
+      await fs.mkdir(path.join(canonical, "guest-ignored"));
+      await writeText(canonical, "guest-ignored/host-secret", "not guest custody");
+      const projection = await prepare();
       await fs.mkdir(path.join(projection, "guest-ignored/empty"), { recursive: true });
       const bytes = Buffer.from("guest-owned ignored bytes\0\n");
       await fs.writeFile(path.join(projection, "guest-ignored/data"), bytes);
       if (process.platform !== "win32") {
         await fs.symlink("../source.txt", path.join(projection, "guest-ignored/link"));
       }
-      await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-      expect(await fs.readFile(path.join(owner.worktree.path, "guest-ignored/data"))).toEqual(
-        bytes,
-      );
+      await synchronize();
+      expect(await fs.readFile(path.join(canonical, "guest-ignored/data"))).toEqual(bytes);
       const removed = await service.remove({
         id: owner.worktree.id,
         reason: "accepted-ignored-archive",
       });
       expect(removed.removed).toBe(true);
-      expect(
-        await git(owner.worktree.repoRoot, "ls-tree", "-r", "--name-only", removed.snapshotRef!),
-      ).not.toContain("guest-ignored");
-      const receipt = (await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref!;
+      expect(await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).not.toContain(
+        "guest-ignored",
+      );
+      const receipt = (await readProjection())!.pending_ref!;
       expect(receipt).toBeTruthy();
       const legacyState = (await getRegistryWorktreeProvisionedState(
         process.env,
@@ -779,11 +741,11 @@ describe("local sandbox workspace reconciliation", () => {
         await updateRegistryWorktree(process.env, owner.worktree.id, {
           removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
         });
-        await fs.writeFile(path.join(projection, "guest-ignored/data"), "unaccepted newer bytes");
+        await writeText(projection, "guest-ignored/data", "unaccepted newer bytes");
         expect((await service.gc()).snapshotsPruned).toBe(0);
-        expect(
-          await git(owner.worktree.repoRoot, "rev-parse", "--verify", removed.snapshotRef!),
-        ).toMatch(/^[a-f0-9]+$/u);
+        expect(await git(repo, "rev-parse", "--verify", removed.snapshotRef!)).toMatch(
+          /^[a-f0-9]+$/u,
+        );
         await fs.writeFile(path.join(projection, "guest-ignored/data"), bytes);
         const sql = observeLocalWorkspaceStoreSql();
         try {
@@ -793,16 +755,10 @@ describe("local sandbox workspace reconciliation", () => {
         } finally {
           sql.restore();
         }
-        expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
+        expect(await readProjection()).toBeUndefined();
         expect(getRegistryWorktree(process.env, owner.worktree.id)).toBeUndefined();
         expect(
-          await git(
-            owner.worktree.repoRoot,
-            "for-each-ref",
-            "--format=%(refname)",
-            receipt,
-            removed.snapshotRef!,
-          ),
+          await git(repo, "for-each-ref", "--format=%(refname)", receipt, removed.snapshotRef!),
         ).toBe("");
         await expect(fs.stat(projection)).rejects.toMatchObject({ code: "ENOENT" });
         return;
@@ -810,37 +766,23 @@ describe("local sandbox workspace reconciliation", () => {
       if (mode === "legacy decoder") {
         // Execute the pre-feature restore sequence and unchanged old decoder, not
         // just its schema preflight. The ledger contains only original regular files.
-        const snapshot = await git(owner.worktree.repoRoot, "rev-parse", removed.snapshotRef!);
-        const parent = await git(owner.worktree.repoRoot, "rev-parse", snapshot + "^");
+        const snapshot = await git(repo, "rev-parse", removed.snapshotRef!);
+        const parent = await git(repo, "rev-parse", snapshot + "^");
         await git(
-          owner.worktree.repoRoot,
+          repo,
           "worktree",
           "add",
-          "--no-checkout",
+          "--no-canonical",
           "-b",
           owner.worktree.branch,
-          owner.worktree.path,
+          canonical,
           parent,
         );
-        await git(
-          owner.worktree.path,
-          "read-tree",
-          "--reset",
-          "--no-recurse-submodules",
-          "-u",
-          snapshot,
-        );
-        await git(owner.worktree.path, "reset", "--quiet", parent);
-        await restoreProvisionedFiles(
-          process.env,
-          owner.worktree.id,
-          owner.worktree.path,
-          legacyState,
-        );
-        expect(await readText(owner.worktree.path, ".env.allowed")).toBe(
-          "original provisioned bytes",
-        );
-        expect(existsSync(path.join(owner.worktree.path, "guest-ignored/data"))).toBe(false);
+        await git(canonical, "read-tree", "--reset", "--no-recurse-submodules", "-u", snapshot);
+        await git(canonical, "reset", "--quiet", parent);
+        await restoreProvisionedFiles(process.env, owner.worktree.id, canonical, legacyState);
+        await expectText(canonical, ".env.allowed", "original provisioned bytes");
+        expect(existsSync(path.join(canonical, "guest-ignored/data"))).toBe(false);
         await updateRegistryWorktree(process.env, owner.worktree.id, {
           removedAt: undefined,
           lastActiveAt: Date.now(),
@@ -853,7 +795,7 @@ describe("local sandbox workspace reconciliation", () => {
           if (
             row.pending_ref &&
             row.pending_target === null &&
-            existsSync(path.join(owner.worktree.path, "guest-ignored/data"))
+            existsSync(path.join(canonical, "guest-ignored/data"))
           ) {
             injected = true;
           }
@@ -870,13 +812,13 @@ describe("local sandbox workspace reconciliation", () => {
         ).rejects.toThrow("restore interrupted after overlay acceptance");
         acknowledgement.mockRestore();
         expect(injected).toBe(true);
-        expect(existsSync(owner.worktree.path)).toBe(false);
-        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(receipt);
+        expect(existsSync(canonical)).toBe(false);
+        expect((await readProjection())?.pending_ref).toBe(receipt);
         expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeDefined();
         await service.restore({ id: owner.worktree.id });
       }
-      await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-      for (const workspace of [owner.worktree.path, projection]) {
+      await prepare();
+      for (const workspace of [canonical, projection]) {
         expect(await fs.readFile(path.join(workspace, "guest-ignored/data"))).toEqual(bytes);
         expect((await fs.stat(path.join(workspace, "guest-ignored/empty"))).isDirectory()).toBe(
           true,
@@ -889,19 +831,17 @@ describe("local sandbox workspace reconciliation", () => {
         await expectMissing(workspace, "guest-ignored/host-secret");
         await expectMissing(workspace, ".env.local");
       }
-      expect(await readText(owner.worktree.path, ".env.allowed")).toBe(
-        "original provisioned bytes",
-      );
+      await expectText(canonical, ".env.allowed", "original provisioned bytes");
       await expectMissing(projection, ".env.allowed");
-      expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeNull();
-      await git(owner.worktree.repoRoot, "config", "--unset-all", "credential.helper");
+      expect((await readProjection())?.pending_ref).toBeNull();
+      await git(repo, "config", "--unset-all", "credential.helper");
       const { captureGitHubPublicationWorkspaceSnapshot } =
         await import("../github-publication-git-transport.js");
       const published = await captureGitHubPublicationWorkspaceSnapshot({
-        cwd: owner.worktree.path,
+        cwd: canonical,
       });
       expect(
-        await git(owner.worktree.path, "ls-tree", "-r", "--name-only", published.workspaceTree),
+        await git(canonical, "ls-tree", "-r", "--name-only", published.workspaceTree),
       ).not.toContain("guest-ignored");
     },
   );
@@ -909,28 +849,24 @@ describe("local sandbox workspace reconciliation", () => {
   it.each(["lifecycle reset", "replacement session"] as const)(
     "preserves pending bytes across a %s without transferring session authority",
     async (change) => {
-      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-      await fs.writeFile(path.join(projection, "source.txt"), "unaccepted edit\n");
+      const projection = await prepare();
+      await writeText(projection, "source.txt", "unaccepted edit\n");
       if (change === "lifecycle reset") {
         const resumed = { ...owner, lifecycleRevision: randomUUID() };
         expect(await withLocalWorkspaceProjection(resumed, (state) => state.prepare())).toBe(
           projection,
         );
-        expect(await readText(owner.worktree.path, "source.txt")).toBe("unaccepted edit\n");
-        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.lifecycle_revision).toBe(
-          resumed.lifecycleRevision,
-        );
+        await expectText(canonical, "source.txt", "unaccepted edit\n");
+        expect((await readProjection())?.lifecycle_revision).toBe(resumed.lifecycleRevision);
       } else {
         await expect(
           withLocalWorkspaceProjection({ ...owner, sessionId: randomUUID() }, (state) =>
             state.prepare(),
           ),
         ).rejects.toThrow("different session incarnation");
-        expect(await readText(projection, "source.txt")).toBe("unaccepted edit\n");
+        await expectText(projection, "source.txt", "unaccepted edit\n");
         revoked = true;
-        await expect(
-          withLocalWorkspaceProjection(owner, (state) => state.prepare()),
-        ).rejects.toThrow("revoked");
+        await expect(prepare()).rejects.toThrow("revoked");
       }
     },
   );

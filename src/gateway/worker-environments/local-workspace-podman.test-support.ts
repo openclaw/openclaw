@@ -11,6 +11,13 @@ import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
+async function expectText(root: string, relative: string, expected: string) {
+  expect(await fs.readFile(path.join(root, relative), "utf8")).toBe(expected);
+}
+async function expectMissing(root: string, relative: string) {
+  await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
 
 /** Production required-Podman lifecycle proof, including revocation and selected cwd. */
@@ -87,6 +94,21 @@ export async function proveRequiredPodmanWorkspace(
       },
     },
   };
+  async function expectGuestText(
+    sandbox: NonNullable<Awaited<ReturnType<typeof resolveSandboxContext>>>,
+    filePath: string,
+    expected: string,
+  ) {
+    expect((await sandbox.fsBridge!.readFile({ filePath })).toString()).toBe(expected);
+  }
+  const resolveSandbox = (assertCurrent?: () => void) =>
+    resolveSandboxContext({
+      config,
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: owner.worktree.path,
+      assertCurrent,
+    });
   try {
     const engine = await import("../../agents/sandbox/container-engine.js");
     const execute = engine.execContainer;
@@ -106,16 +128,10 @@ export async function proveRequiredPodmanWorkspace(
       });
     try {
       await expect(
-        resolveSandboxContext({
-          config,
-          agentId: owner.agentId,
-          sessionKey: owner.sessionKey,
-          workspaceDir: owner.worktree.path,
-          assertCurrent: () => {
-            if (!allocationCurrent) {
-              throw new Error("allocation revoked");
-            }
-          },
+        resolveSandbox(() => {
+          if (!allocationCurrent) {
+            throw new Error("allocation revoked");
+          }
         }),
       ).rejects.toThrow("allocation revoked");
       expect(effects).toEqual([]);
@@ -123,22 +139,18 @@ export async function proveRequiredPodmanWorkspace(
       observe.mockRestore();
     }
     let fileAuthority = true;
-    const sandbox = await resolveSandboxContext({
-      config,
-      assertCurrent: () => {
-        if (!fileAuthority) {
-          throw new Error("filesystem owner revoked");
-        }
-      },
-      agentId: owner.agentId,
-      sessionKey: owner.sessionKey,
-      workspaceDir: owner.worktree.path,
+    const sandbox = await resolveSandbox(() => {
+      if (!fileAuthority) {
+        throw new Error("filesystem owner revoked");
+      }
     });
     expect(sandbox?.required).toBe(true);
     expect(sandbox?.workspaceAccess).toBe("rw");
     if (!sandbox?.backend || !sandbox.fsBridge) {
       throw new Error("Sandbox was not prepared");
     }
+    const writeGuest = (filePath: string, data: string) =>
+      sandbox.fsBridge!.writeFile({ filePath, data });
     // Reconciliation may lose its owner after pausing. Only a fresh live owner
     // can release the retained exact runtime generation.
     const { withLocalWorkspaceProjection } = await import("./local-workspace-projection.js");
@@ -180,28 +192,14 @@ export async function proveRequiredPodmanWorkspace(
     ).toBeNull();
     const skillScaffold = path.join(sandbox.workspaceDir, ".openclaw/sandbox-skills/skills");
     expect((await fs.stat(skillScaffold)).uid).toBe((await fs.stat(sandbox.workspaceDir)).uid);
-    await sandbox.fsBridge.writeFile({ filePath: "source.txt", data: "real sandbox edit\n" });
-    await sandbox.fsBridge.writeFile({
-      filePath: ".gitignore",
-      data: ".env.local\nguest-ignored/\n",
-    });
-    await sandbox.fsBridge.writeFile({
-      filePath: "guest-ignored/data",
-      data: "real ignored guest bytes\n",
-    });
-    await sandbox.fsBridge.writeFile({
-      filePath: ".openclaw/project.json",
-      data: "valid project content\n",
-    });
+    await writeGuest("source.txt", "real sandbox edit\n");
+    await writeGuest(".gitignore", ".env.local\nguest-ignored/\n");
+    await writeGuest("guest-ignored/data", "real ignored guest bytes\n");
+    await writeGuest(".openclaw/project.json", "valid project content\n");
     await expect(
-      sandbox.fsBridge.writeFile({
-        filePath: ".openclaw/sandbox-skills/skills/forbidden",
-        data: "must not write",
-      }),
+      writeGuest(".openclaw/sandbox-skills/skills/forbidden", "must not write"),
     ).rejects.toThrow();
-    expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-      "real sandbox edit\n",
-    );
+    await expectText(owner.worktree.path, "source.txt", "real sandbox edit\n");
     const spec = await sandbox.backend.buildExecSpec({
       command:
         'git status --porcelain && test ! -e .env.local && test -z "$GH_TOKEN$GITHUB_TOKEN" && ! touch .openclaw/sandbox-skills/skills/.write-probe',
@@ -228,29 +226,16 @@ export async function proveRequiredPodmanWorkspace(
       }
       return probeResult;
     };
-    await expect(
-      sandbox.fsBridge.writeFile({ filePath: "revoked-write.txt", data: "must not write" }),
-    ).rejects.toThrow("filesystem owner revoked");
-    await expect(
-      fs.stat(path.join(sandbox.workspaceDir, "revoked-write.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(owner.worktree.path, "revoked-write.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(writeGuest("revoked-write.txt", "must not write")).rejects.toThrow(
+      "filesystem owner revoked",
+    );
+    await expectMissing(sandbox.workspaceDir, "revoked-write.txt");
+    await expectMissing(owner.worktree.path, "revoked-write.txt");
     sandbox.backend.runShellCommand = runShell;
-    const resumed = await resolveSandboxContext({
-      config,
-      agentId: owner.agentId,
-      sessionKey: owner.sessionKey,
-      workspaceDir: owner.worktree.path,
-    });
+    const resumed = await resolveSandbox();
     expect(resumed?.workspaceDir).toBe(sandbox.workspaceDir);
-    expect((await resumed!.fsBridge!.readFile({ filePath: "source.txt" })).toString()).toBe(
-      "real sandbox edit\n",
-    );
-    expect(await fs.readFile(path.join(owner.worktree.repoRoot, "source.txt"), "utf8")).toBe(
-      "original\n",
-    );
+    await expectGuestText(resumed!, "source.txt", "real sandbox edit\n");
+    await expectText(owner.worktree.repoRoot, "source.txt", "original\n");
     // A selected subdirectory changes execution cwd, not the projection/mount owner.
     const selected = path.join(owner.worktree.path, "packages", "app");
     await fs.mkdir(selected, { recursive: true });
@@ -273,10 +258,8 @@ export async function proveRequiredPodmanWorkspace(
       cwd: mapped.effectiveCwd,
       data: "selected write\n",
     });
-    expect(await fs.readFile(path.join(selected, "relative.txt"), "utf8")).toBe("selected write\n");
-    await expect(fs.stat(path.join(owner.worktree.path, "relative.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectText(selected, "relative.txt", "selected write\n");
+    await expectMissing(owner.worktree.path, "relative.txt");
     const selectedSpec = await mapped.sandbox!.backend!.buildExecSpec({
       command: "pwd; cat selected.txt",
       env: {},
@@ -412,31 +395,14 @@ export async function proveRequiredPodmanWorkspace(
     expect(removed.removed).toBe(true);
     expect((await readRegistry()).entries).toEqual([]);
     await service.restore({ id: owner.worktree.id });
-    expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-      "real sandbox edit\n",
-    );
-    expect(
-      await fs.readFile(path.join(owner.worktree.path, ".openclaw/project.json"), "utf8"),
-    ).toBe("valid project content\n");
-    const restored = await resolveSandboxContext({
-      config,
-      agentId: owner.agentId,
-      sessionKey: owner.sessionKey,
-      workspaceDir: owner.worktree.path,
-    });
+    await expectText(owner.worktree.path, "source.txt", "real sandbox edit\n");
+    await expectText(owner.worktree.path, ".openclaw/project.json", "valid project content\n");
+    const restored = await resolveSandbox();
     expect(restored?.workspaceDir).toBe(sandbox.workspaceDir);
-    expect(
-      (await restored!.fsBridge!.readFile({ filePath: "guest-ignored/data" })).toString(),
-    ).toBe("real ignored guest bytes\n");
-    expect(await fs.readFile(path.join(owner.worktree.path, "guest-ignored/data"), "utf8")).toBe(
-      "real ignored guest bytes\n",
-    );
-    await expect(fs.stat(path.join(restored!.workspaceDir, ".env.local"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect((await restored!.fsBridge!.readFile({ filePath: "source.txt" })).toString()).toBe(
-      "real sandbox edit\n",
-    );
+    await expectGuestText(restored!, "guest-ignored/data", "real ignored guest bytes\n");
+    await expectText(owner.worktree.path, "guest-ignored/data", "real ignored guest bytes\n");
+    await expectMissing(restored!.workspaceDir, ".env.local");
+    await expectGuestText(restored!, "source.txt", "real sandbox edit\n");
     expect(
       (await service.remove({ id: owner.worktree.id, reason: "live-proof-retention" })).removed,
     ).toBe(true);
