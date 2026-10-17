@@ -727,60 +727,52 @@ describe("sessions tools", () => {
       rejects: true,
       reason: "runtime_rejected",
     },
-  ])(
-    "rejects $name without durable-session fallback",
-    async ({ key, rejects, streaming, reason }) => {
-      await seedSession("agent:re-portal:main");
-      await seedSession(key, "caller-active-session");
-      const queueMessage = activeRun(key, {
-        rejects,
-        streaming,
-      });
-      mockGatewayResponses({
-        agent: { runId: "fallback-run", status: "accepted", acceptedAt: 2000 },
-      });
-      const result = await getSessionTool("sessions_send", {
-        agentSessionKey: "agent:re-portal:main",
-        agentChannel: "telegram",
-        config: cloneTestConfig(),
-      }).execute("active-send", {
-        sessionKey: key,
-        message: "[TASK-COMPLETE] occupancy ready",
-        timeoutSeconds: 0,
-      });
-      expect(result.details).toMatchObject({
-        status: "error",
-        sessionKey: key,
-        error: expect.stringContaining(`queue_message_failed reason=${reason}`),
-      });
-      expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(
-        false,
+  ])("rejects $name without durable-session fallback", async ({ key, rejects, reason }) => {
+    await seedSession("agent:re-portal:main");
+    await seedSession(key, "caller-active-session");
+    const queueMessage = activeRun(key, { rejects });
+    mockGatewayResponses({
+      agent: { runId: "fallback-run", status: "accepted", acceptedAt: 2000 },
+    });
+    const result = await getSessionTool("sessions_send", {
+      agentSessionKey: "agent:re-portal:main",
+      agentChannel: "telegram",
+      config: cloneTestConfig(),
+    }).execute("active-send", {
+      sessionKey: key,
+      message: "[TASK-COMPLETE] occupancy ready",
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: key,
+      error: expect.stringContaining(`queue_message_failed reason=${reason}`),
+    });
+    expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
+    if (rejects) {
+      expect(result.details).toHaveProperty(
+        "error",
+        expect.stringContaining("caller-active-session"),
       );
-      if (rejects) {
-        expect(result.details).toHaveProperty(
-          "error",
-          expect.stringContaining("caller-active-session"),
-        );
-        expect(result.details).toHaveProperty(
-          "error",
-          expect.not.stringContaining("fallback_failed"),
-        );
-        const queuedText = queueMessage.mock.calls[0]?.[0];
-        expect(queuedText).toContain("[Inter-session message]");
-        expect(queuedText).toContain("[TASK-COMPLETE] occupancy ready");
-        expect(queueMessage).toHaveBeenCalledWith(queuedText, {
-          steeringMode: "all",
-          debounceMs: 0,
-          deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: false,
-          onQueueAccepted: expect.any(Function),
-          userTurnTranscriptRecorder: expect.any(Object),
-        });
-      } else {
-        expect(queueMessage).not.toHaveBeenCalled();
-      }
-    },
-  );
+      expect(result.details).toHaveProperty(
+        "error",
+        expect.not.stringContaining("fallback_failed"),
+      );
+      const queuedText = queueMessage.mock.calls[0]?.[0];
+      expect(queuedText).toContain("[Inter-session message]");
+      expect(queuedText).toContain("[TASK-COMPLETE] occupancy ready");
+      expect(queueMessage).toHaveBeenCalledWith(queuedText, {
+        steeringMode: "all",
+        debounceMs: 0,
+        deliveryTimeoutMs: 30_000,
+        waitForTranscriptCommit: false,
+        onQueueAccepted: expect.any(Function),
+        userTurnTranscriptRecorder: expect.any(Object),
+      });
+    } else {
+      expect(queueMessage).not.toHaveBeenCalled();
+    }
+  });
 
   it.each([
     {

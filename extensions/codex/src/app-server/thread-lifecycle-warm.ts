@@ -26,7 +26,7 @@ import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { CodexThread } from "./protocol.js";
+import { isJsonObject, type CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import {
@@ -192,7 +192,8 @@ export async function releaseCodexBoundLiveThread(
       stopWatching = client.addNotificationHandler((notification) => {
         if (
           notification.method === "thread/closed" &&
-          (notification.params as { threadId?: unknown } | undefined)?.threadId === options.threadId
+          isJsonObject(notification.params) &&
+          notification.params.threadId === options.threadId
         ) {
           resolve();
         }
