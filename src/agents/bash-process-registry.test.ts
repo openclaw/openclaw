@@ -1,8 +1,3 @@
-/**
- * Bash process registry tests.
- * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
- * state for background exec sessions.
- */
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
@@ -59,19 +54,29 @@ describe("bash process registry", () => {
     expect(result.status, [result.stdout, result.stderr].join("\n")).toBe(0);
   });
 
-  function createRegistrySession(params: {
-    id?: string;
-    maxOutputChars: number;
-    pendingMaxOutputChars: number;
-    backgrounded: boolean;
-  }): ProcessSession {
+  function createRegistrySession(
+    params: Partial<Parameters<typeof createProcessSessionFixture>[0]> = {},
+  ): ProcessSession {
     return createProcessSessionFixture({
-      id: params.id ?? "sess",
+      id: "sess",
       command: "echo test",
-      maxOutputChars: params.maxOutputChars,
-      pendingMaxOutputChars: params.pendingMaxOutputChars,
-      backgrounded: params.backgrounded,
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+      ...params,
     });
+  }
+
+  function finishOutput(id: string, size: number, output: string) {
+    const session = createRegistrySession({
+      id,
+      maxOutputChars: size,
+      pendingMaxOutputChars: size,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", output);
+    markExited(session, 0, null, "completed");
+    return session;
   }
 
   beforeEach(() => {
@@ -85,7 +90,6 @@ describe("bash process registry", () => {
       id: "poll-first",
       maxOutputChars: 10_000,
       pendingMaxOutputChars: 30_000,
-      backgrounded: true,
     });
     addSession(session);
     markExited(session, 0, null, "completed");
@@ -104,7 +108,6 @@ describe("bash process registry", () => {
     const session = createRegistrySession({
       maxOutputChars: 100_000,
       pendingMaxOutputChars: 20_000,
-      backgrounded: true,
     });
 
     addSession(session);
@@ -124,7 +127,6 @@ describe("bash process registry", () => {
     const session = createRegistrySession({
       maxOutputChars: 5_000,
       pendingMaxOutputChars: 30_000,
-      backgrounded: true,
     });
 
     addSession(session);
@@ -191,7 +193,6 @@ describe("bash process registry", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
       pendingMaxOutputChars: cap,
-      backgrounded: true,
     });
 
     addSession(session);
@@ -213,7 +214,6 @@ describe("bash process registry", () => {
     const session = createRegistrySession({
       maxOutputChars: 3,
       pendingMaxOutputChars: 3,
-      backgrounded: true,
     });
 
     addSession(session);
@@ -227,8 +227,6 @@ describe("bash process registry", () => {
 
   it("only persists finished sessions when backgrounded", () => {
     const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
       backgrounded: false,
     });
 
@@ -254,7 +252,6 @@ describe("bash process registry", () => {
       id: "exact-finished-output",
       maxOutputChars: 100,
       pendingMaxOutputChars: 100,
-      backgrounded: true,
     });
     addSession(session);
     appendOutput(session, "stdout", "terminal output\n");
@@ -268,15 +265,7 @@ describe("bash process registry", () => {
 
   it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
     for (let index = 0; index < 53; index += 1) {
-      const session = createRegistrySession({
-        id: `finished-${index}`,
-        maxOutputChars: 100,
-        pendingMaxOutputChars: 100,
-        backgrounded: true,
-      });
-      addSession(session);
-      appendOutput(session, "stdout", `output-${index}`);
-      markExited(session, 0, null, "completed");
+      finishOutput(`finished-${index}`, 100, `output-${index}`);
     }
 
     expect(listFinishedSessions()).toHaveLength(50);
@@ -288,15 +277,7 @@ describe("bash process registry", () => {
 
   it("bounds aggregate finished-session output without truncating retained logs", () => {
     for (let index = 0; index < 11; index += 1) {
-      const session = createRegistrySession({
-        id: `large-finished-${index}`,
-        maxOutputChars: 250_000,
-        pendingMaxOutputChars: 250_000,
-        backgrounded: true,
-      });
-      addSession(session);
-      appendOutput(session, "stdout", String(index).repeat(250_000));
-      markExited(session, 0, null, "completed");
+      finishOutput(`large-finished-${index}`, 250_000, String(index).repeat(250_000));
     }
 
     expect(listFinishedSessions()).toHaveLength(8);
@@ -307,28 +288,12 @@ describe("bash process registry", () => {
 
   it("releases the aggregate budget when a completed session is explicitly cleared", () => {
     for (let index = 0; index < 8; index += 1) {
-      const session = createRegistrySession({
-        id: `clear-budget-${index}`,
-        maxOutputChars: 250_000,
-        pendingMaxOutputChars: 250_000,
-        backgrounded: true,
-      });
-      addSession(session);
-      appendOutput(session, "stdout", String(index).repeat(250_000));
-      markExited(session, 0, null, "completed");
+      finishOutput(`clear-budget-${index}`, 250_000, String(index).repeat(250_000));
     }
 
     deleteSession("clear-budget-3");
 
-    const replacement = createRegistrySession({
-      id: "clear-budget-replacement",
-      maxOutputChars: 250_000,
-      pendingMaxOutputChars: 250_000,
-      backgrounded: true,
-    });
-    addSession(replacement);
-    appendOutput(replacement, "stdout", "r".repeat(250_000));
-    markExited(replacement, 0, null, "completed");
+    finishOutput("clear-budget-replacement", 250_000, "r".repeat(250_000));
 
     expect(listFinishedSessions()).toHaveLength(8);
     expect(getFinishedSession("clear-budget-0")?.aggregated).toBe("0".repeat(250_000));
@@ -337,15 +302,7 @@ describe("bash process registry", () => {
   });
 
   it("retains the complete newest log when it alone exceeds the aggregate budget", () => {
-    const session = createRegistrySession({
-      id: "oversized-finished",
-      maxOutputChars: 2_000_001,
-      pendingMaxOutputChars: 2_000_001,
-      backgrounded: true,
-    });
-    addSession(session);
-    appendOutput(session, "stdout", "x".repeat(2_000_001));
-    markExited(session, 0, null, "completed");
+    finishOutput("oversized-finished", 2_000_001, "x".repeat(2_000_001));
 
     expect(listFinishedSessions()).toHaveLength(1);
     expect(getFinishedSession("oversized-finished")?.aggregated).toHaveLength(2_000_001);
@@ -353,8 +310,6 @@ describe("bash process registry", () => {
 
   it("tracks only live backgrounded sessions", () => {
     const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
       backgrounded: false,
     });
 
@@ -375,8 +330,6 @@ describe("bash process registry", () => {
   it("keeps a hidden background session active until its process exits", () => {
     const session = createRegistrySession({
       id: "hidden-until-exit",
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
       backgrounded: false,
     });
 
@@ -397,8 +350,6 @@ describe("bash process registry", () => {
     (backgrounded) => {
       const session = createRegistrySession({
         id: "amber-atlas",
-        maxOutputChars: 100,
-        pendingMaxOutputChars: 30_000,
         backgrounded: false,
       });
 
@@ -421,9 +372,6 @@ describe("bash process registry", () => {
     const originalTestApi = globalStore[testApiKey];
     const session = createRegistrySession({
       id: "original-registry-session",
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: true,
     });
     addSession(session);
 

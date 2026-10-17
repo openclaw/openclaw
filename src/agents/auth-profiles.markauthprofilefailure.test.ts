@@ -155,18 +155,18 @@ describe("markAuthProfileFailure", () => {
   const managedSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [{ id: "local-gateway", providers: ["local"], managesOwnAvailability: true }],
   });
+  const withManagedProvider = (run: () => Promise<void>) =>
+    withPluginMetadataSnapshotScope(managedSnapshot, run, { trustConfigIdentity: true });
+
   it("does not persist direct overload failures for self-managed providers", async () => {
     const { store, agentDir } = fixture();
-    await withPluginMetadataSnapshotScope(
-      managedSnapshot,
-      () =>
-        markAuthProfileFailure({
-          store,
-          agentDir,
-          profileId: "local:default",
-          reason: "overloaded",
-        }),
-      { trustConfigIdentity: true },
+    await withManagedProvider(() =>
+      markAuthProfileFailure({
+        store,
+        agentDir,
+        profileId: "local:default",
+        reason: "overloaded",
+      }),
     );
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toMatchObject({
       profiles: { "local:default": { provider: "local" } },
@@ -177,25 +177,21 @@ describe("markAuthProfileFailure", () => {
   it("keeps subscription blocks and inline-key billing on self-managed providers", async () => {
     const { store, agentDir } = fixture();
     const until = Date.now() + 60_000;
-    await withPluginMetadataSnapshotScope(
-      managedSnapshot,
-      async () => {
-        await markAuthProfileBlockedUntil({
-          store,
-          agentDir,
-          profileId: "local:default",
-          blockedUntil: until,
-          source: "wham",
-        });
-        await markInlineProviderApiKeyFailure({
-          store,
-          agentDir,
-          provider: "local",
-          reason: "billing",
-        });
-      },
-      { trustConfigIdentity: true },
-    );
+    await withManagedProvider(async () => {
+      await markAuthProfileBlockedUntil({
+        store,
+        agentDir,
+        profileId: "local:default",
+        blockedUntil: until,
+        source: "wham",
+      });
+      await markInlineProviderApiKeyFailure({
+        store,
+        agentDir,
+        provider: "local",
+        reason: "billing",
+      });
+    });
     const persisted = ensureAuthProfileStore(agentDir);
     expect(persisted.usageStats?.["local:default"]).toMatchObject({
       blockedUntil: until,

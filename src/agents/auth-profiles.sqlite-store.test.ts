@@ -1,8 +1,3 @@
-/**
- * SQLite auth-profile store integration tests.
- * Verifies secrets/state persistence, runtime overlays, and legacy JSON
- * migration boundaries in temporary agent directories.
- */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -78,6 +73,24 @@ function sharedValue(database: DatabaseSync, key: string) {
     .get(key)?.value_json;
 }
 
+const noExternal = { syncExternalCli: false };
+
+function upsert(agentDir: string, key: string, profileId = "openai:default") {
+  return upsertAuthProfileWithLockOrThrow({
+    agentDir,
+    profileId,
+    credential: apiKeyCredential(key),
+  });
+}
+
+function seedAsync(agentDir: string, profileId: string, key: string) {
+  return upsertAuthProfileAsync({
+    agentDir,
+    profileId,
+    credential: { type: "api_key", provider: "test", key },
+  });
+}
+
 describe("auth profile sqlite store", () => {
   beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -89,15 +102,8 @@ describe("auth profile sqlite store", () => {
 
   it("refreshes async auth reads after concurrent profile writes without losing neighbors", async () => {
     await withAgentDirEnv("openclaw-auth-async-upsert-", async (agentDir) => {
-      await upsertAuthProfileAsync({
-        agentDir,
-        profileId: "test:original",
-        credential: { type: "api_key", provider: "test", key: "original-key" },
-      });
-      const options = {
-        allowKeychainPrompt: false,
-        externalCli: { mode: "none" as const },
-      };
+      await seedAsync(agentDir, "test:original", "original-key");
+      const options = { allowKeychainPrompt: false, externalCli: { mode: "none" as const } };
       expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toHaveProperty(
         "test:original",
       );
@@ -105,16 +111,8 @@ describe("auth profile sqlite store", () => {
         (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
       ).toHaveProperty("test:original");
       await Promise.all([
-        upsertAuthProfileAsync({
-          agentDir,
-          profileId: "test:original",
-          credential: { type: "api_key", provider: "test", key: "replacement-key" },
-        }),
-        upsertAuthProfileAsync({
-          agentDir,
-          profileId: "test:neighbor",
-          credential: { type: "api_key", provider: "test", key: "neighbor-key" },
-        }),
+        seedAsync(agentDir, "test:original", "replacement-key"),
+        seedAsync(agentDir, "test:neighbor", "neighbor-key"),
       ]);
       const expected = {
         "test:original": { type: "api_key", provider: "test", key: "replacement-key" },
@@ -228,7 +226,7 @@ describe("auth profile sqlite store", () => {
         order: { openai: ["openai:default"] },
       });
 
-      expect(ensureAuthProfileStore(undefined, { syncExternalCli: false })).toMatchObject({
+      expect(ensureAuthProfileStore(undefined, noExternal)).toMatchObject({
         profiles: { "openai:default": { key: "sk-shared" } },
         order: { openai: ["openai:default"] },
       });
@@ -279,11 +277,7 @@ describe("auth profile sqlite store", () => {
 
       try {
         for (const key of ["sk-first", "sk-second"]) {
-          await upsertAuthProfileWithLockOrThrow({
-            agentDir,
-            profileId: "openai:default",
-            credential: apiKeyCredential(key),
-          });
+          await upsert(agentDir, key);
         }
         expect(sourceInspections).toBe(1);
 
@@ -294,14 +288,10 @@ describe("auth profile sqlite store", () => {
         await migrateSharedAuthStore({ detected, stateDir });
         const inspectionsAfterDoctor = sourceInspections;
 
-        await upsertAuthProfileWithLockOrThrow({
-          agentDir,
-          profileId: "openai:default",
-          credential: apiKeyCredential("sk-after-doctor"),
-        });
+        await upsert(agentDir, "sk-after-doctor");
 
         expect(sourceInspections).toBe(inspectionsAfterDoctor);
-        expect(ensureAuthProfileStore(undefined, { syncExternalCli: false })).toMatchObject({
+        expect(ensureAuthProfileStore(undefined, noExternal)).toMatchObject({
           profiles: { "openai:default": { key: "sk-after-doctor" } },
         });
         expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
@@ -335,11 +325,7 @@ describe("auth profile sqlite store", () => {
         .run(sourcePath);
       sharedDatabase.close();
 
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir,
-        profileId: "openai:default",
-        credential: apiKeyCredential("sk-after-crash"),
-      });
+      await upsert(agentDir, "sk-after-crash");
 
       const after = new DatabaseSync(resolveOpenClawStateSqlitePath());
       expect(sharedValue(after, "auth.sharedStore")).toBeUndefined();
@@ -365,11 +351,7 @@ describe("auth profile sqlite store", () => {
         });
 
       try {
-        await upsertAuthProfileWithLockOrThrow({
-          agentDir,
-          profileId: "openai:default",
-          credential: apiKeyCredential("sk-unreadable"),
-        });
+        await upsert(agentDir, "sk-unreadable");
       } finally {
         inspection.mockRestore();
       }
@@ -390,7 +372,7 @@ describe("auth profile sqlite store", () => {
         "utf8",
       );
 
-      expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
+      expect(() => ensureAuthProfileStore(agentDir, noExternal)).toThrow(
         "requires legacy credential migration",
       );
     });
@@ -400,13 +382,13 @@ describe("auth profile sqlite store", () => {
     await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", async (agentDir) => {
       saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
       const legacyPath = path.join(agentDir, "auth.json");
-      ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      ensureAuthProfileStore(agentDir, noExternal);
       fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
       await refreshAuthProfileFileState();
       // A migrated store still owns its credentials after a retired file reappears.
-      expect(
-        ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
-      ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
+      expect(ensureAuthProfileStore(agentDir, noExternal).profiles["openai:default"]).toMatchObject(
+        { type: "api_key", provider: "openai", key: "not-a-real" },
+      );
       // Runtime never reads or removes it; Doctor still owns the archive step.
       expect(fs.existsSync(legacyPath)).toBe(true);
     });
@@ -587,7 +569,7 @@ describe("auth profile sqlite store", () => {
         agentDir,
       );
 
-      const loaded = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      const loaded = ensureAuthProfileStore(agentDir, noExternal);
 
       expect(loaded.profiles["openai:default"]).toEqual({
         type: "api_key",

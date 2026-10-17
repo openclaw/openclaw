@@ -218,6 +218,18 @@ function mockApproval(decision: string | null, handlers: GatewayHandlers = {}) {
   });
 }
 
+function mockFollowup(decision: string, handlers: GatewayHandlers = {}) {
+  const followup = createDeferredCore<Record<string, unknown>>();
+  mockApproval(decision, {
+    ...handlers,
+    agent: (params) => {
+      followup.resolve(requireRecord(params, "agent"));
+      return { status: "ok" };
+    },
+  });
+  return followup.promise;
+}
+
 function prepareOnly(params: unknown) {
   return requireRecord(params, "node invoke").command === "system.run.prepare"
     ? buildPreparedSystemRunPayload(params)
@@ -364,14 +376,7 @@ describe("exec approvals", () => {
 
   it("reuses approval id as the node runId for an explicit agent follow-up", async () => {
     const node = nodeFixture();
-    const followup = createDeferredCore<Record<string, unknown>>();
-    mockApproval("allow-once", {
-      "node.invoke": node.handle,
-      agent: (params) => {
-        followup.resolve(requireRecord(params, "agent"));
-        return { status: "ok" };
-      },
-    });
+    const followup = mockFollowup("allow-once", { "node.invoke": node.handle });
     const tool = createExecTool({
       host: "node",
       ask: "always",
@@ -393,7 +398,7 @@ describe("exec approvals", () => {
     expect(pendingText).toContain("ls -la");
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
     expect(pendingText).not.toContain("Background mode");
-    const agent = await followup.promise;
+    const agent = await followup;
     const run = requireRecord(node.runs[0], "system.run params");
     expect(run.runId).toBe(details.approvalId);
     expect(Object.hasOwn(run, "cwd")).toBe(false);
@@ -516,13 +521,7 @@ describe("exec approvals", () => {
   });
 
   it("delivers an explicitly requested agent follow-up through the original external route", async () => {
-    const followup = createDeferredCore<Record<string, unknown>>();
-    mockApproval("allow-once", {
-      agent: (params) => {
-        followup.resolve(requireRecord(params, "agent"));
-        return { status: "ok" };
-      },
-    });
+    const followup = mockFollowup("allow-once");
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
@@ -539,7 +538,7 @@ describe("exec approvals", () => {
       workdir: process.cwd(),
     });
     expect(result.details.status).toBe("approval-pending");
-    const agent = await followup.promise;
+    const agent = await followup;
     expect(gatewayParams("agent")).toHaveLength(1);
     expectAuthenticatedExecFollowup(agent, "agent:main:feishu:channel:123");
     expect(agent).toMatchObject({
@@ -589,13 +588,7 @@ describe("exec approvals", () => {
   });
 
   it("routes denied approval status through an explicitly requested agent follow-up", async () => {
-    const followup = createDeferredCore<Record<string, unknown>>();
-    mockApproval("deny", {
-      agent: (params) => {
-        followup.resolve(requireRecord(params, "agent"));
-        return { status: "ok" };
-      },
-    });
+    const followup = mockFollowup("deny");
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
@@ -613,7 +606,7 @@ describe("exec approvals", () => {
     }
     const approvalId = details.approvalId;
     expect(approvalId).toBeTypeOf("string");
-    const agent = await followup.promise;
+    const agent = await followup;
     expect(gatewayParams("agent")).toHaveLength(1);
     expect(agent).toMatchObject({
       sessionKey: "agent:main:main",
