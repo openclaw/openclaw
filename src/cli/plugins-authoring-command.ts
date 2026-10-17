@@ -140,7 +140,9 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   const packageManifest = readPackageManifest(rootDir);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
   const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
-  const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
+  const currentManifest = fs.existsSync(manifestPath)
+    ? readJsonFile(manifestPath, { json5: true })
+    : undefined;
   const manifest = buildToolPluginManifest({
     metadata,
     packageManifest,
@@ -216,7 +218,7 @@ export async function collectPluginsValidationResult(
   if (!manifestResult.ok) {
     return { valid: false, errors: [manifestResult.error] };
   }
-  const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
+  const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), { json5: true });
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
   const errors = validateToolPluginProject({
     metadata,

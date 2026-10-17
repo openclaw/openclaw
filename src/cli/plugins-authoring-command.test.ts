@@ -489,6 +489,56 @@ describe("plugin authoring commands", () => {
     },
   );
 
+  it.each(["validate", "build --check", "build"] as const)(
+    "accepts JSON5 native manifests in %s and preserves authored metadata",
+    async (command) => {
+      const tmpDir = tempDirs.make("openclaw-plugin-json5-");
+      const entryPath = writeSourceToolPluginProject({
+        tmpDir,
+        packageName: "openclaw-plugin-json5",
+        pluginId: "json5",
+        toolName: "json5_echo",
+      });
+      await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+      const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      manifest.uiHints = { token: { label: "Authored label" } };
+      const authored = JSON.stringify(manifest, null, 2)
+        .replace("{", "{ // Native manifests support JSON5")
+        .replace('"id":', "id:")
+        .replace(/\n\}$/, ",\n}");
+      fs.writeFileSync(manifestPath, authored);
+      const packagePath = path.join(tmpDir, "package.json");
+      const packageBefore = fs.readFileSync(packagePath, "utf8");
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected runtime exit ${code}`);
+      });
+
+      try {
+        if (command === "validate") {
+          await runPluginsValidateCommand({ root: tmpDir, entry: entryPath });
+        } else {
+          await runPluginsBuildCommand({
+            root: tmpDir,
+            entry: entryPath,
+            check: command === "build --check",
+          });
+        }
+        expect(exit).not.toHaveBeenCalled();
+        expect(fs.readFileSync(packagePath, "utf8")).toBe(packageBefore);
+        if (command === "build") {
+          expect(JSON.parse(fs.readFileSync(manifestPath, "utf8")).uiHints).toEqual({
+            token: { label: "Authored label" },
+          });
+        } else {
+          expect(fs.readFileSync(manifestPath, "utf8")).toBe(authored);
+        }
+      } finally {
+        exit.mockRestore();
+      }
+    },
+  );
+
   it("projects undefined TypeBox options into the persisted manifest shape", () => {
     const entry = defineToolPlugin({
       id: "undefined-schema-options",
@@ -591,21 +641,24 @@ describe("plugin authoring commands", () => {
     ).rejects.toThrow("plugin entry not found: ./dist/index.js");
   });
 
-  it("throws a user-friendly error when package.json is malformed JSON", async () => {
-    const tmpDir = tempDirs.make("openclaw-plugin-bad-json-");
-    const packagePath = path.join(tmpDir, "package.json");
-    const entryPath = writeSourceToolPluginProject({
-      tmpDir,
-      packageName: "openclaw-plugin-bad-json",
-      pluginId: "bad-json",
-      toolName: "bad_json_echo",
-    });
-    fs.writeFileSync(packagePath, "{invalid json");
+  it.each(["{invalid json", "{ // JSON5 remains invalid in package.json\n}"])(
+    "rejects non-JSON package metadata: %s",
+    async (raw) => {
+      const tmpDir = tempDirs.make("openclaw-plugin-bad-json-");
+      const packagePath = path.join(tmpDir, "package.json");
+      const entryPath = writeSourceToolPluginProject({
+        tmpDir,
+        packageName: "openclaw-plugin-bad-json",
+        pluginId: "bad-json",
+        toolName: "bad_json_echo",
+      });
+      fs.writeFileSync(packagePath, raw);
 
-    await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
-      `Malformed JSON in ${packagePath}`,
-    );
-  });
+      await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+        `Malformed JSON in ${packagePath}`,
+      );
+    },
+  );
 
   it("finishes a build from an absolute root after the launch directory is removed", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-build-"));
