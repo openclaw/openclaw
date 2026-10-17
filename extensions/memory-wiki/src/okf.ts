@@ -25,6 +25,8 @@ import { readWikiPageStat, writeGuardedVaultPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
+const OKF_HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
+const OKF_HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 const OKF_MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(([^)]+)\)/g;
 const OKF_RELATED_SECTION_PATTERN = new RegExp(
   `\\n+## Related\\n${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}\\n?`,
@@ -281,6 +283,33 @@ function normalizeOkfRenderedPageForComparison(content: string): string {
   return `---\n${frontmatterBody}---\n${withoutRelated.slice(frontmatterMatch[0].length)}`.trimEnd();
 }
 
+// Producer Markdown is inserted directly before the local Notes slot, so the
+// human-marker search must be scoped to the slot appended at the end of the
+// page. Producer bodies may legitimately contain literal marker examples inside
+// fences, and legacy pages produced before the slot existed have no markers at
+// all; both must leave the rendered page untouched.
+function extractOkfHumanNotesBlock(page: string): string | null {
+  const start = page.lastIndexOf(OKF_HUMAN_START_MARKER);
+  const end = page.lastIndexOf(OKF_HUMAN_END_MARKER);
+  if (start === -1 || end < start) {
+    return null;
+  }
+  return page.slice(start, end + OKF_HUMAN_END_MARKER.length);
+}
+
+function preserveOkfHumanNotes(rendered: string, existing: string): string {
+  const humanBlock = extractOkfHumanNotesBlock(existing);
+  if (!humanBlock) {
+    return rendered;
+  }
+  const start = rendered.lastIndexOf(OKF_HUMAN_START_MARKER);
+  const end = rendered.lastIndexOf(OKF_HUMAN_END_MARKER);
+  if (start === -1 || end < start) {
+    return rendered;
+  }
+  return rendered.slice(0, start) + humanBlock + rendered.slice(end + OKF_HUMAN_END_MARKER.length);
+}
+
 async function writeOkfConceptPage(params: {
   vaultRoot: string;
   pagePath: string;
@@ -289,17 +318,20 @@ async function writeOkfConceptPage(params: {
   const vault = await fsRoot(params.vaultRoot);
   const pageStat = await readWikiPageStat(vault, params.pagePath);
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
+  // Re-import regenerates concept pages; keep any human Notes block so
+  // re-imports cannot silently erase handwritten notes.
+  const nextRendered = existing ? preserveOkfHumanNotes(params.content, existing) : params.content;
   if (
-    existing === params.content ||
+    existing === nextRendered ||
     normalizeOkfRenderedPageForComparison(existing) ===
-      normalizeOkfRenderedPageForComparison(params.content)
+      normalizeOkfRenderedPageForComparison(nextRendered)
   ) {
     return { changed: false, created: !pageStat };
   }
   await writeGuardedVaultPage({
     vault,
     pagePath: params.pagePath,
-    content: params.content,
+    content: nextRendered,
     pageStat,
     pageLabel: "OKF concept page",
   });
@@ -469,7 +501,7 @@ export async function importMemoryWikiOkfBundle(params: {
       pagePath: concept.pagePath,
       content: renderWikiMarkdown({
         frontmatter,
-        body: rewritten.body,
+        body: `${rewritten.body.trimEnd()}\n\n## Notes\n${OKF_HUMAN_START_MARKER}\n${OKF_HUMAN_END_MARKER}\n`,
       }),
     });
     if (!writeResult.created && writeResult.changed) {

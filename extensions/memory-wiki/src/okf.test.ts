@@ -357,4 +357,159 @@ describe("importMemoryWikiOkfBundle", () => {
       path: "tables/private.md",
     });
   });
+
+  it("preserves human notes on OKF concept pages across re-import", async () => {
+    const rootDir = await createTempDir("memory-wiki-okf-notes-");
+    const bundlePath = path.join(rootDir, "notes-okf");
+    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "customers.md"),
+      `---
+type: BigQuery Table
+title: Customers
+---
+
+Customer body.
+`,
+      "utf8",
+    );
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+    const first = await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
+    });
+    const pagePath = getOnlyPagePath(first.pagePaths);
+    const pageAbsolutePath = path.join(config.vault.path, pagePath);
+    const raw = await fs.readFile(pageAbsolutePath, "utf8");
+    const withNotes = raw.includes("<!-- openclaw:human:start -->")
+      ? raw.replace(
+          "<!-- openclaw:human:start -->",
+          "<!-- openclaw:human:start -->\nHANDWRITTEN NOTE MUST SURVIVE",
+        )
+      : `${raw.trimEnd()}\n\n## Notes\n<!-- openclaw:human:start -->\nHANDWRITTEN NOTE MUST SURVIVE\n<!-- openclaw:human:end -->\n`;
+    await fs.writeFile(pageAbsolutePath, withNotes, "utf8");
+
+    await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 11, 0, 0),
+    });
+
+    await expect(fs.readFile(pageAbsolutePath, "utf8")).resolves.toContain(
+      "HANDWRITTEN NOTE MUST SURVIVE",
+    );
+  });
+
+  it("re-imports legacy OKF pages that carry an unmarked producer Notes section", async () => {
+    const rootDir = await createTempDir("memory-wiki-okf-legacy-notes-");
+    const bundlePath = path.join(rootDir, "legacy-notes-okf");
+    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "customers.md"),
+      `---
+type: BigQuery Table
+title: Customers
+---
+
+Customer body.
+`,
+      "utf8",
+    );
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+    const first = await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
+    });
+    const pagePath = getOnlyPagePath(first.pagePaths);
+    const pageAbsolutePath = path.join(config.vault.path, pagePath);
+    // Simulate a page produced by the previous importer: a plain producer
+    // "## Notes" section with no human markers.
+    await fs.writeFile(
+      pageAbsolutePath,
+      `---
+pageType: concept
+title: Customers
+---
+
+Customer body.
+
+## Notes
+Producer note.
+`,
+      "utf8",
+    );
+
+    // Re-import must not treat the unmarked producer section as malformed human Notes.
+    await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 11, 0, 0),
+    });
+    await expect(fs.readFile(pageAbsolutePath, "utf8")).resolves.toContain(
+      "<!-- openclaw:human:start -->",
+    );
+  });
+
+  it("preserves only the local Notes slot when the producer body contains literal human markers", async () => {
+    const rootDir = await createTempDir("memory-wiki-okf-literal-marker-");
+    const bundlePath = path.join(rootDir, "literal-marker-okf");
+    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    const conceptPath = path.join(bundlePath, "tables", "customers.md");
+    const writeVersionedConcept = (version: string) =>
+      fs.writeFile(
+        conceptPath,
+        `---
+type: BigQuery Table
+title: Customers
+---
+
+# Schema
+
+\`\`\`markdown
+<!-- openclaw:human:start -->
+\`\`\`
+
+Version ${version}
+`,
+        "utf8",
+      );
+    await writeVersionedConcept("1");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+    const first = await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
+    });
+    const pagePath = getOnlyPagePath(first.pagePaths);
+    const pageAbsolutePath = path.join(config.vault.path, pagePath);
+    const raw = await fs.readFile(pageAbsolutePath, "utf8");
+    await fs.writeFile(
+      pageAbsolutePath,
+      raw.replace(
+        "## Notes\n<!-- openclaw:human:start -->",
+        "## Notes\n<!-- openclaw:human:start -->\nHANDWRITTEN NOTE MUST SURVIVE",
+      ),
+      "utf8",
+    );
+
+    await writeVersionedConcept("2");
+    await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 11, 0, 0),
+    });
+
+    const refreshed = await fs.readFile(pageAbsolutePath, "utf8");
+    expect(refreshed).toContain("HANDWRITTEN NOTE MUST SURVIVE");
+    expect(refreshed).toContain("Version 2");
+    expect(refreshed).not.toContain("Version 1");
+  });
 });
