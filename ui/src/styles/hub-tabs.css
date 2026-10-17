@@ -112,6 +112,10 @@
   justify-self: start;
 }
 
+.content-header.hub-page-header--stacked .page-title {
+  font-size: 26px;
+}
+
 .content-header.hub-page-header--stacked .hub-page-header__tabs {
   grid-area: tabs;
   justify-self: start;

@@ -1,7 +1,9 @@
-import { For, Show, onSettled, untrack } from "solid-js";
+import { For, Show, untrack } from "solid-js";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { reclaimHubTabFocus, rememberHubTabFocus } from "../../components/hub-tabs-focus.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
+  LearnMoreLink,
   SettingsEmpty,
   SettingsPage,
   SettingsRow,
@@ -9,8 +11,6 @@ import {
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { Tabs } from "../../components/solid/tabs.tsx";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
@@ -53,8 +53,6 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     equality: "revision",
   });
   const view = projection.read;
-  let worktreesTab!: HTMLButtonElement;
-  onSettled(() => reclaimHubTabFocus("sessions", "worktrees", worktreesTab));
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -90,55 +88,28 @@ export function WorktreesView(props: { model: WorktreesModel }) {
 
   return (
     <>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
+      <ShellLayoutBoundary traits={{ hubHeader: true }}>
+        <section class="content-header content-header--stacked content-header--settings content-header--page hub-page-header hub-page-header--stacked sessions-hub-header">
           <div class="hub-page-header__title">
-            <div class="page-title">{t("tabs.sessions")}</div>
+            <h1 class="page-title">{titleForRoute("worktrees", t)}</h1>
             <div class="page-subtitle">
-              {t("subtitles.worktrees")}{" "}
-              <a
-                class="learn-more-link"
-                href={WORKTREES_DOCS_URL}
-                target={EXTERNAL_LINK_TARGET}
-                rel={buildExternalLinkRel()}
-              >
-                {t("common.learnMore")}
-              </a>
+              {subtitleForRoute("worktrees", t)} <LearnMoreLink url={WORKTREES_DOCS_URL} />
             </div>
           </div>
           <div class="hub-page-header__tabs">
-            <Tabs
-              class="hub-tabs hub-tabs--primary sessions-hub-tabs"
+            <HubTabs<"sessions" | "worktrees">
+              id="sessions"
               active="worktrees"
-              ariaLabel={t("sessionsPage.hubTablistLabel")}
-              activation="manual"
-              items={[
-                {
-                  value: "sessions",
-                  id: "sessions-tab-sessions",
-                  panelId: "sessions-hub-panel",
-                  className: "hub-tab",
-                  label: t("tabs.sessions"),
-                },
-                {
-                  value: "worktrees",
-                  id: "sessions-tab-worktrees",
-                  panelId: "sessions-hub-panel",
-                  className: "hub-tab",
-                  label: t("tabs.worktrees"),
-                  attributes: {
-                    ref: (element) => (worktreesTab = element),
-                  },
-                },
+              tabs={[
+                { value: "sessions", label: t("tabs.sessions") },
+                { value: "worktrees", label: t("tabs.worktrees") },
               ]}
-              onSelect={(value, tab, event) => {
+              ariaLabel={t("sessionsPage.hubTablistLabel")}
+              panelId="sessions-hub-panel"
+              onSelect={(value) => {
                 if (value === "sessions") {
-                  if (event instanceof KeyboardEvent) {
-                    rememberHubTabFocus("sessions", "sessions", tab);
-                  }
                   model.context.navigate("sessions");
                 }
-                return false;
               }}
             />
           </div>

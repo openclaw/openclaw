@@ -27,6 +27,31 @@ const restorableWorktree = {
 };
 
 suite.define(() => {
+  it.each([1440, 390])(
+    "keeps the Worktrees title above left-aligned hub tabs at %ipx",
+    async (width) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: { "worktrees.list": { worktrees: [] } },
+        });
+        await page.goto(`${suite.server.baseUrl}worktrees`);
+        const heading = page.getByRole("heading", { name: "Worktrees", level: 1 });
+        const tabs = page.getByRole("tablist", { name: "Session sections" });
+        expect(await heading.isVisible()).toBe(true);
+        expect(await tabs.isVisible()).toBe(true);
+        const titleBox = await heading.boundingBox();
+        const tabsBox = await tabs.boundingBox();
+        expect(titleBox).not.toBeNull();
+        expect(tabsBox).not.toBeNull();
+        expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
+        expect(Math.abs(tabsBox!.x - titleBox!.x)).toBeLessThan(12);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `worktrees-header-${width}.png`),
+        });
+      });
+    },
+  );
+
   it("uses the remote default until a base branch is explicitly selected", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
