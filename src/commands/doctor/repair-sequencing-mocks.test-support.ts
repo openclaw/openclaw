@@ -1,7 +1,9 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-const hoistedMocks = vi.hoisted(() => ({
+const unchanged = vi.hoisted(() => (config: OpenClawConfig) => ({ config, changes: [] }));
+
+const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
   collectChannelDoctorCompatibilityMutations: vi.fn(),
@@ -30,84 +32,64 @@ const hoistedMocks = vi.hoisted(() => ({
   resolveProviderInstallCatalogEntries: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
-
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: hoistedMocks.applyPluginAutoEnable,
-  materializePluginAutoEnableCandidates: hoistedMocks.materializePluginAutoEnableCandidates,
+  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
 }));
-
 vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: hoistedMocks.resolveConfigWidePluginManifestRegistry,
-  resolveConfigWidePluginMetadataSnapshot: hoistedMocks.resolveConfigWidePluginMetadataSnapshot,
+  resolveConfigWidePluginManifestRegistry: mocks.resolveConfigWidePluginManifestRegistry,
+  resolveConfigWidePluginMetadataSnapshot: mocks.resolveConfigWidePluginMetadataSnapshot,
 }));
-
 vi.mock("../doctor-plugin-host-links.js", () => ({
-  maybeRepairPluginOpenClawHostLinks: hoistedMocks.maybeRepairPluginOpenClawHostLinks,
+  maybeRepairPluginOpenClawHostLinks: mocks.maybeRepairPluginOpenClawHostLinks,
 }));
-
 vi.mock("../doctor-plugin-registry.js", () => ({
-  maybeRepairStaleManagedNpmBundledPlugins: hoistedMocks.maybeRepairStaleManagedNpmBundledPlugins,
+  maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
-
 vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({
-  migrateLegacyTailscaleProfileIdentities: hoistedMocks.migrateLegacyTailscaleProfileIdentities,
+  migrateLegacyTailscaleProfileIdentities: mocks.migrateLegacyTailscaleProfileIdentities,
 }));
-
 vi.mock("../../state/user-profiles-owner-migration.js", () => ({
-  repairMergedGatewayOwnerProfile: hoistedMocks.repairMergedGatewayOwnerProfile,
+  repairMergedGatewayOwnerProfile: mocks.repairMergedGatewayOwnerProfile,
 }));
-
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
-  maybeRepairLegacyAuthProfileStores: ({
-    profileIdMap,
-  }: {
-    profileIdMap: Map<string, string>;
-  }) => ({
+  maybeRepairLegacyAuthProfileStores: (params: { profileIdMap: Map<string, string> }) => ({
     changes: [],
     warnings: [],
-    profileIdMap,
+    profileIdMap: params.profileIdMap,
   }),
-  collectOpenAICodexAuthProfileStoreIdMap: hoistedMocks.collectOpenAICodexAuthProfileStoreIdMap,
-  maybeMigrateAuthProfileJsonStoresToSqlite: hoistedMocks.maybeMigrateAuthProfileJsonStoresToSqlite,
-  maybeRepairOpenAICodexAuthConfig: hoistedMocks.maybeRepairOpenAICodexAuthConfig,
+  collectOpenAICodexAuthProfileStoreIdMap: mocks.collectOpenAICodexAuthProfileStoreIdMap,
+  maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
 }));
-
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
-  repairMissingConfiguredPluginInstalls: hoistedMocks.repairMissingConfiguredPluginInstalls,
+  repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
 }));
-
 vi.mock("./shared/stale-agent-model-ref-repair.js", () => ({
-  repairStaleAgentModelRefs: hoistedMocks.repairStaleAgentModelRefs,
+  repairStaleAgentModelRefs: mocks.repairStaleAgentModelRefs,
 }));
-
 vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: hoistedMocks.ensureAuthProfileStore,
-  resolveAuthProfileOrder: hoistedMocks.resolveAuthProfileOrder,
-  resolveProfileUnusableUntilForDisplay: hoistedMocks.resolveProfileUnusableUntilForDisplay,
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
+  resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
 }));
-
 vi.mock("../../agents/auth-profiles/credential-state.js", () => ({
-  evaluateStoredCredentialEligibility: hoistedMocks.evaluateStoredCredentialEligibility,
+  evaluateStoredCredentialEligibility: mocks.evaluateStoredCredentialEligibility,
 }));
-
 vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/installed-plugin-index.js")>()),
-  isInstalledPluginEnabled: hoistedMocks.isInstalledPluginEnabled,
-  loadInstalledPluginIndex: hoistedMocks.loadInstalledPluginIndex,
+  isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
+  loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
-
 vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: hoistedMocks.loadPluginMetadataSnapshot,
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
-
 vi.mock("../../plugins/provider-install-catalog.js", () => ({
-  resolveProviderInstallCatalogEntries: hoistedMocks.resolveProviderInstallCatalogEntries,
+  resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
 }));
-
 vi.mock("./shared/channel-doctor.js", () => ({
-  collectChannelDoctorCompatibilityMutations:
-    hoistedMocks.collectChannelDoctorCompatibilityMutations,
+  collectChannelDoctorCompatibilityMutations: mocks.collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorRepairMutations: ({ cfg }: { cfg: OpenClawConfig }) => {
     const allowFrom = cfg.channels?.discord?.allowFrom as unknown[] | undefined;
     if (allowFrom?.[0] === 123) {
@@ -117,10 +99,7 @@ vi.mock("./shared/channel-doctor.js", () => ({
             ...cfg,
             channels: {
               ...cfg.channels,
-              discord: {
-                ...cfg.channels?.discord,
-                allowFrom: ["123"],
-              },
+              discord: { ...cfg.channels?.discord, allowFrom: ["123"] },
             },
           },
           changes: ["channels.discord.allowFrom: converted 1 numeric ID to strings"],
@@ -128,15 +107,9 @@ vi.mock("./shared/channel-doctor.js", () => ({
       ];
     }
     if (allowFrom?.[0] === 106232522769186816) {
-      return [
-        {
-          config: cfg,
-          changes: [],
-          warnings: [
-            "channels.discord.allowFrom[0] cannot be auto-repaired because it is not a safe integer",
-          ],
-        },
-      ];
+      const warning =
+        "channels.discord.allowFrom[0] cannot be auto-repaired because it is not a safe integer";
+      return [{ config: cfg, changes: [], warnings: [warning] }];
     }
     return [];
   },
@@ -145,60 +118,34 @@ vi.mock("./shared/channel-doctor.js", () => ({
     shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
   }),
 }));
-
 vi.mock("./shared/empty-allowlist-scan.js", () => ({
   scanEmptyAllowlistPolicyWarnings: (cfg: OpenClawConfig) =>
     cfg.channels?.signal
       ? ["channels.signal.accounts.ops\u001B[31m-team\u001B[0m\r\nnext.dmPolicy warning"]
       : [],
 }));
-
 vi.mock("./shared/allowlist-policy-repair.js", () => ({
-  maybeRepairAllowlistPolicyAllowFrom: async (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
+  maybeRepairAllowlistPolicyAllowFrom: async (cfg: OpenClawConfig) => unchanged(cfg),
 }));
-
 vi.mock("./shared/allowfrom-fallback-migration.js", () => ({
-  maybeRepairGroupAllowFromFallback: hoistedMocks.maybeRepairGroupAllowFromFallback,
+  maybeRepairGroupAllowFromFallback: mocks.maybeRepairGroupAllowFromFallback,
 }));
-
 vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
-  maybeRepairBundledPluginLoadPaths: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
+  maybeRepairBundledPluginLoadPaths: unchanged,
 }));
-
 vi.mock("./shared/open-policy-allowfrom.js", () => ({
-  maybeRepairOpenPolicyAllowFrom: hoistedMocks.maybeRepairOpenPolicyAllowFrom,
+  maybeRepairOpenPolicyAllowFrom: mocks.maybeRepairOpenPolicyAllowFrom,
 }));
-
 vi.mock("./shared/stale-plugin-config.js", () => ({
-  maybeRepairStalePluginConfig: hoistedMocks.maybeRepairStalePluginConfig,
+  maybeRepairStalePluginConfig: mocks.maybeRepairStalePluginConfig,
 }));
-
 vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
-  repairStaleOAuthProfileShadows: hoistedMocks.repairStaleOAuthProfileShadows,
+  repairStaleOAuthProfileShadows: mocks.repairStaleOAuthProfileShadows,
 }));
-
 vi.mock("./shared/stale-auth-order.js", () => ({
-  maybeRepairStaleConfiguredAuthOrders: hoistedMocks.maybeRepairStaleConfiguredAuthOrders,
+  maybeRepairStaleConfiguredAuthOrders: mocks.maybeRepairStaleConfiguredAuthOrders,
 }));
+vi.mock("./shared/invalid-plugin-config.js", () => ({ maybeRepairInvalidPluginConfig: unchanged }));
+vi.mock("./shared/exec-safe-bins.js", () => ({ maybeRepairExecSafeBinProfiles: unchanged }));
 
-vi.mock("./shared/invalid-plugin-config.js", () => ({
-  maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
-}));
-
-vi.mock("./shared/exec-safe-bins.js", () => ({
-  maybeRepairExecSafeBinProfiles: (cfg: OpenClawConfig) => ({
-    config: cfg,
-    changes: [],
-  }),
-}));
-
-export const mocks = hoistedMocks;
+export { mocks };

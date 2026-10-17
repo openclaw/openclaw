@@ -5,10 +5,18 @@ import {
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  maybeRepairLegacyAuthProfileStores,
+  maybeMigrateAuthProfileJsonStoresToSqlite,
+} from "../doctor-auth-flat-profiles.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 export function withState(label: string, run: Parameters<typeof withOpenClawTestState>[1]) {
   return withOpenClawTestState({ label, layout: "home" }, run);
+}
+
+export function doctorConfig(config: OpenClawConfig = {}): OpenClawConfig {
+  return { plugins: { enabled: false }, ...config };
 }
 
 export function runRepair(
@@ -46,4 +54,25 @@ export function writeStore(env: NodeJS.ProcessEnv, store: unknown, agentDir?: st
     },
     { env },
   );
+}
+
+export function repairAuth(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  profileIdMap = new Map<string, string>(),
+) {
+  return maybeRepairLegacyAuthProfileStores({ cfg, env, profileIdMap });
+}
+
+export function importAuth(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>,
+) {
+  return maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg,
+    env,
+    openAICodexAuthProfileIdMap,
+    prompter: { confirmAutoFix: async () => true },
+  });
 }

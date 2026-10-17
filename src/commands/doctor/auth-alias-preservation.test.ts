@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
 import * as authProfileSqlite from "../../agents/auth-profiles/sqlite.js";
 import {
-  readPersistedAuthProfileStateRaw,
-  readPersistedAuthProfileStoreRaw,
-  readPersistedSharedAuthProfileStoreRaw,
+  readPersistedAuthProfileStateRaw as readLocalState,
+  readPersistedAuthProfileStoreRaw as readLocalStore,
+  readPersistedSharedAuthProfileStoreRaw as readSharedStore,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
@@ -19,13 +19,20 @@ import {
 } from "../../state/user-model-accounts.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import {
-  collectOpenAICodexAuthProfileStoreIdMap,
-  maybeMigrateAuthProfileJsonStoresToSqlite,
-  maybeRepairLegacyAuthProfileStores,
-  maybeRepairOpenAICodexAuthConfig,
+  collectOpenAICodexAuthProfileStoreIdMap as collectIdMap,
+  maybeRepairOpenAICodexAuthConfig as repairAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { recordAuthAliasMigration } from "./auth-alias-receipt.js";
-import { withState, runRepair, apiKey, authStore, writeStore } from "./auth-alias.test-support.js";
+import {
+  withState,
+  runRepair,
+  apiKey,
+  authStore,
+  writeStore,
+  repairAuth,
+  importAuth,
+  doctorConfig,
+} from "./auth-alias.test-support.js";
 import { maybeRepairCodexSessionRoutes } from "./shared/codex-route-session-repair.js";
 
 describe("Doctor auth alias preservation", () => {
@@ -46,21 +53,16 @@ describe("Doctor auth alias preservation", () => {
         invalid === "uninspectable sibling owner" ||
         invalid === "opaque state-only owner";
       const agentDir = fixture.agentDir("worker");
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
+      const cfg: OpenClawConfig = doctorConfig({
         ...(separateOwner ? { agents: { entries: { main: {}, worker: { agentDir } } } } : {}),
         auth: { profiles: { [legacyId]: { provider: "claude-cli", mode: "api_key" } } },
-      };
+      });
       runAuthProfileWriteTransaction(
         undefined,
         (database) => {
           writePersistedAuthProfileStoreRaw(
             authStore({
-              [legacyId]: {
-                mode: "api_key",
-                provider: "claude-cli",
-                apiKey: "synthetic-key",
-              },
+              [legacyId]: { mode: "api_key", provider: "claude-cli", apiKey: "synthetic-key" },
               ...(invalid === "sibling profile" ? { "unknown:future": 17 } : {}),
             }),
             undefined,
@@ -111,21 +113,17 @@ describe("Doctor auth alias preservation", () => {
         { profileId: owner.id, provider: "anthropic", authProfileId: legacyId },
         { env: fixture.env },
       );
-      const repaired = await maybeRepairLegacyAuthProfileStores({
-        cfg,
-        env: fixture.env,
-        profileIdMap: new Map([[legacyId, canonicalId]]),
-      });
+      const repaired = await repairAuth(cfg, fixture.env, new Map([[legacyId, canonicalId]]));
       expect(repaired.profileIdMap.size).toBe(0);
-      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(
+      expect(readSharedStore(fixture.env)).toEqual(
         authStore({
           [legacyId]: apiKey("claude-cli", "synthetic-key"),
           ...(invalid === "sibling profile" ? { "unknown:future": 17 } : {}),
         }),
       );
-      expect(
-        maybeRepairOpenAICodexAuthConfig(cfg, { profileIdMap: repaired.profileIdMap }).config.auth,
-      ).toEqual(cfg.auth);
+      expect(repairAuthConfig(cfg, { profileIdMap: repaired.profileIdMap }).config.auth).toEqual(
+        cfg.auth,
+      );
       expect(listUserProfileAuthLinks(owner.id, { env: fixture.env })).toMatchObject([
         { provider: "anthropic", authProfileId: legacyId },
       ]);
@@ -136,22 +134,12 @@ describe("Doctor auth alias preservation", () => {
             [legacyId]: { mode: "api_key", provider: "claude-cli", apiKey: "synthetic-key" },
           }),
         );
-        const imported = await maybeMigrateAuthProfileJsonStoresToSqlite({
-          cfg,
-          env: fixture.env,
-          prompter: { confirmAutoFix: async () => true },
-          openAICodexAuthProfileIdMap: new Map([[legacyId, canonicalId]]),
-        });
+        const imported = await importAuth(cfg, fixture.env, new Map([[legacyId, canonicalId]]));
         expect(imported.blockedProfileIds.has(legacyId)).toBe(true);
-        expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
-          profiles: {
-            [legacyId]: apiKey("claude-cli", "synthetic-key"),
-          },
+        expect(readSharedStore(fixture.env)).toMatchObject({
+          profiles: { [legacyId]: apiKey("claude-cli", "synthetic-key") },
         });
-        expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).not.toHaveProperty([
-          "profiles",
-          canonicalId,
-        ]);
+        expect(readSharedStore(fixture.env)).not.toHaveProperty(["profiles", canonicalId]);
       }
     });
   });
@@ -159,10 +147,9 @@ describe("Doctor auth alias preservation", () => {
   it("recovers an old rename receipt across normalized and rolled-back credential owners", async () => {
     await withState("alias-field-recovery", async (fixture) => {
       const agentDir = fixture.agentDir("worker");
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
+      const cfg: OpenClawConfig = doctorConfig({
         agents: { entries: { main: {}, worker: { agentDir } } },
-      };
+      });
       const legacyId = "claude-cli:work";
       const canonicalId = "anthropic:work";
       const source = authStore({
@@ -174,8 +161,8 @@ describe("Doctor auth alias preservation", () => {
       const write = (owner: string | undefined, store: unknown) =>
         writeStore(fixture.env, store, owner);
       const repair = (profileIdMap = new Map<string, string>()) =>
-        maybeRepairLegacyAuthProfileStores({ cfg, env: fixture.env, profileIdMap });
-      const collect = () => collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
+        repairAuth(cfg, fixture.env, profileIdMap);
+      const collect = () => collectIdMap({ cfg, env: fixture.env });
       write(undefined, renamed);
       write(agentDir, source);
       const paths = [
@@ -204,8 +191,8 @@ describe("Doctor auth alias preservation", () => {
       } finally {
         failedWrite.mockRestore();
       }
-      expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(source);
-      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(renamed);
+      expect(readLocalStore(agentDir)).toEqual(source);
+      expect(readSharedStore(fixture.env)).toEqual(renamed);
       // Model the partial commit left by independent database owners. Its
       // normalization fingerprint must survive the failed write transaction.
       // Keep Doctor's property order because the receipt hashes exact JSON.
@@ -217,10 +204,8 @@ describe("Doctor auth alias preservation", () => {
       );
       expect(collect().get(legacyId)).toBe(canonicalId);
       await repair();
-      expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(
-        authStore({
-          [canonicalId]: apiKey("anthropic", "synthetic-original"),
-        }),
+      expect(readLocalStore(agentDir)).toEqual(
+        authStore({ [canonicalId]: apiKey("anthropic", "synthetic-original") }),
       );
       expect(collect().get(legacyId)).toBe(canonicalId);
       // A rollback or interrupted multi-owner commit can leave the other owner on its exact preimage.
@@ -260,9 +245,7 @@ describe("Doctor auth alias preservation", () => {
       expect(receiptTimes()).toEqual(previousTimes);
       write(
         agentDir,
-        authStore({
-          [canonicalId]: apiKey("anthropic", "synthetic-different-account"),
-        }),
+        authStore({ [canonicalId]: apiKey("anthropic", "synthetic-different-account") }),
       );
       expect(collect().has(legacyId)).toBe(false);
     });
@@ -273,19 +256,16 @@ describe("Doctor auth alias preservation", () => {
     async (replaceAccount) => {
       await withState("alias-config-recovery", async (fixture) => {
         const agentDir = fixture.agentDir("worker");
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
+        const cfg: OpenClawConfig = doctorConfig({
           agents: { entries: { main: {}, worker: { agentDir } } },
           auth: {
             profiles: { "openai-codex:work": { provider: "openai-codex", mode: "api_key" } },
             order: { "openai-codex": ["openai-codex:work"] },
           },
-        };
+        });
         writeStore(
           fixture.env,
-          authStore({
-            "openai-codex:work": apiKey("openai-codex", "synthetic-original-account"),
-          }),
+          authStore({ "openai-codex:work": apiKey("openai-codex", "synthetic-original-account") }),
         );
         const workerStore = authStore({
           "openai-codex:work": apiKey("openai-codex", "synthetic-worker-account"),
@@ -294,15 +274,13 @@ describe("Doctor auth alias preservation", () => {
         const run = () => runRepair(cfg, { env: fixture.env });
         // The durable store commit survives even when the caller cannot save this candidate.
         await run();
-        expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+        expect(readSharedStore(fixture.env)).toMatchObject({
           profiles: { "openai:work": { provider: "openai", key: "synthetic-original-account" } },
         });
         if (replaceAccount) {
           writeStore(
             fixture.env,
-            authStore({
-              "openai:work": apiKey("openai", "synthetic-replacement-account"),
-            }),
+            authStore({ "openai:work": apiKey("openai", "synthetic-replacement-account") }),
           );
         } else {
           // A stopped multi-store pass can leave one owner at its recorded pre-migration state.
@@ -311,7 +289,7 @@ describe("Doctor auth alias preservation", () => {
         const resumed = await run();
         if (replaceAccount) {
           expect(resumed.state.candidate.auth).toEqual(cfg.auth);
-          expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+          expect(readSharedStore(fixture.env)).toMatchObject({
             profiles: { "openai:work": { key: "synthetic-replacement-account" } },
           });
         } else {
@@ -320,7 +298,7 @@ describe("Doctor auth alias preservation", () => {
             order: { openai: ["openai:work"] },
           });
           expect(resumed.openAICodexAuthProfileIdMap?.get("openai-codex:work")).toBe("openai:work");
-          expect(readPersistedAuthProfileStoreRaw(agentDir)).toMatchObject({
+          expect(readLocalStore(agentDir)).toMatchObject({
             profiles: { "openai:work": { provider: "openai", key: "synthetic-worker-account" } },
           });
         }
@@ -335,11 +313,10 @@ describe("Doctor auth alias preservation", () => {
     async (id, provider, canonical, owner) => {
       await withState("alias-session", async (fixture) => {
         const agentDir = fixture.agentDir("worker");
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
+        const cfg: OpenClawConfig = doctorConfig({
           agents: { entries: { main: {}, worker: { agentDir } } },
           auth: { profiles: { [id]: { provider, mode: "api_key" } } },
-        };
+        });
         writeStore(
           fixture.env,
           authStore({ [id]: apiKey(provider, "synthetic-session-key") }),
@@ -375,7 +352,7 @@ describe("Doctor auth alias preservation", () => {
   it("rejects newly occupied inherited rotation state before changing any store", async () => {
     await withState("alias-inherited-state", async (fixture) => {
       const agentDir = fixture.agentDir("worker");
-      const cfg: OpenClawConfig = { plugins: { enabled: false } };
+      const cfg: OpenClawConfig = doctorConfig();
       const shared = authStore({
         "openai-codex:work": apiKey("openai-codex", "synthetic-shared-key"),
       });
@@ -391,14 +368,11 @@ describe("Doctor auth alias preservation", () => {
         },
         { env: fixture.env },
       );
-      const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
+      const profileIdMap = collectIdMap({ cfg, env: fixture.env });
       expect(profileIdMap.get("openai-codex:work")).toBe("openai:work");
       const currentState = {
         version: 1,
-        usageStats: {
-          "openai-codex:work": { errorCount: 2 },
-          "openai:work": { errorCount: 99 },
-        },
+        usageStats: { "openai-codex:work": { errorCount: 2 }, "openai:work": { errorCount: 99 } },
       };
       runAuthProfileWriteTransaction(
         agentDir,
@@ -407,15 +381,11 @@ describe("Doctor auth alias preservation", () => {
         },
         { env: fixture.env },
       );
-      const result = await maybeRepairLegacyAuthProfileStores({
-        cfg,
-        env: fixture.env,
-        profileIdMap,
-      });
+      const result = await repairAuth(cfg, fixture.env, profileIdMap);
       expect(result.changes).toEqual([]);
       expect(result.profileIdMap.size).toBe(0);
-      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(shared);
-      expect(readPersistedAuthProfileStateRaw(agentDir)).toEqual(currentState);
+      expect(readSharedStore(fixture.env)).toEqual(shared);
+      expect(readLocalState(agentDir)).toEqual(currentState);
     });
   });
 
@@ -427,8 +397,7 @@ describe("Doctor auth alias preservation", () => {
         key: "synthetic-realm-key",
         issuer: "https://fixture.invalid/issuer",
       };
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
+      const cfg: OpenClawConfig = doctorConfig({
         auth: {
           profiles: {
             "work-account": { provider: "claude-cli", mode: "api_key" },
@@ -436,14 +405,11 @@ describe("Doctor auth alias preservation", () => {
           },
           order: { "claude-cli": ["work-account"], codex: ["codex:ready"] },
         },
-      };
+      });
       writeStore(
         fixture.env,
         authStore(
-          {
-            "work-account": blocked,
-            "codex:ready": apiKey("codex", "synthetic-ready-key"),
-          },
+          { "work-account": blocked, "codex:ready": apiKey("codex", "synthetic-ready-key") },
           { order: cfg.auth?.order },
         ),
       );
@@ -452,7 +418,7 @@ describe("Doctor auth alias preservation", () => {
         "claude-cli": ["work-account"],
         openai: ["openai:ready"],
       });
-      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+      expect(readSharedStore(fixture.env)).toMatchObject({
         profiles: {
           "work-account": blocked,
           "openai:ready": { provider: "openai", key: "synthetic-ready-key" },

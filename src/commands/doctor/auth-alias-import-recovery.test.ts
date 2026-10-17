@@ -3,40 +3,40 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
-import { loadPersistedSharedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
+import { loadPersistedSharedAuthProfileStore as loadSharedStore } from "../../agents/auth-profiles/persisted.js";
 import {
-  readPersistedAuthProfileStoreRaw,
-  readPersistedSharedAuthProfileStoreRaw,
+  readPersistedAuthProfileStoreRaw as readLocalStore,
+  readPersistedSharedAuthProfileStoreRaw as readSharedStore,
 } from "../../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
 } from "../../infra/state-migrations.shared-auth-store.js";
-import {
-  collectOpenAICodexAuthProfileStoreIdMap,
-  maybeMigrateAuthProfileJsonStoresToSqlite,
-} from "../doctor-auth-flat-profiles.js";
+import { collectOpenAICodexAuthProfileStoreIdMap as collectIdMap } from "../doctor-auth-flat-profiles.js";
 import { withPersistedAuthProfileStoreRead } from "../doctor-auth-flat-profiles.test-support.js";
-import { withState, runRepair, apiKey, authStore, writeStore } from "./auth-alias.test-support.js";
+import {
+  withState,
+  runRepair,
+  apiKey,
+  authStore,
+  writeStore,
+  importAuth,
+  doctorConfig,
+} from "./auth-alias.test-support.js";
 import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 
 it("repairs credential fields while deferring an occupied JSON alias destination", async () => {
   await withState("alias-stale-json-destination", async (fixture) => {
     const from = "claude-cli:work";
     const to = "anthropic:work";
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
+    const cfg: OpenClawConfig = doctorConfig({
       auth: { profiles: { [from]: { provider: "claude-cli", mode: "api_key" } } },
-    };
+    });
     writeStore(
       fixture.env,
       authStore({
-        [to]: {
-          mode: "api_key",
-          provider: "anthropic",
-          apiKey: "synthetic-existing-account",
-        },
+        [to]: { mode: "api_key", provider: "anthropic", apiKey: "synthetic-existing-account" },
         "example:legacy": {
           type: "api_key",
           provider: "example",
@@ -46,9 +46,7 @@ it("repairs credential fields while deferring an occupied JSON alias destination
     );
     await fixture.writeJson(
       "agents/main/agent/auth-profiles.json",
-      authStore({
-        [from]: apiKey("claude-cli", "synthetic-imported-account"),
-      }),
+      authStore({ [from]: apiKey("claude-cli", "synthetic-imported-account") }),
     );
     const repaired = await repairAuthProfileMigration({
       cfg,
@@ -58,12 +56,12 @@ it("repairs credential fields while deferring an occupied JSON alias destination
     });
     expect(repaired.profileIdMap.size).toBe(0);
     expect(repaired.config.auth).toEqual(cfg.auth);
-    expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
+    expect(loadSharedStore(fixture.env)?.profiles).toEqual({
       [from]: apiKey("claude-cli", "synthetic-imported-account"),
       [to]: apiKey("anthropic", "synthetic-existing-account"),
       "example:legacy": apiKey("example", "synthetic-independent-account"),
     });
-    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+    expect(readSharedStore(fixture.env)).toMatchObject({
       profiles: {
         [from]: { key: "synthetic-imported-account" },
         [to]: { key: "synthetic-existing-account" },
@@ -75,18 +73,15 @@ it("repairs credential fields while deferring an occupied JSON alias destination
 
 it("keeps an old selection unresolved when its source ID is recreated", async () => {
   await withState("alias-recreated", async (fixture) => {
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
+    const cfg: OpenClawConfig = doctorConfig({
       auth: {
         profiles: { "claude-cli:work": { provider: "claude-cli", mode: "api_key" } },
         order: { "claude-cli": ["claude-cli:work"] },
       },
-    };
+    });
     writeStore(
       fixture.env,
-      authStore({
-        "claude-cli:work": apiKey("claude-cli", "original-account"),
-      }),
+      authStore({ "claude-cli:work": apiKey("claude-cli", "original-account") }),
     );
     const run = () => runRepair(cfg, { env: fixture.env });
     await run();
@@ -97,7 +92,7 @@ it("keeps an old selection unresolved when its source ID is recreated", async ()
     writeStore(fixture.env, replaced);
     const result = await run();
     expect(result.state.candidate.auth).toEqual(cfg.auth);
-    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(replaced);
+    expect(readSharedStore(fixture.env)).toEqual(replaced);
     expect(result.warningNotes.join("\n")).toContain("identity is unresolved");
   });
 });
@@ -156,34 +151,21 @@ it.each([
 
 it("keeps the recorded target when import verification rolls back", async () => {
   await withState("alias-import-rollback", async (fixture) => {
-    const cfg: OpenClawConfig = { plugins: { enabled: false } };
+    const cfg: OpenClawConfig = doctorConfig();
     await fixture.writeJson(
       "agents/main/agent/auth-profiles.json",
-      authStore({
-        "claude-cli:work": apiKey("claude-cli", "retry-account"),
-      }),
+      authStore({ "claude-cli:work": apiKey("claude-cli", "retry-account") }),
     );
-    const map = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
+    const map = collectIdMap({ cfg, env: fixture.env });
     const result = await withPersistedAuthProfileStoreRead(
       () => null,
-      () =>
-        maybeMigrateAuthProfileJsonStoresToSqlite({
-          cfg,
-          env: fixture.env,
-          prompter: { confirmAutoFix: async () => true },
-          openAICodexAuthProfileIdMap: map,
-        }),
+      () => importAuth(cfg, fixture.env, map),
     );
     expect(result.warnings.join("\n")).toContain("SQLite verification failed");
-    const retryMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
+    const retryMap = collectIdMap({ cfg, env: fixture.env });
     expect(retryMap.get("claude-cli:work")).toBe("anthropic:work");
-    await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg,
-      env: fixture.env,
-      prompter: { confirmAutoFix: async () => true },
-      openAICodexAuthProfileIdMap: retryMap,
-    });
-    expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
+    await importAuth(cfg, fixture.env, retryMap);
+    expect(loadSharedStore(fixture.env)?.profiles).toEqual({
       "anthropic:work": apiKey("anthropic", "retry-account"),
     });
   });
@@ -194,14 +176,13 @@ it.each(["main", "worker"])(
   async (agentId) => {
     await withState("alias-archive-local-collision", async (fixture) => {
       const agentDir = fixture.agentDir(agentId);
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
+      const cfg: OpenClawConfig = doctorConfig({
         agents: { entries: { main: {}, worker: { agentDir: fixture.agentDir("worker") } } },
         auth: {
           profiles: { "claude-cli:default": { provider: "claude-cli", mode: "api_key" } },
           order: { "claude-cli": ["claude-cli:default"] },
         },
-      };
+      });
       await fixture.writeJson("agents/main/agent/auth.json", {
         "claude-cli": apiKey("claude-cli", "original-shared-account"),
       });
@@ -241,8 +222,8 @@ it.each(["main", "worker"])(
         },
         order: { "claude-cli": ["claude-cli:default"], openai: ["openai:ready"] },
       });
-      expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(local);
-      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+      expect(readLocalStore(agentDir)).toEqual(local);
+      expect(readSharedStore(fixture.env)).toMatchObject({
         profiles: {
           "anthropic:default": { key: "original-shared-account" },
           "openai:ready": { key: "independent-account" },
@@ -256,14 +237,13 @@ it.each(["main", "worker"])(
 it("recovers independently verified imports of the same alias across two stores", async () => {
   await withState("alias-two-imports", async (fixture) => {
     const workerDir = fixture.agentDir("worker");
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
+    const cfg: OpenClawConfig = doctorConfig({
       agents: { entries: { main: {}, worker: { agentDir: workerDir } } },
       auth: {
         profiles: { "claude-cli:work": { provider: "claude-cli", mode: "api_key" } },
         order: { "claude-cli": ["claude-cli:work"] },
       },
-    };
+    });
     for (const [agent, key] of [
       ["main", "shared-account"],
       ["worker", "local-account"],
@@ -286,13 +266,11 @@ it("recovers independently verified imports of the same alias across two stores"
     await migrateSharedAuthStore({ detected, stateDir: fixture.stateDir, env: fixture.env });
     const retry = await run();
     expect(retry.state.candidate.auth).toEqual(first.state.candidate.auth);
-    expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles["anthropic:work"]).toEqual(
+    expect(loadSharedStore(fixture.env)?.profiles["anthropic:work"]).toEqual(
       apiKey("anthropic", "shared-account"),
     );
-    expect(readPersistedAuthProfileStoreRaw(workerDir)).toMatchObject({
-      profiles: {
-        "anthropic:work": apiKey("anthropic", "local-account"),
-      },
+    expect(readLocalStore(workerDir)).toMatchObject({
+      profiles: { "anthropic:work": apiKey("anthropic", "local-account") },
     });
   });
 });
