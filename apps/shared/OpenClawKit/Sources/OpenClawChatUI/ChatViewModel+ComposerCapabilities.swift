@@ -219,8 +219,12 @@ extension OpenClawChatViewModel {
     }
 
     var composerWebSearchEnabled: Bool {
-        self.composerCapabilityCatalog.webSearchAvailable &&
-            (self.composerToolOverrides.webSearch ?? self.composerCapabilityCatalog.webSearchBaseEnabled)
+        // Global tools.web.search.enabled is a kill switch. A retained session
+        // webSearch: true cannot show the composer as On while search stays off.
+        let baseEnabled = self.composerCapabilityCatalog.webSearchBaseEnabled
+        return self.composerCapabilityCatalog.webSearchAvailable &&
+            baseEnabled &&
+            (self.composerToolOverrides.webSearch ?? baseEnabled)
     }
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {

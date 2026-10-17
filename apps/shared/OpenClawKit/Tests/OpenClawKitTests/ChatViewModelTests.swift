@@ -8779,6 +8779,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `composer web search cannot override a globally disabled baseline`() async throws {
+        let retained = OpenClawChatSessionToolOverrides(webSearch: true)
         let catalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             webSearchBaseEnabled: false,
@@ -8789,15 +8790,19 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse([
-                sessionEntry(key: "main", updatedAt: 1),
+                sessionEntry(key: "main", updatedAt: 1, toolOverrides: retained),
             ])],
             composerCapabilityCatalog: catalog)
         try await loadAndWaitBootstrap(vm: vm)
         await vm.loadComposerCapabilities()
 
+        #expect(await MainActor.run { vm.composerToolOverrides.webSearch == true })
+        #expect(await MainActor.run { !vm.composerWebSearchEnabled })
+
         await MainActor.run { vm.toggleComposerWebSearch() }
 
         #expect(await transport.sessionSettingsPatches().isEmpty)
+        #expect(await MainActor.run { vm.composerToolOverrides.webSearch == true })
         #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
             "Web Search is disabled in the Gateway configuration.")
