@@ -14,6 +14,43 @@ const { nodePtySpawn } = vi.hoisted(() => ({ nodePtySpawn: vi.fn() }));
 vi.mock("@lydell/node-pty", () => ({ spawn: nodePtySpawn }));
 
 type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>>;
+const command = { file: "/usr/bin/codex", args: [], cols: 80, rows: 24 };
+function createPtyFixture() {
+  let onData: ((chunk: string) => void) | undefined;
+  let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+  let onInput: ((payloadJSON: string) => void) | undefined;
+  const controller = new AbortController();
+  const pty = {
+    pid: 42,
+    write: vi.fn(),
+    resize: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
+    kill: vi.fn(),
+    onData: (callback) => {
+      onData = callback;
+    },
+    onExit: (callback) => {
+      onExit = callback;
+    },
+  } satisfies TerminalPtyHandle;
+  const io: OpenClawPluginNodeHostCommandIo = {
+    signal: controller.signal,
+    emitChunk: vi.fn(async () => {}),
+    onInput: (callback) => {
+      onInput = callback;
+    },
+  };
+  return {
+    pty,
+    io,
+    controller,
+    data: (chunk: string) => onData?.(chunk),
+    exit: (event: { exitCode: number; signal?: number }) => onExit?.(event),
+    input: (payload: object) => onInput?.(JSON.stringify(payload)),
+    ready: () => vi.waitFor(() => expect(onInput).toBeDefined()),
+  };
+}
 
 describe("node PTY command", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -60,11 +97,7 @@ describe("node PTY command", () => {
     await expect(
       runNodePtyCommand(
         { file: "codex", args: ["--", params.initialMessage!], ...params, requiredCwd: true },
-        {
-          signal: new AbortController().signal,
-          emitChunk: vi.fn(),
-          onInput: vi.fn(),
-        },
+        createPtyFixture().io,
         spawn,
       ),
     ).rejects.toThrow("existing absolute directory");
@@ -91,7 +124,7 @@ describe("node PTY command", () => {
             }
           },
         },
-        { signal: controller.signal, emitChunk: vi.fn(), onInput: vi.fn() },
+        { ...createPtyFixture().io, signal: controller.signal },
       );
       if (change === "source") {
         sourceCurrent = false;
@@ -106,43 +139,16 @@ describe("node PTY command", () => {
   );
 
   it("relays output, data, resize, abort, and exit", async () => {
-    let onData: ((chunk: string) => void) | undefined;
-    let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-    let onInput: ((payloadJSON: string) => void) | undefined;
-    const pty = {
-      pid: 42,
-      write: vi.fn(),
-      resize: vi.fn(),
-      pause: vi.fn(),
-      resume: vi.fn(),
-      kill: vi.fn(),
-      onData: (callback: (chunk: string) => void) => {
-        onData = callback;
-      },
-      onExit: (callback: (event: { exitCode: number; signal?: number }) => void) => {
-        onExit = callback;
-      },
-    } satisfies TerminalPtyHandle;
-    const abort = new AbortController();
-    const emitChunk = vi.fn(async () => {});
-    const io: OpenClawPluginNodeHostCommandIo = {
-      signal: abort.signal,
-      emitChunk,
-      onInput: (callback) => {
-        onInput = callback;
-      },
-    };
+    const { pty, io, controller, data, input, exit } = createPtyFixture();
     const spawn = vi.fn(async () => pty);
     const result = runNodePtyCommand(
       {
-        file: "/usr/bin/codex",
+        ...command,
         args: ["resume", "id"],
         cwd: "/missing/catalog/cwd",
         requiredCwd: false,
         env: { CODEX_HOME: "/catalog/codex-home" },
         pathEnv: "/shell/bin:/usr/bin",
-        cols: 80,
-        rows: 24,
       },
       io,
       spawn,
@@ -151,76 +157,62 @@ describe("node PTY command", () => {
     const spawnCalls = spawn.mock.calls as unknown as Array<
       [{ cwd?: string; env?: Record<string, string> }]
     >;
-    expect(spawnCalls[0]?.[0].cwd).toBe(os.homedir());
-    expect(spawnCalls[0]?.[0].env?.PATH).toBe("/shell/bin:/usr/bin");
-    expect(spawnCalls[0]?.[0].env?.CODEX_HOME).toBe("/catalog/codex-home");
-    expect(spawnCalls[0]?.[0].env?.OPENCLAW_TERMINAL).toBe("1");
+    expect(spawnCalls[0]?.[0]).toMatchObject({
+      cwd: os.homedir(),
+      env: {
+        PATH: "/shell/bin:/usr/bin",
+        CODEX_HOME: "/catalog/codex-home",
+        OPENCLAW_TERMINAL: "1",
+      },
+    });
 
-    onData?.("output");
-    await vi.waitFor(() => expect(emitChunk).toHaveBeenCalledWith("output"));
+    data("output");
+    await vi.waitFor(() => expect(io.emitChunk).toHaveBeenCalledWith("output"));
     expect(pty.pause).toHaveBeenCalledOnce();
     expect(pty.resume).toHaveBeenCalledOnce();
-    onInput?.(JSON.stringify({ kind: "resize", cols: 0, rows: 30 }));
-    onInput?.(JSON.stringify({ kind: "resize", cols: 80, rows: 2001 }));
+    input({ kind: "resize", cols: 0, rows: 30 });
+    input({ kind: "resize", cols: 80, rows: 2001 });
     expect(pty.resize).not.toHaveBeenCalled();
-    onInput?.(JSON.stringify({ kind: "data", data: "keys" }));
-    onInput?.(JSON.stringify({ kind: "resize", cols: 100, rows: 30 }));
+    input({ kind: "data", data: "keys" });
+    input({ kind: "resize", cols: 100, rows: 30 });
     expect(pty.write).toHaveBeenCalledWith("keys");
     expect(pty.resize).toHaveBeenCalledWith(100, 30);
 
-    abort.abort();
+    controller.abort();
     expect(pty.kill).toHaveBeenCalledOnce();
-    onInput?.(JSON.stringify({ kind: "data", data: "after abort" }));
-    onInput?.(JSON.stringify({ kind: "resize", cols: 120, rows: 40 }));
+    input({ kind: "data", data: "after abort" });
+    input({ kind: "resize", cols: 120, rows: 40 });
     expect(pty.write).toHaveBeenCalledTimes(1);
     expect(pty.resize).toHaveBeenCalledTimes(1);
-    onExit?.({ exitCode: 130, signal: 15 });
+    exit({ exitCode: 130, signal: 15 });
     await expect(result).resolves.toEqual({ exitCode: 130, signal: 15 });
   });
 
   it("ignores input after exit without touching a dead PTY", async () => {
-    let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-    let onInput: ((payloadJSON: string) => void) | undefined;
-    const pty = {
-      pid: 42,
-      write: vi.fn(() => {
-        throw new Error("dead PTY write");
-      }),
-      resize: vi.fn(() => {
-        throw new Error("dead PTY resize");
-      }),
-      pause: vi.fn(),
-      resume: vi.fn(),
-      kill: vi.fn(),
-      onData: vi.fn(),
-      onExit: (callback: (event: { exitCode: number; signal?: number }) => void) => {
-        onExit = callback;
-      },
-    } satisfies TerminalPtyHandle;
-    const io: OpenClawPluginNodeHostCommandIo = {
-      signal: new AbortController().signal,
-      emitChunk: vi.fn(async () => {}),
-      onInput: (callback) => {
-        onInput = callback;
-      },
-    };
+    const { pty, io, input, exit, ready } = createPtyFixture();
+    pty.write.mockImplementation(() => {
+      throw new Error("dead PTY write");
+    });
+    pty.resize.mockImplementation(() => {
+      throw new Error("dead PTY resize");
+    });
     const result = runNodePtyCommand(
-      { file: "/usr/bin/codex", args: [], cols: 80, rows: 24 },
+      command,
       io,
       vi.fn(async () => pty),
     );
-    await vi.waitFor(() => expect(onInput).toBeDefined());
+    await ready();
 
-    expect(() => onInput?.(JSON.stringify({ kind: "data", data: "racing" }))).not.toThrow();
-    expect(() => onInput?.(JSON.stringify({ kind: "resize", cols: 100, rows: 30 }))).not.toThrow();
+    expect(() => input({ kind: "data", data: "racing" })).not.toThrow();
+    expect(() => input({ kind: "resize", cols: 100, rows: 30 })).not.toThrow();
     expect(pty.write).toHaveBeenCalledOnce();
     expect(pty.resize).toHaveBeenCalledOnce();
     pty.write.mockClear();
     pty.resize.mockClear();
 
-    onExit?.({ exitCode: 0 });
-    expect(() => onInput?.(JSON.stringify({ kind: "data", data: "late" }))).not.toThrow();
-    expect(() => onInput?.(JSON.stringify({ kind: "resize", cols: 100, rows: 30 }))).not.toThrow();
+    exit({ exitCode: 0 });
+    expect(() => input({ kind: "data", data: "late" })).not.toThrow();
+    expect(() => input({ kind: "resize", cols: 100, rows: 30 })).not.toThrow();
 
     await expect(result).resolves.toEqual({ exitCode: 0 });
     expect(pty.write).not.toHaveBeenCalled();
@@ -235,32 +227,21 @@ describe("node PTY command", () => {
       const configuredComSpec = "C:\\Windows\\System32\\configured-cmd.exe";
       process.env.ComSpec = ambientComSpec;
       try {
+        const { pty, io } = createPtyFixture();
         nodePtySpawn.mockReturnValueOnce({
-          pid: 42,
-          write: vi.fn(),
-          resize: vi.fn(),
-          pause: vi.fn(),
-          resume: vi.fn(),
-          kill: vi.fn(),
-          onData: vi.fn(),
+          ...pty,
           onExit: (callback: (event: { exitCode: number }) => void) => {
             queueMicrotask(() => callback({ exitCode: 0 }));
           },
         });
-        const io: OpenClawPluginNodeHostCommandIo = {
-          signal: new AbortController().signal,
-          emitChunk: vi.fn(async () => {}),
-          onInput: vi.fn(),
-        };
 
         await expect(
           runNodePtyCommand(
             {
+              ...command,
               file: "C:\\tools\\catalog-command.cmd",
               args: ["resume", "thread title"],
               env: { COMSPEC: configuredComSpec },
-              cols: 80,
-              rows: 24,
             },
             io,
           ),

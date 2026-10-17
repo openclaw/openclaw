@@ -46,6 +46,18 @@ server.listen(0, "127.0.0.1", () => {
 });
 `;
 const runtimeExecutableName = path.basename(process.execPath);
+function nodeCommand(script: string, extra: Partial<NodeWorkerWorkspaceExecInput> = {}) {
+  return { ...identity, argv: [runtimeExecutableName, "-e", script], ...extra };
+}
+function holdLookup() {
+  const entered = createDeferredCore();
+  const lookup = createDeferredCore<undefined>();
+  vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockImplementationOnce(async () => {
+    entered.resolve();
+    return await lookup.promise;
+  });
+  return { entered, lookup };
+}
 function fixture(ephemeral = false) {
   const root = tempDirs.make("node-workspace-preview-");
   const workspace = new NodeWorkerWorkspaceRuntime({
@@ -85,18 +97,29 @@ function fixture(ephemeral = false) {
     });
     return url;
   };
-  return { root, workspace, start, control, ready };
+  const stop = (ownerEpoch = 1, cleanup?: () => Promise<void>) =>
+    workspace.processes.stopEnvironment({ ...identity, ownerEpoch }, cleanup);
+  const collect = (sequence: number) =>
+    workspace.applyRetainSnapshot(
+      {
+        version: 1,
+        gatewayNamespace: identity.gatewayNamespace,
+        controllerId: "retention",
+        sequence,
+        retain: [],
+      },
+      async () => [],
+    );
+  return { root, workspace, start, control, ready, stop, collect };
 }
 
 describe("conversation-owned preview processes", () => {
   it("rejects outside path operands after positional arguments, eval terminators, and option values", async () => {
     const { workspace } = fixture(true);
     vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockResolvedValue(undefined);
-    const initial = await workspace.exec({
-      ...identity,
-      nativeProcessOwner: true,
-      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
-    });
+    const initial = await workspace.exec(
+      nodeCommand("process.exit(0)", { nativeProcessOwner: true }),
+    );
     const outside = path.join(tempDirs.make("node-workspace-outside-"), "outside.cjs");
     fs.writeFileSync(outside, "process.exit(0)");
     fs.writeFileSync(path.join(initial.workspaceDir, "tool.cjs"), "process.exit(0)");
@@ -125,7 +148,7 @@ describe("conversation-owned preview processes", () => {
     await first.workspace.exec(first.start);
     await second.workspace.exec(second.start);
     const [firstUrl, secondUrl] = await Promise.all([first.ready(signal), second.ready(signal)]);
-    await first.workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
+    await first.stop();
     await expect(fetch(firstUrl)).rejects.toThrow();
     expect(await (await fetch(secondUrl)).text()).toBe(":99");
   });
@@ -161,14 +184,9 @@ describe("conversation-owned preview processes", () => {
     const url = await ready(signal);
     expect(await (await fetch(url)).text()).toBe(":99");
     turn.abort();
-    await workspace.exec({
-      ...identity,
-      argv: [
-        runtimeExecutableName,
-        "-e",
-        'require("node:fs").writeFileSync("page.txt", "updated preview")',
-      ],
-    });
+    await workspace.exec(
+      nodeCommand('require("node:fs").writeFileSync("page.txt", "updated preview")'),
+    );
     expect(await (await fetch(url)).text()).toBe("updated preview");
     const retried = await workspace.exec(start);
     expect(retried.process).toEqual({ processId: "preview-server", state: "running" });
@@ -189,75 +207,44 @@ describe("conversation-owned preview processes", () => {
   it("keeps running workspaces through retention and fences exact environment cleanup", async ({
     signal,
   }) => {
-    const { workspace, start, control, ready } = fixture();
+    const { workspace, start, control, ready, stop, collect } = fixture();
     const launched = await workspace.exec(start);
     const url = await ready(signal);
     await expect(control("stop", { sessionId: "another-conversation" })).rejects.toThrow(
       "unknown workspace process",
     );
-    await workspace.applyRetainSnapshot(
-      {
-        version: 1,
-        gatewayNamespace: identity.gatewayNamespace,
-        controllerId: "retention",
-        sequence: 1,
-        retain: [],
-      },
-      async () => [],
-    );
+    await collect(1);
     expect(fs.existsSync(launched.workspaceDir)).toBe(true);
     expect((await fetch(url)).ok).toBe(true);
-    await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
+    await stop();
     await expect(fetch(url)).rejects.toThrow();
-    const resumed = await workspace.exec({
-      ...identity,
-      nativeProcessOwner: true,
-      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
-    });
-    expect(resumed.code).toBe(0);
-    await workspace.applyRetainSnapshot(
-      {
-        version: 1,
-        gatewayNamespace: identity.gatewayNamespace,
-        controllerId: "retention",
-        sequence: 2,
-        retain: [],
-      },
-      async () => [],
+    const resumed = await workspace.exec(
+      nodeCommand("process.exit(0)", { nativeProcessOwner: true }),
     );
+    expect(resumed.code).toBe(0);
+    await collect(2);
     expect(fs.existsSync(launched.workspaceDir)).toBe(false);
   });
 
   it("revokes a queued reset command but reopens fresh execution at the retained epoch", async () => {
-    const { workspace } = fixture(true);
-    const entered = createDeferredCore();
-    const lookup = createDeferredCore<undefined>();
-    const find = vi
-      .spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find")
-      .mockResolvedValue(undefined);
-    const command: NodeWorkerWorkspaceExecInput = {
-      ...identity,
-      argv: [runtimeExecutableName, "-e", "process.stdout.write('fresh')"],
+    const { workspace, stop } = fixture(true);
+    vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockResolvedValue(undefined);
+    const command = nodeCommand("process.stdout.write('fresh')", {
       nativeProcessOwner: true,
       resetWorkspace: true,
-    };
-    // Keep a sentinel in the retained workspace so a late reset cannot silently delete it.
-    const initial = await workspace.exec({
-      ...identity,
-      nativeProcessOwner: true,
-      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
     });
+    // Keep a sentinel in the retained workspace so a late reset cannot silently delete it.
+    const initial = await workspace.exec(
+      nodeCommand("process.exit(0)", { nativeProcessOwner: true }),
+    );
     const sentinel = path.join(initial.workspaceDir, "retained.txt");
     fs.writeFileSync(sentinel, "retained");
-    find.mockImplementationOnce(async () => {
-      entered.resolve();
-      return await lookup.promise;
-    });
+    const { entered, lookup } = holdLookup();
     const pending = workspace.exec(command);
     void pending.catch(() => undefined);
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "lookup did not hold the command");
-      await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
+      await stop();
       lookup.resolve(undefined);
       await expect(pending).rejects.toThrow("retired");
       expect(fs.readFileSync(sentinel, "utf8")).toBe("retained");
@@ -270,27 +257,17 @@ describe("conversation-owned preview processes", () => {
   });
 
   it("keeps overlapping stops sealed and excludes higher epochs from stale stop", async () => {
-    const { workspace } = fixture(true);
+    const { workspace, stop } = fixture(true);
     vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockResolvedValue(undefined);
     const first = createDeferredCore();
     const second = createDeferredCore();
     const secondStarted = createDeferredCore();
-    const command: NodeWorkerWorkspaceExecInput = {
-      ...identity,
-      nativeProcessOwner: true,
-      argv: [runtimeExecutableName, "-e", "process.stdout.write('fresh')"],
-    };
-    const stopping = workspace.processes.stopEnvironment(
-      { ...identity, ownerEpoch: 1 },
-      () => first.promise,
-    );
-    const overlapping = workspace.processes.stopEnvironment(
-      { ...identity, ownerEpoch: 1 },
-      async () => {
-        secondStarted.resolve();
-        await second.promise;
-      },
-    );
+    const command = nodeCommand("process.stdout.write('fresh')", { nativeProcessOwner: true });
+    const stopping = stop(1, () => first.promise);
+    const overlapping = stop(1, async () => {
+      secondStarted.resolve();
+      await second.promise;
+    });
     try {
       await expect(workspace.exec(command)).rejects.toThrow("retired");
       first.resolve();
@@ -304,16 +281,9 @@ describe("conversation-owned preview processes", () => {
       second.resolve();
       await overlapping;
       expect((await workspace.exec(command)).stdout).toBe("fresh");
-      await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 2 });
+      await stop(2);
       await expect(workspace.exec(command)).rejects.toThrow("retired");
-      const lookup = createDeferredCore<undefined>();
-      const entered = createDeferredCore();
-      vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockImplementationOnce(
-        async () => {
-          entered.resolve();
-          return await lookup.promise;
-        },
-      );
+      const { lookup, entered } = holdLookup();
       const higher = workspace.exec({ ...command, generation: 3 });
       void higher.catch(() => undefined);
       try {
@@ -322,7 +292,7 @@ describe("conversation-owned preview processes", () => {
           higher,
           "higher-epoch lookup did not begin",
         );
-        await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
+        await stop();
         lookup.resolve(undefined);
         expect((await higher).stdout).toBe("fresh");
       } finally {
@@ -331,13 +301,10 @@ describe("conversation-owned preview processes", () => {
       }
       const lowerStarted = createDeferredCore();
       const finishLower = createDeferredCore();
-      const lower = workspace.processes.stopEnvironment(
-        { ...identity, ownerEpoch: 1 },
-        async () => {
-          lowerStarted.resolve();
-          await finishLower.promise;
-        },
-      );
+      const lower = stop(1, async () => {
+        lowerStarted.resolve();
+        await finishLower.promise;
+      });
       let closed = false;
       let closing: Promise<void> | undefined;
       try {

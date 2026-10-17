@@ -9,6 +9,24 @@ import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const TICKET = "a".repeat(48);
 const cleanups: Array<() => Promise<void>> = [];
+function portOf(server: net.Server) {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected test address");
+  }
+  return address.port;
+}
+function closeServer(server: net.Server, peers: Iterable<{ destroy(): void }> = []) {
+  cleanups.push(
+    () =>
+      new Promise<void>((resolve) => {
+        for (const peer of peers) {
+          peer.destroy();
+        }
+        server.close(() => resolve());
+      }),
+  );
+}
 
 /** Resolves false when the host has no IPv6 (some containers) instead of hanging. */
 async function listenUnlessIpv6Unavailable(
@@ -45,10 +63,7 @@ async function listenGateway(
     path: `${contextPath.replace(/\/$/u, "")}/node-portal/attach`,
   });
   wss.on("connection", onConnection);
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected Gateway test address");
-  }
+  const port = portOf(server);
   cleanups.push(
     async () =>
       await new Promise<void>((resolve) => {
@@ -58,14 +73,15 @@ async function listenGateway(
         wss.close(() => server.close(() => resolve()));
       }),
   );
-  return `ws://127.0.0.1:${address.port}${contextPath}`;
+  return `ws://127.0.0.1:${port}${contextPath}`;
 }
 
-function portalCommand(port: number) {
+function portalCommand(port: number, override: object = {}) {
   return JSON.stringify({
     ticket: TICKET,
     attachPath: `/node-portal/attach?ticket=${TICKET}`,
     port,
+    ...override,
   });
 }
 
@@ -84,12 +100,7 @@ describe("node worker portal stream command", () => {
   ])("rejects a request with %s", async (_name, override) => {
     await expect(
       invokeNodeWorkerPortalStream({
-        paramsJSON: JSON.stringify({
-          ticket: TICKET,
-          attachPath: `/node-portal/attach?ticket=${TICKET}`,
-          port: 8080,
-          ...override,
-        }),
+        paramsJSON: portalCommand(8080, override),
         gatewayUrl: "ws://127.0.0.1:1",
         signal: new AbortController().signal,
       }),
@@ -118,19 +129,7 @@ describe("node worker portal stream command", () => {
       if (!(await listenUnlessIpv6Unavailable(local, { port: 0, host }))) {
         skip("IPv6 loopback is unavailable on this host");
       }
-      const address = local.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected portal loopback test address");
-      }
-      cleanups.push(
-        async () =>
-          await new Promise<void>((resolve) => {
-            for (const peer of peers) {
-              peer.destroy();
-            }
-            local.close(() => resolve());
-          }),
-      );
+      closeServer(local, peers);
 
       const frames: Buffer[] = [];
       let attached: WebSocket | undefined;
@@ -155,7 +154,7 @@ describe("node worker portal stream command", () => {
       }, contextPath);
       const controller = new AbortController();
       const running = invokeNodeWorkerPortalStream({
-        paramsJSON: portalCommand(address.port),
+        paramsJSON: portalCommand(portOf(local)),
         gatewayUrl,
         gatewayCloudflareAccess: {
           clientId: "portal-client-id",
@@ -195,23 +194,9 @@ describe("node worker portal stream command", () => {
       });
     });
     const reservedTarget = net.createServer();
-    await new Promise<void>((resolve, reject) => {
-      reservedTarget.once("error", reject);
-      reservedTarget.listen(0, "127.0.0.1", () => {
-        reservedTarget.off("error", reject);
-        resolve();
-      });
-    });
-    const address = reservedTarget.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected reserved portal test address");
-    }
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve) => {
-          reservedTarget.close(() => resolve());
-        }),
-    );
+    await listenUnlessIpv6Unavailable(reservedTarget, { port: 0, host: "127.0.0.1" });
+    const targetPort = portOf(reservedTarget);
+    closeServer(reservedTarget);
     let refusedTargets = 0;
     // Preserve each caller's native socket through Reflect.apply below.
     // oxlint-disable-next-line typescript/unbound-method
@@ -225,10 +210,7 @@ describe("node worker portal stream command", () => {
       const options = isRecord(normalized[0]) ? normalized[0] : undefined;
       const host = options?.host ?? normalized[1];
       const port = Number(options?.port ?? normalized[0]);
-      if (
-        port === address.port &&
-        (host === "localhost" || host === "127.0.0.1" || host === "::1")
-      ) {
+      if (port === targetPort && (host === "localhost" || host === "127.0.0.1" || host === "::1")) {
         refusedTargets++;
         queueMicrotask(() =>
           this.destroy(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })),
@@ -241,7 +223,7 @@ describe("node worker portal stream command", () => {
     try {
       await expect(
         invokeNodeWorkerPortalStream({
-          paramsJSON: portalCommand(address.port),
+          paramsJSON: portalCommand(targetPort),
           gatewayUrl,
           signal: new AbortController().signal,
         }),

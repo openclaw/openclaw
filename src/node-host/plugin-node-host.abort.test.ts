@@ -1,4 +1,3 @@
-/** Verifies non-duplex plugin commands inherit the node invocation lifetime. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -9,6 +8,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type {
   OpenClawPluginNodeHostCommandContext,
@@ -16,9 +16,37 @@ import type {
 } from "../plugins/types.node-host.js";
 import { handleInvoke } from "./invoke.js";
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(resetPluginRuntimeStateForTest);
+function register(command: PluginNodeHostCommandRegistration["command"], withPlugin = false) {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins = withPlugin
+    ? [
+        createPluginRecord({
+          id: "fixture",
+          source: "test",
+          origin: "bundled",
+          enabled: true,
+          configSchema: true,
+        }),
+      ]
+    : [];
+  registry.nodeHostCommands = [{ pluginId: "fixture", command, source: "test" }];
+  setActivePluginRegistry(registry);
+  return vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+}
+function invoke(
+  request: GatewayClient["request"],
+  options: NonNullable<Parameters<typeof handleInvoke>[4]>,
+  payload: Partial<Parameters<typeof handleInvoke>[0]> = {},
+) {
+  return handleInvoke(
+    { id: "invocation", nodeId: "paired-node", command: "fixture.command", ...payload },
+    { request } as unknown as GatewayClient,
+    { current: async () => [] },
+    undefined,
+    options,
+  );
+}
 
 describe("non-duplex node-host plugin cancellation", () => {
   it("passes the actual invocation signal into the node-owned plugin context", async ({
@@ -49,39 +77,14 @@ describe("non-duplex node-host plugin cancellation", () => {
         return '{"stale":true}';
       },
     );
-    const registry = createEmptyPluginRegistry();
-    registry.plugins = [
-      createPluginRecord({
-        id: "ollama",
-        source: "test",
-        origin: "bundled",
-        enabled: true,
-        configSchema: true,
-      }),
-    ];
-    registry.nodeHostCommands = [
+    const request = register({ command: "fixture.command", cap: "local-inference", handle }, true);
+    const invocation = invoke(
+      request,
+      { signal: controller.signal, pluginCommandContext: { sendNodeEvent } },
       {
-        pluginId: "ollama",
-        pluginName: "Ollama",
-        command: { command: "ollama.chat", cap: "local-inference", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    const invocation = handleInvoke(
-      {
-        id: "cancelable-model-inference",
-        nodeId: "paired-node",
-        command: "ollama.chat",
         paramsJSON: '{"model":"local-only:small"}',
         sessionKey: "agent:main:local-model",
       },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { signal: controller.signal, pluginCommandContext: { sendNodeEvent } },
     );
     try {
       await withinTest(
@@ -110,12 +113,7 @@ describe("non-duplex node-host plugin cancellation", () => {
   it.each(["success", "failure", "cancellation", "supersession", "different-error"] as const)(
     "settles pending asynchronous plugin listener delivery before result (%s)",
     async (outcome) => {
-      let resolveListener!: () => void;
-      let rejectListener!: (error: Error) => void;
-      const listenerCompleted = new Promise<void>((resolve, reject) => {
-        resolveListener = resolve;
-        rejectListener = reject;
-      });
+      const listener = createDeferred();
       const controller = new AbortController();
       let currentInvocation = true;
       let framedFailure: Error | undefined;
@@ -135,7 +133,7 @@ describe("non-duplex node-host plugin cancellation", () => {
       };
       const handle = vi.fn(
         async (_paramsJSON?: string | null, commandIo?: OpenClawPluginNodeHostCommandIo) => {
-          commandIo?.frames?.onMessage(async () => await listenerCompleted);
+          commandIo?.frames?.onMessage(async () => await listener.promise);
           framedIo.receive(
             JSON.stringify({ v: 1, kind: "data", message: 0, index: 0, last: true, data: "Bw==" }),
           );
@@ -151,46 +149,29 @@ describe("non-duplex node-host plugin cancellation", () => {
           return '{"ok":true}';
         },
       );
-      const registry = createEmptyPluginRegistry();
-      registry.nodeHostCommands = [
-        {
-          pluginId: "frames-fixture",
-          pluginName: "Frames fixture",
-          command: { command: "fixture.duplex", duplex: true, handle },
-          source: "test",
-        },
-      ];
-      setActivePluginRegistry(registry);
-      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-      const invocation = handleInvoke(
-        { id: "pending-listener", nodeId: "paired-node", command: "fixture.duplex" },
-        { request } as unknown as GatewayClient,
-        { current: async () => [] },
-        undefined,
-        {
-          signal: controller.signal,
-          pluginCommandIo: io,
-          flushPluginCommandIo: framedIo.drain,
-          canReportAbortedFailure: (error) =>
-            currentInvocation && error === framedFailure && error === controller.signal.reason,
-        },
-      );
+      const request = register({ command: "fixture.command", duplex: true, handle });
+      const invocation = invoke(request, {
+        signal: controller.signal,
+        pluginCommandIo: io,
+        flushPluginCommandIo: framedIo.drain,
+        canReportAbortedFailure: (error) =>
+          currentInvocation && error === framedFailure && error === controller.signal.reason,
+      });
 
       try {
         await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
         expect(request).not.toHaveBeenCalled();
         if (outcome === "failure") {
-          rejectListener(new Error("asynchronous plugin listener rejected"));
+          listener.reject(new Error("asynchronous plugin listener rejected"));
         } else if (outcome === "cancellation") {
           controller.abort(new Error("plugin command canceled"));
         } else if (outcome === "supersession") {
           currentInvocation = false;
-          rejectListener(new Error("superseded plugin listener rejected"));
+          listener.reject(new Error("superseded plugin listener rejected"));
         } else if (outcome === "different-error") {
-          rejectListener(new Error("identical framed failure message"));
+          listener.reject(new Error("identical framed failure message"));
         } else {
-          resolveListener();
+          listener.resolve();
         }
         await invocation;
 
@@ -215,7 +196,7 @@ describe("non-duplex node-host plugin cancellation", () => {
           expect(request).not.toHaveBeenCalled();
         }
       } finally {
-        resolveListener();
+        listener.resolve();
         framedIo.close();
         await invocation;
       }
