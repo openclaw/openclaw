@@ -18,10 +18,7 @@ import {
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
 import { readTranscriptMessages } from "../../../sessions/user-turn-transcript.test-support.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -58,111 +55,12 @@ afterEach(() => {
   clearEmbeddedSessionPromptStates([toolProjectionSessionId, modelPromptSessionId]);
 });
 
-function captureRequests() {
-  const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-  streamMocks.streamSimple.mockImplementation((model, context) => {
-    requests.push(buildOpenAIResponsesParams(model, context, undefined));
-    return createAssistantResultStream(createAssistant(model, "done"));
-  });
-  return requests;
-}
-
-function normalizeSession(
-  session: Awaited<ReturnType<typeof createTestSession>>["session"],
-  options: () => Parameters<typeof normalizeMessagesForLlmBoundary>[1] = () => undefined,
-) {
-  const convert = session.agent.convertToLlm;
-  session.agent.convertToLlm = (messages) =>
-    convert(normalizeMessagesForLlmBoundary(messages, options()));
-}
-
-type Submission = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
-type TestSession = Awaited<ReturnType<typeof createTestSession>>["session"];
-type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
-type Contexts = ReturnType<typeof createUserTranscriptContextRegistry>;
-
-async function projectionTarget(state: OpenClawTestState, name: string, redact = false) {
-  const target = {
-    agentId: "main",
-    sessionId: modelPromptSessionId,
-    sessionKey: `agent:main:${name}`,
-    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    ...(redact ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
-  };
-  setRuntimeConfigSnapshot(target.config ?? {});
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  return target;
-}
-
-function guardRecorder(
-  manager: SessionManager,
-  recorder: Recorder | undefined,
-  contexts: Contexts,
-  suppressNextUserMessagePersistence?: boolean,
-) {
-  return guardSessionManager(manager, {
-    preparedUserTurnMessage: recorder?.message,
-    preparedUserTurnTranscriptRecorder: recorder,
-    suppressNextUserMessagePersistence,
-    onUserMessagePersisted: (message, runtimeMessage) => {
-      if (runtimeMessage) {
-        contexts.record(runtimeMessage, message);
-      }
-    },
-  });
-}
-
-function submitRecorded(
-  session: TestSession,
-  manager: SessionManager,
-  recorder: Recorder,
-  contexts: Contexts | undefined,
-  input: Partial<Submission>,
-) {
-  return submitProjection(session, {
-    prependContext: undefined,
-    appendContext: undefined,
-    attempt: { sessionId: modelPromptSessionId, userTurnTranscriptRecorder: recorder },
-    getUserTranscriptContexts: () => contexts?.list() ?? [],
-    withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
-    ...input,
-  });
-}
-
-function continuePrompt(session: TestSession): Submission["promptActiveSession"] {
-  return async (_prompt, options) => {
-    options?.preflightResult?.(true);
-    await session.agent.continue();
-  };
-}
-
-async function transcriptUsers(target: Parameters<typeof readTranscriptMessages>[0]) {
-  return (await readTranscriptMessages(target)).filter((message) => message.role === "user");
-}
-
-function submitProjection(session: TestSession, input: Partial<Submission>) {
-  return submitEmbeddedAttemptPrompt({
-    ...createBaseInput(),
-    activeSession: session,
-    promptActiveSession: (prompt, options) => session.prompt(prompt, options),
-    ...input,
-  });
-}
-
-function promptImages(buffer: Buffer): ImageContent[] {
-  return finalizeRuntimePromptImages<ImageContent>([
-    {
-      image: { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
-      factIndex: 0,
-    },
-  ]).images;
-}
-
 describe("durable model prompt projection at provider dispatch", () => {
   const sessionId = modelPromptSessionId;
   it.each([
     { projection: "unchanged prompt", steering: "midturn" },
     { projection: "unchanged prompt", steering: "retry" },
+    { projection: "prepend/append hooks", steering: "midturn" },
     { projection: "modelPrompt replacement", steering: "midturn" },
     { projection: "prepend/append hooks", steering: "initial" },
     { projection: "prepend/append hooks with log patterns", steering: "midturn" },
@@ -177,9 +75,17 @@ describe("durable model prompt projection at provider dispatch", () => {
         if (withImage) {
           await fs.writeFile(imagePath, imageBuffer);
         }
-        const target = await projectionTarget(state, "model-prompt-projection", withLogPatterns);
+        const target = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:model-prompt-projection",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+          ...(withLogPatterns ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
+        };
+        setRuntimeConfigSnapshot(target.config ?? {});
+        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-        let firstUserEnvelope: unknown;
+        const userEnvelopes: string[][] = [];
         const openSession = async () => {
           const contexts = createUserTranscriptContextRegistry();
           const manager = await SessionManager.openAsync(target, state.workspaceDir);
@@ -204,26 +110,28 @@ describe("durable model prompt projection at provider dispatch", () => {
                 : normalized,
             );
           };
-          return { ...result, contexts };
+          return { ...result, contexts, getUserTranscriptContexts: () => contexts.list() };
         };
         const first = await openSession();
         streamMocks.streamSimple.mockImplementation((model, context) => {
           requests.push(structuredClone(buildOpenAIResponsesParams(model, context, undefined)));
-          if (requests.length === 1) {
-            firstUserEnvelope = structuredClone(
-              context.messages.find((message) => message.role === "user"),
-            );
-          }
+          userEnvelopes.push(
+            context.messages
+              .filter((message) => message.role === "user")
+              .map((message) => JSON.stringify(message)),
+          );
           if (steering === "midturn" && requests.length === 1) {
             first.session.agent.steer({ role: "user", content: "queued correction", timestamp: 2 });
           }
           if (steering === "retry" && requests.length === 1) {
             return createAssistantResultStream({
-              ...createAssistant(model, "Partial answer", "error"),
+              ...createAssistant(model, [{ type: "text", text: "Partial answer" }], "error"),
               errorMessage: "HTTP 503 interrupted response",
             });
           }
-          return createAssistantResultStream(createAssistant(model, `answer ${requests.length}`));
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: `answer ${requests.length}` }]),
+          );
         });
         const expectedProjection = (turn: number) =>
           projection === "unchanged prompt"
@@ -245,13 +153,40 @@ describe("durable model prompt projection at provider dispatch", () => {
             target: { ...target, sessionEntry: { sessionId, updatedAt: 1 } },
           });
           if (withImage && turn === 1) {
-            // Replay adopts the persisted envelope but retains the loaded image.
+            // Admission precedes guard installation, as in current-turn replay.
+            // Suppressed persistence must adopt the row's envelope without
+            // losing ownership of the already loaded image.
             await recorder.persistApproved();
             await active.sessionManager.reloadPersistedTranscriptAsync();
           }
-          guardRecorder(active.sessionManager, recorder, active.contexts, withImage && turn === 1);
-          await submitRecorded(active.session, active.sessionManager, recorder, active.contexts, {
-            ...(withImage && turn === 1 ? { images: promptImages(imageBuffer) } : {}),
+          guardSessionManager(active.sessionManager, {
+            preparedUserTurnMessage: recorder.message,
+            preparedUserTurnTranscriptRecorder: recorder,
+            suppressNextUserMessagePersistence: withImage && turn === 1,
+            onUserMessagePersisted: (message, runtimeMessage) => {
+              if (runtimeMessage) {
+                active.contexts.record(runtimeMessage, message);
+              }
+            },
+          });
+          await submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+            ...(withImage && turn === 1
+              ? {
+                  images: finalizeRuntimePromptImages([
+                    {
+                      image: {
+                        type: "image" as const,
+                        data: imageBuffer.toString("base64"),
+                        mimeType: "image/png",
+                      },
+                      factIndex: 0,
+                    },
+                  ]).images,
+                }
+              : {}),
+            activeSession: active.session,
             transcriptPrompt,
             modelPrompt: projection === "modelPrompt replacement" ? expectedProjection(turn) : "",
             prependContext:
@@ -259,8 +194,20 @@ describe("durable model prompt projection at provider dispatch", () => {
                 ? undefined
                 : `hook before ${turn}${withLogPatterns ? " hidden" : ""}`,
             appendContext: projection === "unchanged prompt" ? undefined : `hook after ${turn}`,
+            getUserTranscriptContexts: active.getUserTranscriptContexts,
+            withTranscriptWrite: (write) => withSessionManagerWrite(active.sessionManager, write),
+            promptActiveSession: (prompt, options) => active.session.prompt(prompt, options),
           });
-          expect(active.session.getLastAssistantText()).toBe(
+          expect(
+            active.session.getLastAssistantText(),
+            JSON.stringify(
+              active.session.messages.flatMap((message) =>
+                message.role === "assistant"
+                  ? [{ stopReason: message.stopReason, errorMessage: message.errorMessage }]
+                  : [],
+              ),
+            ),
+          ).toBe(
             steering === "retry" && requests.length === 1
               ? "Partial answer"
               : `answer ${requests.length}`,
@@ -275,12 +222,25 @@ describe("durable model prompt projection at provider dispatch", () => {
         let firstTurnRequests = steering === "midturn" ? 2 : 1;
         expect(requests).toHaveLength(firstTurnRequests);
         if (steering === "retry") {
-          await submitRecorded(first.session, first.sessionManager, firstRecorder, first.contexts, {
-            prependContext: "prepend context",
-            appendContext: "append context",
+          await submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            attempt: { sessionId, userTurnTranscriptRecorder: firstRecorder },
+            activeSession: first.session,
             transcriptPrompt: "original turn 1",
             modelPrompt: "Changed prompt from the retry",
-            images: promptImages(createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 })),
+            images: finalizeRuntimePromptImages([
+              {
+                image: {
+                  type: "image",
+                  data: createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 }).toString("base64"),
+                  mimeType: "image/png",
+                } satisfies ImageContent,
+                factIndex: 0,
+              },
+            ]).images,
+            getUserTranscriptContexts: first.getUserTranscriptContexts,
+            withTranscriptWrite: (write) => withSessionManagerWrite(first.sessionManager, write),
+            promptActiveSession: (prompt, options) => first.session.prompt(prompt, options),
           });
           firstTurnRequests++;
           expect(requests).toHaveLength(firstTurnRequests);
@@ -299,6 +259,8 @@ describe("durable model prompt projection at provider dispatch", () => {
         }
 
         for (let index = 1; index < requests.length; index++) {
+          const previousUsers = userEnvelopes[index - 1]!;
+          expect(userEnvelopes[index]!.slice(0, previousUsers.length)).toEqual(previousUsers);
           const previous = requests[index - 1]!;
           const current = requests[index]!;
           expect(
@@ -314,7 +276,9 @@ describe("durable model prompt projection at provider dispatch", () => {
         }
         expect(serialized).not.toContain("modelPromptProjection");
 
-        const users = await transcriptUsers(target);
+        const users = (await readTranscriptMessages(target)).filter(
+          (message) => message.role === "user",
+        );
         expect(users.map((message) => message.content)).toEqual([
           "original turn 1",
           ...(steering === "retry" ? [] : ["queued correction"]),
@@ -337,7 +301,7 @@ describe("durable model prompt projection at provider dispatch", () => {
             expect.objectContaining({ path: imagePath, contentType: "image/png" }),
           ]);
           expect(users[0]).not.toHaveProperty("__openclaw.mediaImageBlockFactIndexes");
-          expect(firstUserEnvelope).toMatchObject({
+          expect(JSON.parse(userEnvelopes[0]![0]!)).toMatchObject({
             timestamp: 1,
             idempotencyKey: "projection:1:user",
             __openclaw: {
@@ -358,7 +322,14 @@ describe("durable model prompt projection at provider dispatch", () => {
     "keeps a dispatched user's projection across model fallback (enriched=%s)",
     async (enriched) => {
       await withOpenClawTestState({ label: "fallback-model-projection" }, async (state) => {
-        const target = await projectionTarget(state, "fallback-model-projection");
+        const target = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:fallback-model-projection",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        };
+        setRuntimeConfigSnapshot({});
+        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const original = "Keep the original user request.";
         const firstProjection = enriched ? "Original request with captured context." : original;
         const retry = "[Retry after the previous model attempt failed or timed out]\n\n" + original;
@@ -372,7 +343,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           return createAssistantResultStream({
             ...createAssistant(
               model,
-              requests.length === 1 ? "" : "done",
+              [{ type: "text", text: requests.length === 1 ? "" : "done" }],
               requests.length === 1 ? "error" : "stop",
             ),
             ...(requests.length === 1 ? { errorMessage: "429 synthetic rate limit" } : {}),
@@ -390,12 +361,14 @@ describe("durable model prompt projection at provider dispatch", () => {
               timeoutMs: 30_000,
               userTurnTranscriptRecorder: recorder,
               suppressNextUserMessagePersistence: recorder.hasPersisted(),
-              modelRoutingProvenance: {
-                requestedProvider: "test-provider",
-                requestedModel: "primary",
-                stage,
-                ...(fallback ? { fallbackReason: "rate_limit" as const } : {}),
-              },
+              modelRoutingProvenance: fallback
+                ? {
+                    requestedProvider: "test-provider",
+                    requestedModel: "primary",
+                    stage,
+                    fallbackReason: "rate_limit",
+                  }
+                : { requestedProvider: "test-provider", requestedModel: "primary", stage },
             },
             sessionAgentId: target.agentId,
             resolvedSessionKey: target.sessionKey,
@@ -404,28 +377,46 @@ describe("durable model prompt projection at provider dispatch", () => {
           });
           const internal = promptState.activePrompt.internal;
           const contexts = createUserTranscriptContextRegistry();
-          const manager = guardRecorder(
+          const manager = guardSessionManager(
             await SessionManager.openAsync(target, state.workspaceDir),
-            internal ? undefined : recorder,
-            contexts,
-            promptState.suppressNextUserMessagePersistence,
+            {
+              preparedUserTurnMessage: internal ? undefined : recorder.message,
+              preparedUserTurnTranscriptRecorder: internal ? undefined : recorder,
+              suppressNextUserMessagePersistence: promptState.suppressNextUserMessagePersistence,
+              onUserMessagePersisted: (message, runtimeMessage) => {
+                if (runtimeMessage) {
+                  contexts.record(runtimeMessage, message);
+                }
+              },
+            },
           );
           const { session } = await createTestSession({
             sessionManager: manager,
             model: { ...testModel, id: fallback ? "backup" : "primary" },
           });
-          normalizeSession(session, () => ({
-            userTranscriptContexts: contexts.list(),
-            includeTimestamp: false,
-          }));
-          await submitRecorded(session, manager, recorder, contexts, {
+          const convert = session.agent.convertToLlm;
+          session.agent.convertToLlm = (messages) =>
+            convert(
+              normalizeMessagesForLlmBoundary(messages, {
+                userTranscriptContexts: contexts.list(),
+                includeTimestamp: false,
+              }),
+            );
+          await submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
             attempt: {
               sessionId,
               userTurnTranscriptRecorder: recorder,
               skipPreparedUserTurnMessage: internal,
             },
+            activeSession: session,
             transcriptPrompt: internal ? retry : original,
             modelPrompt: fallback ? retry : firstProjection,
+            prependContext: undefined,
+            appendContext: undefined,
+            getUserTranscriptContexts: () => contexts.list(),
+            withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
+            promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           });
           const outcome = session.messages.at(-1);
           session.dispose();
@@ -439,15 +430,15 @@ describe("durable model prompt projection at provider dispatch", () => {
           messages.filter((message) => message.role === "user").map((message) => message.content);
         expect(userText(requests[0]!)).toEqual([firstProjection]);
         expect(userText(requests[1]!)).toEqual([firstProjection, retry]);
-        expect(await transcriptUsers(target)).toEqual([
-          expect.objectContaining({
-            content: original,
-            idempotencyKey: "fallback:user",
-            __openclaw: expect.objectContaining({
-              modelPromptProjection: { version: 1, text: firstProjection },
-            }),
-          }),
-        ]);
+        const users = (await readTranscriptMessages(target)).filter(
+          (message) => message.role === "user",
+        );
+        expect(users).toHaveLength(1);
+        expect(users[0]).toMatchObject({ content: original, idempotencyKey: "fallback:user" });
+        expect(users[0]).toHaveProperty("__openclaw.modelPromptProjection", {
+          version: 1,
+          text: firstProjection,
+        });
       });
     },
   );
@@ -457,9 +448,14 @@ describe("durable model prompt projection at provider dispatch", () => {
     async (phase) => {
       await withOpenClawTestState({ label: "dispatch-late-media-projection" }, async (state) => {
         const target = {
-          ...(await projectionTarget(state, "dispatch-late-media-projection")),
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:dispatch-late-media-projection",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
           sessionEntry: { sessionId, updatedAt: 1 },
         };
+        setRuntimeConfigSnapshot({});
+        await upsertSessionEntryCore(target, target.sessionEntry);
         const original = {
           text: "describe this image",
           timestamp: 1,
@@ -479,14 +475,31 @@ describe("durable model prompt projection at provider dispatch", () => {
         const resolution = recorder.resolveMessage();
         await resolving.promise;
         const contexts = createUserTranscriptContextRegistry();
-        const manager = guardRecorder(
+        const manager = guardSessionManager(
           await SessionManager.openAsync(target, state.workspaceDir),
-          recorder,
-          contexts,
+          {
+            preparedUserTurnMessage: recorder.message,
+            preparedUserTurnTranscriptRecorder: recorder,
+            onUserMessagePersisted: (message, runtimeMessage) => {
+              if (runtimeMessage) {
+                contexts.record(runtimeMessage, message);
+              }
+            },
+          },
         );
         const { session } = await createTestSession({ sessionManager: manager });
-        normalizeSession(session, () => ({ userTranscriptContexts: contexts.list() }));
-        const requests = captureRequests();
+        const convert = session.agent.convertToLlm;
+        session.agent.convertToLlm = (messages) =>
+          convert(
+            normalizeMessagesForLlmBoundary(messages, { userTranscriptContexts: contexts.list() }),
+          );
+        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+        streamMocks.streamSimple.mockImplementation((model, context) => {
+          requests.push(buildOpenAIResponsesParams(model, context, undefined));
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "done" }]),
+          );
+        });
         const releaseMedia = async () => {
           media.resolve({
             ...original,
@@ -495,9 +508,15 @@ describe("durable model prompt projection at provider dispatch", () => {
           await resolution;
         };
         try {
-          await submitRecorded(session, manager, recorder, contexts, {
+          await submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+            activeSession: session,
             transcriptPrompt: original.text,
             modelPrompt: "enriched image request",
+            prependContext: undefined,
+            appendContext: undefined,
+            getUserTranscriptContexts: () => contexts.list(),
             withTranscriptWrite: async (write) => {
               if (phase === "capture") {
                 await releaseMedia();
@@ -509,6 +528,7 @@ describe("durable model prompt projection at provider dispatch", () => {
                 await releaseMedia();
               }
             },
+            promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           });
         } finally {
           media.resolve(original);
@@ -520,7 +540,9 @@ describe("durable model prompt projection at provider dispatch", () => {
         expect(requests).toHaveLength(1);
         expect(JSON.stringify(requests[0])).toContain("enriched image request");
         expect(JSON.stringify(requests[0])).not.toContain(imagePath);
-        const users = await transcriptUsers(target);
+        const users = (await readTranscriptMessages(target)).filter(
+          (message) => message.role === "user",
+        );
         expect(users).toEqual([
           expect.objectContaining({
             content: original.text,
@@ -544,16 +566,23 @@ describe("durable model prompt projection at provider dispatch", () => {
   it("does not transfer a compacted keyless user's projection to the retained turn", async () => {
     await withOpenClawTestState({ label: "compacted-model-prompt-projection" }, async (state) => {
       const target = {
-        ...(await projectionTarget(state, "compacted-model-prompt-projection")),
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:compacted-model-prompt-projection",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
         sessionEntry: { sessionId, updatedAt: 1 },
       };
+      setRuntimeConfigSnapshot({});
+      await upsertSessionEntryCore(target, target.sessionEntry);
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "original compacted turn", timestamp: 1 },
         target,
       });
       await recorder.persistApproved();
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
-      await manager.appendMessageAsync(createAssistant(testModel, "old answer"));
+      await manager.appendMessageAsync(
+        createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+      );
       const retained = await manager.appendMessageAsync({
         role: "user",
         content: "retained turn",
@@ -565,14 +594,30 @@ describe("durable model prompt projection at provider dispatch", () => {
         100,
       );
       const { session } = await createTestSession({ sessionManager: manager });
-      normalizeSession(session);
-      const requests = captureRequests();
+      const convert = session.agent.convertToLlm;
+      session.agent.convertToLlm = (messages) => convert(normalizeMessagesForLlmBoundary(messages));
+      const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+      streamMocks.streamSimple.mockImplementation((model, context) => {
+        requests.push(buildOpenAIResponsesParams(model, context, undefined));
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "done" }]),
+        );
+      });
 
-      await submitRecorded(session, manager, recorder, undefined, {
+      await submitEmbeddedAttemptPrompt({
+        ...createBaseInput(),
+        activeSession: session,
+        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
         transcriptPrompt: "original compacted turn",
         modelPrompt: "enriched compacted turn",
         prependContext: "unrelated hook",
-        promptActiveSession: continuePrompt(session),
+        appendContext: undefined,
+        getUserTranscriptContexts: () => [],
+        withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
+        promptActiveSession: async (_prompt, options) => {
+          options?.preflightResult?.(true);
+          await session.agent.continue();
+        },
       });
 
       expect(requests).toHaveLength(1);
@@ -595,9 +640,15 @@ describe("durable model prompt projection at provider dispatch", () => {
     async ({ nested, hook }) => {
       await withOpenClawTestState({ label: "inter-session-model-prompt" }, async (state) => {
         const target = {
-          ...(await projectionTarget(state, "inter-session-model-prompt", hook)),
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:inter-session-model-prompt",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
           sessionEntry: { sessionId, updatedAt: 1 },
+          ...(hook ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
         };
+        setRuntimeConfigSnapshot(target.config ?? {});
+        await upsertSessionEntryCore(target, target.sessionEntry);
         const provenance = {
           kind: "inter_session" as const,
           sourceSessionKey: "agent:main:parent",
@@ -624,14 +675,32 @@ describe("durable model prompt projection at provider dispatch", () => {
         await recorder.persistApproved();
         const manager = await SessionManager.openAsync(target, state.workspaceDir);
         const { session } = await createTestSession({ sessionManager: manager });
-        normalizeSession(session);
-        const requests = captureRequests();
+        const convert = session.agent.convertToLlm;
+        session.agent.convertToLlm = (messages) =>
+          convert(normalizeMessagesForLlmBoundary(messages));
+        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+        streamMocks.streamSimple.mockImplementation((model, context) => {
+          requests.push(buildOpenAIResponsesParams(model, context, undefined));
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "done" }]),
+          );
+        });
 
-        await submitRecorded(session, manager, recorder, undefined, {
+        // The first request keeps the same stored provenance envelope as replay.
+        await submitEmbeddedAttemptPrompt({
+          ...createBaseInput(),
+          activeSession: session,
+          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
           transcriptPrompt: annotated,
           modelPrompt: hook ? `hook before hidden\n\n${body}` : body,
+          prependContext: undefined,
+          appendContext: undefined,
+          getUserTranscriptContexts: () => [],
           withTranscriptWrite: (write) => write(),
-          promptActiveSession: continuePrompt(session),
+          promptActiveSession: async (_prompt, options) => {
+            options?.preflightResult?.(true);
+            await session.agent.continue();
+          },
         });
         session.agent.state.messages = [
           ...manager.buildSessionContext().messages,
@@ -644,7 +713,8 @@ describe("durable model prompt projection at provider dispatch", () => {
           JSON.stringify(
             (request.input as { role?: string }[]).find((item) => item.role === "user"),
           );
-        // Replay retains the safety envelope after its transient carrier disappears.
+        // The first send already carries the stored safety envelope, so replay keeps its bytes
+        // and the envelope stays visible once the transient carrier is gone.
         expect(firstUser(requests[0]!)).toContain("sourceSession=agent:main:parent");
         expect(firstUser(requests[0]!)).toContain(task);
         expect(firstUser(requests[1]!)).toBe(firstUser(requests[0]!));
@@ -659,10 +729,55 @@ describe("durable model prompt projection at provider dispatch", () => {
 });
 
 describe("tool-result projection persistence at dispatch", () => {
+  it("restores only the active branch and retries changed projections after a failed write", async () => {
+    const { sessionManager: manager } = await createTestSession();
+    const snapshot = (key: string) => ({
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [{ key, sourceHash: "source", texts: [key] }],
+    });
+    await manager.appendCustomEntryAsync("openclaw.cache-ttl", snapshot("older"));
+    const activeMarker = await manager.appendCustomEntryAsync(
+      "openclaw.cache-ttl",
+      snapshot("active"),
+    );
+    await manager.appendCustomEntryAsync("openclaw.cache-ttl", snapshot("sibling"));
+    await manager.branchAsync(activeMarker);
+
+    const restored = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(restored, manager.getBranch());
+    expect(serializeCacheTtlToolResultProjections(restored)).toEqual(snapshot("active"));
+    const appendEntry = (customType: string, data: unknown) =>
+      manager.appendCustomEntryAsync(customType, data);
+    const markers = () =>
+      manager
+        .getEntries()
+        .filter((entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl");
+    await persistToolResultProjections(restored, appendEntry);
+    expect(markers()).toHaveLength(3);
+
+    restored.replacements.set("active", { content: [{ type: "text", text: "changed" }] });
+    await expect(
+      persistToolResultProjections(restored, async () => {
+        throw new Error("write failed");
+      }),
+    ).rejects.toThrow("write failed");
+    await persistToolResultProjections(restored, appendEntry);
+    await persistToolResultProjections(restored, appendEntry);
+    expect(markers()).toHaveLength(4);
+    const reopened = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(reopened, manager.getBranch());
+    expect(serializeCacheTtlToolResultProjections(reopened)).toEqual({
+      ...snapshot("active"),
+      frozenToolResults: [{ key: "active", sourceHash: "source", texts: ["changed"] }],
+    });
+  });
+
   it("writes one marker for unchanged requests and another for a new frozen batch", async () => {
     const { session: activeSession, sessionManager: manager } = await createTestSession();
     using promptStateLease = retainEmbeddedSessionPromptState(toolProjectionSessionId);
-    const projectionState = promptStateLease.state.toolResults;
+    const sessionPromptState = promptStateLease.state;
+    const projectionState = sessionPromptState.toolResults;
     const requests: Context["messages"][] = [];
     activeSession.agent.streamFn = (model, context) => {
       const persisted = createToolResultPromptProjectionState();
@@ -677,18 +792,24 @@ describe("tool-result projection persistence at dispatch", () => {
         }
       }
       requests.push(structuredClone(context.messages));
-      return createAssistantResultStream(createAssistant(model, "done"));
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }]));
     };
-    await submitProjection(activeSession, {
+    await submitEmbeddedAttemptPrompt({
       attempt: { sessionId: toolProjectionSessionId },
-      prependContext: undefined,
-      appendContext: undefined,
+      contextTokenBudget: 8_000,
+      images: [],
       modelPrompt: "read files",
       onFinalPromptText: () => {},
       onSteeringAcknowledged: () => {},
+      runtimeOnly: false,
       systemPrompt: "test prompt",
+      toolResultAggregateMaxChars: 8_000,
+      toolResultMaxChars: 4_000,
       toolResultPromptProjectionState: projectionState,
+      trajectoryRecorder: null,
+      transcriptLeafId: null,
       transcriptPrompt: "read files",
+      activeSession,
       persistToolResultProjections: async () => {
         await Promise.resolve();
         await persistToolResultProjections(projectionState, (customType, data) =>
@@ -698,7 +819,7 @@ describe("tool-result projection persistence at dispatch", () => {
       promptActiveSession: async () => {
         const messages: Context["messages"] = [];
         for (let index = 0; index < 2; index++) {
-          messages.push(createAssistant(testModel, "read"), {
+          messages.push(createAssistant(testModel, [{ type: "text", text: "read" }]), {
             role: "toolResult",
             toolCallId: `batch-${index}`,
             toolName: "read",
