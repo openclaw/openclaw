@@ -10,18 +10,48 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import * as projectClone from "../../projects/project-clone.js";
-import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { clonedProject } from "./projects-shard.test-support.js";
 import {
-  initializeRepository,
   invokeProjectMethod,
   listRegistryRecords,
   resolveRepositoryIdentity,
   withProjectState,
 } from "./projects.test-support.js";
+
+async function expectCheckoutInUse(
+  repo: string,
+  id: string,
+  cfg: Parameters<typeof invokeProjectMethod>[2],
+  reference: string,
+) {
+  expect(
+    await invokeProjectMethod("projects.remove", { id, deleteCheckout: true }, cfg),
+  ).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining(reference) },
+  });
+  await expect(fs.stat(repo)).resolves.toBeDefined();
+}
+function observeSecondRemovalCheck(afterCheck: () => Promise<unknown>) {
+  const remove = projectClone.removeClonedProjectCheckout;
+  let checks = 0;
+  return vi
+    .spyOn(projectClone, "removeClonedProjectCheckout")
+    .mockImplementation((selected, check, options) =>
+      remove(
+        selected,
+        async () => {
+          await check();
+          if (++checks === 2) {
+            await afterCheck();
+          }
+        },
+        options,
+      ),
+    );
+}
 
 beforeEach(() => {
   listRegistryRecords.mockClear();
@@ -37,31 +67,14 @@ test.each(["existing", "after-check"])(
   "projects.remove preserves a checkout referenced by an %s memory session in another agent",
   async (timing) => {
     await withProjectState(async (state) => {
-      const originUrl = "https://github.com/acme/memory-project.git";
-      const fingerprint = sha256HexPrefixCore(originUrl, 16);
-      const repo = await initializeRepository(
-        path.join(state.stateDir, "projects", fingerprint),
-        "memory-project",
-        originUrl,
-      );
-      const project = await registerClonedProjectRegistry({
-        path: repo,
-        name: "Memory project",
-        originUrl,
-      });
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      } as OpenClawConfig;
+      const { repo, project } = await clonedProject(state, "memory-project", "Memory project");
+      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:dashboard:incognito-project";
       const otherKey = "agent:other:dashboard:incognito-reference";
       await upsertSessionEntryCore(
         { env: state.env, sessionKey },
-        {
-          sessionId: "project",
-          updatedAt: 1,
-          incognito: true,
-        },
+        { sessionId: "project", updatedAt: 1, incognito: true },
       );
       const addReference = () =>
         upsertSessionEntryCore(
@@ -71,36 +84,12 @@ test.each(["existing", "after-check"])(
       if (timing === "existing") {
         await addReference();
       }
-      const remove = projectClone.removeClonedProjectCheckout;
-      let checks = 0;
-      const observer = vi
-        .spyOn(projectClone, "removeClonedProjectCheckout")
-        .mockImplementation((selected, check, options) =>
-          remove(
-            selected,
-            async () => {
-              await check();
-              if (++checks === 2 && timing === "after-check") {
-                await addReference();
-              }
-            },
-            options,
-          ),
-        );
-      try {
-        const result = await invokeProjectMethod(
-          "projects.remove",
-          { id: project.id, deleteCheckout: true },
-          cfg,
-        );
-        expect(result).toMatchObject({
-          ok: false,
-          error: { code: "INVALID_REQUEST", message: expect.stringContaining(otherKey) },
-        });
-        await expect(fs.stat(repo)).resolves.toBeDefined();
-      } finally {
-        observer.mockRestore();
-      }
+      using _ = observeSecondRemovalCheck(async () => {
+        if (timing === "after-check") {
+          await addReference();
+        }
+      });
+      await expectCheckoutInUse(repo, project.id, cfg, otherKey);
     });
   },
 );
@@ -109,21 +98,8 @@ test.each(["durable", "memory", "memory-changed-after-check"])(
   "projects.remove preserves a checkout referenced by a %s session",
   async (mode) => {
     return withProjectState(async (state) => {
-      const originUrl = "https://github.com/acme/session-project.git";
-      const fingerprint = sha256HexPrefixCore(originUrl, 16);
-      const repo = await initializeRepository(
-        path.join(state.stateDir, "projects", fingerprint),
-        "session-project",
-        originUrl,
-      );
-      const project = await registerClonedProjectRegistry({
-        path: repo,
-        name: "Session project",
-        originUrl,
-      });
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      } as OpenClawConfig;
+      const { repo, project } = await clonedProject(state, "session-project", "Session project");
+      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       setRuntimeConfigSnapshot(cfg);
       const sessionKey =
         mode === "durable"
@@ -138,41 +114,20 @@ test.each(["durable", "memory", "memory-changed-after-check"])(
           ...(mode !== "durable" && { incognito: true as const }),
         },
       );
-      const remove = projectClone.removeClonedProjectCheckout;
-      let checks = 0;
-      const observer = vi
-        .spyOn(projectClone, "removeClonedProjectCheckout")
-        .mockImplementation((selected, check, options) =>
-          remove(
-            selected,
-            async () => {
-              await check();
-              if (++checks === 2 && mode === "memory-changed-after-check") {
-                await upsertSessionEntryCore(
-                  { agentId: "main", env: state.env, sessionKey: `${sessionKey}-new` },
-                  { sessionId: "project-new", updatedAt: 2, incognito: true, spawnedCwd: repo },
-                );
-              }
-            },
-            options,
-          ),
-        );
-      try {
-        const invoke = () =>
-          invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }, cfg);
-        expect(await invoke()).toMatchObject({
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message: expect.stringContaining(
-              mode === "memory-changed-after-check" ? `${sessionKey}-new` : sessionKey,
-            ),
-          },
-        });
-        await expect(fs.stat(repo)).resolves.toBeDefined();
-      } finally {
-        observer.mockRestore();
-      }
+      using _ = observeSecondRemovalCheck(async () => {
+        if (mode === "memory-changed-after-check") {
+          await upsertSessionEntryCore(
+            { agentId: "main", env: state.env, sessionKey: `${sessionKey}-new` },
+            { sessionId: "project-new", updatedAt: 2, incognito: true, spawnedCwd: repo },
+          );
+        }
+      });
+      await expectCheckoutInUse(
+        repo,
+        project.id,
+        cfg,
+        mode === "memory-changed-after-check" ? `${sessionKey}-new` : sessionKey,
+      );
     });
   },
 );

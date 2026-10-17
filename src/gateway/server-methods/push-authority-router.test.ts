@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -27,6 +26,7 @@ import {
 import "../server/ws-connection/authenticated-request-dispatch.server-methods.runtime.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { pushHandlers } from "./push.js";
+import { pushClient, pushSubscription } from "./push.test-support.js";
 
 vi.mock("../../infra/push-apns.js", () => ({
   clearApnsRegistrationIfCurrent: vi.fn(),
@@ -132,32 +132,12 @@ describe("Web Push router authority at the worker grant", () => {
       } finally {
         inGrant = false;
       }
-      return {
-        subscriptionId: "router-subscription",
-        endpoint: params.endpoint,
-        keys: params.keys,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-      };
+      return pushSubscription(params.endpoint, params.keys, "router-subscription");
     });
     const connection = new AbortController();
     const client: GatewayWsClient = {
       ...createOperatorWsClient(),
-      connId: "original-connection",
-      connect: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.write"],
-        device: {
-          id: "browser-device",
-          publicKey: "synthetic-public-key",
-          signature: "synthetic-signature",
-          signedAt: 1,
-          nonce: "synthetic-nonce",
-        },
-      },
+      ...pushClient("profile-owner", "original-connection", connection.signal),
       authenticatedUserProfile: {
         profileId: scenario === "merged alias" ? "retired-profile" : "profile-owner",
         displayName: null,
@@ -165,7 +145,6 @@ describe("Web Push router authority at the worker grant", () => {
         hasAvatar: false,
         updatedAt: 1,
       },
-      connectionSignal: connection.signal,
     };
     const isConnectionActive = vi.fn(() => true);
     const getClientConnIds = vi.fn(() => new Set(["original-connection"]));

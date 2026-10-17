@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { pushHandlers } from "./push.js";
+import { pushSubscription } from "./push.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -70,7 +71,6 @@ vi.mock("../../state/user-profile-list.js", () => ({
 }));
 
 import {
-  type ApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
@@ -91,8 +91,10 @@ type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
 type WebPushResults = Awaited<ReturnType<typeof broadcastWebPush>>;
 
 type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
+const endpoint = "https://push.example.test/subscription";
+const keys = { p256dh: "p256dh", auth: "auth" };
 
-const DEFAULT_DIRECT_REGISTRATION = {
+const directRegistration = {
   nodeId: "ios-node-1",
   transport: "direct",
   token: "abcd",
@@ -101,30 +103,18 @@ const DEFAULT_DIRECT_REGISTRATION = {
   updatedAtMs: 1,
 } as const;
 
-const DEFAULT_RELAY_REGISTRATION = {
+const relayRegistration = {
   nodeId: "ios-node-1",
   transport: "relay",
   relayHandle: "relay-handle-123",
   sendGrant: "send-grant-123",
-  installationId: "install-123",
+  installationId: "install-1",
   topic: "ai.openclaw.ios",
   environment: "production",
   distribution: "official",
   updatedAtMs: 1,
   tokenDebugSuffix: "abcd1234",
 } as const;
-
-function directRegistration(
-  overrides: Partial<Extract<ApnsRegistration, { transport: "direct" }>> = {},
-): Extract<ApnsRegistration, { transport: "direct" }> {
-  return { ...DEFAULT_DIRECT_REGISTRATION, ...overrides };
-}
-
-function relayRegistration(
-  overrides: Partial<Extract<ApnsRegistration, { transport: "relay" }>> = {},
-): Extract<ApnsRegistration, { transport: "relay" }> {
-  return { ...DEFAULT_RELAY_REGISTRATION, ...overrides };
-}
 
 function mockDirectAuth() {
   vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
@@ -149,81 +139,68 @@ function apnsResult(overrides: Partial<ApnsPushResult>): ApnsPushResult {
   };
 }
 
-function createInvokeParams(params: Record<string, unknown>) {
+type PushOptions = Parameters<(typeof pushHandlers)["push.test"]>[0];
+
+function invocation(
+  method: keyof typeof pushHandlers,
+  params: Record<string, unknown>,
+  context: PushOptions["context"],
+  client: PushOptions["client"] = null,
+) {
   const respond = vi.fn();
   return {
     respond,
-    invoke: async () =>
-      await expectDefined(
-        pushHandlers["push.test"],
-        'pushHandlers["push.test"] test invariant',
-      )({
+    invoke: () =>
+      pushHandlers[method]({
         params,
-        respond: respond as never,
-        context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
-        client: null,
-        req: { type: "req", id: "req-1", method: "push.test" },
+        respond,
+        context,
+        client,
+        req: { type: "req", id: "req-1", method },
         isWebchatConnect: () => false,
       }),
   };
+}
+
+function createInvokeParams(params: Record<string, unknown>) {
+  return invocation("push.test", params, {
+    getRuntimeConfig: () => mocks.getRuntimeConfig(),
+  } as never);
 }
 
 function createWebPushTestInvokeParams(params: Record<string, unknown> = {}) {
-  const respond = vi.fn();
-  return {
-    respond,
-    invoke: async () =>
-      await expectDefined(
-        pushHandlers["push.web.test"],
-        'pushHandlers["push.web.test"] test invariant',
-      )({
-        params,
-        respond: respond as never,
-        context: {} as never,
-        client: null,
-        req: { type: "req", id: "req-1", method: "push.web.test" },
-        isWebchatConnect: () => false,
-      }),
-  };
+  return invocation("push.web.test", params, {} as never);
 }
 
-function createWebPushSubscribeInvokeParams(options?: {
-  deviceId?: string;
-  userProfileId?: string;
-  config?: Record<string, unknown>;
-}) {
-  const respond = vi.fn();
+function webClient(options: { deviceId?: string; userProfileId?: string }) {
   return {
-    respond,
-    invoke: async () =>
-      await expectDefined(
-        pushHandlers["push.web.subscribe"],
-        'pushHandlers["push.web.subscribe"] test invariant',
-      )({
-        params: {
-          endpoint: "https://push.example.test/subscription",
-          keys: { p256dh: "p256dh", auth: "auth" },
-        },
-        respond: respond as never,
-        context: { getRuntimeConfig: () => options?.config ?? {} } as never,
-        client: {
-          connect: {
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            device: options?.deviceId ? { id: options.deviceId } : undefined,
-          },
-          ...(options?.userProfileId
-            ? {
-                authenticatedUserProfile: {
-                  profileId: options.userProfileId,
-                },
-              }
-            : {}),
-        } as never,
-        req: { type: "req", id: "req-1", method: "push.web.subscribe" },
-        isWebchatConnect: () => false,
-      }),
-  };
+    connect: {
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+      device: options.deviceId === undefined ? undefined : { id: options.deviceId },
+    },
+    ...(options.userProfileId
+      ? { authenticatedUserProfile: { profileId: options.userProfileId } }
+      : {}),
+  } as never;
+}
+
+function createWebPushSubscribeInvokeParams(
+  options: {
+    deviceId?: string;
+    userProfileId?: string;
+    config?: Record<string, unknown>;
+  } = {},
+) {
+  return invocation(
+    "push.web.subscribe",
+    {
+      endpoint,
+      keys,
+    },
+    { getRuntimeConfig: () => options.config ?? {} } as never,
+    webClient({ ...options, deviceId: options.deviceId || undefined }),
+  );
 }
 
 function createBoundWebPushInvokeParams(
@@ -231,41 +208,23 @@ function createBoundWebPushInvokeParams(
   params: Record<string, unknown>,
   options: { deviceId?: string; userProfileId?: string } = {},
 ) {
-  const respond = vi.fn();
-  return {
-    respond,
-    invoke: async () =>
-      await expectDefined(
-        pushHandlers[method],
-        `${method} test invariant`,
-      )({
-        params,
-        respond: respond as never,
-        context: { broadcastToConnIds: vi.fn() } as never,
-        client: {
-          connect: {
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            device: { id: options.deviceId ?? "browser-device" },
-          },
-          ...(options.userProfileId
-            ? { authenticatedUserProfile: { profileId: options.userProfileId } }
-            : {}),
-        } as never,
-        req: { type: "req", id: "req-1", method },
-        isWebchatConnect: () => false,
-      }),
-  };
+  return invocation(
+    method,
+    params,
+    { broadcastToConnIds: vi.fn() } as never,
+    webClient({ ...options, deviceId: options.deviceId ?? "browser-device" }),
+  );
 }
 
 function expectInvalidRequestResponse(
   respond: ReturnType<typeof vi.fn>,
   expectedMessagePart: string,
 ) {
-  const call = firstRespondCall(respond);
-  expect(call?.[0]).toBe(false);
-  expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-  expect(call?.[2]?.message).toContain(expectedMessagePart);
+  expect(firstRespondCall(respond)).toMatchObject([
+    false,
+    undefined,
+    { code: ErrorCodes.INVALID_REQUEST, message: expect.stringContaining(expectedMessagePart) },
+  ]);
 }
 
 function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined {
@@ -275,10 +234,8 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | unde
 function expectSuccessfulPushTestResponse(respond: ReturnType<typeof vi.fn>): ApnsPushResult {
   expect(sendApnsAlert).toHaveBeenCalledTimes(1);
   const call = firstRespondCall(respond);
-  expect(call?.[0]).toBe(true);
+  expect(call).toMatchObject([true, { ok: true, status: 200 }, undefined]);
   const result = call?.[1] as ApnsPushResult | undefined;
-  expect(result?.ok).toBe(true);
-  expect(result?.status).toBe(200);
   return result as ApnsPushResult;
 }
 
@@ -309,27 +266,13 @@ describe("push.test handler", () => {
   });
 
   it("sends push test through relay registrations", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      gateway: {
-        push: {
-          apns: {
-            relay: {
-              baseUrl: "https://relay.example.com",
-              timeoutMs: 1000,
-            },
-          },
-        },
-      },
-    });
-    vi.mocked(loadApnsRegistration).mockResolvedValue(
-      relayRegistration({ installationId: "install-1" }),
-    );
+    const relay = () => ({ baseUrl: "https://relay.example.com", timeoutMs: 1000 });
+    const push = { apns: { relay: relay() } };
+    mocks.getRuntimeConfig.mockReturnValue({ gateway: { push } });
+    vi.mocked(loadApnsRegistration).mockResolvedValue(relayRegistration);
     vi.mocked(resolveApnsRelayConfigFromEnv).mockReturnValue({
       ok: true,
-      value: {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: 1000,
-      },
+      value: relay(),
     });
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
     vi.mocked(sendApnsAlert).mockResolvedValue(
@@ -351,16 +294,7 @@ describe("push.test handler", () => {
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
       process.env,
-      {
-        push: {
-          apns: {
-            relay: {
-              baseUrl: "https://relay.example.com",
-              timeoutMs: 1000,
-            },
-          },
-        },
-      },
+      { push: { apns: { relay: relay() } } },
       { registrationRelayOrigin: undefined },
     );
     const result = expectSuccessfulPushTestResponse(respond);
@@ -368,7 +302,7 @@ describe("push.test handler", () => {
   });
 
   it("clears stale registrations after invalid token push-test failures", async () => {
-    const registration = directRegistration();
+    const registration = directRegistration;
     vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
     mockDirectAuth();
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
@@ -452,10 +386,11 @@ describe("push.web.test handler", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     const call = firstRespondCall(respond);
-    expect(call?.[0]).toBe(false);
-    expect(call?.[1]).toBeUndefined();
-    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(call?.[2]?.details).toEqual({ results });
+    expect(call).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, details: { results } }),
+    ]);
   });
 
   it("returns all delivery results when at least one attempt succeeds", async () => {
@@ -494,13 +429,9 @@ describe("push.web.test handler", () => {
 describe("push.web.subscribe handler", () => {
   beforeEach(() => {
     vi.mocked(registerWebPushSubscription).mockReset();
-    vi.mocked(registerWebPushSubscription).mockResolvedValue({
-      subscriptionId: "subscription-1",
-      endpoint: "https://push.example.test/subscription",
-      keys: { p256dh: "p256dh", auth: "auth" },
-      createdAtMs: 1,
-      updatedAtMs: 1,
-    });
+    vi.mocked(registerWebPushSubscription).mockResolvedValue(
+      pushSubscription(endpoint, keys, "subscription-1"),
+    );
   });
 
   it("binds the subscription to the authenticated browser device and profile", async () => {
@@ -512,7 +443,7 @@ describe("push.web.subscribe handler", () => {
     await invoke();
 
     expect(registerWebPushSubscription).toHaveBeenCalledWith({
-      endpoint: "https://push.example.test/subscription",
+      endpoint,
       keys: { p256dh: "p256dh", auth: "auth" },
       binding: { deviceId: "browser-device", userProfileId: "profile-1" },
       guard: expect.objectContaining({ assertCurrent: expect.any(Function) }),
@@ -555,11 +486,7 @@ describe("bound Web Push handlers", () => {
     vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReset();
     vi.mocked(setWebPushSubscriptionPreferences).mockReset();
     vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
-      subscriptionId: "subscription-1",
-      endpoint: "https://push.example.test/subscription",
-      keys: { p256dh: "p256dh", auth: "auth" },
-      createdAtMs: 1,
-      updatedAtMs: 1,
+      ...pushSubscription(endpoint, keys, "subscription-1"),
       deviceId: "browser-device",
       userProfileId: null,
       devicePreferences: { enabled: true, label: "" },
@@ -575,7 +502,7 @@ describe("bound Web Push handlers", () => {
     "%s rejects a deleted profile instead of treating it as profileless",
     async (method) => {
       const subscription = await findBoundWebPushSubscriptionByEndpoint({
-        endpoint: "https://push.example.test/subscription",
+        endpoint,
       });
       vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
         ...expectDefined(subscription, "bound subscription fixture"),
@@ -583,7 +510,7 @@ describe("bound Web Push handlers", () => {
       });
       mocks.resolveProfileId.mockReturnValue(undefined);
       const { respond, invoke } = createBoundWebPushInvokeParams(method, {
-        endpoint: "https://push.example.test/subscription",
+        endpoint,
         ...(method === "push.web.preferences.set"
           ? { scope: "device", preferences: { enabled: true, label: "" } }
           : {}),
@@ -599,7 +526,7 @@ describe("bound Web Push handlers", () => {
     async (options) => {
       const { respond, invoke } = createBoundWebPushInvokeParams(
         "push.web.unsubscribe",
-        { endpoint: "https://push.example.test/subscription" },
+        { endpoint },
         options,
       );
 
@@ -614,7 +541,7 @@ describe("bound Web Push handlers", () => {
   it("updates device preferences only while the subscription binding matches", async () => {
     const preferences = { enabled: false, label: "phone", categories: { humanMentioned: true } };
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
-      endpoint: "https://push.example.test/subscription",
+      endpoint,
       scope: "device",
       preferences,
     });
@@ -622,7 +549,7 @@ describe("bound Web Push handlers", () => {
     await invoke();
 
     expect(setWebPushSubscriptionPreferences).toHaveBeenCalledWith({
-      endpoint: "https://push.example.test/subscription",
+      endpoint,
       preferences,
       expectedDeviceId: "browser-device",
       expectedUserProfileId: null,
@@ -636,7 +563,7 @@ describe("bound Web Push handlers", () => {
     async (humanMentioned) => {
       const subscription = expectDefined(
         await findBoundWebPushSubscriptionByEndpoint({
-          endpoint: "https://push.example.test/subscription",
+          endpoint,
         }),
         "bound subscription fixture",
       );
@@ -690,7 +617,7 @@ describe("bound Web Push handlers", () => {
   it("fails closed when the subscription binding changes during the update", async () => {
     vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(false);
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
-      endpoint: "https://push.example.test/subscription",
+      endpoint,
       scope: "device",
       preferences: { enabled: true, label: "" },
     });
@@ -703,7 +630,7 @@ describe("bound Web Push handlers", () => {
 
   it("rejects an invalid quiet-hours time zone", async () => {
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
-      endpoint: "https://push.example.test/subscription",
+      endpoint,
       scope: "device",
       preferences: {
         enabled: true,

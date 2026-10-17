@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { WebPushMutationGuard } from "../../infra/push-web-store.records.js";
 import {
@@ -15,7 +14,7 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { pushHandlers } from "./push.js";
-import type { GatewayClient } from "./types.js";
+import { pushClient, pushSubscription } from "./push.test-support.js";
 
 const { findBoundWebPushSubscriptionByEndpoint, resolveProfileId, snapshotScope } = vi.hoisted(
   () => ({
@@ -88,11 +87,7 @@ type WriteMethod =
 
 function subscription(userProfileId: string | null = "profile-owner"): BoundWebPushSubscription {
   return {
-    subscriptionId: "subscription-owner",
-    endpoint,
-    keys,
-    createdAtMs: 1,
-    updatedAtMs: 1,
+    ...pushSubscription(endpoint, keys, "subscription-owner"),
     deviceId: "browser-device",
     userProfileId,
     devicePreferences: { enabled: true, label: "" },
@@ -102,30 +97,13 @@ function subscription(userProfileId: string | null = "profile-owner"): BoundWebP
 function createInvocation(method: WriteMethod, scope: "user" | "device" = "device") {
   const transport = new AbortController();
   const request = new AbortController();
-  const client: GatewayClient = {
-    connId: "original-connection",
-    connect: {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      device: {
-        id: "browser-device",
-        publicKey: "synthetic-public-key",
-        signature: "synthetic-signature",
-        signedAt: 1,
-        nonce: "synthetic-nonce",
-      },
-    },
-    authenticatedUserProfile: {
-      profileId: "profile-owner",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connectionSignal: transport.signal,
-  };
+  const client = pushClient(
+    "profile-owner",
+    "original-connection",
+    transport.signal,
+    "browser-device",
+    ["operator.read", "operator.write"],
+  );
   const respond = vi.fn();
   const broadcast = vi.fn();
   const hasCurrentClientAuthority = vi.fn(() => true);

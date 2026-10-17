@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
@@ -13,7 +12,8 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { dispatchGatewayMethodInProcessRaw } from "../server-plugin-in-process-dispatch.js";
 import { pushHandlers } from "./push.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { pushClient, pushSubscription } from "./push.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 vi.mock("../../infra/push-apns.js", () => ({
   clearApnsRegistrationIfCurrent: vi.fn(),
@@ -82,41 +82,12 @@ describe("Web Push opaque in-process authority", () => {
         } finally {
           inWorkerGrant = false;
         }
-        return {
-          subscriptionId: "in-process-subscription",
-          endpoint: params.endpoint,
-          keys: params.keys,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-        };
+        return pushSubscription(params.endpoint, params.keys, "in-process-subscription");
       });
 
       const connection = new AbortController();
       const connectionId = "paired-in-process-client";
-      const client: GatewayClient = {
-        connId: connectionId,
-        connectionSignal: connection.signal,
-        connect: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-          role: "operator",
-          scopes: ["operator.write"],
-          device: {
-            id: "paired-browser",
-            publicKey: "synthetic-public-key",
-            signature: "synthetic-signature",
-            signedAt: 1,
-            nonce: "synthetic-nonce",
-          },
-        },
-        authenticatedUserProfile: {
-          profileId,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-      };
+      const client = pushClient(profileId, connectionId, connection.signal, "paired-browser");
       const registry = createRequestGatewayMethodRegistry(pushHandlers);
       const isConnectionActive = vi.fn(() => true);
       const getClientConnIds = vi.fn(() => new Set([connectionId]));
