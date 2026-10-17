@@ -34,12 +34,13 @@ export function bindBoundedSeed(
 ): Pick<AgentHarnessHostCapabilities, "prepareBoundedSeed" | "prepareContextMedia"> | undefined {
   const { config, workspaceDir, contextEngine } = input;
   const target = input.preparedSessionTarget?.target ?? input.sessionTarget;
+  const { agentId, sessionId, sessionKey, storePath } = target ?? {};
   const maxBytes = resolveMaxActiveTranscriptBytes(config);
   if (
-    !target?.agentId ||
-    !target.sessionId ||
-    !target.sessionKey ||
-    !target.storePath ||
+    !agentId ||
+    !sessionId ||
+    !sessionKey ||
+    !storePath ||
     !workspaceDir ||
     maxBytes === undefined ||
     contextEngine?.info.ownsCompaction ||
@@ -49,13 +50,7 @@ export function bindBoundedSeed(
   }
   const hostTokenBudget =
     normalizeContextTokenBudget(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
-  const sessionTarget = {
-    ...target,
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
+  const sessionTarget = { ...target, agentId, sessionId, sessionKey, storePath };
   const attempt = {
     ...input,
     sessionTarget,
@@ -103,7 +98,7 @@ export function bindBoundedSeed(
         ? [...(refresh ?? []), ...(attempt.continuation?.messages ?? [])]
         : undefined;
     let activeCount = 0;
-    let omitted = 0;
+    let cut = 0;
     const read = async () => {
       const history = await SessionManager.readSessionContextAsync(
         sessionTarget,
@@ -123,7 +118,7 @@ export function bindBoundedSeed(
       return history.filter((message) => !isAdmittedUser(message));
     };
     const select = async (messages: AgentMessage[]) => {
-      omitted = 0;
+      cut = 0;
       const history = activeCount ? messages.slice(0, -activeCount) : messages;
       const active = activeCount ? messages.slice(-activeCount) : [];
       const bounded = boundContextEngineAssembly(
@@ -165,8 +160,8 @@ export function bindBoundedSeed(
       const boundHistory = () =>
         boundContextEngineAssembly(bounded, bytes, remainingTokens, additionalBytes).messages;
       let retained = boundHistory();
-      omitted = history.length - retained.length;
-      if (omitted) {
+      cut = history.length - retained.length;
+      if (cut) {
         const notice: AgentMessage = {
           role: "user",
           content: BOUNDED_CONTEXT_NOTICE,
@@ -180,9 +175,20 @@ export function bindBoundedSeed(
         if (bytes < 2) {
           throw new Error("Native history allowance cannot fit its omission notice");
         }
+        // A retained oversized turn must not crowd out the summary that covers its older history.
+        const summary = history.findLast((message) => message.role === "compactionSummary");
+        const summaryBytes = summary ? Buffer.byteLength(JSON.stringify(summary)) + 1 : 0;
+        const summaryTokens = summary ? estimateTokens(summary) : 0;
+        const prefix =
+          summary && summaryBytes + 2 <= bytes && summaryTokens <= remainingTokens ? [summary] : [];
+        bytes -= prefix.length ? summaryBytes : 0;
+        remainingTokens -= prefix.length ? summaryTokens : 0;
+        if (prefix.length) {
+          bounded.messages = bounded.messages.filter((message) => message !== summary);
+        }
         retained = boundHistory();
-        omitted = history.length - retained.length;
-        return [notice, ...retained, ...active];
+        cut = history.length - retained.length;
+        return [notice, ...prefix, ...retained, ...active];
       }
       return activeCount ? [...retained, ...active] : retained;
     };
@@ -190,7 +196,7 @@ export function bindBoundedSeed(
     let bounded = await select(messages);
     if (
       config?.agents?.defaults?.compaction?.enabled !== false &&
-      messages.slice(0, omitted).some((message) => message.role !== "compactionSummary")
+      messages.slice(0, cut).some((message) => message.role !== "compactionSummary")
     ) {
       const entry = await readSessionEntryReadOnlyInWorker(
         { ...sessionTarget, readConsistency: "latest" },
@@ -257,7 +263,7 @@ export function bindBoundedSeed(
       bounded = await select(messages);
     }
     assert();
-    if (omitted) {
+    if (cut) {
       await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
       assert();
     }

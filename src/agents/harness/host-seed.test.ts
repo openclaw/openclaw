@@ -26,13 +26,11 @@ vi.mock("../embedded-agent-runner/compact.js", () => ({
 
 it.each([
   { name: "small history", oldBytes: 20, summary: undefined, expected: 0 },
-  { name: "unsummarized history", oldBytes: 4096, summary: undefined, expected: 1 },
-  { name: "declined summary", oldBytes: 4096, summary: undefined, expected: 1, decline: true },
+  { name: "unsummarized history", oversizedTail: true },
+  { name: "declined summary", summary: "existing", decline: true, oversizedTail: true },
   {
     name: "narrow delivery allowance",
     oldBytes: 1000,
-    summary: undefined,
-    expected: 1,
     maxBytes: 8192,
     contextTokens: 1024,
     requestTokens: 128,
@@ -41,8 +39,6 @@ it.each([
   {
     name: "larger allowance cannot widen host",
     oldBytes: 1000,
-    summary: undefined,
-    expected: 1,
     maxBytes: 8192,
     contextTokens: 128,
     requestTokens: 1024,
@@ -51,8 +47,6 @@ it.each([
   {
     name: "invalid allowance is ignored",
     oldBytes: 1000,
-    summary: undefined,
-    expected: 1,
     maxBytes: 8192,
     contextTokens: 128,
     requestTokens: Infinity,
@@ -61,8 +55,6 @@ it.each([
   {
     name: "oversized summary is bounded again",
     oldBytes: 1000,
-    summary: undefined,
-    expected: 1,
     maxBytes: 8192,
     contextTokens: 128,
     requestTokens: 128,
@@ -71,25 +63,22 @@ it.each([
   },
   {
     name: "omitted existing summary",
-    oldBytes: 4096,
     summary: "summary ".repeat(1024),
     expected: 0,
   },
   {
     name: "unsummarized retained tail",
-    oldBytes: 4096,
     summary: "older prefix covered",
-    expected: 1,
   },
-  { name: "revoked source", oldBytes: 4096, summary: undefined, expected: 1, revoke: true },
-  { name: "replaced writer", oldBytes: 4096, summary: undefined, expected: 1, replaceWriter: true },
+  { name: "revoked source", revoke: true },
+  { name: "replaced writer", replaceWriter: true },
 ])(
   "prepares a bounded seed for $name",
   async ({
     name,
-    oldBytes,
+    oldBytes = 4096,
     summary,
-    expected,
+    expected = 1,
     revoke,
     replaceWriter,
     decline,
@@ -98,6 +87,7 @@ it.each([
     requestTokens,
     expectedBytes = maxBytes,
     oversizedSummary,
+    oversizedTail,
   }) => {
     await withOpenClawTestState({ label: "native-seed" }, async (state) => {
       setRuntimeConfigSnapshot({});
@@ -124,6 +114,11 @@ it.each([
         await manager.appendMessageAsync(makeUserMessage("recent request", 2)),
         "recent seed turn",
       );
+      if (oversizedTail) {
+        await manager.appendMessageAsync(
+          makeAssistantMessageFixture({ content: [{ type: "text", text: "tail".repeat(1024) }] }),
+        );
+      }
       if (summary) {
         await manager.appendCompactionAsync(
           summary,
@@ -179,7 +174,9 @@ it.each([
       } else {
         const seed = await result;
         expect(Buffer.byteLength(JSON.stringify(seed))).toBeLessThanOrEqual(expectedBytes);
-        expect(seed).toContainEqual(makeUserMessage("recent request", 2));
+        if (!oversizedTail) {
+          expect(seed).toContainEqual(makeUserMessage("recent request", 2));
+        }
         if (expected && !decline) {
           if (oversizedSummary) {
             expect(seed.some((message) => message.role === "compactionSummary")).toBe(false);
@@ -197,6 +194,9 @@ it.each([
         if (decline) {
           expect(loadTranscriptEventsSync(target)).toEqual(originalEvents);
           expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+          expect(seed).toContainEqual(
+            expect.objectContaining({ role: "compactionSummary", summary }),
+          );
         }
         expect(loadTranscriptEventsSync(target)).toEqual(expect.arrayContaining(originalEvents));
       }

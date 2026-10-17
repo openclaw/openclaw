@@ -32,8 +32,8 @@ healthy thread does not discard native context because the mirror grew.
 
 A fresh seed keeps whole recent turns and tool/result pairs. If it would omit
 history not already covered by a host summary, OpenClaw makes one host
-compaction attempt and seeds from the bounded result. Oversized history may
-still be omitted, with a notice in the seed and a user-facing bounded-context
+compaction attempt. A fitting host summary is reserved before oversized retained turns.
+Older history may still be omitted, with a notice in the seed and a user-facing bounded-context
 event. System instructions and the current request, including refresh handoffs, stay intact.
 With compaction disabled, the configured byte cap still omits older history with a notice; no-cap defaults are unaffected.
 Stored transcript history is not deleted.
