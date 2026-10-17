@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Menu, type MenuHandle } from "../../components/solid/menu.tsx";
-import { closeMenusWithin } from "../../components/solid/menu.tsx";
+import { closeMenusWithin, Menu, type MenuHandle } from "../../components/solid/menu.tsx";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { closeAgentPicker } from "./new-session-runtime.ts";
