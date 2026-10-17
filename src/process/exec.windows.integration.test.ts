@@ -35,6 +35,13 @@ async function waitForDescendantExit(
   }
 }
 
+function readyBeforeExit<T>(ready: Promise<T>, closed: Promise<unknown>, signal: AbortSignal) {
+  return withinTest(
+    awaitGateBeforeSettlement(ready, closed, "Child exited before readiness"),
+    signal,
+  );
+}
+
 describe("runUtf8CommandWithTimeout Windows integration", () => {
   it.runIf(process.platform === "win32")(
     "closes a nested Node descendant after an inner spawnSync timeout and outer failure",
@@ -74,14 +81,7 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
         },
       });
       try {
-        const descendant = await withinTest(
-          awaitGateBeforeSettlement(
-            ready.promise,
-            pending,
-            "inner command ended without descendant readiness",
-          ),
-          signal,
-        );
+        const descendant = await readyBeforeExit(ready.promise, pending, signal);
         expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
         await expect(withinTest(pending, signal)).resolves.toMatchObject({
           code: 1,
@@ -128,12 +128,9 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
       }
 
       try {
-        const [output] = await withinTest(
-          awaitGateBeforeSettlement(
-            once(parentStdout, "data", { signal }),
-            parentClosed,
-            "Could not start the Windows process tree",
-          ),
+        const [output] = await readyBeforeExit(
+          once(parentStdout, "data", { signal }),
+          parentClosed,
           signal,
         );
         const childPid = Number.parseInt(String(output).trim(), 10);
@@ -207,20 +204,16 @@ describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_S
         expect(JSON.parse(proof.stdout)).toMatchObject({
           payloads: expect.arrayContaining([expect.objectContaining({ text: "PONG" })]),
         });
-        expect(proof.launches).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              phase: "run",
-              platform: process.platform,
-              entrypoint: proof.entrypoint,
-            }),
-          ]),
+        expect(proof.launches).toContainEqual(
+          expect.objectContaining({
+            phase: "run",
+            platform: process.platform,
+            entrypoint: proof.entrypoint,
+          }),
         );
         if (kind === "native") {
-          expect(proof.launches).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ phase: "native-launch", platform: "win32" }),
-            ]),
+          expect(proof.launches).toContainEqual(
+            expect.objectContaining({ phase: "native-launch", platform: "win32" }),
           );
         }
       },

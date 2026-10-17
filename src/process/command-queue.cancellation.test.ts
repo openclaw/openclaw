@@ -105,9 +105,7 @@ describe("queued command scheduling and cancellation", () => {
         pending.push(
           enqueueCommandInLane(
             lane,
-            async () => {
-              starts.push([`${priority}-${index}`, performance.now()]);
-            },
+            async () => void starts.push([`${priority}-${index}`, performance.now()]),
             { priority },
           ),
         );
@@ -137,7 +135,6 @@ describe("queued command scheduling and cancellation", () => {
     setCommandLaneConcurrency(lane, 1);
     await foregroundDone.promise;
     await Promise.all(pending);
-
     expect(starts[0]).toEqual(["foreground", 0]);
     expect(starts.filter(([kind]) => kind !== "foreground")).toEqual([
       ["normal-0", 15_000],
@@ -181,13 +178,7 @@ describe("queued command scheduling and cancellation", () => {
     }
     expect(getCommandLaneSnapshot(lane).queuedCount).toBe(3);
     const refills = priorities.map((priority) =>
-      enqueueCommandInLane(
-        lane,
-        async () => {
-          order.push(`${priority}-refill`);
-        },
-        { priority },
-      ),
+      enqueueCommandInLane(lane, async () => void order.push(`${priority}-refill`), { priority }),
     );
     setCommandLaneConcurrency(lane, 1);
     const settled = await outcomes;
@@ -199,14 +190,9 @@ describe("queued command scheduling and cancellation", () => {
           : { status: "rejected", reason },
       ),
     );
-    expect(order).toEqual([
-      "foreground-1",
-      "foreground-refill",
-      "normal-1",
-      "normal-refill",
-      "background-1",
-      "background-refill",
-    ]);
+    expect(order).toEqual(
+      priorities.toReversed().flatMap((priority) => [`${priority}-1`, `${priority}-refill`]),
+    );
     expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
   });
 
@@ -264,11 +250,9 @@ describe("queued command scheduling and cancellation", () => {
     const selected = enqueue("selected");
     const after = enqueue("after");
     const rejection = expect(selected).rejects.toBeInstanceOf(CommandLaneClearedError);
-
     expect(clearCommandLane(lane, (target) => target?.sessionId === "selected")).toBe(1);
     expect(getCommandLaneSnapshot(lane).queuedCount).toBe(2);
     setCommandLaneConcurrency(lane, 1);
-
     await rejection;
     await Promise.all([before, after]);
     expect(started).toEqual(["before", "after"]);
@@ -295,9 +279,9 @@ describe("queued command scheduling and cancellation", () => {
     removed.releaseQueuedAbort = release;
     expect(removeLaneQueueEntry(queue, removed)).toBe(true);
     expect(release).toHaveBeenCalledOnce();
-    const survivors = entries.filter((entry) => entry !== removed);
-    expect([dequeueLaneQueue(queue), dequeueLaneQueue(queue), dequeueLaneQueue(queue)]).toEqual([
-      ...survivors,
+    expect(Array.from({ length: 3 }, () => dequeueLaneQueue(queue))).toEqual([
+      entries[0],
+      entries[2],
       refill,
     ]);
     expect(dequeueLaneQueue(queue)).toBeUndefined();
