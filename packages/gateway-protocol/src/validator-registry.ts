@@ -514,6 +514,7 @@ export const validateSkillsWorkshopRestoreParams = compile(S.SkillsWorkshopResto
 export const validateSkillsWorkshopUndoParams = compile(S.SkillsWorkshopUndoParamsSchema);
 export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
+export const validateSkillsFileGetParams = compile(S.SkillsFileGetParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);
 export const validateCronStatusParams = compile(S.CronStatusParamsSchema);
 export const validateCronGetParams = compile(S.CronGetParamsSchema);

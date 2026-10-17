@@ -35,6 +35,7 @@ function sealSchema(names: string[]): string {
 
 export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   name: "sqlite.full-verification",
+  lifetime: "process",
   read: (value) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined),
 };
 
@@ -93,7 +94,7 @@ export class SqliteDatabaseCleanCloseSeals {
   constructor(
     private readonly publishFact: (
       record: Admission,
-      key: Pick<SqliteDatabaseAdmissionKey<unknown>, "name" | "schemaDependent">,
+      key: Pick<SqliteDatabaseAdmissionKey<unknown>, "name" | "schemaDependent" | "lifetime">,
       value: unknown,
       revision: number,
     ) => void,
@@ -154,7 +155,7 @@ export class SqliteDatabaseCleanCloseSeals {
       for (const [name, schemaDependent, value] of facts) {
         this.publishFact(
           record,
-          { name, schemaDependent },
+          { name, schemaDependent, lifetime: "process" },
           value,
           readSqliteDatabaseFactRevision(record, schemaDependent),
         );

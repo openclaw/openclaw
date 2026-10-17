@@ -18,6 +18,7 @@ import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers
 type ReceiptDatabase = { db: EngineConnection; agentId: string };
 const canonicalReceiptAdmission: SqliteDatabaseAdmissionKey<string | null> = {
   name: "agent.canonical-validation-receipt",
+  lifetime: "process",
   // Canonical writers preserve proof; only schema changes and offline repair revoke it.
   schemaDependent: true,
   read: (value) => (value === null || typeof value === "string" ? value : undefined),

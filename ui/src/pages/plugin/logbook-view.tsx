@@ -110,6 +110,7 @@ function LogbookCard(props: {
       : undefined;
   const preview = () =>
     keyframeId() !== undefined ? props.model.state.framePreviews.get(keyframeId()!) : undefined;
+  // Load the expanded card's missing keyframe through the Gateway-backed preview cache.
   createEffect(
     () => ({
       expanded: expanded(),
@@ -317,6 +318,7 @@ export function Logbook(props: LogbookProps) {
   };
   const model = createLogbook();
   const state = () => model.state;
+  // A client change retires logbook requests and starts loading the newly connected Gateway.
   createEffect(
     () => (props.connected ? props.client : null),
     (client) => void (model.connect(client) && model.load()),

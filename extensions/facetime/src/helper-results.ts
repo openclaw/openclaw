@@ -14,20 +14,6 @@ export type HelperActionResult = Record<string, unknown> & {
   topologyComplete?: boolean;
 };
 
-type FaceTimeNativeActionOutcome =
-  | { status: "answered-muted" }
-  | { status: "safe-muted" }
-  | { status: "media-active" }
-  | { status: "termination-requested" }
-  | { status: "absent" };
-
-export class FaceTimeHelperActionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "FaceTimeHelperActionError";
-  }
-}
-
 export class FaceTimeHelperAmbiguousError extends Error {
   constructor(
     message: string,
@@ -57,10 +43,10 @@ function requireCompleteTopology(result: HelperActionResult): HelperActionResult
   return results;
 }
 
-export function projectFaceTimeNativeAction(
+export function assertFaceTimeNativeAction(
   action: "answer" | "safe-mute" | "unmute" | "activate" | "terminate",
   result: HelperActionResult,
-): FaceTimeNativeActionOutcome {
+): void {
   const results = requireCompleteTopology(result);
   const present = results.filter((entry) => entry.outcome !== "absent");
   // FaceTime and Phone can both proxy the same system TUCall. Accept shared
@@ -79,7 +65,7 @@ export function projectFaceTimeNativeAction(
           (observed.is_sending_audio === true && observed.is_sending_transmission === true)),
     )
   ) {
-    return { status: "media-active" };
+    return;
   }
   if (
     (action === "answer" || action === "safe-mute") &&
@@ -92,15 +78,15 @@ export function projectFaceTimeNativeAction(
           : observed.downlink_muted === true),
     )
   ) {
-    return { status: action === "answer" ? "answered-muted" : "safe-muted" };
+    return;
   }
   if (
     action === "terminate" &&
     present.every((observed) => observed.outcome === "termination-requested")
   ) {
-    return { status: "termination-requested" };
+    return;
   }
-  throw new FaceTimeHelperActionError(`FaceTime ${action} postcondition was not observed`);
+  throw new Error(`FaceTime ${action} postcondition was not observed`);
 }
 
 export function projectCompleteFaceTimeAbsence(result: HelperActionResult): {

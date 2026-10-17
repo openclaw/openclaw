@@ -94,12 +94,7 @@ function toFetchUrl(resource: RequestInfo | URL): string {
 const MATRIX_STATE_AFTER_SYNC_PARAM = "org.matrix.msc4222.use_state_after";
 
 function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return rawUrl;
-  }
+  const url = new URL(rawUrl);
 
   if (!url.pathname.endsWith("/sync") || !url.searchParams.has(MATRIX_STATE_AFTER_SYNC_PARAM)) {
     return rawUrl;

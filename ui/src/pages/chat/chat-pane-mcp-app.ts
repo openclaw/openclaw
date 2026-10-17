@@ -19,6 +19,7 @@ import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { mcpAppMessageInput, sendMcpAppNewConversation } from "../../lib/mcp-app-message.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import {
   releaseChatAttachmentPayloads,
@@ -239,15 +240,15 @@ export function createChatPaneMcpApps(options: {
   }
 
   // Pane-local listeners keep split-view prompts with their iframe.
-  const listeners = new AbortController();
-  const listenerOptions = { signal: listeners.signal };
   const element = options.element;
-  element.addEventListener(MCP_APP_RESOURCE_MENTION_EVENT, receiveResourceMention, listenerOptions);
-  element.addEventListener(MCP_APP_MESSAGE_EVENT, receiveMessage, listenerOptions);
-  element.addEventListener(MCP_APP_FILE_OPEN_EVENT, receiveFile, listenerOptions);
-  element.addEventListener(MCP_APP_CONTEXT_EVENT, receiveContext, listenerOptions);
-  element.addEventListener(MCP_APP_OPEN_EVENT, receiveOpen, listenerOptions);
-  element.addEventListener(WIDGET_PROMPT_EVENT, receiveWidgetPrompt, listenerOptions);
-  onCleanup(() => listeners.abort());
+  const stopEvents = [
+    listen(element, MCP_APP_RESOURCE_MENTION_EVENT, { handleEvent: receiveResourceMention }),
+    listen(element, MCP_APP_MESSAGE_EVENT, { handleEvent: receiveMessage }),
+    listen(element, MCP_APP_FILE_OPEN_EVENT, { handleEvent: receiveFile }),
+    listen(element, MCP_APP_CONTEXT_EVENT, { handleEvent: receiveContext }),
+    listen(element, MCP_APP_OPEN_EVENT, { handleEvent: receiveOpen }),
+    listen(element, WIDGET_PROMPT_EVENT, { handleEvent: receiveWidgetPrompt }),
+  ];
+  onCleanup(() => stopEvents.forEach((stop) => stop()));
   return syncLaunch;
 }

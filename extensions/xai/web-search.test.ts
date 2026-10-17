@@ -436,9 +436,10 @@ describe("xai web search config resolution", () => {
       config: xaiPluginConfig({ webSearch: { apiKey: "xai-test-key" } }),
     });
     await expect(tool.execute({ query: "OpenClaw timeout" })).rejects.toMatchObject({
-      name: "Error",
+      name: "TimeoutError",
       cause: abort,
       code: "ETIMEDOUT",
+      timeoutMs: 60_000,
     });
   });
 

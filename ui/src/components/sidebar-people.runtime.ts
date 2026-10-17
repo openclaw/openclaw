@@ -10,10 +10,7 @@ import {
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
-import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
+import { resolveSessionPreferredFace } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -264,16 +261,8 @@ export class SidebarPeopleRuntime {
           },
           () => this.close(),
         ),
-        openSession: (row, agentId) => {
+        openSession: (row, agentId, options) => {
           const face = resolveSessionPreferredFace(row);
-          const target = sessionNavigationTarget({
-            face,
-            sessionKey: row.key,
-            row,
-            fallbackAgentId: agentId,
-            basePath: this.host.basePath,
-            mainKey: resolveUiConfiguredMainKey(defaults),
-          });
           this.close();
           runSessionNavigationIntent(this.host, {
             agentId,
@@ -288,8 +277,8 @@ export class SidebarPeopleRuntime {
               ) {
                 return false;
               }
-              this.host.prepareSessionNavigation(row.key, target.options.pathname);
-              this.host.onNavigate?.(face, target.options);
+              this.host.prepareSessionNavigation(row.key, options.pathname);
+              this.host.onNavigate?.(face, options);
               selectApplicationSession({
                 selection: context.agentSelection,
                 gateway: context.gateway,

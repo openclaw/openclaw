@@ -9,6 +9,7 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -20,7 +21,13 @@ export type SqliteIntegrityCheckTiming = {
   workerLifetimeElapsedMs?: number;
 };
 
-export type SqliteIntegrityCheck = {
+export type SqliteIntegrityCheckOptions = {
+  check?: "quick" | "full";
+  /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
+  tables?: readonly string[];
+};
+
+export type SqliteIntegrityCheck = SqliteIntegrityCheckOptions & {
   database: DatabaseSync;
   databaseLabel: string;
   timing?: SqliteIntegrityCheckTiming;
@@ -37,7 +44,7 @@ export type SqliteIntegrityDiagnostics = {
     | "dirty-receipt"
     | "no-proof"
     | "lease-class";
-  integrityGateMode?: "full" | "deferred";
+  integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
   integrityCheckSyncMs?: number;
@@ -54,12 +61,13 @@ export function* sqliteIntegrityCheckSteps(
   database: DatabaseSync,
   databaseLabel: string,
   diagnostics?: SqliteIntegrityDiagnostics,
+  options: SqliteIntegrityCheckOptions = {},
 ): SqliteIntegrityOperation<void> {
   const startedAt = performance.now();
-  const check: SqliteIntegrityCheck = { database, databaseLabel };
+  const check: SqliteIntegrityCheck = { database, databaseLabel, ...options };
   if (diagnostics) {
     check.timing = {};
-    diagnostics.integrityGateMode = "full";
+    diagnostics.integrityGateMode = options.check ?? "full";
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -102,7 +110,7 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
   const timing = check.timing;
   const startedAt = timing ? performance.now() : 0;
   try {
-    assertSqliteIntegrity(check.database, check.databaseLabel);
+    assertSqliteIntegrity(check.database, check.databaseLabel, check);
   } finally {
     if (timing) {
       timing.syncElapsedMs = performance.now() - startedAt;
@@ -188,13 +196,26 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
   return isSqliteCorruptionError(error.cause);
 }
 
-/** Require structural, table/index, and referential consistency before trusting a database. */
+/** Check structure and foreign keys, plus all indexes or the migration's selected tables. */
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
-  check: SqliteCheckPragma = "integrity_check",
+  options: SqliteIntegrityCheckOptions = {},
 ): SqliteIntegrityChecks {
+  const check = options.check === "quick" ? "quick_check" : "integrity_check";
   const integrityCheck = runSqliteCheck(database, databaseLabel, check);
+  if (check === "quick_check" && options.tables?.length) {
+    const existing = new Set(
+      readSqliteSchemaObjects(database)
+        .filter((row) => row.type === "table")
+        .map((row) => row.name),
+    );
+    for (const table of options.tables) {
+      if (existing.has(table)) {
+        assertSqliteTableIntegrity(database, databaseLabel, table);
+      }
+    }
+  }
   runSqliteForeignKeyCheck(database, databaseLabel);
   if (check === "integrity_check") {
     recordSqliteDatabaseIntegrity(database);

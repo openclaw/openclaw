@@ -970,7 +970,7 @@ describe("device folder selection", () => {
     f.state.selectDevice("desktop");
     f.state.selectDeviceFolder();
     f.state.setDeviceFolderPath("/srv/project");
-    f.gateway.environments![0]!.workerHost = { deviceFolders: false };
+    f.gateway.environments![0]!.workerHost = {};
     expect(f.state.folderSubmissionBlocked()).toBe(true);
     expect(f.state.deviceFolder).toEqual({ deviceId: "desktop", path: "/srv/project" });
     f.state.selectNewWorkspace();

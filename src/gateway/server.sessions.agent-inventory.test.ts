@@ -106,7 +106,6 @@ test.each(inventorySizes)(
     const materialization = {
       list: vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly"),
       fullLookup: vi.spyOn(sessionAccessor, "listSessionEntriesCore"),
-      exactBatch: vi.spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch"),
     };
     const transcripts = [
       vi.spyOn(sessionAccessor, "readSessionTranscriptWatermark"),

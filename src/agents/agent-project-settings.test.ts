@@ -179,48 +179,6 @@ describe("prepareAgentProviderRetryCount", () => {
     });
   });
 
-  it.each(["trusted", "sanitize", "ignore"] as const)(
-    "keeps %s precedence, frozen file inputs and explicit invalidation",
-    async (policy) => {
-      await withSettingsWorkspace(async (params) => {
-        const pluginRoot = path.join(params.cwd, "bundle");
-        await fs.mkdir(pluginRoot);
-        await fs.writeFile(
-          path.join(params.agentDir, "settings.json"),
-          JSON.stringify({ retry: { provider: { maxRetries: 4 } } }),
-        );
-        await fs.writeFile(
-          path.join(pluginRoot, "settings.json"),
-          JSON.stringify({ retry: { provider: { maxRetries: 1 } } }),
-        );
-        const projectPath = path.join(params.cwd, ".openclaw", "settings.json");
-        await fs.writeFile(projectPath, JSON.stringify({ retry: { provider: { maxRetries: 0 } } }));
-        const input = {
-          ...params,
-          cfg: {
-            agents: { defaults: { embeddedAgent: { projectSettingsPolicy: policy } } },
-            plugins: { entries: { "retry-bundle": { enabled: true } } },
-          },
-          pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-            plugins: [
-              {
-                id: "retry-bundle",
-                rootDir: pluginRoot,
-                format: "bundle",
-                settingsFiles: ["settings.json"],
-              },
-            ],
-          }),
-        };
-        expect(prepareAgentProviderRetryCount(input)).toBe(policy === "ignore" ? 1 : 0);
-        await fs.writeFile(projectPath, JSON.stringify({ retry: { provider: { maxRetries: 2 } } }));
-        expect(prepareAgentProviderRetryCount(input)).toBe(policy === "ignore" ? 1 : 0);
-        clearPreparedEmbeddedAgentSettings([params.sessionId]);
-        expect(prepareAgentProviderRetryCount(input)).toBe(policy === "ignore" ? 1 : 2);
-      });
-    },
-  );
-
   it("does not admit embedded retired settings, compaction or delay policy into native setup", async () => {
     await withSettingsWorkspace(async (params) => {
       await fs.writeFile(
@@ -246,53 +204,61 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
     { policy: "sanitize", shellCommandPrefix: "echo global &&", reserveTokens: 32_000 },
     { policy: "ignore", shellCommandPrefix: "echo global &&", reserveTokens: 22_000 },
   ] as const)(
-    "reuses $policy settings until reset without persisting attempt changes",
+    "keeps $policy precedence and frozen settings until reset without persisting attempt changes",
     async (testCase) => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-settings-"));
-      try {
-        const cwd = path.join(baseDir, "workspace");
-        const agentDir = path.join(baseDir, "agent");
-        const projectSettingsDir = path.join(cwd, ".openclaw");
-        const agentSettingsPath = path.join(agentDir, "settings.json");
-        await fs.mkdir(projectSettingsDir, { recursive: true });
-        await fs.mkdir(agentDir, { recursive: true });
+      await withSettingsWorkspace(async (params) => {
+        const agentSettingsPath = path.join(params.agentDir, "settings.json");
+        const projectPath = path.join(params.cwd, ".openclaw", "settings.json");
+        const pluginRoot = path.join(params.cwd, "bundle");
         const globalSettings = {
-          retry: { enabled: true },
+          retry: { enabled: true, provider: { maxRetries: 4 } },
           shellCommandPrefix: "echo global &&",
           compaction: { reserveTokens: 22_000, keepRecentTokens: 23_000 },
         };
-        await fs.writeFile(agentSettingsPath, JSON.stringify(globalSettings, null, 2), "utf8");
+        const projectSettings = {
+          retry: { provider: { maxRetries: 0 } },
+          shellCommandPrefix: "echo trusted &&",
+          compaction: { reserveTokens: 32_000 },
+        };
+        await fs.mkdir(pluginRoot);
+        await fs.writeFile(agentSettingsPath, JSON.stringify(globalSettings));
+        await fs.writeFile(projectPath, JSON.stringify(projectSettings));
         await fs.writeFile(
-          path.join(projectSettingsDir, "settings.json"),
-          JSON.stringify({
-            shellCommandPrefix: "echo trusted &&",
-            compaction: { reserveTokens: 32_000 },
-          }),
-          "utf8",
+          path.join(pluginRoot, "settings.json"),
+          JSON.stringify({ retry: { provider: { maxRetries: 1 } } }),
         );
-
-        const params = {
-          sessionId: baseDir,
-          cwd,
-          agentDir,
-          pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+        const input = {
+          ...params,
           cfg: {
             agents: { defaults: { embeddedAgent: { projectSettingsPolicy: testCase.policy } } },
+            plugins: { entries: { "retry-bundle": { enabled: true } } },
           },
+          pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "retry-bundle",
+                rootDir: pluginRoot,
+                format: "bundle",
+                settingsFiles: ["settings.json"],
+              },
+            ],
+          }),
         };
-        const settingsManager = createPreparedEmbeddedAgentSettingsManager(params);
-
+        expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 0);
+        const settingsManager = createPreparedEmbeddedAgentSettingsManager(input);
         expect(settingsManager.getShellCommandPrefix()).toBe(testCase.shellCommandPrefix);
         expect(settingsManager.getCompactionReserveTokens()).toBe(testCase.reserveTokens);
         expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
         expect(settingsManager.getRetryEnabled()).toBe(false);
         settingsManager.applyOverrides({ compaction: { reserveTokens: 90_000 } });
         settingsManager.setRetryEnabled(true);
-
         await settingsManager.flush();
-
         expect(JSON.parse(await fs.readFile(agentSettingsPath, "utf8"))).toEqual(globalSettings);
 
+        await fs.writeFile(
+          projectPath,
+          JSON.stringify({ ...projectSettings, retry: { provider: { maxRetries: 2 } } }),
+        );
         await fs.writeFile(
           agentSettingsPath,
           JSON.stringify({
@@ -300,21 +266,20 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
             compaction: { ...globalSettings.compaction, keepRecentTokens: 45_000 },
           }),
         );
+        expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 0);
         await settingsManager.reload();
         expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
-        const nextSettingsManager = createPreparedEmbeddedAgentSettingsManager(params);
+        const nextSettingsManager = createPreparedEmbeddedAgentSettingsManager(input);
         expect(nextSettingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
         expect(nextSettingsManager.getCompactionReserveTokens()).toBe(testCase.reserveTokens);
         expect(nextSettingsManager.getRetryEnabled()).toBe(false);
         await nextSettingsManager.flush();
         clearPreparedEmbeddedAgentSettings([params.sessionId]);
+        expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 2);
         expect(
-          createPreparedEmbeddedAgentSettingsManager(params).getCompactionKeepRecentTokens(),
+          createPreparedEmbeddedAgentSettingsManager(input).getCompactionKeepRecentTokens(),
         ).toBe(45_000);
-      } finally {
-        clearPreparedEmbeddedAgentSettings([baseDir]);
-        await fs.rm(baseDir, { recursive: true, force: true });
-      }
+      });
     },
   );
 

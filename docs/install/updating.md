@@ -35,6 +35,40 @@ backup.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+### Migration integrity checks
+
+SQLite upgrades default to a whole-database `quick_check`, a full
+`integrity_check` of the tables the migration rewrites or re-indexes, and the
+existing foreign-key checks. This avoids checking every unrelated index against
+its table during a routine upgrade. Structural corruption anywhere in the
+database and corruption in the migration's affected tables still refuse the
+migration; quarantine and rollback behavior are unchanged.
+Historical migrations without a declared table scope, same-version Doctor
+repairs, and legacy transformed recovery archives retain full integrity checks.
+
+To request full integrity checking across every table and index during migration:
+
+```bash
+openclaw update --full-integrity-check
+openclaw doctor --fix --full-integrity-check
+```
+
+The default can miss an index/table mismatch in an untouched table. Use the full
+check when you need that coverage; it can take considerably longer on large
+databases. A successful quick check is never recorded as a full verification.
+Later runtime admission still performs a full check when no reusable
+full-verification seal exists, and can detect that mismatch before activation.
+The flag selects migration checks; it does not turn an already-current database
+into a separate verification job. Explicit database verification, backup
+verification, Doctor recovery, and compaction retain their existing checks.
+
+The installed updater runs first. Its own captures and checks keep their shipped
+behavior; the more efficient default begins when the candidate runs its
+migrations. An older installed CLI does not recognize the new flag. For that
+first upgrade, update normally to receive the candidate's new default, or run
+the candidate's `doctor --fix --full-integrity-check` through your manual upgrade
+workflow.
+
 Post-activation schema verification preserves agent databases Doctor holds after
 deletion. These stores may keep an older schema without failing the update;
 Doctor's held-store warning remains visible. Configured agents required by the

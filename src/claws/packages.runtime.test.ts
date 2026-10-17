@@ -18,6 +18,7 @@ import {
 } from "../plugins/plugin-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { stageClawAddHostRequirementsStateless } from "./add-stateless.js";
 import {
   installClawPackages,
@@ -557,24 +558,30 @@ describe("Claw source-host plugin collision", () => {
     const env = sourceHostEnv(root);
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
     await withEnvAsync(env, async () => {
-      await expect(
-        preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
-          config: {},
-          env,
-          deps: {
-            preflightPlugin,
-            probePlugin,
-            inspectPluginCapabilities: (_rootDir, pluginId) => ({
-              ...emptyPluginCapabilityEvidence,
-              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-            }),
-          },
-        }),
-      ).resolves.toMatchObject({
-        ok: false,
-        code: "plugin_source_host_conflict",
-        message: expect.stringContaining("bundled plugin memory-core"),
-      });
+      const sql = observeMainThreadSql();
+      try {
+        await expect(
+          preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
+            config: {},
+            env,
+            deps: {
+              preflightPlugin,
+              probePlugin,
+              inspectPluginCapabilities: (_rootDir, pluginId) => ({
+                ...emptyPluginCapabilityEvidence,
+                grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+              }),
+            },
+          }),
+        ).resolves.toMatchObject({
+          ok: false,
+          code: "plugin_source_host_conflict",
+          message: expect.stringContaining("bundled plugin memory-core"),
+        });
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
     });
   });
 

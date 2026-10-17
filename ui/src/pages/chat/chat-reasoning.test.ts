@@ -9,6 +9,7 @@ import {
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { projectChatReasoning } from "./chat-reasoning.ts";
 import { buildCachedChatItems, getChatItemsGeneration } from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
@@ -220,6 +221,15 @@ it("applies View and session visibility independently to live and saved reasonin
   expect(container.querySelector(".chat-thinking")).toBeNull();
   show(container, state, "on");
   expect(container.querySelector(".chat-thinking")?.textContent).toContain("Private synthetic");
+});
+
+it("falls back to the inherited reasoning default only without a session override", () => {
+  const visible = (selectedSession: { reasoningLevel?: string; reasoningDefault?: string }) =>
+    projectChatReasoning({ showThinking: true, selectedSession }).showReasoning;
+  expect(visible({ reasoningDefault: "on" })).toBe(true);
+  expect(visible({ reasoningDefault: "stream" })).toBe(false);
+  expect(visible({ reasoningLevel: "off", reasoningDefault: "on" })).toBe(false);
+  expect(visible({ reasoningLevel: "on", reasoningDefault: "off" })).toBe(true);
 });
 
 it.each(["error", "aborted"] as const)(

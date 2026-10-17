@@ -29,8 +29,8 @@ const preparation = vi.hoisted(() => ({
   billing: undefined as PreparedDecisionBillingFacts["billing"],
 }));
 
-// The registered provider host, validation, lifecycle fences, SDK wrapper and accounting stay real.
-// mock-isolation: Keep auth/catalog preparation isolated from this usage accounting fixture.
+// The registered provider host, lifecycle, SDK wrapper and accounting stay real.
+// mock-isolation: Supply prepared adapter outcomes; real provider validation has integration proof.
 vi.mock("../agents/decision-inference.js", () => ({
   executePreparedDecision: (
     params: Parameters<typeof import("../agents/decision-inference.js").executePreparedDecision>[0],
@@ -170,14 +170,10 @@ it("keeps unknown route pricing absent after accepting provider usage", async ()
   expect(host.events[0]?.event).not.toHaveProperty("costUsd");
 });
 
-it("does not record a provider result rejected by host validation", async () => {
+it("does not record usage for a rejected prepared outcome", async () => {
   const host = registered(async () => ({
-    status: "ok",
-    result: {
-      model: "native",
-      answers: { q: { type: "boolean", probabilityTrue: 2 } },
-      usage: { inputTokens: 100, costUsd: 1 },
-    },
+    status: "unavailable",
+    reason: "invalid-response",
   }));
   await expect(host.run()).resolves.toEqual({ status: "unavailable", reason: "invalid-response" });
   expect(host.events).toEqual([]);

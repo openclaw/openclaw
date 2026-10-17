@@ -4,12 +4,14 @@ import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js"
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
+import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
@@ -263,6 +265,26 @@ export function ChatView(input: { props: ChatProps; application?: ApplicationCon
 
 function ChatContent(input: { props: ChatProps }) {
   const application = useOptionalApplication();
+  const gateway = application && projectGateway(application.gateway);
+  const skillFileHovercard = createSkillFileHovercard({
+    get client() {
+      return gateway?.read().snapshot.client ?? null;
+    },
+    get agentId() {
+      return input.props.currentAgentId ?? undefined;
+    },
+    get sessionKey() {
+      return input.props.sessionKey;
+    },
+    onOpenFile: (file, line) =>
+      input.props.onOpenSidebar?.({
+        kind: "file",
+        ...file,
+        name: "SKILL.md",
+        language: "markdown",
+        line,
+      }),
+  });
   const frame = createMemo(() => createChatViewFrame(input.props));
   const [presentationRevision, setPresentationRevision] = createSignal(0, { ownedWrite: true });
   createEffect(
@@ -395,6 +417,7 @@ function ChatContent(input: { props: ChatProps }) {
                 <div class="chat-main__conversation-frame">
                   <div
                     class="chat-main__conversation"
+                    ref={skillFileHovercard}
                     onWheel={(event) =>
                       forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
                     }

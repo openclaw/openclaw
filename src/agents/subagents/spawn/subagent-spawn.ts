@@ -364,7 +364,6 @@ export async function spawnSubagentDirect(
         childIdem,
         outputSchema: params.outputSchema,
         childSystemPrompt,
-        thinkingOverride: plan.thinkingOverride,
         runTimeoutSeconds,
         lightContext: params.lightContext === true,
         requesterOrigin,

@@ -160,8 +160,14 @@ afterEach(() => {
   expect(observed.release).toHaveBeenCalledOnce();
 });
 
-function restore() {
-  return restoreSessionColdTranscript(preparation.target, observed.caller, preparation);
+function restore(signal?: AbortSignal) {
+  return restoreSessionColdTranscript(
+    preparation.target,
+    observed.caller,
+    preparation,
+    undefined,
+    signal,
+  );
 }
 
 it("cancels restoration queued at writer admission when its host callback expires", async () => {
@@ -182,13 +188,7 @@ it("cancels restoration queued at writer admission when its host callback expire
     await params.withWriteAdmission(async () => undefined, { admissionId: 1 });
     return [{ result }];
   });
-  const pending = restoreSessionColdTranscript(
-    preparation.target,
-    observed.caller,
-    preparation,
-    undefined,
-    controller.signal,
-  );
+  const pending = restore(controller.signal);
   const outcome = Promise.allSettled([pending]);
   try {
     const signal = await awaitGateBeforeSettlement(
@@ -219,13 +219,7 @@ it("cancels a queued restoration without releasing its admitted predecessor", as
   const first = restore();
   await awaitGateBeforeSettlement(entered.promise, first, "First restore was not admitted");
   const controller = new AbortController();
-  const second = restoreSessionColdTranscript(
-    preparation.target,
-    observed.caller,
-    preparation,
-    undefined,
-    controller.signal,
-  );
+  const second = restore(controller.signal);
   const outcome = Promise.allSettled([second]);
   try {
     const expired = new Error("queued restore host deadline expired");
@@ -256,15 +250,14 @@ it("publishes the committed key exactly once after the worker settles, without h
     settled.resolve([{ result }]);
     await pending;
   }
-  expect(changes).toHaveBeenCalledExactlyOnceWith({
+  const change = {
     storePath: preparation.target.path,
     sessionKey: "agent:main:committed-window",
     scope: "transcript",
-  });
+  };
+  expect(changes).toHaveBeenCalledExactlyOnceWith(change);
   expect(factChanges).toHaveBeenCalledExactlyOnceWith({
-    storePath: preparation.target.path,
-    sessionKey: "agent:main:committed-window",
-    scope: "transcript",
+    ...change,
     facts: { kind: "unchanged" },
   });
 });

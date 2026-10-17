@@ -341,7 +341,7 @@ async function installClawPackagesUnlocked(
         );
       }
       const capabilityReviewToken = computeDeclaredSurfaceHash(pkg.declaredCapabilities);
-      const sourceHostConflict = sourceHostPluginConflict(pkg, probe.pluginId, options);
+      const sourceHostConflict = await sourceHostPluginConflict(pkg, probe.pluginId, options);
       if (sourceHostConflict) {
         throw new ClawPackageInstallError(
           "plugin_source_host_conflict",

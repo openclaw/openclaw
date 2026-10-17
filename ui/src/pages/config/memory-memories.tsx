@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -61,6 +61,15 @@ function FileContent(props: { content: string; result: SearchResult }) {
 }
 
 export function MemoryMemories(props: MemoryMemoriesProps) {
+  // Search drafts and outstanding reads belong to this agent and connection.
+  const identity = createMemo(
+    () => [props.agentId, props.client, props.connected, props.methodAdvertised],
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  return <For each={[identity()]}>{() => <MemorySearch {...props} />}</For>;
+}
+
+function MemorySearch(props: MemoryMemoriesProps) {
   const [query, setQuery] = createSignal("");
   const [searchState, setSearchState] = createSignal<SearchState>({ kind: "idle" });
   const [openResultKey, setOpenResultKey] = createSignal<string | null>(null);
@@ -68,24 +77,7 @@ export function MemoryMemories(props: MemoryMemoriesProps) {
   let searchRequest: object | null = null;
   const detailRequests = new Map<string, object>();
 
-  function resetSearch() {
-    searchRequest = null;
-    detailRequests.clear();
-    setQuery("");
-    setSearchState({ kind: "idle" });
-    setOpenResultKey(null);
-    setDetails(new Map());
-  }
-
-  createEffect(
-    () => [props.agentId, props.client, props.connected, props.methodAdvertised] as const,
-    (_identity, previous) => {
-      if (previous) {
-        resetSearch();
-      }
-    },
-  );
-  onCleanup(() => {
+  onSettled(() => () => {
     searchRequest = null;
     detailRequests.clear();
   });
