@@ -13,7 +13,8 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
-vi.mock("./openclaw-plugin-tools.js", () => ({
+vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
 

@@ -566,7 +566,13 @@ describe("embedded session prompt delivery", () => {
   // Provider prefix caches need one system prompt per session; turn delivery rules
   // that differ (heartbeats, completions) travel in the turn's runtime context.
   it.each([
-    ["source-only completion", { sourceReplyDeliveryMode: "message_tool_only" as const }],
+    [
+      "source-only completion",
+      {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        requireExplicitMessageTarget: false,
+      },
+    ],
     [
       "explicit-target heartbeat",
       { sourceReplyDeliveryMode: "message_tool_only" as const, requireExplicitMessageTarget: true },

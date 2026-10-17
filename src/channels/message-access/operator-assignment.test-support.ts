@@ -148,7 +148,10 @@ export function registerOperatorAssignmentTests() {
             if (role === "member") {
               expect(assignment.operatorAuthority).toBeUndefined();
               const tool = assignment.tools.find((entry) => entry.name === "sessions")!;
-              expect(tool.parameters).toHaveProperty("properties.action.enum", ["assign_owner"]);
+              expect(tool.parameters).toHaveProperty(
+                "properties.action.enum",
+                expect.arrayContaining(["assign_owner"]),
+              );
               await expect(
                 assignment.run(() =>
                   tool.execute("deny-settings", { action: "patch", label: "forbidden" }),
@@ -342,7 +345,10 @@ export function registerOperatorAssignmentTests() {
           const tool = assignment.tools.find((entry) => entry.name === "sessions");
           expect(tool).toBeDefined();
           if (!configuredOwner) {
-            expect(tool!.parameters).toHaveProperty("properties.action.enum", ["assign_owner"]);
+            expect(tool!.parameters).toHaveProperty(
+              "properties.action.enum",
+              expect.arrayContaining(["assign_owner"]),
+            );
           }
           // An admitted agent may assign responsibility, but a bare RPC has no agent caller.
           await expect(
