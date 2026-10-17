@@ -12,7 +12,12 @@ import type { GatewayServer } from "../../gateway/server-public.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createManagedServiceBoundaryCleanup } from "../../infra/update-managed-service-handoff-process.test-support.js";
 import { updateExecutorEntrypoints } from "../cli-entrypoint.test-support.js";
-import type { UpdateRespawnFixtures } from "./run-loop.test-support.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
+import {
+  createLifecycleGate,
+  expectUncalled,
+  type UpdateRespawnFixtures,
+} from "./run-loop.test-support.js";
 
 const removeFixturePath = fs.rm;
 const sourceUrl = (key: keyof typeof updateExecutorEntrypoints) =>
@@ -115,17 +120,12 @@ export async function startPackageLifecycleStopFixture(params: {
     },
     async expectHostedPending() {
       await expect(host.request("stop", () => {})).resolves.toMatchObject({ ok: false });
-      expect(fixtures.hostedStopPrepare).toHaveBeenCalledOnce();
-      expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+      expectCallCount(1, fixtures.hostedStopPrepare, fixtures.captureForegroundUpdateHandoffStop);
       expect(params.isServing()).toBe(true);
-      expect(close).not.toHaveBeenCalled();
-      expect(hostedExecute).not.toHaveBeenCalled();
-      expect(hostedDispose).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
+      expectUncalled(close, hostedExecute, hostedDispose, runtime.exit);
     },
     expectHostedCompleted() {
-      expect(hostedExecute).toHaveBeenCalledOnce();
-      expect(hostedDispose).toHaveBeenCalledOnce();
+      expectCallCount(1, hostedExecute, hostedDispose);
       expect(hostedExecute).toHaveBeenCalledBefore(hostedDispose);
       expect(hostedDispose).toHaveBeenCalledBefore(runtime.exit);
     },
@@ -136,8 +136,7 @@ export async function startPackageLifecycleStopFixture(params: {
 export async function gateFixtureHandoffPublication(root: string, handoffId: string) {
   const runtimeFs = (await import("node:fs/promises")).default;
   const write = runtimeFs.writeFile;
-  const entered = createDeferred();
-  const release = createDeferred();
+  const gate = createLifecycleGate();
   const publication = vi
     .spyOn(runtimeFs, "writeFile")
     .mockImplementation(async (target, data, options) => {
@@ -148,15 +147,14 @@ export async function gateFixtureHandoffPublication(root: string, handoffId: str
       ) {
         const params = JSON.parse(data);
         if (params.updateLeaseKey === root && params.handoffId === handoffId) {
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
         }
       }
       return write(target, data, options);
     });
   return {
-    entered: entered.promise,
-    release: () => release.resolve(),
+    entered: gate.entered,
+    release: gate.release,
     restore: () => publication.mockRestore(),
   };
 }
@@ -190,17 +188,16 @@ export async function observeFixtureHelper(
   };
   spawnProcess.mockImplementation((command, args, options) => {
     const script = Array.isArray(args) ? args[0] : undefined;
-    let matched = false;
-    if (typeof script === "string" && path.basename(script) === "handoff.cjs") {
-      const params = JSON.parse(
-        fsSync.readFileSync(path.join(path.dirname(script), "handoff.json"), "utf8"),
-      );
-      matched = params.updateLeaseKey === root && params.handoffId === handoffId;
-    }
-    if (!matched) {
+    if (typeof script !== "string" || path.basename(script) !== "handoff.cjs") {
       return spawn(command, args, options);
     }
-    helperDirectory = path.dirname(script!);
+    const params = JSON.parse(
+      fsSync.readFileSync(path.join(path.dirname(script), "handoff.json"), "utf8"),
+    );
+    if (params.updateLeaseKey !== root || params.handoffId !== handoffId) {
+      return spawn(command, args, options);
+    }
+    helperDirectory = path.dirname(script);
     // Only stderr visibility changes; argv, environment, IPC and ownership stay real.
     helper = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
     helper.stderr?.on("data", (bytes) => {
@@ -227,14 +224,10 @@ export async function observeFixtureHelper(
     },
     async close() {
       const outcomes = await Promise.allSettled([cleanup(), ...(closed ? [closed] : [])]);
+      outcomes.push(...(await Promise.allSettled([capture()])));
       const failures = outcomes.flatMap((outcome) =>
         outcome.status === "rejected" ? [outcome.reason] : [],
       );
-      try {
-        await capture();
-      } catch (error) {
-        failures.push(error);
-      }
       if (failures.length) {
         throw new AggregateError(failures, "Fixture helper cleanup did not settle");
       }

@@ -1,3 +1,14 @@
+import { expect } from "vitest";
+
+export function expectCallCount(
+  count: number,
+  ...mocks: { mock: { calls: readonly unknown[] } }[]
+) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+
 /** Always join fixture cleanup, preserving both failures when assertions and cleanup reject. */
 export async function withRunLoopCleanup(
   assertion: () => Promise<void>,

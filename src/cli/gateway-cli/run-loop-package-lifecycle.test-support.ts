@@ -22,7 +22,7 @@ import {
   startPackageLifecycleStopFixture,
   writePackageLifecycleFixture,
 } from "./run-loop-package-helper.test-support.js";
-import type { UpdateRespawnFixtures } from "./run-loop.test-support.js";
+import { expectUncalled, type UpdateRespawnFixtures } from "./run-loop.test-support.js";
 
 /** Real package staging, helper IPC and run-loop Stop share one held script. */
 export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixtures): void {
@@ -87,10 +87,13 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
           },
           async () => {
             const server = createServer((socket) => socket.end("serving"));
-            const closeServer = () =>
-              new Promise<void>((resolve) => {
-                server.close(() => resolve());
-              });
+            const closeServer = async () => {
+              if (server.listening) {
+                await new Promise<void>((resolve) => {
+                  server.close(() => resolve());
+                });
+              }
+            };
             server.listen(0, "127.0.0.1");
             await once(server, "listening");
             const address = server.address();
@@ -119,9 +122,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
             try {
               await fixtures.withIsolatedSignals(async ({ captureSignal }) => {
                 const close = vi.fn(async () => {
-                  if (server.listening) {
-                    await closeServer();
-                  }
+                  await closeServer();
                   if (closeFailure) {
                     throw new Error("fixture Gateway close failed");
                   }
@@ -354,6 +355,8 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     prefix: string;
                     packageRoot: string;
                   };
+                  const pendingPath = path.join(stage.packageRoot, ".openclaw-lifecycle-pending");
+                  const lockPath = path.join(stage.packageRoot, ".openclaw-lifecycle-lock");
                   context.signal.throwIfAborted();
                   competing = runPackageUpdateLifecycle({
                     packageRoot: stage.packageRoot,
@@ -375,12 +378,9 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     committed: false,
                   });
                   expect(disposal).toMatchObject({ status: "failed", preserveStage: true });
-                  expect(
-                    await fs.readFile(
-                      path.join(stage.packageRoot, ".openclaw-lifecycle-pending"),
-                      "utf8",
-                    ),
-                  ).toBe("pending candidate lifecycle\n");
+                  expect(await fs.readFile(pendingPath, "utf8")).toBe(
+                    "pending candidate lifecycle\n",
+                  );
                   expect(handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
                   // Observe the real Stop owner's wait or the regression's premature exit.
                   await requestStop();
@@ -406,8 +406,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       "persisted SIGTERM restart was not consumed",
                     );
                     await setImmediate();
-                    expect(close).not.toHaveBeenCalled();
-                    expect(runtime.exit).not.toHaveBeenCalled();
+                    expectUncalled(close, runtime.exit);
                     const localReads = fixtures.consumeGatewayRestartIntent.mock.calls.length;
                     fixtures.consumeGatewayRestartIntent.mockReturnValueOnce({
                       reason: "update.run",
@@ -420,8 +419,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       "same-owner SIGUSR2 restart was not consumed",
                     );
                     await setImmediate();
-                    expect(close).not.toHaveBeenCalled();
-                    expect(runtime.exit).not.toHaveBeenCalled();
+                    expectUncalled(close, runtime.exit);
                     expect(server.listening).toBe(true);
                     expect(handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
                     expect(
@@ -444,10 +442,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   expect(fsSync.existsSync(stage.packageRoot)).toBe(true);
                   expect(controlExists("script-settled")).toBe(false);
                   if (uncertain) {
-                    await fs.writeFile(
-                      path.join(stage.packageRoot, ".openclaw-lifecycle-lock"),
-                      "replacement ownership evidence\n",
-                    );
+                    await fs.writeFile(lockPath, "replacement ownership evidence\n");
                   }
                   released = true;
                   await fs.writeFile(releasePath, "finish writer");
@@ -481,17 +476,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   if (uncertain) {
                     const outcome = JSON.parse(await readControl("outcome.json"));
                     expect(outcome.failedStep?.stderrTail).toContain("ownership is uncertain");
-                    expect(
-                      await fs.readFile(
-                        path.join(stage.packageRoot, ".openclaw-lifecycle-lock"),
-                        "utf8",
-                      ),
-                    ).toBe("replacement ownership evidence\n");
-                    expect(
-                      fsSync.existsSync(
-                        path.join(stage.packageRoot, ".openclaw-lifecycle-pending"),
-                      ),
-                    ).toBe(true);
+                    expect(await fs.readFile(lockPath, "utf8")).toBe(
+                      "replacement ownership evidence\n",
+                    );
+                    expect(fsSync.existsSync(pendingPath)).toBe(true);
                     expect(ledger.getUpdateRun(run.runId)?.status).toBe("failed");
                   }
                   await expect
@@ -512,18 +500,13 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   await runScenario();
                 } catch (error) {
                   failure = { error };
-                  preserveArtifacts = true;
                   await settle(async () => {
                     await fs.writeFile(
                       path.join(control, "gateway-events.json"),
-                      JSON.stringify(
-                        Object.fromEntries(
-                          (["info", "warn"] as const).map((level) => [
-                            level,
-                            fixtures.gatewayLog[level].mock.calls,
-                          ]),
-                        ),
-                      ),
+                      JSON.stringify({
+                        info: fixtures.gatewayLog.info.mock.calls,
+                        warn: fixtures.gatewayLog.warn.mock.calls,
+                      }),
                     );
                   });
                 } finally {
@@ -543,11 +526,8 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       .toBe(false);
                   });
                   await settle(() => join(competing));
-                  await settle(async () => {
-                    // False cancellation is not settlement. The captured child and exact
-                    // lease are joined below even after readiness or claim failed.
-                    await handoff.cancelManagedServiceUpdateHandoff(identity);
-                  });
+                  // Cancellation alone is not settlement: join the captured child and lease below.
+                  await settle(() => handoff.cancelManagedServiceUpdateHandoff(identity));
                   await settle(() => helper.close());
                   await settle(() => join(competing));
                   await settle(() => {
@@ -558,11 +538,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       );
                     }
                   });
-                  await settle(async () => {
-                    if (server.listening) {
-                      await closeServer();
-                    }
-                  });
+                  await settle(closeServer);
                   await settle(() => gatewayLock.current?.release());
                   await settle(async () => {
                     const { closeOpenClawStateDatabaseForTest } =
@@ -577,7 +553,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   fixtures.gatewayLog.info.mockReset();
                 }
                 if (cleanupErrors.length) {
-                  preserveArtifacts = true;
                   throw new AggregateError(
                     [...(failure ? [failure.error] : []), ...cleanupErrors],
                     `Fixture cleanup remains uncertain; preserved ${home}`,
@@ -597,20 +572,13 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                 }
               });
             } finally {
-              if (server.listening) {
-                await closeServer();
-              }
+              await closeServer();
               await gatewayLock.current?.release();
             }
           },
         );
         // Retain this body and its cleanup after Vitest cancels its timeout wrapper.
-        context.onTestFinished(() =>
-          work.then(
-            () => {},
-            () => {},
-          ),
-        );
+        context.onTestFinished(() => work.catch(() => {}));
         await work;
       } catch (error) {
         preserveArtifacts = true;
