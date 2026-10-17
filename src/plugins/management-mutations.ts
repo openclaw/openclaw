@@ -511,7 +511,6 @@ export async function reloadManagedPlugin(
           );
         }
         const ownedPluginIds = ownership.value.pluginIds;
-        let install: { id: string; hash: string } | undefined;
         if (target.installHash !== undefined) {
           const owner = ownership.value.installOwner;
           if (
@@ -523,7 +522,6 @@ export async function reloadManagedPlugin(
               `Plugin ${pluginId} changed after the installation batch. Inspect it before reloading.`,
             );
           }
-          install = { id: owner, hash: target.installHash };
         }
         const sourceDigests = target.sourceDigests ?? {};
         if (Object.keys(sourceDigests).some((id) => !ownedPluginIds.includes(id))) {
@@ -535,7 +533,6 @@ export async function reloadManagedPlugin(
           pluginId,
           pluginIds: ownedPluginIds,
           sourceDigests,
-          install,
         };
       });
     };
@@ -570,13 +567,6 @@ export async function reloadManagedPlugin(
         reason: "reload",
         ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
-        ...(resolved.every((target) => target.install !== undefined)
-          ? {
-              expectedInstallHashes: Object.fromEntries(
-                resolved.flatMap(({ install }) => (install ? [[install.id, install.hash]] : [])),
-              ),
-            }
-          : {}),
         assertInvokerOwned: beforePersistentApply,
       }),
     };
