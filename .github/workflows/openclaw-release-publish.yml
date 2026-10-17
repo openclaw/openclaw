@@ -2265,12 +2265,18 @@ jobs:
     with:
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       advisory: true
+      tooling_sha: ${{ github.workflow_sha }}
+      tooling_ref: ${{ github.ref_name }}
+      tooling_full_ref: ${{ github.ref }}
+      release_publish_run_id: ${{ github.run_id }}
+      release_publish_run_attempt: ${{ github.run_attempt }}
       include_browser: ${{ needs.publish_docker.outputs.include_browser == 'true' }}
       source_digests: ${{ needs.publish_docker.outputs.vcr_source_digests }}
       version: ${{ needs.publish_docker.outputs.version }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     permissions:
+      actions: read
       contents: read
 
   approve_github_release:
