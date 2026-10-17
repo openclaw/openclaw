@@ -7,7 +7,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-r
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
+import type { AfterCommitEffect } from "./render-lifecycle.ts";
 
 function createSecondaryHydrationPane() {
   const secondaryResponse = new Promise<never>(() => {});
@@ -57,15 +57,30 @@ function createSecondaryHydrationPane() {
       callback(0);
     }
   };
+  const deferTranscript = () => {
+    const transcript = deferred<boolean>();
+    pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
+    return async (committed = true) => {
+      transcript.resolve(committed);
+      await transcript.promise;
+      await Promise.resolve();
+    };
+  };
+  const expectNoSecondaryReads = () => {
+    expect(request).not.toHaveBeenCalled();
+    expect(listBranches).not.toHaveBeenCalled();
+  };
   return {
     afterCommit,
     commitEffects,
-    listBranches,
     pane,
     patch,
     request,
+    listBranches,
     runAnimationFrame,
     state,
+    deferTranscript,
+    expectNoSecondaryReads,
   };
 }
 
@@ -73,125 +88,91 @@ describe("chat pane session hydration", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("lets the committed transcript paint before starting secondary RPCs together", async () => {
-    const { afterCommit, commitEffects, listBranches, pane, request, runAnimationFrame, state } =
-      createSecondaryHydrationPane();
-    const transcript = deferred<boolean>();
+    const f = createSecondaryHydrationPane();
+    const commitTranscript = f.deferTranscript();
+    f.expectNoSecondaryReads();
+    await commitTranscript();
 
-    pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
-
-    expect(request).not.toHaveBeenCalled();
-    expect(listBranches).not.toHaveBeenCalled();
-    transcript.resolve(true);
-    await transcript.promise;
-    await Promise.resolve();
-
-    expect(afterCommit).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-    expect(listBranches).not.toHaveBeenCalled();
+    expect(f.afterCommit).toHaveBeenCalledOnce();
+    f.expectNoSecondaryReads();
 
     const complete = vi.fn();
-    commitEffects[0]!(complete);
+    f.commitEffects[0]!(complete);
     await Promise.resolve();
 
-    expect(request).not.toHaveBeenCalled();
-    expect(listBranches).not.toHaveBeenCalled();
+    f.expectNoSecondaryReads();
     expect(complete).not.toHaveBeenCalled();
 
-    runAnimationFrame();
+    f.runAnimationFrame();
     await Promise.resolve();
-    expect(request).not.toHaveBeenCalled();
-    expect(listBranches).not.toHaveBeenCalled();
+    f.expectNoSecondaryReads();
     expect(complete).not.toHaveBeenCalled();
 
-    runAnimationFrame();
+    f.runAnimationFrame();
     await Promise.resolve();
-    expect(listBranches).toHaveBeenCalledOnce();
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
+    expect(f.listBranches).toHaveBeenCalledOnce();
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
       "system.info",
       "session.discussion.info",
       "sessions.companion.state",
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ]);
     expect(
-      request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
-    ).toEqual({ sessionKey: state.sessionKey, agentId: "work" });
+      f.request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
+    ).toEqual({ sessionKey: f.state.sessionKey, agentId: "work" });
     expect(complete).toHaveBeenCalledOnce();
   });
 
   it("drops a previous session's deferred hydration before it reaches commit", async () => {
-    const request = vi.fn((_method: string, _params?: unknown) => new Promise<never>(() => {}));
-    const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const afterCommit = vi.fn<RenderLifecycle["afterCommit"]>(() => () => undefined);
-    state.renderLifecycle = { afterCommit };
-    const previousTranscript = deferred<boolean>();
-    const currentTranscript = deferred<boolean>();
+    const f = createSecondaryHydrationPane();
+    const commitPrevious = f.deferTranscript();
+    f.state.sessionKey = "agent:main:current-2";
+    const commitCurrent = f.deferTranscript();
 
-    pane.deferSessionHydrationUntilTranscript(state.sessionKey, previousTranscript.promise);
-    state.sessionKey = "agent:main:current-2";
-    pane.deferSessionHydrationUntilTranscript(state.sessionKey, currentTranscript.promise);
+    await commitPrevious();
+    expect(f.afterCommit).not.toHaveBeenCalled();
 
-    previousTranscript.resolve(true);
-    await previousTranscript.promise;
-    await Promise.resolve();
-    expect(afterCommit).not.toHaveBeenCalled();
-
-    currentTranscript.resolve(true);
-    await currentTranscript.promise;
-    await Promise.resolve();
-    expect(afterCommit).toHaveBeenCalledOnce();
+    await commitCurrent();
+    expect(f.afterCommit).toHaveBeenCalledOnce();
   });
 
   it("drops secondary work when the session changes between commit and paint", async () => {
-    const { commitEffects, listBranches, pane, patch, request, runAnimationFrame, state } =
-      createSecondaryHydrationPane();
-    const transcript = deferred<boolean>();
-    pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
-    transcript.resolve(true);
-    await transcript.promise;
-    await Promise.resolve();
+    const f = createSecondaryHydrationPane();
+    await f.deferTranscript()();
 
     const complete = vi.fn();
-    commitEffects[0]!(complete);
-    runAnimationFrame();
-    state.sessionKey = "agent:work:replacement";
-    runAnimationFrame();
+    f.commitEffects[0]!(complete);
+    f.runAnimationFrame();
+    f.state.sessionKey = "agent:work:replacement";
+    f.runAnimationFrame();
     await Promise.resolve();
 
-    expect(request).not.toHaveBeenCalled();
-    expect(listBranches).not.toHaveBeenCalled();
-    expect(patch).not.toHaveBeenCalled();
+    f.expectNoSecondaryReads();
+    expect(f.patch).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledOnce();
   });
 
   it("resumes deferred companion and discussion hydration when a retained pane returns", async () => {
-    const { commitEffects, pane, request, runAnimationFrame, state } =
-      createSecondaryHydrationPane();
-    const transcript = deferred<boolean>();
+    const f = createSecondaryHydrationPane();
+    const commitTranscript = f.deferTranscript();
+    f.pane.presented = false;
+    await commitTranscript();
 
-    pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
-    pane.presented = false;
-    transcript.resolve(true);
-    await transcript.promise;
-    await Promise.resolve();
+    expect(f.commitEffects).toHaveLength(0);
+    expect(f.request).not.toHaveBeenCalled();
 
-    expect(commitEffects).toHaveLength(0);
-    expect(request).not.toHaveBeenCalled();
-
-    pane.presented = true;
-    expect(commitEffects).toHaveLength(1);
-    commitEffects[0]!(vi.fn());
-    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual([
+    f.pane.presented = true;
+    expect(f.commitEffects).toHaveLength(1);
+    f.commitEffects[0]!(vi.fn());
+    expect(f.request.mock.calls.map(([method]) => method).toSorted()).toEqual([
       "chat.metadata",
       "models.list",
     ]);
-    runAnimationFrame();
-    runAnimationFrame();
+    f.runAnimationFrame();
+    f.runAnimationFrame();
     await Promise.resolve();
 
-    const methods = request.mock.calls.map(([method]) => method);
+    const methods = f.request.mock.calls.map(([method]) => method);
     expect(methods).toContain("session.discussion.info");
     expect(methods).toContain("sessions.companion.state");
   });
@@ -202,13 +183,11 @@ describe("chat pane session hydration", () => {
   ])(
     "acknowledges unread only after deferred transcript hydration $name",
     async ({ committed, expectedPatches }) => {
-      const { commitEffects, pane, patch, runAnimationFrame, state } =
-        createSecondaryHydrationPane();
-      const transcript = deferred<boolean>();
-      state.sessionsResult = {
+      const f = createSecondaryHydrationPane();
+      f.state.sessionsResult = {
         sessions: [
           {
-            key: state.sessionKey,
+            key: f.state.sessionKey,
             kind: "direct",
             updatedAt: 20,
             unread: true,
@@ -216,23 +195,21 @@ describe("chat pane session hydration", () => {
         ],
       } as never;
 
-      pane.presented = false;
-      pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
-      pane.presented = true;
-      expect(patch).not.toHaveBeenCalled();
+      f.pane.presented = false;
+      const commitTranscript = f.deferTranscript();
+      f.pane.presented = true;
+      expect(f.patch).not.toHaveBeenCalled();
 
-      transcript.resolve(committed);
-      await transcript.promise;
-      await Promise.resolve();
-      expect(commitEffects).toHaveLength(1);
+      await commitTranscript(committed);
+      expect(f.commitEffects).toHaveLength(1);
 
-      commitEffects[0]!(vi.fn());
-      expect(patch).not.toHaveBeenCalled();
-      runAnimationFrame();
-      expect(patch).not.toHaveBeenCalled();
-      runAnimationFrame();
+      f.commitEffects[0]!(vi.fn());
+      expect(f.patch).not.toHaveBeenCalled();
+      f.runAnimationFrame();
+      expect(f.patch).not.toHaveBeenCalled();
+      f.runAnimationFrame();
       await Promise.resolve();
-      expect(patch).toHaveBeenCalledTimes(expectedPatches);
+      expect(f.patch).toHaveBeenCalledTimes(expectedPatches);
     },
   );
 });

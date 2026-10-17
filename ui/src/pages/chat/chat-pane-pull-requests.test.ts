@@ -6,6 +6,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
+  type ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
@@ -65,24 +66,26 @@ function createPullRequestPane(sessions: SessionCapability) {
   return { ...harness, request };
 }
 
+function createSummaryPane() {
+  const epoch = {};
+  const setPullRequestSummary = vi.fn();
+  return {
+    ...createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
+    } as unknown as SessionCapability),
+    epoch,
+    setPullRequestSummary,
+  };
+}
+
 function emitSnapshot(
   emitGatewayEvent: (event: string, payload: unknown) => void,
   sessionKey: string,
-  snapshot: {
-    repository?: { owner: string; repo: string };
-    branch?: {
-      owner: string;
-      repo: string;
-      branch: string;
-      createUrl?: string;
-    };
-    pullRequests: ControlUiSessionPullRequest[];
-    rateLimited: boolean;
-    status: "ready" | "rate-limited" | "unavailable";
-  },
+  snapshot: Omit<ControlUiSessionPullRequests, "rateLimited"> & { rateLimited?: boolean },
 ) {
   emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-    sessions: { [sessionKey]: snapshot },
+    sessions: { [sessionKey]: { rateLimited: false, status: "ready", ...snapshot } },
   });
 }
 
@@ -313,12 +316,7 @@ describe("chat pane pushed pull request state", () => {
   it.each(["unavailable", "rate-limited"] as const)(
     "applies retained and replaced repository snapshots during %s",
     async (status) => {
-      const epoch = {};
-      const setPullRequestSummary = vi.fn();
-      const { pane, emitGatewayEvent } = createPullRequestPane({
-        capturePullRequestEpoch: vi.fn(() => epoch),
-        setPullRequestSummary,
-      } as unknown as SessionCapability);
+      const { pane, emitGatewayEvent, epoch, setPullRequestSummary } = createSummaryPane();
       const key = "agent:main:current";
       const repository = { owner: "openclaw", repo: "openclaw" };
       pane.refreshSessionPullRequests();
@@ -327,8 +325,6 @@ describe("chat pane pushed pull request state", () => {
         repository,
         branch: { ...repository, branch: "feature/demo" },
         pullRequests: [pullRequest(111532, "open")],
-        rateLimited: false,
-        status: "ready",
       });
       pane.refreshSessionPullRequests();
       const failure = { pullRequests: [], rateLimited: status === "rate-limited", status };
@@ -536,12 +532,7 @@ describe("chat pane pushed pull request state", () => {
   ])(
     "publishes pushed PR summaries: $name",
     async ({ pullRequests, summary, refresh, rateLimited = false }) => {
-      const epoch = {};
-      const setPullRequestSummary = vi.fn();
-      const { pane, request, emitGatewayEvent } = createPullRequestPane({
-        capturePullRequestEpoch: vi.fn(() => epoch),
-        setPullRequestSummary,
-      } as unknown as SessionCapability);
+      const { pane, request, emitGatewayEvent, epoch, setPullRequestSummary } = createSummaryPane();
       pane.refreshSessionPullRequests({ refresh });
       await Promise.resolve();
       await Promise.resolve();
@@ -570,12 +561,7 @@ describe("chat pane pushed pull request state", () => {
   it.each(["session switch", "disconnect", "branch switch"] as const)(
     "retires pane PR state on %s",
     async (change) => {
-      const epoch = {};
-      const setPullRequestSummary = vi.fn();
-      const { pane, state, emitGatewayEvent } = createPullRequestPane({
-        capturePullRequestEpoch: vi.fn(() => epoch),
-        setPullRequestSummary,
-      } as unknown as SessionCapability);
+      const { pane, state, emitGatewayEvent, epoch, setPullRequestSummary } = createSummaryPane();
       pane.refreshSessionPullRequests();
       await Promise.resolve();
       emitSnapshot(emitGatewayEvent, state.sessionKey, {
@@ -586,8 +572,6 @@ describe("chat pane pushed pull request state", () => {
           createUrl: "https://github.com/openclaw/openclaw/pull/new/feature/demo",
         },
         pullRequests: [pullRequest(111532, "open")],
-        rateLimited: false,
-        status: "ready",
       });
       pane.refreshSessionPullRequests();
       await Promise.resolve();
@@ -621,15 +605,11 @@ describe("chat pane pushed pull request state", () => {
       if (change === "session switch") {
         emitSnapshot(emitGatewayEvent, "agent:main:current", {
           pullRequests: [pullRequest(1, "open")],
-          rateLimited: false,
-          status: "ready",
         });
         pane.refreshSessionPullRequests();
         await Promise.resolve();
         emitSnapshot(emitGatewayEvent, state.sessionKey, {
           pullRequests: [pullRequest(2, "open")],
-          rateLimited: false,
-          status: "ready",
         });
         pane.refreshSessionPullRequests();
         await Promise.resolve();
@@ -737,193 +717,138 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
 
 describe("PR refresh wire ownership", () => {
   it.each([
-    { name: "identical finals on separate frames", texts: ["Opened", "Opened"], expected: 1 },
-    { name: "distinct finals in the same burst", texts: ["Opened", "Merged"], expected: 1 },
-    {
-      name: "distinct finals after the debounce interval",
-      texts: ["Opened", "Merged"],
-      spaced: true,
-      expected: 2,
-    },
-    { name: "the first live final after history", texts: ["Opened"], history: true, expected: 1 },
-    {
-      name: "the first presented final after hidden delivery",
-      texts: ["Opened", "Opened"],
-      hiddenFirst: true,
-      expected: 1,
-    },
-    {
-      name: "a stream announcement followed by its final",
-      texts: ["Opened"],
-      stream: true,
-      expected: 1,
-    },
-    {
-      name: "a final whose queued refresh lost its last watch before sync",
-      texts: ["Opened", "Opened"],
-      loseWatchBeforeSync: true,
-      expected: 1,
-    },
-    { name: "a same-session background final", texts: ["Opened"], background: true, expected: 1 },
-    {
-      name: "reconnect between final deliveries",
-      texts: ["Opened", "Opened"],
-      reconnect: true,
-      expected: 1,
-    },
-    {
-      name: "explicit history reset between finals",
-      texts: ["Opened", "Opened"],
-      reset: true,
-      expected: 1,
-    },
-    {
-      name: "ordinary history between final replays",
-      texts: ["Opened", "Opened"],
-      historyBetween: true,
-      expected: 1,
-    },
-    {
-      name: "a genuine branch switch before the next final",
-      texts: ["Opened", "Opened"],
-      branchSwitch: true,
-      expected: 1,
-    },
-  ])(
-    "keeps subscription force scoped for $name",
-    async ({
-      texts,
-      expected,
-      history,
-      hiddenFirst,
-      stream,
-      background,
-      reconnect,
-      reset,
-      historyBetween,
-      branchSwitch,
-      loseWatchBeforeSync,
-      spaced,
-    }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      onTestFinished(() => {
-        vi.useRealTimers();
+    ["identical finals on separate frames", "duplicate"],
+    ["distinct finals in the same burst", "burst"],
+    ["distinct finals after the debounce interval", "spaced"],
+    ["the first live final after history", "history"],
+    ["the first presented final after hidden delivery", "hiddenFirst"],
+    ["a stream announcement followed by its final", "stream"],
+    ["a final whose queued refresh lost its last watch before sync", "loseWatchBeforeSync"],
+    ["a same-session background final", "background"],
+    ["reconnect between final deliveries", "reconnect"],
+    ["explicit history reset between finals", "reset"],
+    ["ordinary history between final replays", "historyBetween"],
+    ["a genuine branch switch before the next final", "branchSwitch"],
+  ] as const)("keeps subscription force scoped for %s", async (_name, mode) => {
+    const texts = ["history", "stream", "background"].includes(mode)
+      ? ["Opened"]
+      : ["Opened", mode === "burst" || mode === "spaced" ? "Merged" : "Opened"];
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const sessions = makeChatHost().sessions;
+    onTestFinished(() => sessions.dispose());
+    const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
+    Object.assign(
+      state,
+      makeChatHost({
+        client: state.client,
+        connectionEpoch: state.connectionEpoch,
+        sessionKey: state.sessionKey,
+        sessions: state.sessions,
+      }),
+      {
+        chatMessagesBySession: new Map(),
+        pendingSessionMessageReloadSessionKey: null,
+      },
+    );
+    state.refreshSessionPullRequests = (options) => pane.refreshSessionPullRequests(options);
+    state.chatRunId = mode === "background" ? "foreground-run" : "wire-pr-run";
+    const key = state.sessionKey;
+    const otherKey = "agent:main:unrelated";
+    const store = sessionPullRequestsForGateway(pane.context.gateway);
+    const otherOwner = {};
+    store.watch(otherOwner, [otherKey]);
+    onTestFinished(() => store.unwatch(otherOwner));
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
+    await nextFrame();
+    request.mockClear();
+    const message = (text: string) => ({
+      role: "assistant",
+      content: [{ type: "text", text: `${text} https://github.com/openclaw/openclaw/pull/111532` }],
+    });
+    if (mode === "history") {
+      reduceChatSessionProjection(state, {
+        type: "snapshotLoaded",
+        messages: [message("Opened")],
       });
-      const sessions = makeChatHost().sessions;
-      onTestFinished(() => sessions.dispose());
-      const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
-      Object.assign(
-        state,
-        makeChatHost({
-          client: state.client,
-          connectionEpoch: state.connectionEpoch,
-          sessionKey: state.sessionKey,
-          sessions: state.sessions,
-        }),
-        {
-          chatMessagesBySession: new Map(),
-          pendingSessionMessageReloadSessionKey: null,
+      reduceChatSessionProjection(state, {
+        type: "runTerminal",
+        runId: "wire-pr-run",
+        status: "completed",
+      });
+      state.chatRunId = null;
+    }
+    if (mode === "stream") {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          state: "delta",
+          runId: "wire-pr-run",
+          sessionKey: key,
+          deltaText: "Opened https://github.com/openclaw/openclaw/pull/111532 ",
         },
-      );
-      state.refreshSessionPullRequests = (options) => pane.refreshSessionPullRequests(options);
-      state.chatRunId = background ? "foreground-run" : "wire-pr-run";
-      const key = state.sessionKey;
-      const otherKey = "agent:main:unrelated";
-      const store = sessionPullRequestsForGateway(pane.context.gateway);
-      const otherOwner = {};
-      store.watch(otherOwner, [otherKey]);
-      onTestFinished(() => store.unwatch(otherOwner));
-      pane.refreshSessionPullRequests();
-      await Promise.resolve();
-      await nextFrame();
-      request.mockClear();
-      const message = (text: string) => ({
-        role: "assistant",
-        content: [
-          { type: "text", text: `${text} https://github.com/openclaw/openclaw/pull/111532` },
-        ],
       });
-      if (history) {
+      await nextFrame();
+    }
+    for (const [index, text] of texts.entries()) {
+      if (index > 0 && mode === "reconnect") {
+        pane.connectionGeneration += 1;
+        state.connectionEpoch = pane.connectionGeneration;
+      }
+      if (index > 0 && mode === "reset") {
+        resetChatHistoryProjection(state);
+      }
+      if (index > 0 && mode === "historyBetween") {
         reduceChatSessionProjection(state, {
           type: "snapshotLoaded",
           messages: [message("Opened")],
         });
-        reduceChatSessionProjection(state, {
-          type: "runTerminal",
+      }
+      if (index > 0 && mode === "branchSwitch") {
+        const payload = { sessionKey: key, agentId: "main", reason: "branch-switch" };
+        handlePageGatewayEvent(
+          state,
+          { type: "event", event: "sessions.changed", payload },
+          () => false,
+        );
+        emitGatewayEvent("sessions.changed", payload);
+        await nextFrame();
+      }
+      pane.presented = !(mode === "hiddenFirst" && index === 0);
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          state: "final",
           runId: "wire-pr-run",
-          status: "completed",
-        });
-        state.chatRunId = null;
+          sessionKey: key,
+          message: message(text),
+        },
+      });
+      if (index === 0 && mode === "loseWatchBeforeSync") {
+        pane.presented = false;
       }
-      if (stream) {
-        handlePageGatewayEvent(state, {
-          type: "event",
-          event: "chat",
-          payload: {
-            state: "delta",
-            runId: "wire-pr-run",
-            sessionKey: key,
-            deltaText: "Opened https://github.com/openclaw/openclaw/pull/111532 ",
-          },
-        });
-        await nextFrame();
-      }
-      for (const [index, text] of texts.entries()) {
-        if (index > 0 && reconnect) {
-          pane.connectionGeneration += 1;
-          state.connectionEpoch = pane.connectionGeneration;
-        }
-        if (index > 0 && reset) {
-          resetChatHistoryProjection(state);
-        }
-        if (index > 0 && historyBetween) {
-          reduceChatSessionProjection(state, {
-            type: "snapshotLoaded",
-            messages: [message("Opened")],
-          });
-        }
-        if (index > 0 && branchSwitch) {
-          const payload = { sessionKey: key, agentId: "main", reason: "branch-switch" };
-          handlePageGatewayEvent(
-            state,
-            { type: "event", event: "sessions.changed", payload },
-            () => false,
-          );
-          emitGatewayEvent("sessions.changed", payload);
-          await nextFrame();
-        }
-        pane.presented = !(hiddenFirst && index === 0);
-        handlePageGatewayEvent(state, {
-          type: "event",
-          event: "chat",
-          payload: {
-            state: "final",
-            runId: "wire-pr-run",
-            sessionKey: key,
-            message: message(text),
-          },
-        });
-        if (index === 0 && loseWatchBeforeSync) {
-          pane.presented = false;
-        }
-        // Preserve separate WebSocket deliveries within the debounce window.
-        await nextFrame();
-        if (spaced) {
-          await vi.advanceTimersByTimeAsync(5_000);
-        }
-      }
-      await vi.advanceTimersByTimeAsync(5_000);
+      // Preserve separate WebSocket deliveries within the debounce window.
       await nextFrame();
-      const forces = request.mock.calls.filter(
-        ([method, params]) =>
-          method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
-          Array.isArray(params?.refreshSessionKeys) &&
-          params.refreshSessionKeys.length > 0,
-      );
-      for (const [, params] of forces) {
-        expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
+      if (mode === "spaced") {
+        await vi.advanceTimersByTimeAsync(5_000);
       }
-      expect(forces).toHaveLength(expected);
-    },
-  );
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    await nextFrame();
+    const forces = request.mock.calls.filter(
+      ([method, params]) =>
+        method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
+        Array.isArray(params?.refreshSessionKeys) &&
+        params.refreshSessionKeys.length > 0,
+    );
+    for (const [, params] of forces) {
+      expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
+    }
+    expect(forces).toHaveLength(mode === "spaced" ? 2 : 1);
+  });
 });
