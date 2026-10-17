@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
@@ -23,6 +23,8 @@ import { createGoalChatStartRequest } from "./server.chat-goal.test-support.js";
 import { agentCommandMock, dispatchInboundMessageMock } from "./test-helpers.js";
 
 type Outcome = "unknown" | "refused" | "accepted" | "reply lost";
+const REFUSAL = "Synthetic refusal before native input commit";
+const LOST_REPLY = "Synthetic input reply lost after native commit";
 
 function expectAdmissionError(response: unknown, message: string) {
   expect(response).toMatchObject({
@@ -40,9 +42,7 @@ function observeInputAdmission(
 ) {
   const actor = kind !== "legacy";
   const original = workerStore.runSqliteWorkerStoreOperation;
-  let attempts = 0;
-  let committed = 0;
-  let faults = 0;
+  const counts = { attempts: 0, committed: 0, faults: 0 };
   let capturingInput = false;
   const restoreEvidence: (() => void)[] = [];
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
@@ -55,7 +55,7 @@ function observeInputAdmission(
         if (
           selected &&
           outcome === "refused" &&
-          faults === 0 &&
+          counts.faults === 0 &&
           request.stage === "commit" &&
           isRecord(facts) &&
           facts.kind === "session-actor-admission" &&
@@ -63,8 +63,8 @@ function observeInputAdmission(
           isRecord(facts.snapshot.target) &&
           facts.snapshot.target.sessionKey === sessionKey
         ) {
-          faults++;
-          throw new Error("Synthetic refusal before native input commit");
+          counts.faults++;
+          throw new Error(REFUSAL);
         }
         admit(request, grant);
       }, attachment);
@@ -98,10 +98,10 @@ function observeInputAdmission(
                     isRecord(command.input) &&
                     command.input.kind === "stage";
                 if (staging) {
-                  attempts++;
+                  counts.attempts++;
                   if (!actor && outcome === "refused") {
-                    faults++;
-                    throw new Error("Synthetic refusal before native input commit");
+                    counts.faults++;
+                    throw new Error(REFUSAL);
                   }
                 }
                 const result = await worker.execute(command, options);
@@ -112,7 +112,7 @@ function observeInputAdmission(
                   expect(result).toMatchObject({ kind: "rolled-back" });
                   return result;
                 }
-                committed++;
+                counts.committed++;
                 const owned = expectDefined(admission, "real staging admission");
                 const input = expectDefined(
                   isRecord(command.input) ? command.input : undefined,
@@ -145,8 +145,8 @@ function observeInputAdmission(
                   }
                 }
                 if (outcome === "unknown" || outcome === "reply lost") {
-                  faults++;
-                  throw new Error("Synthetic input reply lost after native commit");
+                  counts.faults++;
+                  throw new Error(LOST_REPLY);
                 }
                 return result;
               },
@@ -170,9 +170,7 @@ function observeInputAdmission(
       },
     );
   return {
-    attempts: () => attempts,
-    committed: () => committed,
-    faults: () => faults,
+    counts,
     restore: () => {
       for (const restore of restoreEvidence) {
         restore();
@@ -183,221 +181,204 @@ function observeInputAdmission(
   };
 }
 
-describe("Gateway pending-input media custody", () => {
-  const fixture = installAgentAuthorityProofFixture();
+const fixture = installAgentAuthorityProofFixture();
 
-  it.for(
-    (["agent inline", "agent offloaded", "chat offloaded", "goal offloaded"] as const).flatMap(
-      (route) =>
-        (route === "chat offloaded" || route === "goal offloaded"
-          ? (["unknown", "refused", "accepted", "reply lost"] as const)
-          : (["unknown", "refused", "accepted"] as const)
-        ).map((outcome) => ({ route, outcome })),
-    ),
-  )(
-    "preserves the $route attachment according to $outcome admission",
-    async ({ route, outcome }, { signal }) => {
-      const f = await fixture({ imageCapable: true });
-      const goal = route === "goal offloaded";
-      const chat = route === "chat offloaded" || goal;
-      const accepted = outcome === "accepted" || outcome === "reply lost";
-      const bytes = chat
-        ? Buffer.from("synthetic inbound attachment")
-        : route === "agent offloaded"
-          ? Buffer.concat([Buffer.from(PNG, "base64"), Buffer.alloc(2_000_001)])
-          : Buffer.from(PNG, "base64");
-      const request = {
-        message: "retain the attachment with its admitted input",
-        attachments: [
-          {
-            mimeType: chat ? "text/plain" : "image/png",
-            fileName: chat ? "notes.txt" : "image.png",
-            content: bytes.toString("base64"),
-          },
-        ],
-      };
-      const saved: mediaStore.SavedMedia[] = [];
-      const deletions: Promise<void>[] = [];
-      const save = mediaStore.saveMediaBuffer;
-      const remove = mediaStore.deleteMediaBuffer;
-      const saveObserver = vi
-        .spyOn(mediaStore, "saveMediaBuffer")
-        .mockImplementation(async (...args) => {
-          const result = await save(...args);
-          saved.push(result);
-          return result;
-        });
-      const deleteObserver = vi
-        .spyOn(mediaStore, "deleteMediaBuffer")
-        .mockImplementation((...args) => {
-          const result = remove(...args);
-          deletions.push(result);
-          return result;
-        });
-      const staging = observeInputAdmission(
-        outcome,
-        f.sessionKey,
-        goal ? "turn" : chat ? "pending" : "legacy",
+it.for(
+  (["agent inline", "agent offloaded", "chat offloaded", "goal offloaded"] as const).flatMap(
+    (route) =>
+      (route === "chat offloaded" || route === "goal offloaded"
+        ? (["unknown", "refused", "accepted", "reply lost"] as const)
+        : (["unknown", "refused", "accepted"] as const)
+      ).map((outcome) => ({ route, outcome })),
+  ),
+)(
+  "preserves the $route attachment according to $outcome admission",
+  async ({ route, outcome }, { signal }) => {
+    const f = await fixture({ imageCapable: true });
+    const goal = route === "goal offloaded";
+    const chat = route === "chat offloaded" || goal;
+    const accepted = outcome === "accepted" || outcome === "reply lost";
+    const bytes = chat
+      ? Buffer.from("synthetic inbound attachment")
+      : route === "agent offloaded"
+        ? Buffer.concat([Buffer.from(PNG, "base64"), Buffer.alloc(2_000_001)])
+        : Buffer.from(PNG, "base64");
+    const request = {
+      message: "retain the attachment with its admitted input",
+      attachments: [
+        {
+          mimeType: chat ? "text/plain" : "image/png",
+          fileName: chat ? "notes.txt" : "image.png",
+          content: bytes.toString("base64"),
+        },
+      ],
+    };
+    const saveObserver = vi.spyOn(mediaStore, "saveMediaBuffer");
+    const deleteObserver = vi.spyOn(mediaStore, "deleteMediaBuffer");
+    const deletions = () =>
+      deleteObserver.mock.results.flatMap((result) =>
+        result.type === "return" ? [result.value] : [],
       );
-      const prepare = agentAdmission.prepareAgentRunDispatch;
-      const mediaTransferred = vi.fn();
-      const admissionObserver = vi
-        .spyOn(agentAdmission, "prepareAgentRunDispatch")
-        .mockImplementation((params) =>
-          prepare({
-            ...params,
-            onUserTurnMediaPersisted: () => {
-              mediaTransferred();
-              params.onUserTurnMediaPersisted();
+    const staging = observeInputAdmission(
+      outcome,
+      f.sessionKey,
+      goal ? "turn" : chat ? "pending" : "legacy",
+    );
+    const prepare = agentAdmission.prepareAgentRunDispatch;
+    const mediaTransferred = vi.fn();
+    const admissionObserver = vi
+      .spyOn(agentAdmission, "prepareAgentRunDispatch")
+      .mockImplementation((params) =>
+        prepare({
+          ...params,
+          onUserTurnMediaPersisted: () => {
+            mediaTransferred();
+            params.onUserTurnMediaPersisted();
+          },
+        }),
+      );
+    const chatSettled = createDeferred();
+    const emitChange = sessionChangeEvent.emitSessionsChanged;
+    const settlementObserver = vi
+      .spyOn(sessionChangeEvent, "emitSessionsChanged")
+      .mockImplementation((...args) => {
+        emitChange(...args);
+        if (
+          args[0] === f.context &&
+          args[1].sessionKey === f.sessionKey &&
+          args[1].reason === "agent.input.settled"
+        ) {
+          chatSettled.resolve();
+        }
+      });
+    const persist = async (recorder: UserTurnTranscriptRecorder | undefined) => {
+      const owned = expectDefined(recorder, "admitted dispatch recorder");
+      expect((await owned.persistApproved())?.appended).toBe(true);
+    };
+    agentCommandMock.mockImplementation(async (input) => {
+      await persist((input as AgentCommandGatewayIngressOpts).userTurnTranscriptRecorder);
+    });
+    dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
+      const { replyOptions } = input as Parameters<typeof dispatchInboundMessage>[0];
+      await persist(replyOptions?.userTurnTranscriptRecorder);
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+    const requestIdentity = goal
+      ? createGoalChatStartRequest(f, request.message, f.runId)
+      : { sessionKey: f.sessionKey, idempotencyKey: f.runId };
+    const send = () =>
+      chat
+        ? dispatchGatewayMethodInProcessRaw(
+            "chat.send",
+            { ...request, ...requestIdentity },
+            {
+              forceSyntheticClient: true,
+              syntheticScopes: ["operator.admin"],
+              resolveGatewayContext: () => f.context,
             },
-          }),
-        );
-      const chatSettled = createDeferred();
-      const emitChange = sessionChangeEvent.emitSessionsChanged;
-      const settlementObserver = vi
-        .spyOn(sessionChangeEvent, "emitSessionsChanged")
-        .mockImplementation((...args) => {
-          emitChange(...args);
-          if (
-            args[0] === f.context &&
-            args[1].sessionKey === f.sessionKey &&
-            args[1].reason === "agent.input.settled"
-          ) {
-            chatSettled.resolve();
-          }
-        });
-      const persist = async (recorder: UserTurnTranscriptRecorder | undefined) => {
-        const owned = expectDefined(recorder, "admitted dispatch recorder");
-        expect((await owned.persistApproved())?.appended).toBe(true);
-      };
-      agentCommandMock.mockImplementation(async (input) => {
-        await persist((input as AgentCommandGatewayIngressOpts).userTurnTranscriptRecorder);
+          )
+        : f.dispatch(request, null);
+    try {
+      const response = await send();
+      if (chat && accepted) {
+        expect(response.ok).toBe(true);
+        // Chat dispatch is detached from the request owner. Its exact settled
+        // event follows dispatch finalization, not just the started ACK.
+        await withinTest(chatSettled.promise, signal);
+      }
+      // Join the actual handler, including the agent service's outer finally,
+      // then every real file deletion requested by detached chat cleanup.
+      await f.drain();
+      const deletionResults = await Promise.allSettled(deletions());
+      expect(staging.counts).toEqual({
+        attempts: 1,
+        committed: outcome === "refused" ? 0 : 1,
+        faults: outcome === "accepted" ? 0 : 1,
       });
-      dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
-        const { replyOptions } = input as Parameters<typeof dispatchInboundMessage>[0];
-        await persist(replyOptions?.userTurnTranscriptRecorder);
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      });
-      const requestIdentity = goal
-        ? createGoalChatStartRequest(f, request.message, f.runId)
-        : { sessionKey: f.sessionKey, idempotencyKey: f.runId };
-      const send = () =>
-        chat
-          ? dispatchGatewayMethodInProcessRaw(
-              "chat.send",
-              { ...request, ...requestIdentity },
-              {
-                forceSyntheticClient: true,
-                syntheticScopes: ["operator.admin"],
-                resolveGatewayContext: () => f.context,
-              },
-            )
-          : f.dispatch(request, null);
-      try {
-        const response = await send();
-        if (chat && accepted) {
-          expect(response.ok).toBe(true);
-          // Chat dispatch is detached from the request owner. Its exact settled
-          // event follows dispatch finalization, not just the started ACK.
-          await withinTest(chatSettled.promise, signal);
+      const saved = await Promise.all(
+        saveObserver.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        ),
+      );
+      expect(saveObserver).toHaveBeenCalledTimes(1);
+      expect(saved).toHaveLength(1);
+      const media = expectDefined(saved[0], "real inbound file");
+      const pending = await sessionAccessor.listSessionPendingInputs(f.scope);
+      const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
+      expect(pending.total).toBe(!goal && outcome === "unknown" ? 1 : 0);
+      if (goal && outcome !== "refused") {
+        expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
+      }
+      if (goal && outcome === "unknown") {
+        expect(transcript.slice(0, f.before.length)).toEqual(f.before);
+        // Goal failure can add a lifecycle notice. The committed user input
+        // still occurs exactly once and must keep its referenced attachment.
+        const inputs = transcript
+          .slice(f.before.length)
+          .filter(
+            (event) => isRecord(event) && isRecord(event.message) && event.message.role === "user",
+          );
+        expect(inputs).toHaveLength(1);
+        expect(JSON.stringify(inputs[0])).toContain(media.id);
+      }
+      if (outcome === "refused") {
+        expectAdmissionError(response, REFUSAL);
+        expect(transcript).toEqual(f.before);
+        if (goal) {
+          expect(sessionAccessor.loadSessionEntry(f.scope)?.goal).toBeUndefined();
         }
-        // Join the actual handler, including the agent service's outer finally,
-        // then every real file deletion requested by detached chat cleanup.
-        await f.drain();
-        const deletionResults = await Promise.allSettled(deletions);
-        expect(staging.attempts()).toBe(1);
-        expect(staging.committed()).toBe(outcome === "refused" ? 0 : 1);
-        expect(staging.faults()).toBe(outcome === "accepted" ? 0 : 1);
-        expect(saved).toHaveLength(1);
-        const media = expectDefined(saved[0], "real inbound file");
-        const pending = await sessionAccessor.listSessionPendingInputs(f.scope);
-        const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-        if (goal && outcome === "unknown") {
-          expect(pending.total).toBe(0);
-          expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
-          expect(transcript.slice(0, f.before.length)).toEqual(f.before);
-          // Goal failure can add a lifecycle notice. The committed user input
-          // still occurs exactly once and must keep its referenced attachment.
-          const inputs = transcript
-            .slice(f.before.length)
-            .filter(
-              (event) =>
-                isRecord(event) && isRecord(event.message) && event.message.role === "user",
-            );
-          expect(inputs).toHaveLength(1);
-          expect(JSON.stringify(inputs[0])).toContain(media.id);
-          expect(agentCommandMock).not.toHaveBeenCalled();
-          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        }
-        if (outcome === "refused") {
-          expectAdmissionError(response, "Synthetic refusal before native input commit");
-          expect(pending.total).toBe(0);
-          expect(transcript).toEqual(f.before);
-          if (goal) {
-            expect(sessionAccessor.loadSessionEntry(f.scope)?.goal).toBeUndefined();
+        await expect(fs.stat(media.path)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await fs.readFile(media.path)).toEqual(bytes);
+        if (outcome === "unknown") {
+          expectAdmissionError(
+            response,
+            chat ? LOST_REPLY : "commitment is unknown; do not replay",
+          );
+          // UNKNOWN never publishes a live input owner. The public history
+          // read reconciles that committed, ownerless row to interrupted.
+          if (!goal) {
+            expect(pending).toMatchObject({
+              total: 1,
+              items: [{ runId: f.runId, state: "interrupted" }],
+            });
+            expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
+            expect(transcript).toEqual(f.before);
           }
-          await expect(fs.stat(media.path)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
+          expect(response.ok).toBe(true);
+          expect(transcript).toHaveLength(f.before.length + 1);
+          expect(JSON.stringify(transcript.at(-1))).toContain(media.id);
+          expect((await send()).ok).toBe(true);
+          await f.drain();
+          expect(staging.counts.attempts).toBe(1);
+          expect(saveObserver).toHaveBeenCalledTimes(1);
+          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
           expect(await fs.readFile(media.path)).toEqual(bytes);
-          expect(deleteObserver).not.toHaveBeenCalledWith(media.id, "inbound");
-          if (outcome === "unknown") {
-            expectAdmissionError(
-              response,
-              chat
-                ? "Synthetic input reply lost after native commit"
-                : "commitment is unknown; do not replay",
-            );
-            // UNKNOWN never publishes a live input owner. The public history
-            // read reconciles that committed, ownerless row to interrupted.
-            if (!goal) {
-              expect(pending).toMatchObject({
-                total: 1,
-                items: [{ runId: f.runId, state: "interrupted" }],
-              });
-              expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
-              expect(transcript).toEqual(f.before);
-            }
-          } else {
-            expect(response.ok).toBe(true);
-            if (goal) {
-              expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(
-                request.message,
-              );
-            }
-            expect(pending.total).toBe(0);
-            expect(transcript).toHaveLength(f.before.length + 1);
-            expect(JSON.stringify(transcript.at(-1))).toContain(media.id);
-            expect((await send()).ok).toBe(true);
-            await f.drain();
-            expect(staging.attempts()).toBe(1);
-            expect(saved).toHaveLength(1);
-            expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
-            expect(await fs.readFile(media.path)).toEqual(bytes);
-          }
-        }
-        for (const result of deletionResults) {
-          if (result.status === "rejected") {
-            throw result.reason;
-          }
-        }
-        expect(deleteObserver).toHaveBeenCalledTimes(outcome === "refused" ? 1 : 0);
-        expect(mediaTransferred).toHaveBeenCalledTimes(!chat && outcome !== "refused" ? 1 : 0);
-        expect(agentCommandMock).toHaveBeenCalledTimes(accepted && !chat ? 1 : 0);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(accepted && chat ? 1 : 0);
-      } finally {
-        try {
-          await f.cleanup();
-        } finally {
-          await Promise.allSettled(deletions);
-          staging.restore();
-          admissionObserver.mockRestore();
-          settlementObserver.mockRestore();
-          saveObserver.mockRestore();
-          deleteObserver.mockRestore();
-          agentCommandMock.mockReset();
-          dispatchInboundMessageMock.mockReset();
         }
       }
-    },
-  );
-});
+      for (const result of deletionResults) {
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+      }
+      expect(deleteObserver).toHaveBeenCalledTimes(outcome === "refused" ? 1 : 0);
+      expect(mediaTransferred).toHaveBeenCalledTimes(!chat && outcome !== "refused" ? 1 : 0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(accepted && !chat ? 1 : 0);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(accepted && chat ? 1 : 0);
+    } finally {
+      try {
+        await f.cleanup();
+      } finally {
+        await Promise.allSettled(deletions());
+        staging.restore();
+        admissionObserver.mockRestore();
+        settlementObserver.mockRestore();
+        saveObserver.mockRestore();
+        deleteObserver.mockRestore();
+        agentCommandMock.mockReset();
+        dispatchInboundMessageMock.mockReset();
+      }
+    }
+  },
+);

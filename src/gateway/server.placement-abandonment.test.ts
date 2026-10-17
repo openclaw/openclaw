@@ -6,7 +6,6 @@ import { stopChild } from "../../scripts/lib/gateway-bench-child.js";
 import { getFreePort } from "../../scripts/lib/gateway-bench-probes.js";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
@@ -39,47 +38,31 @@ const createTunnel = nodeTunnel.createNodeWorkerTunnelManager;
 let fixtureActive = false;
 
 const cases = [
-  {
-    name: "moves an offline device with a result already pending",
-    persisted: false,
-    failed: false,
-  },
-  {
-    name: "recovers persisted abandonment after database reopen and in-process Gateway startup",
-    persisted: true,
-    failed: false,
-  },
-  {
-    name: "recovers persisted abandonment with a different failure after database reopen and in-process Gateway startup",
-    persisted: true,
-    failed: true,
-  },
+  { name: "offline move", persisted: false, failed: false },
+  { name: "database reopen", persisted: true, failed: false },
+  { name: "failed recovery reopen", persisted: true, failed: true },
 ];
 
 it.for(cases)(
-  "$name, completes a fresh turn, and archives deletion",
+  "$name: abandons the pending worker result, completes a fresh turn, and archives deletion",
   { timeout: 90_000 },
   async ({ persisted, failed }, { expect, onTestFinished, signal }) => {
-    // A hook timeout also leaves its async cleanup running. Do not let the next
-    // case acquire HOME, SQLite, or this module's spy until that owner releases.
+    // Timeout cleanup must release HOME, SQLite, and the spy before another case.
     if (fixtureActive) {
       throw new Error("Previous placement abandonment fixture has not released its state");
     }
     fixtureActive = true;
-    const bodySettled = createDeferred();
     const fixture = createFixtureLifetime();
     const cleanups: Array<() => unknown> = [];
     let gatewayStopped = true;
     let childStopped = true;
-    let bodyFailure: { error: unknown } | undefined;
-    // The body owns teardown inside its original 90-second budget. The finish
-    // hook only joins that same lifetime if Vitest times out before it settles.
-    void fixture.track(bodySettled.promise);
     onTestFinished(async () => {
       await fixture.cleanup();
       fixtureActive = false;
     });
-    try {
+    const owner = { environmentId: "offline-environment", ownerEpoch: 1 };
+    const { environmentId } = owner;
+    const run = async () => {
       const state = await createOpenClawTestState({
         label: "placement-abandonment",
         verifyCleanup: fixture.verifyCleanup,
@@ -164,8 +147,7 @@ it.for(cases)(
         await runQaGatewayFixture(
           () => disconnectGatewayClient(client),
           async () => {
-            // Only teardown supplies an acknowledgement for this exact synthetic
-            // device. The registered manager still owns draining and shutdown.
+            // Only teardown acknowledges this offline device; the real manager drains it.
             cleaningUp = true;
             await server.close({ reason: "placement abandonment test cleanup" });
             gatewayStopped = true;
@@ -174,9 +156,8 @@ it.for(cases)(
                 expect.objectContaining({
                   command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
                   params: expect.objectContaining({
-                    environmentId: "offline-environment",
+                    ...owner,
                     sessionId: REQUEST.sessionId,
-                    ownerEpoch: 1,
                   }),
                 }),
               );
@@ -270,25 +251,23 @@ it.for(cases)(
       signal.throwIfAborted();
       let database = openOpenClawStateDatabase();
       let placements = createWorkerSessionPlacementStore({ database });
-      const environmentId = "offline-environment";
       seedAttachedPlacementEnvironment(database, {
-        environmentId,
+        ...owner,
         sessionId,
-        ownerEpoch: 1,
         providerId: "device",
         profileId: "device:offline-device",
         nodeDeviceId: "offline-device",
       });
       offlineDeviceSeeded = true;
-      const active = await seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
-      const source = { generation: active.generation, environmentId, ownerEpoch: 1 };
+      const active = await seedActivePlacement(placements, owner);
+      const source = { generation: active.generation, ...owner };
       const claim = await placements.claimTurn({
         sessionId,
         sessionKey,
         agentId,
         claimId: "abandoned-claim",
         runId: "abandoned-run",
-        owner: { kind: "worker", environmentId, ownerEpoch: 1 },
+        owner: { kind: "worker", ...owner },
       });
       await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       await placements.markWorkspaceResultPending(claim);
@@ -399,26 +378,20 @@ it.for(cases)(
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
       expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");
       expect(stopInvoke).not.toHaveBeenCalled();
-    } catch (error) {
-      bodyFailure = { error };
-    } finally {
-      try {
-        await runQaGatewayFixture(
-          async () => {
-            if (bodyFailure) {
-              throw bodyFailure.error;
-            }
-          },
+    };
+    // Track the whole body and its teardown, including after a runner timeout.
+    await fixture.run(() =>
+      runQaGatewayFixture(run, () =>
+        runQaGatewayFixture(
+          async () => {},
           ...cleanups.toReversed().map(
             (cleanup) => () =>
               fixture.verifyCleanup(async () => {
                 await cleanup();
               }),
           ),
-        );
-      } finally {
-        bodySettled.resolve();
-      }
-    }
+        ),
+      ),
+    );
   },
 );

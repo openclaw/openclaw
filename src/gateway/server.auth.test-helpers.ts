@@ -4,7 +4,6 @@ import { expect } from "vitest";
 import { WebSocket } from "ws";
 import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
@@ -37,50 +36,44 @@ export async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<
   });
 }
 
-export const openWs = async (port: number, headers?: Record<string, string>) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
+async function openAuthWs(url: string, headers?: Record<string, string>) {
+  const ws = new WebSocket(url, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => {
     ws.once("open", resolve);
   });
   return ws;
-};
+}
+
+export const openWs = (port: number, headers?: Record<string, string>) =>
+  openAuthWs(`ws://127.0.0.1:${port}`, headers);
 
 export const readConnectChallengeNonce = async (ws: WebSocket) => {
   const cached = getTrackedConnectChallengeNonce(ws);
   if (cached) {
     return cached;
   }
-  const challenge: {
-    type?: string;
-    event?: string;
-    payload?: Record<string, unknown> | null;
-  } = await onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+  const challenge = await onceMessage(
+    ws,
+    (o) => o.type === "event" && o.event === "connect.challenge",
+  );
   const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
   expect(typeof nonce).toBe("string");
   return String(nonce);
 };
 
-export const openTailscaleWs = async (
+export const openTailscaleWs = (
   endpoint: GatewayTailscaleIngressEndpoint,
   headers?: Record<string, string>,
-) => {
-  const ws = new WebSocket(`ws://${endpoint.host}:${endpoint.port}`, {
-    headers: {
-      "x-forwarded-for": "100.64.0.1",
-      "x-forwarded-proto": "https",
-      "x-forwarded-host": "gateway.tailnet.ts.net",
-      "tailscale-user-login": "peter",
-      "tailscale-user-name": "Peter",
-      ...headers,
-    },
+) =>
+  openAuthWs(`ws://${endpoint.host}:${endpoint.port}`, {
+    "x-forwarded-for": "100.64.0.1",
+    "x-forwarded-proto": "https",
+    "x-forwarded-host": "gateway.tailnet.ts.net",
+    "tailscale-user-login": "peter",
+    "tailscale-user-name": "Peter",
+    ...headers,
   });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", resolve);
-  });
-  return ws;
-};
 
 export const originForPort = (port: number) => `http://127.0.0.1:${port}`;
 
@@ -92,26 +85,19 @@ export function restoreGatewayToken(prevToken: string | undefined) {
   }
 }
 
-export async function withRuntimeVersionEnv<T>(
-  env: Record<string, string | undefined>,
-  run: () => Promise<T>,
-): Promise<T> {
-  return withEnvAsync(env, run);
+function authClient<Id extends string, Mode extends string>(id: Id, mode: Mode, platform = "test") {
+  return { id, version: "1.0.0", platform, mode };
 }
 
-export const TEST_OPERATOR_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.TEST,
-  version: "1.0.0",
-  platform: "test",
-  mode: GATEWAY_CLIENT_MODES.TEST,
-};
-
-export const CONTROL_UI_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-  version: "1.0.0",
-  platform: "web",
-  mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-};
+export const TEST_OPERATOR_CLIENT = authClient(
+  GATEWAY_CLIENT_NAMES.TEST,
+  GATEWAY_CLIENT_MODES.TEST,
+);
+export const CONTROL_UI_CLIENT = authClient(
+  GATEWAY_CLIENT_NAMES.CONTROL_UI,
+  GATEWAY_CLIENT_MODES.WEBCHAT,
+  "web",
+);
 
 export const TRUSTED_PROXY_CONTROL_UI_HEADERS = {
   origin: "https://localhost",
@@ -120,19 +106,12 @@ export const TRUSTED_PROXY_CONTROL_UI_HEADERS = {
   "x-forwarded-user": "peter@example.com",
 } as const;
 
-export const NODE_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-  version: "1.0.0",
-  platform: "test",
-  mode: GATEWAY_CLIENT_MODES.NODE,
-};
-
-export const BACKEND_GATEWAY_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-  version: "1.0.0",
-  platform: "node",
-  mode: GATEWAY_CLIENT_MODES.BACKEND,
-};
+export const NODE_CLIENT = authClient(GATEWAY_CLIENT_NAMES.NODE_HOST, GATEWAY_CLIENT_MODES.NODE);
+export const BACKEND_GATEWAY_CLIENT = authClient(
+  GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+  GATEWAY_CLIENT_MODES.BACKEND,
+  "node",
+);
 
 export async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
   const ws = await openWs(port);
@@ -162,14 +141,11 @@ export async function createSignedDevice(params: {
     : loadOrCreateDeviceIdentity();
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
+    ...params,
     deviceId: identity.deviceId,
-    clientId: params.clientId,
-    clientMode: params.clientMode,
     role: params.role ?? "operator",
-    scopes: params.scopes,
     signedAtMs,
     token: params.token ?? null,
-    nonce: params.nonce,
   });
   return {
     identity,
@@ -185,10 +161,8 @@ export async function createSignedDevice(params: {
 }
 
 export function resolveGatewayTokenOrEnv(): string {
-  const token =
-    typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-      ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-      : process.env.OPENCLAW_GATEWAY_TOKEN;
+  const configured = (testState.gatewayAuth as { token?: unknown } | undefined)?.token;
+  const token = typeof configured === "string" ? configured : process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token !== "string") {
     throw new Error("expected gateway token in test state or OPENCLAW_GATEWAY_TOKEN");
   }
@@ -198,8 +172,7 @@ export function resolveGatewayTokenOrEnv(): string {
 async function approvePendingPairingIfNeeded() {
   const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
   const { listDevicePairing } = await import("../infra/device-pairing.js");
-  const list = await listDevicePairing();
-  const pending = list.pending.at(0);
+  const pending = (await listDevicePairing()).pending.at(0);
   if (!pending?.requestId) {
     throw new Error("expected pending pairing request");
   }
@@ -226,23 +199,11 @@ export async function configureTrustedProxyControlUiAuth() {
           },
         },
         trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: ["https://localhost"],
-        },
+        controlUi: { allowedOrigins: ["https://localhost"] },
       },
     },
     afterWrite: { mode: "auto" },
   });
-}
-
-function isConnectResMessage(id: string) {
-  return (o: unknown) => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) {
-      return false;
-    }
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  };
 }
 
 export async function sendRawConnectReq(
@@ -269,37 +230,13 @@ export async function sendRawConnectReq(
       },
     }),
   );
-  const response: {
+  return onceMessage<{
     type?: string;
     id?: string;
     ok?: boolean;
     payload?: Record<string, unknown> | null;
-    error?: {
-      message?: string;
-      details?: {
-        code?: string;
-        reason?: string;
-      };
-    };
-  } = await onceMessage(ws, isConnectResMessage(params.id));
-  return response;
-}
-
-async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: string): Promise<{
-  identity: { deviceId: string };
-  deviceToken: string;
-}> {
-  const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-  const { getPairedDevice } = await import("../infra/device-pairing.js");
-
-  const identity = loadOrCreateDeviceIdentity({ path: deviceIdentityPath });
-  const paired = await getPairedDevice(identity.deviceId);
-  const deviceToken = paired?.tokens?.operator?.token;
-  expect(paired?.deviceId).toBe(identity.deviceId);
-  if (!deviceToken) {
-    throw new Error(`expected operator token for paired device ${identity.deviceId}`);
-  }
-  return { identity: { deviceId: identity.deviceId }, deviceToken };
+    error?: { message?: string; details?: { code?: string; reason?: string } };
+  }>(ws, (frame) => frame.type === "res" && frame.id === params.id);
 }
 
 export async function startRateLimitedTokenServerWithPairedDeviceToken() {
@@ -314,11 +251,7 @@ export async function startRateLimitedTokenServerWithPairedDeviceToken() {
   });
   const deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-rate-limit");
   try {
-    const initial = await connectReq(ws, { token: "secret", deviceIdentityPath });
-    if (!initial.ok) {
-      await approvePendingPairingIfNeeded();
-    }
-    const { deviceToken } = await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
+    const { deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws, deviceIdentityPath);
 
     ws.close();
     return { server, port, prevToken, deviceToken: deviceToken ?? "", deviceIdentityPath };
@@ -330,20 +263,23 @@ export async function startRateLimitedTokenServerWithPairedDeviceToken() {
   }
 }
 
-export async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise<{
-  identity: { deviceId: string };
-  deviceToken: string;
-  deviceIdentityPath: string;
-}> {
-  const deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-device");
-
-  const res = await connectReq(ws, { token: "secret", deviceIdentityPath });
-  if (!res.ok) {
+export async function ensurePairedDeviceTokenForCurrentIdentity(
+  ws: WebSocket,
+  deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-device"),
+) {
+  if (!(await connectReq(ws, { token: "secret", deviceIdentityPath })).ok) {
     await approvePendingPairingIfNeeded();
   }
-  const { identity, deviceToken } =
-    await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
-  return { identity, deviceToken, deviceIdentityPath };
+  const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+  const { getPairedDevice } = await import("../infra/device-pairing.js");
+  const identity = loadOrCreateDeviceIdentity({ path: deviceIdentityPath });
+  const paired = await getPairedDevice(identity.deviceId);
+  const deviceToken = paired?.tokens?.operator?.token;
+  expect(paired?.deviceId).toBe(identity.deviceId);
+  if (!deviceToken) {
+    throw new Error(`expected operator token for paired device ${identity.deviceId}`);
+  }
+  return { identity: { deviceId: identity.deviceId }, deviceToken, deviceIdentityPath };
 }
 
 export {
@@ -365,3 +301,4 @@ export {
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+export { withEnvAsync as withRuntimeVersionEnv } from "../test-utils/env.js";

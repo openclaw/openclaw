@@ -89,7 +89,7 @@ it(
         response.end(
           JSON.stringify({
             error: {
-              message: "Synthetic contract rejection: missing encrypted detail",
+              message: "missing encrypted detail",
               type: "invalid_request_error",
             },
           }),
@@ -290,20 +290,17 @@ it(
           expect(toolResults).toEqual([]);
           expect(historyJson).not.toContain('"type":"toolCall"');
           expect(historyJson).not.toContain(answer);
-          expect(waited.status, JSON.stringify({ order, waited, requests: requests.length })).toBe(
-            order === "abort" ? "error" : "ok",
+          expect(waited).toMatchObject(
+            order === "abort" ? { status: "error", stopReason: "rpc" } : { status: "ok" },
           );
+          expect(requests).toHaveLength(order === "abort" ? 1 : 2);
           expect(
             requests.flatMap((request) =>
               request.messages.filter(({ reasoning_details }) => reasoning_details !== undefined),
             ),
           ).toEqual([]);
           if (order !== "abort") {
-            expect(requests).toHaveLength(2);
             expect(answerJson).toContain(rejectedAnswer);
-          } else {
-            expect(waited.stopReason).toBe("rpc");
-            expect(requests).toHaveLength(1);
           }
           continue;
         }
