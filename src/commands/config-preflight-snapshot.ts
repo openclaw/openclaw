@@ -9,6 +9,7 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -162,12 +163,19 @@ async function readConfigPreflightSnapshot(
 /** Select storage from a core-only read before observation or plugin discovery can open it. */
 export async function readConfigSnapshotForEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
+  options: { isolateEnv?: boolean } = {},
 ): Promise<ConfigFileSnapshot> {
-  const snapshot = await readConfigFileSnapshot({
-    observe: false,
-    isolateEnv: true,
-    pluginValidation: "core-only",
-  });
+  const read = () =>
+    readConfigFileSnapshot({
+      observe: false,
+      isolateEnv: options.isolateEnv ?? true,
+      pluginValidation: "core-only",
+    });
+  let snapshot = await read();
+  // One-shot config env may select another target before storage becomes process-stable.
+  while (options.isolateEnv === false && snapshot.path !== resolveConfigPath(env)) {
+    snapshot = await read();
+  }
   if (
     !isConfigReadFailure(snapshot) &&
     !snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")

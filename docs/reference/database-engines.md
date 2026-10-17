@@ -619,7 +619,15 @@ may use the synchronous `withEngineStoreAdmission` scope from
 that scope ends does not authorize main-thread queries. The callback must remain
 synchronous. CLI processes classified as one-shots may use the synchronous bridge
 for offline commands and Doctor repairs; an unset process role still refuses
-main-thread access. Close remains available to settle resources. The store owner supplies
+main-thread access. One-shot CLI dispatch selects the engine after profile, dotenv,
+and config-directed path routing, before commands read shared state. Help, version,
+log retrieval, package authoring, and database-only connection repairs remain usable
+without database credentials. Gateway processes retain their final-target admission
+owner, including interactive onboarding that can start an embedded Gateway.
+Updater admission and recovery commands retain their context, receipt, or explicit
+path selection. QA fixtures, database tooling, and agent execution likewise keep
+their existing target owners.
+Close remains available to settle resources. The store owner supplies
 `openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
 so partially initialized stores are also protected from an accidental engine
 switch. See the canonical

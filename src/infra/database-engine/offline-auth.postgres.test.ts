@@ -11,6 +11,7 @@ import {
   loadAuthProfileStoreForRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../agents/auth-profiles/store-runtime.js";
+import { prepareCliDatabaseEngine } from "../../cli/database-engine-selection.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { ensureConfigReady } from "../../cli/program/config-guard.js";
 import { agentsDeleteCommand } from "../../commands/agents.commands.delete.js";
@@ -89,6 +90,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
           const tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
           Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
           try {
+            await prepareCliDatabaseEngine(["node", "openclaw", "models", "auth", "paste-api-key"]);
             await ensureConfigReady({
               runtime: defaultRuntime,
               commandPath: ["models", "auth", "paste-api-key"],

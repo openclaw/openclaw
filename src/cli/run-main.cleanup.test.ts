@@ -65,6 +65,8 @@ vi.mock("./dotenv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dotenv.js")>()),
   loadCliDotEnv() {},
 }));
+// mock-isolation: These lifecycle fixtures replace storage startup; PG CLI tests cover selection.
+vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => {} }));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 // mock-isolation: Synthetic proxy handles exercise CLI custody without changing process-wide routing or starting Proxyline.
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({

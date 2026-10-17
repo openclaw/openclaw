@@ -854,6 +854,10 @@ async function runCliWithPreparedOutputMode(
       }
     });
   }
+  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
+  await startupTrace.measure("database-engine-selection", () =>
+    prepareCliDatabaseEngine(normalizedArgv),
+  );
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
     const { prepareDoctorCliStartup } = await import("./run-main-doctor-startup.js");

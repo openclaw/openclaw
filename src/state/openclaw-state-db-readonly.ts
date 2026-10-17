@@ -630,7 +630,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
-  assertStateFileSnapshotAllowed();
   if (openStateSchemaReadAdmission) {
     return withExistingOpenClawStateDatabaseCurrentReadOnly(
       operation,
@@ -689,7 +688,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T | undefined> {
-  assertStateFileSnapshotAllowed();
   return withArtifactPreservingStateReads(async () => {
     const pathname = resolveReadOnlyPath(options);
     const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);

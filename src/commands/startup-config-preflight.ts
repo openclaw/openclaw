@@ -18,7 +18,6 @@ import {
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   readAdmittedConfigSnapshot,
-  readConfigSnapshotForEngineSelection,
   createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
@@ -112,7 +111,6 @@ async function prepareStartupConfig(
     return true;
   };
   if (!options.gateway) {
-    await readConfigSnapshotForEngineSelection(env);
     const read = await readSnapshot();
     await beforeStatePreparation(read.snapshot);
     if (read.snapshot.valid && options.observe !== false) {

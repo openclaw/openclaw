@@ -1,0 +1,284 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { getEnvironmentData } from "node:worker_threads";
+import pg from "pg";
+import { afterAll, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { cliRecoveryEntrypoints } from "../../cli/cli-entrypoint.test-support.js";
+import {
+  formatCliProcessFailure,
+  getCliProcessTestTimeout,
+  runCliProcessChild,
+} from "../../cli/cli-process-child.test-helpers.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
+
+const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
+const connection = typeof configured === "string" ? configured : undefined;
+const roots = useAutoCleanupTempDirTracker(afterAll);
+const childTimeoutMs = 60_000;
+const entrypoint = resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli));
+
+describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
+  it(
+    "runs onboarding, agent, model, config and Doctor commands without local application tables",
+    async () => {
+      const root = roots.make("postgres-cli-oneshot-");
+      const stateDir = path.join(root, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const prefix = `cli_parity_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      const credential = "sk-ant-synthetic-cli-oneshot-proof";
+      const port = await acquireTestPortBlock({ offsets: [0, 1] });
+      const client = new pg.Client({ connectionString: connection });
+      const env: NodeJS.ProcessEnv = {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_TEST_CLI_DSN: connection,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+        CI: "1",
+        NO_COLOR: "1",
+      };
+      await fs.mkdir(stateDir);
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          database: {
+            engine: "postgres",
+            postgres: {
+              connection: { source: "env", provider: "default", id: "OPENCLAW_TEST_CLI_DSN" },
+              schemaPrefix: prefix,
+            },
+          },
+          gateway: {
+            mode: "local",
+            port: port.port,
+            auth: { mode: "token", token: "synthetic-cli-oneshot-token" },
+          },
+          plugins: { enabled: true, allow: ["anthropic"] },
+          meta: { migrations: { webhookListeners: true } },
+        }),
+      );
+      const commands = [
+        [
+          "onboard",
+          "--non-interactive",
+          "--accept-risk",
+          "--auth-choice",
+          "apiKey",
+          "--token-provider",
+          "anthropic",
+          "--anthropic-api-key",
+          credential,
+          "--skip-daemon",
+          "--skip-channels",
+          "--skip-skills",
+          "--skip-search",
+          "--skip-health",
+          "--skip-ui",
+          "--skip-hooks",
+          "--workspace",
+          path.join(root, "workspace"),
+          "--json",
+        ],
+        [
+          "agents",
+          "add",
+          "probe",
+          "--non-interactive",
+          "--workspace",
+          path.join(root, "probe-workspace"),
+          "--json",
+        ],
+        ["models", "list", "--json"],
+        ["models", "status", "--json"],
+        ["config", "set", "gateway.port", String(port.port + 1)],
+        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+        ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+      ];
+      await client.connect();
+      try {
+        const schemas = new Set<string>();
+        for (const args of commands) {
+          const result = await runCliProcessChild({
+            nodeArgs: [...entrypoint, ...args],
+            env,
+            timeoutMs: childTimeoutMs,
+          });
+          expect(
+            result.code,
+            formatCliProcessFailure({
+              reason: `CLI ${args.slice(0, 2).join(" ")} failed`,
+              ...result,
+            }),
+          ).toBe(0);
+          const databases = (await fs.readdir(stateDir, { recursive: true }))
+            .filter((file) =>
+              ["openclaw.sqlite", "openclaw-agent.sqlite"].includes(path.basename(file)),
+            )
+            .map((file) => path.join(stateDir, file));
+          expect(databases).toContain(resolveOpenClawStateSqlitePath(env));
+          expect(databases.some((file) => path.basename(file) === "openclaw-agent.sqlite")).toBe(
+            true,
+          );
+          for (const database of databases) {
+            using anchor = openNodeSqliteDatabase(database, { readOnly: true });
+            expect(
+              anchor
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+                .all(),
+              `${args[0]} left application tables in ${path.relative(stateDir, database)}`,
+            ).toEqual([{ name: "openclaw_engine_anchor" }]);
+            const identity = anchor
+              .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
+              .get();
+            expect(identity?.engine).toBe("postgres");
+            schemas.add(String(identity?.schema));
+          }
+        }
+        let storedCredentials = 0;
+        for (const schema of schemas) {
+          const table = await client.query(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'config_machine_state'",
+            [schema],
+          );
+          if (table.rowCount) {
+            const persisted = await client.query(
+              `SELECT state_key FROM "${schema.replaceAll('"', '""')}".config_machine_state
+                WHERE state_key = 'authProfiles.store' AND value_json LIKE $1`,
+              [`%${credential}%`],
+            );
+            storedCredentials += persisted.rowCount ?? 0;
+          }
+        }
+        expect(storedCredentials).toBeGreaterThan(0);
+        const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(config.gateway.port).toBe(port.port + 1);
+        expect(config.agents.entries.probe).toBeDefined();
+      } finally {
+        try {
+          const schemas = await client.query<{ schema_name: string }>(
+            "SELECT schema_name FROM information_schema.schemata WHERE starts_with(schema_name, $1)",
+            [`${prefix}_`],
+          );
+          for (const { schema_name: schema } of schemas.rows) {
+            await client.query(`DROP SCHEMA "${schema}" CASCADE`);
+          }
+        } finally {
+          await client.end();
+          await port.release();
+        }
+      }
+    },
+    getCliProcessTestTimeout(childTimeoutMs, ...Array<number>(6).fill(childTimeoutMs)),
+  );
+});
+
+describe("CLI with unresolved PostgreSQL credentials", () => {
+  it(
+    "keeps help, logs and DSN repair available while refusing stateful commands without SQLite fallback",
+    async () => {
+      const root = roots.make("postgres-cli-unresolved-");
+      const stateDir = path.join(root, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const logPath = path.join(root, "openclaw.log");
+      const port = await acquireTestPortBlock({ offsets: [0] });
+      const env: NodeJS.ProcessEnv = {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        CI: "1",
+        NO_COLOR: "1",
+      };
+      try {
+        await fs.mkdir(stateDir);
+        await fs.writeFile(
+          logPath,
+          `${JSON.stringify({
+            time: "2026-01-09T02:10:00.000Z",
+            level: "info",
+            message: "synthetic PostgreSQL diagnostic log",
+          })}\n`,
+        );
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            database: {
+              engine: "postgres",
+              postgres: {
+                connection: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_MISSING_CLI_DSN",
+                },
+              },
+            },
+            gateway: {
+              mode: "local",
+              port: port.port,
+              auth: { mode: "token", token: "synthetic-cli-unresolved-token" },
+            },
+            logging: { file: logPath, level: "silent", consoleLevel: "silent" },
+            plugins: { enabled: false },
+          }),
+        );
+        for (const args of [
+          ["--help"],
+          ["--version"],
+          ["logs", "--limit", "1", "--timeout", "50", "--plain"],
+          ["channels", "logs", "--lines", "1", "--json"],
+          ["config", "set", "database.postgres.connection.id", "OPENCLAW_REPAIRED_CLI_DSN"],
+        ]) {
+          const result = await runCliProcessChild({
+            nodeArgs: [...entrypoint, ...args],
+            env,
+            timeoutMs: childTimeoutMs,
+          });
+          expect(
+            result.code,
+            formatCliProcessFailure({ reason: `CLI ${args.join(" ")} failed`, ...result }),
+          ).toBe(0);
+          if (args[0] === "logs" || args[0] === "channels") {
+            expect(result.stdout).toContain("synthetic PostgreSQL diagnostic log");
+          }
+          expect(
+            (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
+              file.endsWith(".sqlite"),
+            ),
+          ).toEqual([]);
+        }
+        const repaired = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(repaired.database.postgres.connection.id).toBe("OPENCLAW_REPAIRED_CLI_DSN");
+        const result = await runCliProcessChild({
+          nodeArgs: [...entrypoint, "models", "list", "--json"],
+          env,
+          timeoutMs: childTimeoutMs,
+        });
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain("SecretRef is unresolved");
+        expect(
+          (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
+            file.endsWith(".sqlite"),
+          ),
+        ).toEqual([]);
+      } finally {
+        await port.release();
+      }
+    },
+    getCliProcessTestTimeout(childTimeoutMs, ...Array<number>(5).fill(childTimeoutMs)),
+  );
+});
