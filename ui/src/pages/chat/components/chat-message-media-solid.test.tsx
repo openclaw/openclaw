@@ -53,7 +53,7 @@ it("retries a standalone native image after a failed preview", async () => {
   expect(image).not.toBeNull();
   image.dispatchEvent(new Event("error"));
   flush();
-  view.getByRole("button", { name: "Retry", exact: true }).click();
+  view.getByRole("button", { name: /^Retry$/ }).click();
   await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   expect(view.container.querySelector("img")).toBeNull();
   retry.resolve(Response.json({ available: true }));
