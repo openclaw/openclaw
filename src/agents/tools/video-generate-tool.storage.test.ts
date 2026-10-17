@@ -20,27 +20,19 @@ function createMp4Fixture(): Buffer {
   ]);
 }
 
-function createPreparedRuntime(providers: VideoGenerationProvider[]): PreparedModelRuntimeSnapshot {
-  return {
-    mediaCapabilityProviders: {
-      videoGenerationProviders: providers,
-    },
-  } as unknown as PreparedModelRuntimeSnapshot;
-}
-
 function createConfig(primary: string, fallbacks: string[]): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        mediaModels: {
-          video: { primary, fallbacks },
-        },
-      },
-    },
-  };
+  return { agents: { defaults: { mediaModels: { video: { primary, fallbacks } } } } };
 }
 
-function requireVideoTool(tool: ReturnType<typeof createVideoGenerateTool>) {
+function createTool(root: string, config: OpenClawConfig, providers: VideoGenerationProvider[]) {
+  const tool = createVideoGenerateTool({
+    config,
+    agentDir: path.join(root, "agent"),
+    workspaceDir: root,
+    preparedModelRuntime: {
+      mediaCapabilityProviders: { videoGenerationProviders: providers },
+    } as unknown as PreparedModelRuntimeSnapshot,
+  });
   if (!tool) {
     throw new Error("expected video_generate tool");
   }
@@ -52,6 +44,25 @@ function requireDetails(result: { details?: unknown }): Record<string, unknown> 
     throw new Error("expected video generation result details");
   }
   return result.details as Record<string, unknown>;
+}
+
+function provider(
+  id: string,
+  model: string,
+  overrides: Pick<VideoGenerationProvider, "generateVideo"> & Partial<VideoGenerationProvider>,
+): VideoGenerationProvider {
+  return {
+    id,
+    defaultModel: model,
+    models: [model],
+    isConfigured: () => true,
+    capabilities: {},
+    ...overrides,
+  };
+}
+
+function video(fileName: string, source: { buffer?: Buffer; url?: string }) {
+  return { ...source, fileName, mimeType: "video/mp4" };
 }
 
 describe("video generation invocation QA", () => {
@@ -66,67 +77,37 @@ describe("video generation invocation QA", () => {
     const generatedVideo = createMp4Fixture();
     let primaryGenerateCalls = 0;
     let fallbackRequest: VideoGenerationRequest | undefined;
-    const primaryProvider: VideoGenerationProvider = {
-      id: "qa-limited-video",
-      defaultModel: "limited-v1",
-      models: ["limited-v1"],
-      isConfigured: () => true,
-      capabilities: {
-        imageToVideo: {
-          enabled: true,
-          maxInputImages: 1,
-          providerOptions: { seed: "number", draft: "boolean" },
-        },
+    const capabilities: VideoGenerationProvider["capabilities"] = {
+      imageToVideo: {
+        enabled: true,
+        maxInputImages: 1,
+        providerOptions: { seed: "number", draft: "boolean" },
       },
-      resolveModelCapabilities: async () => ({
-        imageToVideo: {
-          enabled: false,
-        },
-      }),
+    };
+    const primaryProvider = provider("qa-limited-video", "limited-v1", {
+      capabilities,
+      resolveModelCapabilities: async () => ({ imageToVideo: { enabled: false } }),
       generateVideo: async () => {
         primaryGenerateCalls += 1;
         throw new Error("unsupported provider must be skipped before forwarding");
       },
-    };
-    const fallbackProvider: VideoGenerationProvider = {
-      id: "qa-capable-video",
-      defaultModel: "capable-v1",
-      models: ["capable-v1"],
-      isConfigured: () => true,
-      capabilities: {
-        imageToVideo: {
-          enabled: true,
-          maxInputImages: 1,
-          providerOptions: { seed: "number", draft: "boolean" },
-        },
-      },
+    });
+    const fallbackProvider = provider("qa-capable-video", "capable-v1", {
+      capabilities,
       generateVideo: async (request) => {
         fallbackRequest = request;
         return {
           model: request.model,
-          videos: [
-            {
-              buffer: generatedVideo,
-              mimeType: "video/mp4",
-              fileName: "provider-result.mp4",
-            },
-          ],
+          videos: [video("provider-result.mp4", { buffer: generatedVideo })],
         };
       },
-    };
+    });
     const providers = [primaryProvider, fallbackProvider];
     const config = createConfig("qa-limited-video/limited-v1", ["qa-capable-video/capable-v1"]);
     const providerOptions = { seed: 17, draft: true };
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
-      const tool = requireVideoTool(
-        createVideoGenerateTool({
-          config,
-          agentDir: path.join(root, "agent"),
-          workspaceDir: root,
-          preparedModelRuntime: createPreparedRuntime(providers),
-        }),
-      );
+      const tool = createTool(root, config, providers);
       const result = await tool.execute("qa-video-invocation", {
         prompt: "Animate the reference image into a short QA clip.",
         image: referencePath,
@@ -158,9 +139,11 @@ describe("video generation invocation QA", () => {
           role: "first_frame",
         },
       ]);
-      expect(details.provider).toBe("qa-capable-video");
-      expect(details.model).toBe("capable-v1");
-      expect(details.count).toBe(1);
+      expect(details).toMatchObject({
+        provider: "qa-capable-video",
+        model: "capable-v1",
+        count: 1,
+      });
       expect(details.attempts).toEqual([
         {
           provider: "qa-limited-video",
@@ -197,45 +180,23 @@ describe("video generation invocation QA", () => {
     const root = tempDirs.make("openclaw-qa-video-output-order-");
     const savedVideo = createMp4Fixture();
     const oversizedVideo = Buffer.concat([savedVideo, Buffer.from([0x00])]);
-    const provider: VideoGenerationProvider = {
-      id: "qa-ordered-video",
-      defaultModel: "ordered-v1",
-      models: ["ordered-v1"],
-      isConfigured: () => true,
-      capabilities: {},
+    const orderedProvider = provider("qa-ordered-video", "ordered-v1", {
       generateVideo: async () => ({
         videos: [
-          {
-            url: "https://media.example/first.mp4",
-            mimeType: "video/mp4",
-            fileName: "first.mp4",
-          },
-          {
-            buffer: savedVideo,
-            mimeType: "video/mp4",
-            fileName: "middle.mp4",
-          },
-          {
+          video("first.mp4", { url: "https://media.example/first.mp4" }),
+          video("middle.mp4", { buffer: savedVideo }),
+          video("last.mp4", {
             buffer: oversizedVideo,
             url: "https://media.example/last.mp4",
-            mimeType: "video/mp4",
-            fileName: "last.mp4",
-          },
+          }),
         ],
       }),
-    };
+    });
     const config = createConfig("qa-ordered-video/ordered-v1", []);
     config.agents!.defaults!.mediaMaxMb = savedVideo.byteLength / (1024 * 1024);
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
-      const tool = requireVideoTool(
-        createVideoGenerateTool({
-          config,
-          agentDir: path.join(root, "agent"),
-          workspaceDir: root,
-          preparedModelRuntime: createPreparedRuntime([provider]),
-        }),
-      );
+      const tool = createTool(root, config, [orderedProvider]);
       const result = await tool.execute("qa-video-output-order", {
         prompt: "Generate three ordered QA clips.",
       });
