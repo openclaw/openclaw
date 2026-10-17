@@ -319,15 +319,12 @@ describe("resolveRequesterToolPolicies", () => {
       withPreparedSessionCapabilityRead(() =>
         resolveWebSearchToolPolicy({ config: searchConfig, agentId: "main", sessionKey }),
       );
+    const denied = { allowed: false, persistentAllowed: false };
     expect(await searchPolicy(cfg)).toEqual({ allowed: true, persistentAllowed: true });
-    expect(await searchPolicy({ ...cfg, tools: { ...cfg.tools, deny: ["web_search"] } })).toEqual({
-      allowed: false,
-      persistentAllowed: false,
-    });
-    expect(await searchPolicy(cfg, "agent:main:subagent:forged")).toEqual({
-      allowed: false,
-      persistentAllowed: false,
-    });
+    expect(await searchPolicy({ ...cfg, tools: { ...cfg.tools, deny: ["web_search"] } })).toEqual(
+      denied,
+    );
+    expect(await searchPolicy(cfg, "agent:main:subagent:forged")).toEqual(denied);
   });
 
   it.each([
@@ -371,9 +368,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnedBy: "agent:main:discord:direct:alice",
     });
 
-    const result = await resolvePolicy({ sessionKey: childSessionKey });
-
-    expectCurrentPolicy(result);
+    expectCurrentPolicy(await resolvePolicy({ sessionKey: childSessionKey }));
   });
 
   it("re-resolves sender policy for an unversioned legacy child envelope", async () => {

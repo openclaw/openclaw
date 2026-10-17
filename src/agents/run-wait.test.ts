@@ -306,7 +306,7 @@ describe("waitForAgentRun", () => {
 
 describe("waitForAgentRunReply", () => {
   it("returns the run's reply and metadata without consulting unrelated session history", async () => {
-    mockRunReply({
+    const terminal = {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
@@ -314,16 +314,11 @@ describe("waitForAgentRunReply", () => {
       yielded: true,
       providerStarted: true,
       terminalReply: { disposition: "visible", text: "authoritative reply" },
-    });
+    };
+    mockRunReply(terminal);
 
     await expect(waitReply("run-visible-terminal-reply")).resolves.toEqual({
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      stopReason: "completed",
-      yielded: true,
-      providerStarted: true,
-      terminalReply: { disposition: "visible", text: "authoritative reply" },
+      ...terminal,
       replyText: "authoritative reply",
     });
     expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);

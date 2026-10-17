@@ -1,4 +1,3 @@
-// Verifies agent runtime plugin loads stay scoped to prepared-runtime handles.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -91,16 +90,13 @@ import {
   withAgentPluginRegistry,
 } from "./runtime-plugins.js";
 
-function createMetadataSnapshot(
-  workspaceDir = "/tmp/gateway-workspace",
-  pluginIds: string[] | undefined = ["telegram", "memory-core"],
-) {
+function createMetadataSnapshot(workspaceDir = "/tmp/gateway-workspace") {
   return {
     workspaceDir,
     index: { installRecords: {}, plugins: [] },
     manifestRegistry: { diagnostics: [], plugins: [] },
     discovery: { candidates: [], diagnostics: [] },
-    pluginIds,
+    pluginIds: ["telegram", "memory-core"],
   };
 }
 
@@ -248,47 +244,38 @@ describe("agent runtime plugin registries", () => {
   );
 
   it.each([
-    { purpose: "model-catalog" as const, broader: false },
-    { purpose: "model-catalog" as const, broader: true },
-    { purpose: "isolated-completion" as const, broader: false },
-    { purpose: "isolated-completion" as const, broader: true },
-  ])(
-    "keeps $purpose registries exact with broader reusable scope=$broader",
-    ({ purpose, broader }) => {
-      const reusableRegistry = registryWith(
-        "catalog-provider",
-        ...(broader ? ["memory-core"] : []),
-      );
-      const primaryRegistry = registryWith("catalog-provider");
-      hoisted.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
-      hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
-      hoisted.resolveAgentRuntimePluginLoadPlan.mockReturnValue({
-        config: {},
-        pluginIds: ["catalog-provider"],
-      });
+    ["model-catalog", false],
+    ["model-catalog", true],
+    ["isolated-completion", false],
+    ["isolated-completion", true],
+  ] as const)("keeps %s registries exact with broader reusable scope=%s", (purpose, broader) => {
+    const reusableRegistry = registryWith("catalog-provider", ...(broader ? ["memory-core"] : []));
+    const primaryRegistry = registryWith("catalog-provider");
+    hoisted.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockReturnValue({
+      config: {},
+      pluginIds: ["catalog-provider"],
+    });
 
-      const registry = loadAgentRuntimePluginRegistryHandle({
-        config: {},
-        basePluginIds: ["catalog-provider"],
-        reusableRegistry,
-        purpose,
-      });
+    const registry = loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      basePluginIds: ["catalog-provider"],
+      reusableRegistry,
+      purpose,
+    });
 
-      expect(registry).toBe(broader ? primaryRegistry : reusableRegistry);
-      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(broader ? 1 : 0);
-      expect(hoisted.adoptRuntimeContextEngineRegistrations).not.toHaveBeenCalled();
-      expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).not.toHaveBeenCalled();
-    },
-  );
+    expect(registry).toBe(broader ? primaryRegistry : reusableRegistry);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(broader ? 1 : 0);
+    expect(hoisted.adoptRuntimeContextEngineRegistrations).not.toHaveBeenCalled();
+    expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).not.toHaveBeenCalled();
+  });
 
   it("reuses the current Gateway generation and loads only the imported-plugin delta", async () => {
     const { config, workspaceDir, metadataSnapshot, activeRegistry } =
       createGatewayRegistryFixture();
-    const selectedRegistry = createEmptyPluginRegistry();
-    selectedRegistry.plugins = [
-      ...activeRegistry.plugins,
-      createPluginRecord({ id: "selected-provider" }),
-    ];
+    const selectedRegistry = registryWith("selected-provider");
+    selectedRegistry.plugins.unshift(...activeRegistry.plugins);
     hoisted.loadPluginRegistryHandle.mockReturnValue(selectedRegistry);
     hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ basePluginIds }) => ({
       config,
@@ -318,8 +305,10 @@ describe("agent runtime plugin registries", () => {
     ]);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
     const loadedOptions = hoisted.loadPluginRegistryHandle.mock.calls[0]?.[0];
-    expect(loadedOptions?.onlyPluginIds).toEqual(["gateway-owned", "selected-provider"]);
-    expect(loadedOptions?.preferBuiltPluginArtifacts).toBe(true);
+    expect(loadedOptions).toMatchObject({
+      onlyPluginIds: ["gateway-owned", "selected-provider"],
+      preferBuiltPluginArtifacts: true,
+    });
   });
 
   it("reuses the published Gateway registry inside the reload operation cache", async () => {

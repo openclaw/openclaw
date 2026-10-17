@@ -1,5 +1,6 @@
 // Verifies prepared agent turns retain their selected runtime context-engine owner.
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
@@ -21,7 +22,6 @@ import {
   waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import { getSandboxBackendFactory } from "./sandbox/backend.js";
@@ -70,63 +70,23 @@ afterEach(async () => {
 
 afterAll(() => cleanupPluginLoaderFixturesForTest());
 
-it("keeps the configured context engine active in a prepared agent registry", async () => {
-  const plugin = enginePlugin(
-    "prepared-context-engine",
-    `
+it.each([false, true])(
+  "keeps the configured engine in scoped handles without global setup (full-only: %s)",
+  async (fullOnly) => {
+    const previousSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
+    const contextEngine = enginePlugin(
+      "ce-probe",
+      `
+        ingest: async () => ({ ingested: ${fullOnly} }),
         assemble: async ({ messages }) => ({ messages, estimatedTokens: 0, systemPromptAddition: "prepared-engine" }),
-  `,
-    false,
-  );
-  const engineId = plugin.id;
-  const config = {
-    plugins: {
-      load: { paths: [plugin.file] },
-      slots: { contextEngine: engineId },
-    },
-  };
-
-  const activeRegistry = await loadAndActivateRootPluginRegistry({
-    cache: false,
-    config,
-    workspaceDir: makePluginLoaderTempDir(),
-    onlyPluginIds: [engineId],
-  });
-  const preparedRegistry = preparedHandle(config, plugin.dir);
-
-  expect(preparedRegistry).not.toBe(activeRegistry);
-  await withPluginRuntimeRegistryScope(preparedRegistry, async () => {
-    const lease = await createContextEngineLogicalTurnLease({
-      identity: { runId: "test-run", sessionId: "test-session" },
-      config,
-      workspaceDir: plugin.dir,
-    });
-    expect(lease).toMatchObject({
-      degraded: false,
-      effectiveEngineId: engineId,
-      effectiveEnginePluginId: engineId,
-    });
-    await expect(
-      lease.begin().engine.assemble({ messages: [], sessionId: "prepared-session" }),
-    ).resolves.toMatchObject({ systemPromptAddition: "prepared-engine" });
-    await lease.dispose();
-  });
-});
-
-it("selects a full-mode-only context engine on caller-owned handles without full-only global setup", async () => {
-  const previousSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
-  const contextEngine = enginePlugin(
-    "ce-probe",
-    `
-        ingest: async () => ({ ingested: true }),
         dispose: async () => {},
   `,
-    true,
-    true,
-  );
-  const sandboxProbe = writePlugin({
-    id: "sandbox-probe",
-    body: `module.exports = {
+      fullOnly,
+      fullOnly,
+    );
+    const sandboxProbe = writePlugin({
+      id: "sandbox-probe",
+      body: `module.exports = {
   id: "sandbox-probe",
   register(api) {
     if (api.registrationMode !== "full") {
@@ -138,74 +98,84 @@ it("selects a full-mode-only context engine on caller-owned handles without full
     }));
   },
 };`,
-  });
-  const config = {
-    plugins: {
-      load: { paths: [contextEngine.dir, sandboxProbe.dir] },
-      allow: ["ce-probe", "sandbox-probe"],
-      slots: { contextEngine: "ce-probe" },
-      entries: {
-        "ce-probe": { enabled: true },
-        "sandbox-probe": { enabled: true },
+    });
+    const config = {
+      plugins: {
+        load: { paths: [contextEngine.dir, sandboxProbe.dir] },
+        slots: { contextEngine: "ce-probe" },
+        ...(fullOnly
+          ? {
+              allow: ["ce-probe", "sandbox-probe"],
+              entries: { "ce-probe": { enabled: true }, "sandbox-probe": { enabled: true } },
+            }
+          : {}),
       },
-    },
-  };
-  const workspaceDir = makePluginLoaderTempDir();
-  const root = await loadAndActivateRootPluginRegistry({
-    cache: false,
-    config,
-    onlyPluginIds: ["ce-probe", "sandbox-probe"],
-  });
-  const rootSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
-
-  expect(getActivePluginRegistry()).toBe(root);
-  expect(root.plugins, JSON.stringify(root.diagnostics)).toEqual([
-    expect.objectContaining({ id: "ce-probe", status: "loaded" }),
-    expect.objectContaining({ id: "sandbox-probe", status: "loaded" }),
-  ]);
-  expect(root.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
-  expect(rootSandboxFactory).not.toBeNull();
-  expect(rootSandboxFactory).not.toBe(previousSandboxFactory);
-
-  const handle = loadAgentRuntimePluginRegistryHandle({
-    basePluginIds: ["ce-probe", "sandbox-probe"],
-    config,
-    workspaceDir,
-  });
-  const discovery = loadPluginRegistryHandle({
-    cache: false,
-    config,
-    onlyPluginIds: ["ce-probe", "sandbox-probe"],
-  });
-
-  expect(handle).not.toBe(root);
-  expect(getActivePluginRegistry()).toBe(root);
-  expect(handle.plugins.find((plugin) => plugin.id === "sandbox-probe")?.status).toBe("loaded");
-  expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(rootSandboxFactory);
-  expect(discovery.contextEngines.get("ce-probe")).toBeUndefined();
-  expect(handle.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
-
-  const warn = (message: string) => {
-    throw new Error(`unexpected context-engine degrade: ${message}`);
-  };
-  // Cron prepare loads this handle, then run-executor selects the engine inside the scoped registry.
-  const lease = await withPluginRuntimeRegistryScope(handle, () =>
-    createContextEngineLogicalTurnLease({
-      identity: { runId: "test-run", sessionId: "test-session" },
+    };
+    const workspaceDir = makePluginLoaderTempDir();
+    const root = await loadAndActivateRootPluginRegistry({
+      cache: false,
       config,
-      warn,
+      onlyPluginIds: ["ce-probe", "sandbox-probe"],
+    });
+    const rootSandboxFactory = getSandboxBackendFactory(SANDBOX_PROBE_ID);
+
+    expect(getActivePluginRegistry()).toBe(root);
+    expect(root.plugins, JSON.stringify(root.diagnostics)).toEqual([
+      expect.objectContaining({ id: "ce-probe", status: "loaded" }),
+      expect.objectContaining({ id: "sandbox-probe", status: "loaded" }),
+    ]);
+    expect(root.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
+    expect(rootSandboxFactory).not.toBeNull();
+    expect(rootSandboxFactory).not.toBe(previousSandboxFactory);
+
+    const handle = loadAgentRuntimePluginRegistryHandle({
+      basePluginIds: fullOnly ? ["ce-probe", "sandbox-probe"] : [],
+      config,
       workspaceDir,
-    }),
-  );
-  try {
-    expect(lease.effectiveEngineId).toBe("ce-probe");
-    expect(lease.degraded).toBe(false);
-  } finally {
-    await lease.dispose();
-  }
-  await clearActivePluginRegistry();
-  expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(previousSandboxFactory);
-});
+    });
+    const discovery = loadPluginRegistryHandle({
+      cache: false,
+      config,
+      onlyPluginIds: ["ce-probe", "sandbox-probe"],
+    });
+
+    expect(handle).not.toBe(root);
+    expect(getActivePluginRegistry()).toBe(root);
+    expect(handle.plugins.find((plugin) => plugin.id === "sandbox-probe")?.status).toBe(
+      fullOnly ? "loaded" : undefined,
+    );
+    expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(rootSandboxFactory);
+    expect(discovery.contextEngines.has("ce-probe")).toBe(!fullOnly);
+    expect(handle.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
+
+    const warn = (message: string) => {
+      throw new Error(`unexpected context-engine degrade: ${message}`);
+    };
+    // Cron prepare loads this handle, then run-executor selects the engine inside the scoped registry.
+    const lease = await withPluginRuntimeRegistryScope(handle, () =>
+      createContextEngineLogicalTurnLease({
+        identity: { runId: "test-run", sessionId: "test-session" },
+        config,
+        warn,
+        workspaceDir,
+      }),
+    );
+    try {
+      expect(lease).toMatchObject({
+        effectiveEngineId: "ce-probe",
+        effectiveEnginePluginId: "ce-probe",
+        degraded: false,
+      });
+      await expect(
+        lease.begin().engine.assemble({ messages: [], sessionId: "prepared-session" }),
+      ).resolves.toMatchObject({ systemPromptAddition: "prepared-engine" });
+    } finally {
+      await lease.dispose();
+    }
+    await clearActivePluginRegistry();
+    expect(getSandboxBackendFactory(SANDBOX_PROBE_ID)).toBe(previousSandboxFactory);
+  },
+);
 
 it("retains the adopted engine through reload, accepted commit and engine disposal", async () => {
   const event = `context-consumer-${randomUUID()}`;
@@ -391,18 +361,8 @@ it.each(["factory", "contract"] as const)(
 
 it("revokes earlier engine callbacks while its raw disposal remains admitted", async () => {
   const event = `closing-engine-${randomUUID()}`;
-  const disposeEntered = createDeferredCore();
-  const lateResult = createDeferredCore<string>();
   const events: string[] = [];
-  const record = (kind: string) => {
-    events.push(kind);
-    if (kind === "dispose-entered") {
-      disposeEntered.resolve();
-    }
-    if (kind.startsWith("late-")) {
-      lateResult.resolve(kind);
-    }
-  };
+  const record = (kind: string) => events.push(kind);
   process.on(event, record);
   const plugin = writePlugin({
     id: "closing-engine",
@@ -437,12 +397,14 @@ it("revokes earlier engine callbacks while its raw disposal remains admitted", a
   await loadAndActivateRootPluginRegistry({ config, cache: false });
   const lease = await turnLease(config, "closing");
   await lease.begin().engine.assemble({ sessionId: "closing-session", messages: [] });
+  const disposeEntered = once(process, event);
   const retiring = clearActivePluginRegistry();
   const disposal = lease.dispose();
   try {
-    await disposeEntered.promise;
+    expect(await disposeEntered).toEqual(["dispose-entered"]);
+    const lateResult = once(process, event);
     process.emit(event + "-late");
-    expect(await lateResult.promise).toBe("late-rejected");
+    expect(await lateResult).toEqual(["late-rejected"]);
     expect(events).not.toContain("dispose-finished");
   } finally {
     process.emit(event + "-late");

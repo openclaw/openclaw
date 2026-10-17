@@ -154,25 +154,17 @@ describe("agent run session target", () => {
     }
   });
 
-  it("returns a typed failure when existing-transcript resolution has no keyed row", async () => {
-    await expect(
-      resolveStoredTarget({ agentId: "main", sessionId: "missing-session" }),
-    ).rejects.toMatchObject(missingTarget);
-  });
-
-  it("does not create a key for an unknown session id during cross-agent lookup", async () => {
-    await expect(
-      resolveStoredTarget({
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: { ops: {}, research: {} },
-          },
-        },
-        sessionId: "unknown-cross-agent-session",
-      }),
-    ).rejects.toMatchObject(missingTarget);
-  });
+  it.each([
+    { agentId: "main" },
+    { config: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } } },
+  ] satisfies Omit<ResolveTargetParams, "sessionId">[])(
+    "returns a typed missing-row failure without creating a key: %j",
+    async (scope) => {
+      await expect(
+        resolveStoredTarget({ ...scope, sessionId: "missing-session" }),
+      ).rejects.toMatchObject(missingTarget);
+    },
+  );
 
   it("matches a partial typed target key against its compatibility token", async () => {
     await expectKeyedTarget(
@@ -243,23 +235,19 @@ describe("agent run session target", () => {
   });
 
   it("ignores a stale legacy marker when a complete typed target is present", async () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "target-session",
+      sessionKey: "agent:main:target-session",
+      storePath,
+    };
     await expect(
       resolveAgentRunSessionTarget({
         config: {},
         sessionId: "old-session",
         sessionFile: `sqlite:helper:old-session:${path.join(tempDir, "old.json")}`,
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "target-session",
-          sessionKey: "agent:main:target-session",
-          storePath,
-        },
+        sessionTarget,
       }),
-    ).resolves.toMatchObject({
-      agentId: "main",
-      sessionId: "target-session",
-      sessionKey: "agent:main:target-session",
-      storePath,
-    });
+    ).resolves.toMatchObject(sessionTarget);
   });
 });
