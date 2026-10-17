@@ -5,8 +5,10 @@ import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 
 export function resolveCliDatabaseProcessRole(rawArgv: string[]): DatabaseProcessRole {
   const argv = rewriteUpdateFlagArgv(rawArgv);
+  const { primary, hasHelpOrVersion } = resolveCliArgvInvocation(argv);
   // Interactive setup owns one-shot state work; any Gateway it starts has its own process.
-  return !resolveCliArgvInvocation(argv).hasHelpOrVersion && isGatewayRunInvocationArgv(argv)
+  // Bare-root routing can instead open a long-lived local TUI.
+  return !hasHelpOrVersion && (primary === null || isGatewayRunInvocationArgv(argv))
     ? "gateway"
     : "cli-oneshot";
 }

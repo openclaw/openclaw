@@ -431,6 +431,33 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
 
+  it.each([
+    { args: ["onboard"], flag: "OPENCLAW_CONFIG_READONLY" },
+    { args: ["setup", "--wizard"], flag: "OPENCLAW_NIX_MODE" },
+  ])(
+    "preserves immutable setup guidance for $flag without opening storage",
+    async ({ args, flag }) => {
+      const { stateDir, configPath, env, run } = createDoctorFixture("setup-immutable", true);
+      const raw = 'synthetic warning\n{"database":{"engine":"postgres"}}\n';
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
+
+      const result = await run(args, DOCTOR_CHILD_TIMEOUT_MS, { ...env, [flag]: "1" });
+      const output = `${result.stderr}\n${result.stdout}`;
+      expect(result, output).toMatchObject({ code: 1, signal: null });
+      expect(output).toContain(`${flag}=1`);
+      expect(output).toContain("immutable");
+      expect(output).not.toContain('Run "openclaw doctor --fix"');
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(
+        fs
+          .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+          .filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+      ).toEqual([]);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
   it.each(["sqlite", "postgres"] as const)(
     "leaves prefixed %s config untouched while a live Gateway owns the target",
     async (engine) => {

@@ -3,7 +3,9 @@ import { resolveCliDatabaseProcessRole } from "./database-process-role.js";
 
 describe("CLI database process role", () => {
   it.each([
-    [[], "cli-oneshot"],
+    [[], "gateway"],
+    [["--profile", "test"], "gateway"],
+    [["--help"], "cli-oneshot"],
     [["gateway"], "gateway"],
     [["--profile", "test", "gateway", "run"], "gateway"],
     [["gateway", "status"], "cli-oneshot"],

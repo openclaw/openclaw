@@ -168,6 +168,15 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
   if (isSetupInvocation && hasFlag(argv, "--reset")) {
     return false;
   }
+  if (
+    isSetupInvocation &&
+    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID") &&
+    (await import("../config/paths.js")).resolveIsConfigReadOnly()
+  ) {
+    // Setup may check its TTY before the config guard; report the owner's immutable-file error.
+    const { createConfigMutationError } = await import("../config/config-write-guard.js");
+    throw createConfigMutationError({ configPath: snapshot.path });
+  }
   let doctorRecovery = false;
   const {
     createConfigReadError,
