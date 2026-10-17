@@ -214,8 +214,8 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
   }
 });
 
-it("uses a daemon-owned relay without replacing its listener or closing its extension", async () => {
-  await withConnectedDaemon(async ({ port, token, extension }) => {
+it("uses a daemon-owned relay without replacing its listener or closing its extension", async () =>
+  withConnectedDaemon(async ({ port, token, extension }) => {
     const external = await externalRelayClient(port, token);
     try {
       for (const mismatch of [
@@ -248,11 +248,10 @@ it("uses a daemon-owned relay without replacing its listener or closing its exte
     } finally {
       external.terminate();
     }
-  });
-});
+  }));
 
-it("keeps remote captures on the exact grant across renderer attachment, then revokes them", async () => {
-  await withConnectedDaemon(async ({ port, token, extension, setTarget, sendTabs }) => {
+it("keeps remote captures on the exact grant across renderer attachment, then revokes them", async () =>
+  withConnectedDaemon(async ({ port, token, extension, setTarget, sendTabs }) => {
     const client = await RelayOwnerClient.connect({
       port,
       profile: "chrome",
@@ -292,11 +291,10 @@ it("keeps remote captures on the exact grant across renderer attachment, then re
     } finally {
       await client.close();
     }
-  });
-});
+  }));
 
-it("coalesces real borrowed acquisitions while independently cancelling one caller", async () => {
-  await withConnectedDaemon(async ({ port }) => {
+it("coalesces real borrowed acquisitions while independently cancelling one caller", async () =>
+  withConnectedDaemon(async ({ port }) => {
     const resolved = resolveBrowserConfig({
       profiles: { chrome: { driver: "extension", cdpPort: port } },
     });
@@ -321,13 +319,12 @@ it("coalesces real borrowed acquisitions while independently cancelling one call
     } finally {
       await stopExtensionRelays(state);
     }
-  });
-});
+  }));
 
 it.each(["port", "name"] as const)(
   "retires borrowed access on configured profile %s drift without stopping the old daemon",
-  async (change) => {
-    await withConnectedDaemon(async ({ port, token }) => {
+  async (change) =>
+    withConnectedDaemon(async ({ port, token }) => {
       const external = await externalRelayClient(port, token);
       try {
         await startBrowserControlServiceFromConfig();
@@ -355,12 +352,11 @@ it.each(["port", "name"] as const)(
       } finally {
         external.terminate();
       }
-    });
-  },
+    }),
 );
 
-it("releases its old lease on key drift and refuses to reconfigure the daemon owner", async () => {
-  await withConnectedDaemon(async ({ stateDir }) => {
+it("releases its old lease on key drift and refuses to reconfigure the daemon owner", async () =>
+  withConnectedDaemon(async ({ stateDir }) => {
     await startBrowserControlServiceFromConfig();
     const profile = createBrowserControlContext().forProfile("chrome");
     await fs.writeFile(
@@ -369,11 +365,10 @@ it("releases its old lease on key drift and refuses to reconfigure the daemon ow
     );
     await expect(profile.ensureBrowserAvailable()).rejects.toThrow();
     expect(getBrowserControlState()?.extensionRelays?.size).toBe(0);
-  });
-});
+  }));
 
-it("waits for the actual native detach acknowledgement before borrowed cleanup completes", async () => {
-  await withConnectedDaemon(async ({ port, token, holdDetach }) => {
+it("waits for the actual native detach acknowledgement before borrowed cleanup completes", async () =>
+  withConnectedDaemon(async ({ port, token, holdDetach }) => {
     const external = await externalRelayClient(port, token);
     const hold = holdDetach();
     try {
@@ -401,11 +396,10 @@ it("waits for the actual native detach acknowledgement before borrowed cleanup c
       hold.release();
       external.terminate();
     }
-  });
-});
+  }));
 
-it("reacquires a retired daemon owner without reusing its captured references", async () => {
-  await withConnectedDaemon(async ({ restartDaemon }) => {
+it("reacquires a retired daemon owner without reusing its captured references", async () =>
+  withConnectedDaemon(async ({ restartDaemon }) => {
     const state = await startBrowserControlServiceFromConfig();
     if (!state) {
       throw new Error("Expected browser runtime");
@@ -422,11 +416,10 @@ it("reacquires a retired daemon owner without reusing its captured references", 
     expect(replacement).not.toBe(original);
     expect(replacement.ownership).toBe("borrowed");
     await expect(reference.resolve()).rejects.toThrow();
-  });
-});
+  }));
 
-it("fences a captured operation when profile stop advances the generation but retains the relay", async () => {
-  await withConnectedDaemon(async () => {
+it("fences a captured operation when profile stop advances the generation but retains the relay", async () =>
+  withConnectedDaemon(async () => {
     await startBrowserControlServiceFromConfig();
     const ctx = createBrowserControlContext();
     const profile = ctx.forProfile("chrome");
@@ -448,11 +441,10 @@ it("fences a captured operation when profile stop advances the generation but re
     } finally {
       await captured?.release();
     }
-  });
-});
+  }));
 
-it("reports an explicit stricter policy conflict without reconfiguring the existing owner", async () => {
-  await withConnectedDaemon(
+it("reports an explicit stricter policy conflict without reconfiguring the existing owner", async () =>
+  withConnectedDaemon(
     async ({ port, token }) => {
       const resolved = resolveBrowserConfig({
         extensionRelay: { allowLegacyAuth: false },
@@ -478,5 +470,4 @@ it("reports an explicit stricter policy conflict without reconfiguring the exist
       }
     },
     async (port) => await runExtensionRelayDaemon({ port, allowLegacyAuth: true }),
-  );
-});
+  ));

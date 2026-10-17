@@ -8,7 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
@@ -34,6 +34,7 @@ import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,
   BROWSER_RELAY_AUTH_COMPLETE_PATH,
 } from "./auth-v2.js";
+import { authenticateExtension } from "./relay-coexistence.test-support.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 
 const getPluginRuntimeGatewayRequestScopeMock = vi.hoisted(() => vi.fn());
@@ -105,16 +106,6 @@ function encodeUpgradeHead(messages: object[]): Buffer {
   );
 }
 
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
-}
-
 async function closeServer(server: Server): Promise<void> {
   if (!server.listening) {
     return;
@@ -134,8 +125,8 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
   it.each([
     { name: "disabled Browser", enabled: false, driver: "extension" as const },
     { name: "no extension profiles", enabled: true, driver: "openclaw" as const },
-  ])("leaves the relay key absent with $name", async ({ enabled, driver }) => {
-    await withTempDir("openclaw-relay-service-", async (dir) => {
+  ])("leaves the relay key absent with $name", async ({ enabled, driver }) =>
+    withTempDir("openclaw-relay-service-", async (dir) => {
       const stateDir = await fs.realpath(dir);
       const credentials = path.join(stateDir, "credentials");
       const config = {
@@ -157,8 +148,8 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
           }
         },
       );
-    });
-  });
+    }),
+  );
 
   it.each([
     { browserRequestAlreadyWaiting: false, standaloneFirst: false, malformedFrame: false },
@@ -316,31 +307,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
               });
               await once(extension, "open");
               if (!legacy) {
-                const clientNonce = randomRelayNonce();
-                const challengeMessage = once(extension, "message");
-                extension.send(
-                  JSON.stringify({
-                    type: "auth.hello",
-                    v: 2,
-                    keyId: relayKeyIdFromHex(RELAY_KEY),
-                    clientNonce,
-                  }),
-                );
-                const [challengeData] = (await challengeMessage) as [RawData];
-                const challenge = JSON.parse(rawDataText(challengeData));
-                const okMessage = once(extension, "message", {
-                  signal: AbortSignal.timeout(2_000),
-                });
-                extension.send(
-                  JSON.stringify({
-                    type: "auth.response",
-                    v: 2,
-                    sessionId: challenge.sessionId,
-                    clientProof: createRelayProof(RELAY_KEY, "client", challenge),
-                  }),
-                );
-                const [okData] = (await okMessage) as [RawData];
-                expect(JSON.parse(rawDataText(okData))).toMatchObject({ type: "auth.ok", v: 2 });
+                await authenticateExtension(extension, RELAY_KEY, 2_000);
               }
               if (legacy === "head") {
                 expect(upgradeHeadBytes).toBe(coalesced?.byteLength);

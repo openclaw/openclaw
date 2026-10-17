@@ -25,6 +25,36 @@ function deliver(receiver: { onMessage(raw: string): void }, message: unknown) {
   receiver.onMessage(JSON.stringify(message));
 }
 
+function connectClient(bridge: ExtensionRelayBridge) {
+  const client = new FakeSocket();
+  return { client, cdp: bridge.attachCdpClientSocket(client) };
+}
+
+function sendCommand(
+  cdp: { onMessage(raw: string): void },
+  id: number,
+  method: string,
+  params?: Record<string, unknown>,
+  sessionId?: unknown,
+) {
+  deliver(cdp, { id, method, params, sessionId });
+}
+
+function sendResult(receiver: { onMessage(raw: string): void }, seq: unknown, result: unknown) {
+  deliver(receiver, { type: "result", seq, result });
+}
+
+function readyBridge() {
+  const bridge = createBridge();
+  const extension = wireExtension(bridge);
+  sendHello(extension.handlers);
+  return { bridge, ...extension };
+}
+
+function targetInfos(...ids: string[]) {
+  return { result: { targetInfos: ids.map((targetId) => expect.objectContaining({ targetId })) } };
+}
+
 function createBridge() {
   const bridge = new ExtensionRelayBridge();
   onTestFinished(() => {
@@ -35,9 +65,8 @@ function createBridge() {
 }
 
 async function attachClient(bridge: ExtensionRelayBridge) {
-  const client = new FakeSocket();
-  const cdp = bridge.attachCdpClientSocket(client);
-  deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+  const { client, cdp } = connectClient(bridge);
+  sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
   await flush();
   return { client, cdp };
 }
@@ -58,14 +87,13 @@ async function holdCdpCommand(
     }
   };
   sendHello(extension.handlers);
-  const client = new FakeSocket();
-  const cdp = bridge.attachCdpClientSocket(client);
-  deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+  const { client, cdp } = connectClient(bridge);
+  sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
   await vi.advanceTimersByTimeAsync(0);
   const sessionId = asOptionalRecord(
     client.frames().find((frame) => frame.method === "Target.attachedToTarget")?.params,
   )?.sessionId;
-  deliver(cdp, { id: 2, sessionId, method, params });
+  sendCommand(cdp, 2, method, params, sessionId);
   return { extension, client, cdp, sessionId };
 }
 
@@ -81,11 +109,7 @@ describe("ExtensionRelayBridge", () => {
       const command = extension.socket
         .frames()
         .find((frame) => frame.type === "cdp" && frame.method === method);
-      deliver(extension.handlers, {
-        type: "result",
-        seq: command?.seq,
-        result: { result: { value: true } },
-      });
+      sendResult(extension.handlers, command?.seq, { result: { value: true } });
       await vi.advanceTimersByTimeAsync(0);
       expect(response(client, 2)).toMatchObject({
         result: { result: { value: true } },
@@ -129,7 +153,7 @@ describe("ExtensionRelayBridge", () => {
     await vi.advanceTimersByTimeAsync(17_000);
     expect(response(client, 2)).toBeUndefined();
     if (loss === "detach") {
-      deliver(cdp, { id: 3, method: "Target.detachFromTarget", params: { sessionId } });
+      sendCommand(cdp, 3, "Target.detachFromTarget", { sessionId });
       await vi.advanceTimersByTimeAsync(0);
       expect(response(client, 3)).toMatchObject({ result: {} });
     } else {
@@ -217,12 +241,10 @@ describe("ExtensionRelayBridge", () => {
   });
 
   it("creates a tab inside the group and returns its synthetic target", async () => {
-    const bridge = createBridge();
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
+    const { bridge, socket } = readyBridge();
 
     const { client, cdp } = await attachClient(bridge);
-    deliver(cdp, { id: 2, method: "Target.createTarget", params: { url: "https://new.test" } });
+    sendCommand(cdp, 2, "Target.createTarget", { url: "https://new.test" });
     await flush();
 
     const reply = response(client, 2);
@@ -247,9 +269,8 @@ describe("ExtensionRelayBridge", () => {
       },
     ]);
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
 
     expect(socket.frames().filter((frame) => frame.type === "attach")).toEqual([
@@ -274,19 +295,14 @@ describe("ExtensionRelayBridge", () => {
     });
     sendHello(extension.handlers);
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
 
     expect(attach).toBeDefined();
     expect(response(client, 1)).toBeUndefined();
 
-    deliver(extension.handlers, {
-      type: "result",
-      seq: attach?.seq,
-      result: { targetId: "target-1" },
-    });
+    sendResult(extension.handlers, attach?.seq, { targetId: "target-1" });
     await flush();
     expect(client.frames()).toEqual([
       expect.objectContaining({
@@ -306,16 +322,11 @@ describe("ExtensionRelayBridge", () => {
       const socket = new FakeSocket();
       const extension = bridge.attachExtensionSocket(socket);
       sendHello(extension, []);
-      const client = new FakeSocket();
-      const cdp = bridge.attachCdpClientSocket(client);
-      deliver(cdp, { id: 1, method: "Target.createTarget", params: { url: "" } });
+      const { client, cdp } = connectClient(bridge);
+      sendCommand(cdp, 1, "Target.createTarget", { url: "" });
       const command = socket.frames().at(-1);
       expect(command).toMatchObject({ type: "createTab", url: "about:blank" });
-      deliver(extension, {
-        type: "result",
-        seq: command?.seq,
-        result: { tabId: 99, targetId: "created-target" },
-      });
+      sendResult(extension, command?.seq, { tabId: 99, targetId: "created-target" });
       // Resolve the old promise, then replace its owner before its continuation.
 
       if (lifecycle === "replaced extension") {
@@ -339,17 +350,10 @@ describe("ExtensionRelayBridge", () => {
   );
 
   it("honors an explicit Target.createTarget focus request", async () => {
-    const bridge = createBridge();
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
+    const { bridge, socket } = readyBridge();
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, {
-      id: 1,
-      method: "Target.createTarget",
-      params: { url: "https://focused.test", focus: true },
-    });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.createTarget", { url: "https://focused.test", focus: true });
     await flush();
 
     expect(response(client, 1)?.result).toMatchObject({
@@ -363,13 +367,10 @@ describe("ExtensionRelayBridge", () => {
   });
 
   it("rejects isolated browser contexts (real profile only)", async () => {
-    const bridge = createBridge();
-    const { handlers } = wireExtension(bridge);
-    sendHello(handlers);
+    const { bridge } = readyBridge();
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.createBrowserContext" });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.createBrowserContext");
     await flush();
 
     const reply = response(client, 1);
@@ -378,8 +379,7 @@ describe("ExtensionRelayBridge", () => {
 
   it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
     const bridge = createBridge();
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
+    const { client, cdp } = connectClient(bridge);
 
     cdp.onMessage("{");
 
@@ -390,8 +390,7 @@ describe("ExtensionRelayBridge", () => {
 
   it("reports invalid CDP client requests instead of leaving the client waiting", () => {
     const bridge = createBridge();
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
+    const { client, cdp } = connectClient(bridge);
 
     deliver(cdp, { id: 7, sessionId: "session-1", params: {} });
 
@@ -480,12 +479,9 @@ describe("ExtensionRelayBridge", () => {
   });
 
   it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
-    const bridge = createBridge();
-    const { handlers } = wireExtension(bridge);
-    sendHello(handlers);
+    const { bridge } = readyBridge();
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
+    const { client, cdp } = connectClient(bridge);
     const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
       { id: 1, method: "Browser.getVersion" },
       { id: 2, method: "Target.setDiscoverTargets", params: { discover: true } },
@@ -520,7 +516,7 @@ describe("ExtensionRelayBridge", () => {
     const original = wireExtension(bridge);
     sendHello(original.handlers);
     const cdp = bridge.attachCdpClientSocket(new FakeSocket());
-    deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
     const resolveTarget = bridge.captureOperationTarget("target-1");
 
@@ -545,18 +541,16 @@ describe("ExtensionRelayBridge target enumeration", () => {
           : replyFor(message),
       );
       sendHello(extension.handlers);
-      const first = new FakeSocket();
-      const firstCdp = bridge.attachCdpClientSocket(first);
-      const second = new FakeSocket();
-      const secondCdp = bridge.attachCdpClientSocket(second);
+      const { client: first, cdp: firstCdp } = connectClient(bridge);
+      const { client: second, cdp: secondCdp } = connectClient(bridge);
       for (const cdp of [firstCdp, secondCdp]) {
-        deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+        sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
       }
       await flush();
       const original = first.frames().find((frame) => frame.method === "Target.attachedToTarget");
       const sessionId = (original?.params as { sessionId?: string } | undefined)?.sessionId;
       expect(typeof sessionId).toBe("string");
-      deliver(firstCdp, { id: 2, method: "Target.detachFromTarget", params: { sessionId } });
+      sendCommand(firstCdp, 2, "Target.detachFromTarget", { sessionId });
       await flush();
 
       targetId = "replacement-target";
@@ -581,12 +575,7 @@ describe("ExtensionRelayBridge target enumeration", () => {
           targetInfo: { targetId: "replacement-target" },
         });
       }
-      deliver(secondCdp, {
-        id: 3,
-        sessionId,
-        method: "Runtime.evaluate",
-        params: { expression: "1" },
-      });
+      sendCommand(secondCdp, 3, "Runtime.evaluate", { expression: "1" }, sessionId);
       await flush();
       expect(response(second, 3)?.error).toBeDefined();
       expect(
@@ -611,12 +600,10 @@ describe("ExtensionRelayBridge target enumeration", () => {
         return replyFor(message);
       });
       sendHello(extension.handlers);
-      const first = new FakeSocket();
-      const firstCdp = bridge.attachCdpClientSocket(first);
-      const second = new FakeSocket();
-      const secondCdp = bridge.attachCdpClientSocket(second);
+      const { client: first, cdp: firstCdp } = connectClient(bridge);
+      const { client: second, cdp: secondCdp } = connectClient(bridge);
       for (const cdp of [firstCdp, secondCdp]) {
-        deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+        sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
       }
       await flush();
       deliver(extension.handlers, { type: "detached", tabId: 1, reason: "target_closed" });
@@ -662,7 +649,7 @@ describe("ExtensionRelayBridge target enumeration", () => {
       nextStep.resolve(JSON.parse(data));
     };
     const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.getTargets" });
+    sendCommand(cdp, 1, "Target.getTargets");
     const first = await firstAttach.promise;
     deliver(extension.handlers, {
       type: "tabs",
@@ -674,20 +661,9 @@ describe("ExtensionRelayBridge target enumeration", () => {
     deliver(extension.handlers, replyFor(first));
     const second = await nextStep.promise;
     expect(second).toMatchObject({ type: "attach", tabId: 2 });
-    deliver(extension.handlers, {
-      type: "result",
-      seq: second.seq,
-      result: { targetId: "target-2" },
-    });
+    sendResult(extension.handlers, second.seq, { targetId: "target-2" });
     await flush();
-    expect(response(client, 1)).toMatchObject({
-      result: {
-        targetInfos: [
-          expect.objectContaining({ targetId: "target-1" }),
-          expect.objectContaining({ targetId: "target-2" }),
-        ],
-      },
-    });
+    expect(response(client, 1)).toMatchObject(targetInfos("target-1", "target-2"));
   });
 
   it("repairs reconnect attach without undoing a later explicit detach", async () => {
@@ -696,9 +672,8 @@ describe("ExtensionRelayBridge target enumeration", () => {
     const initial = bridge.attachExtensionSocket(initialSocket);
     sendHello(initial);
 
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
     expect(initialSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
 
     const replacement = wireExtension(bridge);
@@ -708,22 +683,19 @@ describe("ExtensionRelayBridge target enumeration", () => {
     expect(replacement.socket.frames().filter((frame) => frame.type === "attach")).toEqual([
       expect.objectContaining({ tabId: 1 }),
     ]);
-    deliver(cdp, { id: 2, method: "Target.getTargets" });
+    sendCommand(cdp, 2, "Target.getTargets");
     await flush();
-    expect(response(client, 2)?.result).toMatchObject({
-      targetInfos: [expect.objectContaining({ targetId: "target-1" })],
-    });
+    expect(response(client, 2)?.result).toMatchObject(targetInfos("target-1").result);
 
-    const peer = new FakeSocket();
-    const peerCdp = bridge.attachCdpClientSocket(peer);
-    deliver(peerCdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    const { client: peer, cdp: peerCdp } = connectClient(bridge);
+    sendCommand(peerCdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
     const attached = client
       .frames()
       .findLast((frame) => frame.method === "Target.attachedToTarget");
     const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
     expect(typeof sessionId).toBe("string");
-    deliver(cdp, { id: 3, method: "Target.detachFromTarget", params: { sessionId } });
+    sendCommand(cdp, 3, "Target.detachFromTarget", { sessionId });
     await flush();
     const attachedEventCount = events(client, "Target.attachedToTarget").length;
     const peerAttachedEventCount = events(peer, "Target.attachedToTarget").length;
@@ -736,7 +708,7 @@ describe("ExtensionRelayBridge target enumeration", () => {
     expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
     expect(events(client, "Target.attachedToTarget")).toHaveLength(attachedEventCount);
     expect(events(peer, "Target.attachedToTarget")).toHaveLength(peerAttachedEventCount + 1);
-    deliver(cdp, { id: 4, method: "Target.getTargets" });
+    sendCommand(cdp, 4, "Target.getTargets");
     await flush();
     expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
     expect(response(client, 4)?.result).toMatchObject({
@@ -758,10 +730,9 @@ describe("ExtensionRelayBridge target enumeration", () => {
     const extension = wireExtension(bridge);
     sendHello(extension.handlers, []);
     extension.handlers.onClose();
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
+    const { client, cdp } = connectClient(bridge);
 
-    deliver(cdp, { id: 1, method: "Target.getTargets" });
+    sendCommand(cdp, 1, "Target.getTargets");
     await flush();
 
     expect(response(client, 1)).toMatchObject({
@@ -780,11 +751,10 @@ describe("ExtensionRelayBridge target enumeration", () => {
       return replyFor(message);
     });
     sendHello(extension.handlers);
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.getTargets" });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.getTargets");
     const detach = await retirement.promise;
-    deliver(cdp, { id: 2, method: "Target.getTargets" });
+    sendCommand(cdp, 2, "Target.getTargets");
     deliver(extension.handlers, {
       type: "error",
       seq: detach.seq,
@@ -807,20 +777,18 @@ describe("ExtensionRelayBridge target enumeration", () => {
       return replyFor(message);
     });
     sendHello(extension.handlers);
-    const first = new FakeSocket();
-    const firstCdp = bridge.attachCdpClientSocket(first);
-    deliver(firstCdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    const { client: first, cdp: firstCdp } = connectClient(bridge);
+    sendCommand(firstCdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
 
-    const second = new FakeSocket();
-    const secondCdp = bridge.attachCdpClientSocket(second);
-    deliver(secondCdp, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
+    const { client: second, cdp: secondCdp } = connectClient(bridge);
+    sendCommand(secondCdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
     expect(second.frames().some((frame) => frame.method === "Target.attachedToTarget")).toBe(true);
     expect(first.frames().some((frame) => frame.method === "Target.attachedToTarget")).toBe(true);
     const firstAttachedEventCount = events(first, "Target.attachedToTarget").length;
 
-    deliver(firstCdp, { id: 2, method: "Target.getTargets" });
+    sendCommand(firstCdp, 2, "Target.getTargets");
     await flush();
 
     expect(extension.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(2);
@@ -845,25 +813,15 @@ describe("ExtensionRelayBridge target enumeration", () => {
         active: false,
       },
     ]);
-    const client = new FakeSocket();
-    const cdp = bridge.attachCdpClientSocket(client);
-    deliver(cdp, { id: 1, method: "Target.getTargets" });
+    const { client, cdp } = connectClient(bridge);
+    sendCommand(cdp, 1, "Target.getTargets");
     await flush();
-    expect(response(client, 1)).toMatchObject({
-      result: { targetInfos: [expect.objectContaining({ targetId: "target-1" })] },
-    });
+    expect(response(client, 1)).toMatchObject(targetInfos("target-1"));
 
     refused = false;
-    deliver(cdp, { id: 2, method: "Target.getTargets" });
+    sendCommand(cdp, 2, "Target.getTargets");
     await flush();
-    expect(response(client, 2)).toMatchObject({
-      result: {
-        targetInfos: [
-          expect.objectContaining({ targetId: "target-1" }),
-          expect.objectContaining({ targetId: "target-2" }),
-        ],
-      },
-    });
+    expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));
   });
 });
 
@@ -874,13 +832,13 @@ it.each(["attach", "createTab"])(
     const extensionSocket = new FakeSocket();
     const extension = bridge.attachExtensionSocket(extensionSocket);
     sendHello(extension, operation === "attach" ? defaultTabs() : []);
-    const clientSocket = new FakeSocket();
-    const client = bridge.attachCdpClientSocket(clientSocket);
-    deliver(client, {
-      id: 1,
-      method: operation === "attach" ? "Target.setAutoAttach" : "Target.createTarget",
-      params: operation === "attach" ? { autoAttach: true } : { url: "about:blank" },
-    });
+    const { client: clientSocket, cdp: client } = connectClient(bridge);
+    sendCommand(
+      client,
+      1,
+      operation === "attach" ? "Target.setAutoAttach" : "Target.createTarget",
+      operation === "attach" ? { autoAttach: true } : { url: "about:blank" },
+    );
     const command = extensionSocket.frames().find((frame) => frame.type === operation);
     expect(command).toBeDefined();
     let finished = false;
@@ -889,17 +847,13 @@ it.each(["attach", "createTab"])(
     });
     await flush();
     expect(finished).toBe(false);
-    deliver(extension, {
-      type: "result",
-      seq: command?.seq,
-      result: { tabId: 1, targetId: "target-1" },
-    });
+    sendResult(extension, command?.seq, { tabId: 1, targetId: "target-1" });
     await vi.waitFor(() =>
       expect(extensionSocket.frames().some((frame) => frame.type === "detach")).toBe(true),
     );
     expect(finished).toBe(false);
     const detach = extensionSocket.frames().find((frame) => frame.type === "detach");
-    deliver(extension, { type: "result", seq: detach?.seq, result: {} });
+    sendResult(extension, detach?.seq, {});
     await closing;
     expect(finished).toBe(true);
     expect(clientSocket.frames()).toEqual([]);

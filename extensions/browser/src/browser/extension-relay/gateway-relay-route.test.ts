@@ -103,6 +103,12 @@ function fakeSocket() {
   return { socket, writes, isDestroyed: () => destroyed };
 }
 
+async function upgrade(request: IncomingMessage, head = Buffer.alloc(0)) {
+  const connection = fakeSocket();
+  const handled = await handleGatewayExtensionUpgrade(request, connection.socket, head);
+  return { ...connection, handled, response: connection.writes.join("") };
+}
+
 function req(url: string, headers: Record<string, string> = {}): IncomingMessage {
   return { url, headers: { origin: "chrome-extension://abc", ...headers } } as IncomingMessage;
 }
@@ -187,8 +193,7 @@ async function mockSuccessfulUpgrade() {
 
 describe("handleGatewayExtensionUpgrade", () => {
   it("ignores non-relay paths", async () => {
-    const { socket } = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(req("/other"), socket, Buffer.alloc(0));
+    const { handled } = await upgrade(req("/other"));
     expect(handled).toBe(false);
     expect(getBrowserControlStateMock).not.toHaveBeenCalled();
   });
@@ -196,63 +201,37 @@ describe("handleGatewayExtensionUpgrade", () => {
   it("503s when authenticated lazy startup cannot enable browser control", async () => {
     getBrowserControlStateMock.mockReturnValue(null);
     startBrowserControlServiceFromConfigMock.mockResolvedValue(null);
-    const { socket, writes, isDestroyed } = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension"),
-      socket,
-      Buffer.alloc(0),
-    );
+    const { handled, response, isDestroyed } = await upgrade(relayReq("/browser/extension"));
     expect(handled).toBe(true);
-    expect(writes.join("")).toContain("503");
+    expect(response).toContain("503");
     expect(isDestroyed()).toBe(true);
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
   });
 
   it("403s a non-extension origin", async () => {
     getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
-    const { socket, writes } = fakeSocket();
-    await handleGatewayExtensionUpgrade(
+    const { response } = await upgrade(
       relayReq("/browser/extension", TOKEN, { origin: "https://evil.example" }),
-      socket,
-      Buffer.alloc(0),
     );
-    expect(writes.join("")).toContain("403");
+    expect(response).toContain("403");
   });
 
   it("401s a missing, wrong, or length-mismatched token", async () => {
     getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
     primeProfile();
-    const missing = fakeSocket();
-    await handleGatewayExtensionUpgrade(req("/browser/extension"), missing.socket, Buffer.alloc(0));
-    expect(missing.writes.join("")).toContain("401");
-
-    const wrong = fakeSocket();
-    await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension", "b".repeat(64)),
-      wrong.socket,
-      Buffer.alloc(0),
-    );
-    expect(wrong.writes.join("")).toContain("401");
-
-    const short = fakeSocket();
-    await handleGatewayExtensionUpgrade(
+    for (const request of [
+      req("/browser/extension"),
+      relayReq("/browser/extension", ROTATED_TOKEN),
       relayReq("/browser/extension", "short"),
-      short.socket,
-      Buffer.alloc(0),
-    );
-    expect(short.writes.join("")).toContain("401");
+    ]) {
+      expect((await upgrade(request)).response).toContain("401");
+    }
     expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
   });
 
   it("rejects relay secrets in the public request URL", async () => {
     getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
-    const { socket, writes } = fakeSocket();
-    await handleGatewayExtensionUpgrade(
-      req("/browser/extension?token=" + TOKEN),
-      socket,
-      Buffer.alloc(0),
-    );
-    expect(writes.join("")).toContain("400");
+    expect((await upgrade(req("/browser/extension?token=" + TOKEN))).response).toContain("400");
     expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
   });
 
@@ -267,11 +246,7 @@ describe("handleGatewayExtensionUpgrade", () => {
     ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
     await mockSuccessfulUpgrade();
 
-    const handled = await handleGatewayExtensionUpgrade(
-      v2Req(),
-      fakeSocket().socket,
-      Buffer.alloc(0),
-    );
+    const { handled } = await upgrade(v2Req());
     expect(handled).toBe(true);
     expect(authenticateExtensionWebSocketMock).toHaveBeenCalledOnce();
     expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
@@ -283,8 +258,7 @@ describe("handleGatewayExtensionUpgrade", () => {
       resource: string;
       source: string;
     };
-    expect(authParams.resource).toBe("/browser/extension");
-    expect(authParams.source).toBe("203.0.113.20");
+    expect(authParams).toMatchObject({ resource: "/browser/extension", source: "203.0.113.20" });
     const attach = await authParams.prepareAuthenticated();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
@@ -296,14 +270,7 @@ describe("handleGatewayExtensionUpgrade", () => {
   });
 
   it("rejects oversized direct-Gateway upgrade-head data before ws auth or lazy startup", async () => {
-    const { socket, writes, isDestroyed } = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(
-      v2Req(),
-      socket,
-      oversizedMaskedTextFrame(),
-    );
-
-    const response = writes.join("");
+    const { handled, response, isDestroyed } = await upgrade(v2Req(), oversizedMaskedTextFrame());
     expect(handled).toBe(true);
     expect(response.startsWith("HTTP/1.1 400 Bad Request\r\n")).toBe(true);
     expect(isDestroyed()).toBe(true);
@@ -317,44 +284,25 @@ describe("handleGatewayExtensionUpgrade", () => {
 
   it("binds v2 to the exact profile resource and refuses mixed-protocol downgrade", async () => {
     await mockSuccessfulUpgrade();
-    const valid = fakeSocket();
-    await handleGatewayExtensionUpgrade(
-      v2Req("/browser/extension?profile=chrome"),
-      valid.socket,
-      Buffer.alloc(0),
-    );
+    await upgrade(v2Req("/browser/extension?profile=chrome"));
     expect(authenticateExtensionWebSocketMock.mock.calls[0]?.[0]).toMatchObject({
       resource: "/browser/extension?profile=chrome",
     });
 
-    const duplicate = fakeSocket();
-    await handleGatewayExtensionUpgrade(
-      v2Req("/browser/extension?profile=chrome&profile=other"),
-      duplicate.socket,
-      Buffer.alloc(0),
-    );
-    expect(duplicate.writes.join("")).toContain("400");
+    const duplicate = await upgrade(v2Req("/browser/extension?profile=chrome&profile=other"));
+    expect(duplicate.response).toContain("400");
 
-    const mixed = fakeSocket();
-    await handleGatewayExtensionUpgrade(
+    const mixed = await upgrade(
       req("/browser/extension", {
         "sec-websocket-protocol": `openclaw-extension-relay.v2, openclaw-extension-relay, openclaw-extension-token.${TOKEN}`,
       }),
-      mixed.socket,
-      Buffer.alloc(0),
     );
-    expect(mixed.writes.join("")).toContain("400");
+    expect(mixed.response).toContain("400");
   });
 
   it("accepts legacy only while the explicit migration gate is enabled", async () => {
     configState.allowLegacyAuth = false;
-    const denied = fakeSocket();
-    await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension"),
-      denied.socket,
-      Buffer.alloc(0),
-    );
-    expect(denied.writes.join("")).toContain("401");
+    expect((await upgrade(relayReq("/browser/extension"))).response).toContain("401");
     expect(getBrowserControlStateMock).not.toHaveBeenCalled();
   });
 
@@ -371,9 +319,8 @@ describe("handleGatewayExtensionUpgrade", () => {
         }
         return { bridge: { id: "retired-auth" } };
       });
-      const { socket, writes, isDestroyed } = fakeSocket();
-      await handleGatewayExtensionUpgrade(relayReq("/browser/extension"), socket, Buffer.alloc(0));
-      expect(writes.join("")).toContain("503");
+      const { response, isDestroyed } = await upgrade(relayReq("/browser/extension"));
+      expect(response).toContain("503");
       expect(isDestroyed()).toBe(true);
       expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
     },
@@ -387,21 +334,10 @@ describe("handleGatewayExtensionUpgrade", () => {
     ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
     await mockSuccessfulUpgrade();
 
-    const stale = fakeSocket();
-    await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension", TOKEN),
-      stale.socket,
-      Buffer.alloc(0),
-    );
-    expect(stale.writes.join("")).toContain("401");
+    expect((await upgrade(relayReq("/browser/extension", TOKEN))).response).toContain("401");
     expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
 
-    const rotated = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension", ROTATED_TOKEN),
-      rotated.socket,
-      Buffer.alloc(0),
-    );
+    const { handled } = await upgrade(relayReq("/browser/extension", ROTATED_TOKEN));
 
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();

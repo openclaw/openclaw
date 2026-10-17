@@ -24,6 +24,43 @@ import {
 import { RawHttpConnection } from "./relay-http.test-support.js";
 
 const INITIAL_PORT_SELECTION_ATTEMPTS = 3;
+const FIXTURE_TAB = {
+  tabId: 1,
+  url: "https://example.com/fixture",
+  title: "Fixture",
+  active: true,
+};
+
+export async function authenticateExtension(
+  extension: WebSocket,
+  token: string,
+  okTimeoutMs?: number,
+) {
+  const challengeMessage = once(extension, "message");
+  extension.send(
+    JSON.stringify({
+      type: "auth.hello",
+      v: 2,
+      keyId: relayKeyIdFromHex(token),
+      clientNonce: randomRelayNonce(),
+    }),
+  );
+  const [raw] = await challengeMessage;
+  const challenge = JSON.parse(rawDataToString(raw));
+  const authenticated = once(extension, "message", {
+    signal: okTimeoutMs === undefined ? undefined : AbortSignal.timeout(okTimeoutMs),
+  });
+  extension.send(
+    JSON.stringify({
+      type: "auth.response",
+      v: 2,
+      sessionId: challenge.sessionId,
+      clientProof: createRelayProof(token, "client", challenge),
+    }),
+  );
+  const [ok] = await authenticated;
+  expect(JSON.parse(rawDataToString(ok))).toMatchObject({ type: "auth.ok", v: 2 });
+}
 
 /** An ordinary external v2 client: HTTP authentication/discovery/upgrade on one socket. */
 export async function externalRelayClient(port: number, token: string): Promise<WebSocket> {
@@ -163,34 +200,15 @@ export async function withConnectedDaemon(
             BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
             { origin: "chrome-extension://coexistence-test" },
           );
+          const send = (message: Record<string, unknown>) =>
+            extension.send(JSON.stringify(message));
           let nativeTarget = "fixture-target";
           let detachHeld = false;
           let detachEntered = () => {};
           const detachReplies: Array<() => void> = [];
           try {
             await once(extension, "open");
-            const challengeMessage = once(extension, "message");
-            extension.send(
-              JSON.stringify({
-                type: "auth.hello",
-                v: 2,
-                keyId: relayKeyIdFromHex(token),
-                clientNonce: randomRelayNonce(),
-              }),
-            );
-            const [raw] = await challengeMessage;
-            const challenge = JSON.parse(rawDataToString(raw));
-            const authenticated = once(extension, "message");
-            extension.send(
-              JSON.stringify({
-                type: "auth.response",
-                v: 2,
-                sessionId: challenge.sessionId,
-                clientProof: createRelayProof(token, "client", challenge),
-              }),
-            );
-            const [ok] = await authenticated;
-            expect(JSON.parse(rawDataToString(ok))).toMatchObject({ type: "auth.ok", v: 2 });
+            await authenticateExtension(extension, token);
             extension.on("message", (frame) => {
               const command = JSON.parse(rawDataToString(frame)) as {
                 seq: number;
@@ -198,18 +216,14 @@ export async function withConnectedDaemon(
                 method?: string;
               };
               if (command.type === "ping") {
-                extension.send(JSON.stringify({ type: "pong" }));
+                send({ type: "pong" });
                 return;
               }
-              const send = (message: Record<string, unknown>) =>
-                extension.send(JSON.stringify(message));
               if (handleExtensionCommand?.(command, send)) {
                 return;
               }
               if (command.type === "detach" && detachHeld) {
-                detachReplies.push(() =>
-                  extension.send(JSON.stringify({ type: "result", seq: command.seq, result: {} })),
-                );
+                detachReplies.push(() => send({ type: "result", seq: command.seq, result: {} }));
                 detachEntered();
                 return;
               }
@@ -220,9 +234,9 @@ export async function withConnectedDaemon(
                     ? {
                         targetInfo: {
                           targetId: nativeTarget,
-                          title: "Fixture",
+                          title: FIXTURE_TAB.title,
                           type: "page",
-                          url: "https://example.com/fixture",
+                          url: FIXTURE_TAB.url,
                         },
                       }
                     : command.method === "Page.getFrameTree"
@@ -232,26 +246,22 @@ export async function withConnectedDaemon(
                               id: nativeTarget,
                               name: "",
                               loaderId: "loader",
-                              url: "https://example.com/fixture",
+                              url: FIXTURE_TAB.url,
                               securityOrigin: "https://example.com",
                               mimeType: "text/html",
                             },
                           },
                         }
                       : {};
-              extension.send(JSON.stringify({ type: "result", seq: command.seq, result }));
+              send({ type: "result", seq: command.seq, result });
             });
-            extension.send(
-              JSON.stringify({
-                type: "hello",
-                browserVersion: "Chrome/test",
-                userAgent: "coexistence-test",
-                extensionVersion: "2",
-                tabs: [
-                  { tabId: 1, url: "https://example.com/fixture", title: "Fixture", active: true },
-                ],
-              }),
-            );
+            send({
+              type: "hello",
+              browserVersion: "Chrome/test",
+              userAgent: "coexistence-test",
+              extensionVersion: "2",
+              tabs: [FIXTURE_TAB],
+            });
 
             await run({
               port,
@@ -281,22 +291,7 @@ export async function withConnectedDaemon(
               setTarget: (value) => {
                 nativeTarget = value;
               },
-              sendTabs: (granted) =>
-                extension.send(
-                  JSON.stringify({
-                    type: "tabs",
-                    tabs: granted
-                      ? [
-                          {
-                            tabId: 1,
-                            url: "https://example.com/fixture",
-                            title: "Fixture",
-                            active: true,
-                          },
-                        ]
-                      : [],
-                  }),
-                ),
+              sendTabs: (granted) => send({ type: "tabs", tabs: granted ? [FIXTURE_TAB] : [] }),
             });
           } finally {
             try {
