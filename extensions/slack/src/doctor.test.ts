@@ -38,8 +38,10 @@ function previewWarnings(slack: Record<string, unknown>) {
   });
 }
 
-function expectWarning(warnings: string[], text: string) {
-  expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+function expectWarning(warnings: string[], ...texts: string[]) {
+  expect(warnings).toEqual(
+    expect.arrayContaining(texts.map((text) => expect.stringContaining(text))),
+  );
 }
 
 function emptyChannels(...keys: string[]): Record<string, Record<string, never>> {
@@ -108,9 +110,12 @@ describe("slack doctor", () => {
         work: { dm: { allowFrom: ["U12345678"] }, channels: { general: { users: ["bob"] } } },
       },
     });
-    expectWarning(warnings, "mutable allowlist entries across slack");
-    expectWarning(warnings, "channels.slack.allowFrom: alice");
-    expectWarning(warnings, "channels.slack.accounts.work.channels.general.users: bob");
+    expectWarning(
+      warnings,
+      "mutable allowlist entries across slack",
+      "channels.slack.allowFrom: alice",
+      "channels.slack.accounts.work.channels.general.users: bob",
+    );
   });
 
   it("accepts workspace-qualified channel and user ids as stable policy entries", async () => {
@@ -150,23 +155,27 @@ describe("slack doctor", () => {
     const nameKeyWarnings = warnings.filter((warning) =>
       warning.includes("Re-key it with the channel's"),
     );
-    expect(nameKeyWarnings).toHaveLength(5);
-    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
-    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."*" applies instead');
-    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."community" is ambiguous');
-    expect(nameKeyWarnings[2]).toContain(
-      'channels.slack.channels."channel:customers" is ambiguous',
+    expect(nameKeyWarnings).toEqual(
+      [
+        '"example-channel"',
+        '"community" is ambiguous',
+        '"channel:customers" is ambiguous',
+        '"CHANNEL:C0AL2GDUA7N"',
+        '"channel:C0al2gdua7p"',
+      ].map((key) => expect.stringContaining(`channels.slack.channels.${key}`)),
     );
-    expect(nameKeyWarnings[3]).toContain('channels.slack.channels."CHANNEL:C0AL2GDUA7N"');
-    expect(nameKeyWarnings[4]).toContain('channels.slack.channels."channel:C0al2gdua7p"');
+    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."*" applies instead');
     const dmWarnings = warnings.filter((warning) =>
       warning.includes("is a Slack DM conversation ID"),
     );
-    expect(dmWarnings).toHaveLength(4);
-    expect(dmWarnings[0]).toContain('channels.slack.channels."D0AL2GDUA7Q"');
-    expect(dmWarnings[1]).toContain('channels.slack.channels."channel:d0al2gdua7r"');
-    expect(dmWarnings[2]).toContain('channels.slack.channels."channel:dabcdefgh"');
-    expect(dmWarnings[3]).toContain('channels.slack.channels."team:T11111111:channel:D0AL2GDUA7T"');
+    expect(dmWarnings).toEqual(
+      [
+        "D0AL2GDUA7Q",
+        "channel:d0al2gdua7r",
+        "channel:dabcdefgh",
+        "team:T11111111:channel:D0AL2GDUA7T",
+      ].map((key) => expect.stringContaining(`channels.slack.channels."${key}"`)),
+    );
     expect(dmWarnings[0]).toContain("channels.slack.dmPolicy");
   });
 
@@ -217,23 +226,13 @@ describe("slack doctor", () => {
       nameKeyWarnings,
       'channels.slack.accounts.explicitAllowlist.channels."engineering"',
     );
-    expectWarning(
-      nameKeyWarnings,
-      'channels.slack.accounts.nameMatching.channels."channel:customers" is ambiguous',
-    );
-    expectWarning(
-      nameKeyWarnings,
-      'channels.slack.accounts.nameMatching.channels."<#C0AL2GDUA7J>"',
-    );
-    expectWarning(
-      nameKeyWarnings,
-      'channels.slack.accounts.nameMatching.channels."slack:C0AL2GDUA7K"',
-    );
-    for (const invalidName of invalidNames) {
-      expectWarning(
-        nameKeyWarnings,
-        `channels.slack.accounts.nameMatching.channels."${invalidName}"`,
-      );
+    for (const key of [
+      'channel:customers" is ambiguous',
+      '<#C0AL2GDUA7J>"',
+      'slack:C0AL2GDUA7K"',
+      ...invalidNames.map((name) => `${name}"`),
+    ]) {
+      expectWarning(nameKeyWarnings, `channels.slack.accounts.nameMatching.channels."${key}`);
     }
 
     const sharedOpenWarnings = await collectSlackWarnings(
@@ -309,18 +308,13 @@ describe("slack doctor", () => {
       accounts: { work: { thread: { requireExplicitMention: false } } },
     });
 
-    expect(result.config.channels?.slack).toMatchObject({
-      thread: { historyScope: "channel" },
-      implicitMentions: { threadParticipation: false },
-      accounts: { work: { implicitMentions: { threadParticipation: true } } },
-    });
-    expect(result.config.channels?.slack?.implicitMentions).toEqual({
-      threadParticipation: false,
-    });
-    expect(result.config.channels?.slack?.accounts?.work?.implicitMentions).toEqual({
-      threadParticipation: true,
-    });
-    expect(result.config.channels?.slack?.accounts?.work?.thread).toBeUndefined();
+    const slack = result.config.channels?.slack;
+    expect(slack?.thread).toMatchObject({ historyScope: "channel" });
+    expect([
+      slack?.implicitMentions,
+      slack?.accounts?.work?.implicitMentions,
+      slack?.accounts?.work?.thread,
+    ]).toEqual([{ threadParticipation: false }, { threadParticipation: true }, undefined]);
     expect(result.changes).toEqual([
       "Moved channels.slack.thread.requireExplicitMention → channels.slack.implicitMentions.threadParticipation (false).",
       "Moved channels.slack.accounts.work.thread.requireExplicitMention → channels.slack.accounts.work.implicitMentions.threadParticipation (true).",

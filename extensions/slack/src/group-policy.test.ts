@@ -6,6 +6,7 @@ import { registerSlackInstallationState } from "./installation-identity-state.js
 
 type PolicyContext = Parameters<typeof resolveSlackGroupRequireMention>[0];
 type ToolPolicy = ReturnType<typeof resolveSlackGroupToolPolicy>;
+type SlackConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
 function expectPolicies(
   params: PolicyContext,
   mention: boolean,
@@ -18,9 +19,10 @@ function expectPolicies(
 }
 
 function channelConfig(
-  channels: NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["channels"],
+  channels: SlackConfig["channels"],
+  overrides: Partial<SlackConfig> = {},
 ): OpenClawConfig {
-  return { channels: { slack: { channels } } };
+  return { channels: { slack: { ...overrides, channels } } };
 }
 
 const cfg: OpenClawConfig = {
@@ -69,15 +71,11 @@ describe("slack group policy", () => {
   it.each(["#alerts", "alerts", "Alerts"])(
     "allows direct name matching for %s only when the merged account enables it",
     (groupChannel) => {
-      const nameMatchingCfg: OpenClawConfig = {
-        channels: {
-          slack: {
-            ...cfg.channels?.slack,
-            dangerouslyAllowNameMatching: true,
-            accounts: { restricted: { dangerouslyAllowNameMatching: false } },
-          },
-        },
-      };
+      const nameMatchingCfg = channelConfig(cfg.channels?.slack?.channels, {
+        ...cfg.channels?.slack,
+        dangerouslyAllowNameMatching: true,
+        accounts: { restricted: { dangerouslyAllowNameMatching: false } },
+      });
       const params = {
         cfg: nameMatchingCfg,
         accountId: "default",
@@ -94,18 +92,13 @@ describe("slack group policy", () => {
   );
 
   it("prefers an ID entry over resolved and directly matched name entries", () => {
-    const idCfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          ...cfg.channels?.slack,
-          dangerouslyAllowNameMatching: true,
-          channels: {
-            ...cfg.channels?.slack?.channels,
-            C01234567: { requireMention: true, tools: { deny: ["exec"] } },
-          },
-        },
+    const idCfg = channelConfig(
+      {
+        ...cfg.channels?.slack?.channels,
+        C01234567: { requireMention: true, tools: { deny: ["exec"] } },
       },
-    };
+      { ...cfg.channels?.slack, dangerouslyAllowNameMatching: true },
+    );
     const params = { cfg: idCfg, groupId: "c01234567", groupChannel: "#alerts" };
 
     expectPolicies(params, true, { deny: ["exec"] });

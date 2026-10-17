@@ -1,4 +1,5 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import { createSlackDraftStream } from "./draft-stream.js";
@@ -7,9 +8,6 @@ type DraftStreamParams = Parameters<typeof createSlackDraftStream>[0];
 type DraftSendFn = typeof import("./send.js").sendMessageSlack;
 type DraftEditFn = typeof import("./actions.js").editSlackMessage;
 type DraftRemoveFn = typeof import("./actions.js").deleteSlackMessage;
-type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
-
-const TEST_CFG = {};
 
 const transport = vi.hoisted(() => ({
   send: vi.fn<DraftSendFn>(),
@@ -41,25 +39,22 @@ function slackDraftSendResult(messageId: string, channelId = "C123") {
 }
 
 function createDraftStreamHarness(
-  params: Pick<DraftStreamParams, "accountId" | "maxChars" | "eventScope" | "identity" | "warn"> & {
+  params: Pick<DraftStreamParams, "accountId" | "maxChars" | "eventScope" | "identity"> & {
     threadTs?: string;
     send?: DraftSendFn;
-    edit?: DraftEditFn;
     remove?: DraftRemoveFn;
   } = {},
 ) {
-  const send = params.send ?? vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
-  const edit = params.edit ?? vi.fn<DraftEditFn>(async () => {});
-  const editRendered = vi.fn<DraftEditFn>(async () => {});
-  const remove = params.remove ?? vi.fn<DraftRemoveFn>(async () => {});
-  const warn = params.warn ?? vi.fn<DraftWarnFn>();
-  transport.send.mockReset().mockImplementation(send);
-  transport.edit.mockReset().mockImplementation(edit);
-  transport.editRendered.mockReset().mockImplementation(editRendered);
-  transport.remove.mockReset().mockImplementation(remove);
+  const send = transport.send
+    .mockReset()
+    .mockImplementation(params.send ?? (async () => slackDraftSendResult("111.222")));
+  const edit = transport.edit.mockReset().mockImplementation(async () => {});
+  const editRendered = transport.editRendered.mockReset().mockImplementation(async () => {});
+  const remove = transport.remove.mockReset().mockImplementation(params.remove ?? (async () => {}));
+  const warn = vi.fn<NonNullable<DraftStreamParams["warn"]>>();
   const stream = createSlackDraftStream({
     target: "channel:C123",
-    cfg: TEST_CFG,
+    cfg: {},
     token: "xoxb-test",
     accountId: params.accountId,
     throttleMs: 250,
@@ -72,12 +67,12 @@ function createDraftStreamHarness(
   return { stream, send, edit, editRendered, remove, warn };
 }
 
-async function publish(
+function publish(
   stream: ReturnType<typeof createSlackDraftStream>,
   update: Parameters<typeof stream.update>[0],
 ) {
   stream.update(update);
-  await stream.flush();
+  return stream.flush();
 }
 
 function humanMessage(
@@ -128,19 +123,16 @@ describe("createSlackDraftStream", () => {
     await publish(stream, "hello world");
     await stream.clear();
 
-    expect(send).toHaveBeenCalledWith(
-      "channel:C123",
-      text,
-      expect.objectContaining({ eventScope, identity, token: "xoxb-test" }),
-    );
-    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls).toMatchObject([
+      ["channel:C123", text, { eventScope, identity, token: "xoxb-test" }],
+    ]);
     expect(warn).not.toHaveBeenCalled();
-    expect(edit).toHaveBeenCalledWith(
+    expect(edit.mock.calls).toContainEqual([
       "C123",
       "111.222",
       "hello world",
       expect.objectContaining({ client }),
-    );
+    ]);
     expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
   });
 
@@ -208,14 +200,11 @@ describe("createSlackDraftStream", () => {
 
   it("drains previews detached during an in-flight removal", async () => {
     const accountId = "detach-during-drop";
-    let finishFirstRemove: (() => void) | undefined;
-    const firstRemove = new Promise<void>((resolve) => {
-      finishFirstRemove = resolve;
-    });
+    const firstRemove = createDeferred<void>();
     const send = rotatingSend();
     const remove = vi
       .fn<DraftRemoveFn>()
-      .mockImplementationOnce(async () => await firstRemove)
+      .mockImplementationOnce(() => firstRemove.promise)
       .mockResolvedValueOnce(undefined);
     const { stream } = createDraftStreamHarness({ accountId, threadTs: "100.000", send, remove });
 
@@ -223,14 +212,12 @@ describe("createSlackDraftStream", () => {
     humanMessage("100.200", { accountId });
 
     const dropping = stream.dropDetachedMessages();
-    await vi.waitFor(() => {
-      expect(remove).toHaveBeenCalledOnce();
-    });
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
 
     await publish(stream, "_second card_");
     humanMessage("100.400", { accountId });
 
-    finishFirstRemove?.();
+    firstRemove.resolve();
     await dropping;
 
     expect(remove.mock.calls).toEqual([
@@ -263,8 +250,7 @@ describe("createSlackDraftStream", () => {
     humanMessage("100.200", { accountId, teamId: "T_FIRST" });
     await publish(stream, "_after the real interruption_");
 
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(stream.messageId()).toBe("100.300");
+    expect([send.mock.calls.length, stream.messageId()]).toEqual([2, "100.300"]);
   });
 
   it("ignores older, duplicate, unrelated, and bot-authored conversation events", async () => {
