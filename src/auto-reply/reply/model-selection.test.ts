@@ -89,30 +89,6 @@ vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
   prepareAuthProfileProvider: authMocks.prepareAuthProfileProvider,
 }));
 
-// Resolve the deprecated CLI alias without loading live plugin metadata.
-vi.mock("../../agents/auth-profiles/order.js", () => ({
-  isStoredCredentialCompatibleWithAuthProvider: ({
-    provider,
-    credential,
-  }: {
-    provider: string;
-    credential: { type: string; provider: string };
-  }) => {
-    const key = (value: string) => {
-      const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-      return normalized === "claudecli" ? "anthropic" : normalized;
-    };
-    const providerKey = key(provider);
-    const credentialKey = key(credential.provider);
-    return (
-      credentialKey === providerKey ||
-      (["openaiapicodex", "openaicodex"].includes(providerKey) &&
-        credentialKey === "openai" &&
-        credential.type === "api_key")
-    );
-  },
-}));
-
 afterEach(() => {
   getContextWindowCaches().discoveredTokenCache.clear();
   persist.mockReset();
@@ -134,6 +110,12 @@ function preparedCatalog(entries: ModelCatalogSnapshot["entries"]): ModelCatalog
   return { entries, routeVariants: [] };
 }
 
+function expectUnset<T>(value: T, ...keys: (keyof T)[]) {
+  for (const key of keys) {
+    expect(value[key], String(key)).toBeUndefined();
+  }
+}
+
 function selectSession(
   cfg: OpenClawConfig,
   provider: string,
@@ -151,70 +133,57 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
-  it("uses observed levels for reply thinking", async () => {
-    const stale = {
-      provider: "fixture",
-      id: "reasoner",
-      name: "Reasoner",
-      api: "openai-completions" as const,
-      baseUrl: "https://fixture.invalid/v1",
-      reasoning: true,
-      thinkingLevelMap: { max: null },
-    };
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
-      { ...stale, thinkingLevelMap: { max: "max" } },
-    ]);
-    const state = await createInitialState(
-      selectionConfig({ model: "fixture/reasoner" }),
-      "fixture",
-      "reasoner",
-      { preparedModelCatalog: preparedCatalog([stale]) },
-    );
-    expect(
-      isThinkingLevelSupported({
+  it.each(["observed thinking", "automatic-primary thinking"] as const)(
+    "uses prepared %s metadata",
+    async (kind) => {
+      const automatic = kind === "automatic-primary thinking";
+      const id = automatic ? "automatic" : "reasoner";
+      const model = {
         provider: "fixture",
-        model: "reasoner",
-        level: "max",
-        catalog: await state.resolveThinkingCatalog(),
-      }),
-    ).toBe(true);
-  });
-
-  it("retains prepared automatic-primary reasoning outside manual policy", async () => {
-    const automatic = {
-      provider: "fixture",
-      id: "automatic",
-      name: "Automatic",
-      api: "openai-completions" as const,
-      baseUrl: "https://fixture.invalid/v1",
-      reasoning: true,
-      compat: { supportedReasoningEfforts: ["xhigh"] },
-    };
-    const cfg = selectionConfig(
-      { model: "fixture/automatic", modelPolicy: { allow: ["fixture/manual"] } },
-      {
-        fixture: {
-          api: "openai-completions",
-          baseUrl: "https://fixture.invalid/v1",
-          models: [makeConfiguredModel({ id: "manual", name: "Manual", reasoning: false })],
+        id,
+        name: id,
+        api: "openai-completions" as const,
+        baseUrl: "https://fixture.invalid/v1",
+        reasoning: true,
+        ...(automatic
+          ? { compat: { supportedReasoningEfforts: ["xhigh"] } }
+          : { thinkingLevelMap: { max: null } }),
+      };
+      const cfg = selectionConfig(
+        {
+          model: `fixture/${id}`,
+          modelPolicy: automatic ? { allow: ["fixture/manual"] } : undefined,
         },
-      },
-    );
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([automatic]);
-    const state = await createInitialState(cfg, "fixture", "automatic", {
-      preparedModelCatalog: preparedCatalog([automatic]),
-    });
-    expect(state.modelPolicy.allows({ provider: "fixture", model: "automatic" })).toBe(false);
-    expect(
-      isThinkingLevelSupported({
-        provider: "fixture",
-        model: "automatic",
-        level: "xhigh",
-        catalog: await state.resolveThinkingCatalog(),
-      }),
-    ).toBe(true);
-    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
-  });
+        automatic
+          ? {
+              fixture: {
+                api: "openai-completions",
+                baseUrl: "https://fixture.invalid/v1",
+                models: [makeConfiguredModel({ id: "manual", name: "Manual", reasoning: false })],
+              },
+            }
+          : undefined,
+      );
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
+        automatic ? model : { ...model, thinkingLevelMap: { max: "max" } },
+      ]);
+      const state = await createInitialState(cfg, "fixture", id, {
+        preparedModelCatalog: preparedCatalog([model]),
+      });
+      expect(
+        isThinkingLevelSupported({
+          provider: "fixture",
+          model: id,
+          level: automatic ? "xhigh" : "max",
+          catalog: await state.resolveThinkingCatalog(),
+        }),
+      ).toBe(true);
+      if (automatic) {
+        expect(state.modelPolicy.allows({ provider: "fixture", model: id })).toBe(false);
+        await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+      }
+    },
+  );
 
   it("reloads embedded metadata when clearing a native runtime pin", async () => {
     const embedded = {
@@ -368,8 +337,7 @@ describe("session override precedence and persistence", () => {
           modelOverride: "gpt-4o-mini",
         }),
       });
-      expect(request?.entry.providerOverride).toBeUndefined();
-      expect(request?.entry.modelOverride).toBeUndefined();
+      expectUnset(request!.entry, "providerOverride", "modelOverride");
       expect(entry).toMatchObject(
         rotating
           ? { sessionId: "s1", providerOverride: "openai", modelOverride: "gpt-4o-mini" }
@@ -439,9 +407,7 @@ describe("automatic fallback provenance", () => {
     });
     if (reset) {
       expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
-      expect(entry.providerOverride).toBeUndefined();
-      expect(entry.modelOverride).toBeUndefined();
-      expect(entry.modelOverrideSource).toBeUndefined();
+      expectUnset(entry, "providerOverride", "modelOverride", "modelOverrideSource");
     } else {
       expect(entry).toEqual(before);
     }
@@ -465,14 +431,9 @@ describe("automatic fallback provenance", () => {
       resetModelOverride: true,
       resetModelOverrideRef: "openai/gpt-5.5",
     });
-    expect(entry.providerOverride).toBeUndefined();
-    expect(entry.modelOverride).toBeUndefined();
-    expect(entry.modelOverrideSource).toBeUndefined();
-    expect(entry.modelProvider).toBeUndefined();
-    expect(entry.model).toBeUndefined();
-    expect(entry.contextTokens).toBeUndefined();
-    expect(entry.authProfileOverride).toBeUndefined();
-    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expectUnset(entry, "providerOverride", "modelOverride", "modelOverrideSource");
+    expectUnset(entry, "modelProvider", "model", "contextTokens");
+    expectUnset(entry, "authProfileOverride", "authProfileOverrideSource");
   });
 });
 
@@ -578,8 +539,7 @@ it("keeps a locked pin active without a degraded-catalog fallback notice", async
   });
   const state = await selectSession(cfg, "openai", "gpt-4o-mini", entry);
   expect(state.resetModelOverride).toBe(false);
-  expect(state.resetModelOverrideReason).toBeUndefined();
-  expect(state.resetModelOverrideRef).toBeUndefined();
+  expectUnset(state, "resetModelOverrideReason", "resetModelOverrideRef");
   expect(state.model).toBe("gpt-4o");
   expect(entry.modelOverride).toBe("gpt-4o");
 });
@@ -678,8 +638,7 @@ describe("refused pins use the primary instead of catalog order", () => {
         expect(state.resetModelOverrideRef).toBe("provider-c/model-c1");
       }
       if (source === "direct" || source === "parent") {
-        expect(entry.modelOverride).toBeUndefined();
-        expect(entry.providerOverride).toBeUndefined();
+        expectUnset(entry, "modelOverride", "providerOverride");
       } else {
         expect(entry.modelOverride).toBe("model-c1");
         expect(entry.modelOverrideSource).toBe("user");
