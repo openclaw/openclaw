@@ -37,6 +37,28 @@ function assistantTexts(messages: unknown[]): string[] {
     .filter((text): text is string => typeof text === "string" && text.length > 0);
 }
 
+/**
+ * Rotate a session generation without entering the Gateway lifecycle fence.
+ *
+ * The live hook probe holds an admitted writer at an HTTP boundary. A production
+ * lifecycle mutation would correctly wait for that writer, so preserving the
+ * revoked-delivery assertion needs a test-only direct store rotation.
+ */
+async function rotateSessionGenerationFromTest(
+  client: GatewayClient,
+  agentId: string,
+  sessionKey: string,
+  previousSessionId: string,
+): Promise<string> {
+  const rotated = await client.request<{ sessionId: string }>("cronHookProof.rotateGeneration", {
+    agentId,
+    sessionKey,
+    expectedSessionId: previousSessionId,
+  });
+  expect(rotated.sessionId).not.toBe(previousSessionId);
+  return rotated.sessionId;
+}
+
 async function finishedCronRun(client: GatewayClient, jobId: string) {
   const queued = await client.request<{ ok: boolean; enqueued: boolean; runId: string }>(
     "cron.run",
@@ -68,7 +90,7 @@ async function finishedCronRun(client: GatewayClient, jobId: string) {
 
 describeLive("cron placement identity through production Gateway routing", () => {
   it(
-    "writes allowed root replies and rejects a reassigned root's stale generation before execution",
+    "writes allowed replies, waits for an in-flight writer, and rejects a reassigned root",
     async ({ signal }) => {
       const instance = await createOpenClawTestInstance({
         name: "cron-placement-live",
@@ -325,7 +347,13 @@ describeLive("cron placement identity through production Gateway routing", () =>
             const oldRun = hookTarget;
             const before = await historyFor(oldRun);
             if (marker === "HOOK_ROTATED") {
-              hookTarget = await finishedCronRun(connected, job.id);
+              const rotatedSessionId = await rotateSessionGenerationFromTest(
+                connected,
+                "probe",
+                rootKey,
+                oldRun.sessionId,
+              );
+              hookTarget = { ...oldRun, sessionId: rotatedSessionId };
               expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
             }
             const replacementBefore = await historyFor(hookTarget);
@@ -344,6 +372,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
               expect(gate.effects).toBe(0);
               expect(await historyFor(oldRun)).toEqual(before);
               expect(await historyFor(hookTarget)).toEqual(replacementBefore);
+              expect((await describeRoot()).session.sessionId).toBe(hookTarget.sessionId);
             }
             expect(
               await connected.request("agent.wait", { runId: accepted.runId, timeoutMs: 0 }),
@@ -366,6 +395,57 @@ describeLive("cron placement identity through production Gateway routing", () =>
               `hook revocation: ${marker}; hooks=1; provider dispatches=0; outbound effects=${gate.effects}; settlement=${outcome.status}; repeated wait unchanged`,
             );
           }
+
+          // A forced cron run must wait for the held writer before rotating the root generation.
+          const marker = "HOOK_WAITS";
+          const accepted = await connected.request<{ runId: string; status: string }>("agent", {
+            agentId: "probe",
+            sessionKey: rootKey,
+            expectedExistingSessionId: hookTarget.sessionId,
+            message: marker,
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          });
+          expect(accepted.status).toBe("accepted");
+          const completion = connected.request<AgentWaitResult>(
+            "agent.wait",
+            { runId: accepted.runId, timeoutMs: RUN_TIMEOUT_MS },
+            { timeoutMs: RUN_TIMEOUT_MS + 5_000 },
+          );
+          const gate = hookProbe.gate(marker);
+          await Promise.race([
+            gate.entered.promise,
+            completion.then((result) => {
+              throw new Error(`Hook never paused: ${JSON.stringify(result)}`);
+            }),
+          ]);
+          expect(gate.effects).toBe(0);
+
+          const forcedRun = finishedCronRun(connected, job.id);
+          const settlementState = await Promise.race([
+            forcedRun.then(
+              () => "completed",
+              (error: unknown) => `rejected: ${String(error)}`,
+            ),
+            delay(1_000).then(() => "waiting"),
+          ]);
+          expect(settlementState).toBe("waiting");
+          logLiveProgress("cron placement: forced run waited for the in-flight session writer");
+
+          gate.response?.end("continue");
+          await connected.request("cronHookProof.settled", { marker });
+          expect(await completion).toMatchObject({
+            status: "ok",
+            terminalReply: { disposition: "visible", text: "HOOK_WAITS_REPLY" },
+          });
+          expect(gate.effects).toBe(1);
+
+          const rotated = await forcedRun;
+          expect(rotated.sessionId).not.toBe(hookTarget.sessionId);
+          expect((await describeRoot()).session.sessionId).toBe(rotated.sessionId);
+          logLiveProgress(
+            `writer settlement: hooks=1; outbound effects=${gate.effects}; rotated=${rotated.sessionId}`,
+          );
         },
         async () => await client?.stopAndWait(),
         () => hookProbe.close(),
