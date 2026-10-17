@@ -26,7 +26,6 @@ import {
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
@@ -39,8 +38,6 @@ import { listWorkshopChanges } from "./library.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
 import { workshopReviewRunId } from "./review-undo.js";
-
-const log = createSubsystemLogger("skills/workshop");
 
 /** Admits a queued review only when Workshop is on and the session's policy exposes the tool. */
 export async function prepareSkillExperienceReviewCandidate(
@@ -319,7 +316,6 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   } finally {
     // Each skill_workshop call commits on its own, so a failed or aborted run may have changed skills.
     const changes = await listWorkshopChanges(agentId, { runId });
-    log.debug(`experience review finished: session=${sessionKey} changes=${changes.length}`);
     await postWorkshopChangeNotice({ config, generation, runId, changes });
   }
 }
