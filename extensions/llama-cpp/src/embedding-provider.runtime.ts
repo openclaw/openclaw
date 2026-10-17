@@ -120,6 +120,8 @@ export async function createLlamaCppEmbeddingProvider(
     provider: LLAMA_CPP_PROVIDER_ID,
     model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
     remote: undefined,
+    // llama-server ignores `dimensions`; forwarding it would fail the transport's size check.
+    dimensions: undefined,
     ...(acquireLocalService
       ? {
           acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>

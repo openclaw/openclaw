@@ -368,6 +368,20 @@ describe("llama.cpp provider plugin", () => {
     });
   });
 
+  it("does not forward output dimensions to the managed server", async () => {
+    const result = await llamaCppEmbeddingProviderAdapter.create({
+      ...configuredOptions(),
+      dimensions: 256,
+    });
+
+    expect(mocks.genericCreate.mock.calls[0]?.[0]).toHaveProperty("dimensions", undefined);
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      outputDimensionality: 256,
+    });
+  });
+
   it("keeps media preset sections and residency when refreshing embeddings", async () => {
     const options = configuredOptions();
     const provider: ModelProviderConfig = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
