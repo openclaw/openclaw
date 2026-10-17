@@ -264,6 +264,18 @@ function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
 }
 
+function requireSystemMessage(sdk: FakeSdk) {
+  const systemMessage = requireCreateSessionConfig(sdk).systemMessage as { content?: string };
+  return expectDefined(systemMessage?.content, "SDK developer instructions");
+}
+
+function requirePermissionHandler(config: Record<string, unknown>) {
+  return config.onPermissionRequest as (
+    request: { kind: string },
+    invocation: { sessionId: string },
+  ) => Promise<{ kind: string; feedback?: string }>;
+}
+
 function flushAsync() {
   // Drain the in-flight delta and timeout continuations after SDK startup.
   const tick = () => Promise.resolve();
@@ -276,6 +288,20 @@ function waitForEventLoopTurn(): Promise<void> {
   });
 }
 
+function emitToolResult(session: FakeSession, toolCallId: string, content: string) {
+  session.emit("tool.execution_complete", { result: { content }, success: true, toolCallId });
+}
+
+function emitToolRequest(
+  session: FakeSession,
+  toolCallId: string,
+  name: string,
+  message: Record<string, unknown>,
+) {
+  session.emit("assistant.message", { toolRequests: [{ name, toolCallId }], ...message });
+  session.emit("tool.execution_start", { toolCallId, toolName: name });
+}
+
 function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefined {
   return (
     projectAgentRunAttemptTerminal(result.terminal).promptError as { code?: string } | undefined
@@ -284,6 +310,17 @@ function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefin
 
 function getSdkSessionId(result: AgentHarnessAttemptResult): string | undefined {
   return (result as AgentHarnessAttemptResult & { sdkSessionId?: string }).sdkSessionId;
+}
+
+function userMessage(
+  content = "hello",
+  overrides: Partial<Extract<AgentMessage, { role: "user" }>> = {},
+): Extract<AgentMessage, { role: "user" }> {
+  return { role: "user", content, timestamp: 1, ...overrides };
+}
+
+function replayState(sdkSessionId: string, replayInvalid = false) {
+  return { sdkSessionId, replayInvalid, hadPotentialSideEffects: false };
 }
 
 function makeUserTurnRecorder(
@@ -334,7 +371,7 @@ function makeParams(overrides: Partial<AttemptParamsLike> = {}): AgentHarnessAtt
     disableTools: true,
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
-    messages: [{ content: "hello", role: "user", timestamp: 1 }],
+    messages: [userMessage()],
     model: {
       api: "openai-responses",
       id: "gpt-4o",
@@ -352,11 +389,7 @@ function makeParams(overrides: Partial<AttemptParamsLike> = {}): AgentHarnessAtt
       storePath: "openclaw-agent.sqlite",
     },
     timeoutMs: 5000,
-    userTurnTranscriptRecorder: makeUserTurnRecorder({
-      content: transcriptPrompt,
-      role: "user",
-      timestamp: 1,
-    }),
+    userTurnTranscriptRecorder: makeUserTurnRecorder(userMessage(transcriptPrompt)),
     workspaceDir: "C:\\workspace",
     ...overrides,
   } as unknown as AgentHarnessAttemptParams;
@@ -441,6 +474,13 @@ function expectNotCalled(...mocks: unknown[]) {
   }
 }
 
+function expectHook(mock: unknown, event: object, context: object = { sessionId: "session-1" }) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining(event),
+    expect.objectContaining(context),
+  );
+}
+
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
 });
@@ -465,32 +505,19 @@ describe("runCopilotAttempt", () => {
           : mode === "prepared header auth"
             ? { "x-api-key": "header-secret" }
             : undefined;
+      const baseModel = {
+        api: mode === "provider headers" ? "anthropic-messages" : "openai-responses",
+        baseUrl: "https://api.example.test/v1",
+        headers,
+        id: "gpt-test",
+        provider: "custom-openai",
+      };
       const model =
-        mode === "provider headers"
-          ? {
-              api: "anthropic-messages",
-              baseUrl: "https://anthropic.example.test",
-              headers,
-              id: "claude-test",
-              provider: "anthropic-proxy",
-            }
-          : mode === "token auth"
-            ? {
-                api: "openai-responses",
-                baseUrl: "https://api.example.test/v1",
-                id: "gpt-test",
-                provider: "custom-openai",
-              }
-            : attachModelProviderRequestTransport(
-                {
-                  api: "openai-responses",
-                  baseUrl: "https://proxy.example.test/v1",
-                  headers,
-                  id: "gpt-test",
-                  provider: "custom-header-proxy",
-                },
-                { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
-              );
+        mode === "prepared header auth"
+          ? attachModelProviderRequestTransport(baseModel, {
+              auth: { mode: "header", headerName: "x-api-key", value: "header-secret" },
+            })
+          : baseModel;
       await run({
         ...(mode === "token auth" ? { auth: { gitHubToken: "unrelated-token" } } : {}),
         model: model as never,
@@ -687,17 +714,16 @@ describe("runCopilotAttempt", () => {
 
     await attempt;
 
-    expect(beforeCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({ messageCount: -1, sessionFile: "session.json" }),
-      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
-    );
-    expect(afterCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const context = { accountId: "account-a", runId: "run-1", sessionId: "session-1" };
+    expectHook(beforeCompaction, { messageCount: -1, sessionFile: "session.json" }, context);
+    expectHook(
+      afterCompaction,
+      {
         compactedCount: 4,
         messageCount: -1,
         sessionFile: "session.json",
-      }),
-      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
+      },
+      context,
     );
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
@@ -732,11 +758,7 @@ describe("runCopilotAttempt", () => {
       const result = await run(
         mode === "resumed"
           ? {
-              initialReplayState: {
-                sdkSessionId: "legacy-session",
-                replayInvalid: false,
-                hadPotentialSideEffects: false,
-              },
+              initialReplayState: replayState("legacy-session"),
             }
           : {},
       );
@@ -820,11 +842,12 @@ describe("runCopilotAttempt", () => {
       { sessionId: "sess-1" },
     );
     expect(llmInput).toHaveBeenCalledTimes(1);
-    expect(llmInput).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectHook(
+      llmInput,
+      {
         prompt: "Review the authentication change.\n\nUse the approved repository.",
-      }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      },
+      { runId: "run-1", sessionId: "session-1" },
     );
   });
 
@@ -917,9 +940,7 @@ describe("runCopilotAttempt", () => {
     });
     const result = await run({
       initialReplayState: {
-        sdkSessionId: mode === "empty session" ? " \t " : " resume-1 ",
-        hadPotentialSideEffects: false,
-        replayInvalid: mode === "invalid replay",
+        ...replayState(mode === "empty session" ? " \t " : " resume-1 ", mode === "invalid replay"),
         ...(mode === "resume" ? { journalValidated: true } : {}),
       },
     });
@@ -953,18 +974,12 @@ describe("runCopilotAttempt", () => {
   it("replay-shim: consolidated mutating tool metadata makes the attempt replay-unsafe", async () => {
     const { run } = makeTurnAttempt(async (session) => {
       session.emit("user.message", { content: "hello" });
-      session.emit("assistant.message", {
+      emitToolRequest(session, "tool-1", "write", {
         __eventId: "write-request",
         content: "",
         messageId: "write-request",
-        toolRequests: [{ name: "write", toolCallId: "tool-1" }],
       });
-      session.emit("tool.execution_start", { toolCallId: "tool-1", toolName: "write" });
-      session.emit("tool.execution_complete", {
-        result: { content: "wrote file" },
-        success: true,
-        toolCallId: "tool-1",
-      });
+      emitToolResult(session, "tool-1", "wrote file");
       return makeAssistantMessageEvent("done");
     });
 
@@ -1065,10 +1080,7 @@ describe("runCopilotAttempt", () => {
         expect(requireSession(sdk).abort).toHaveBeenCalledTimes(1);
       } else if (stage === "before start") {
         expectNotCalled(sdk.createSession, pool.acquire);
-        expect(agentEnd).toHaveBeenCalledWith(
-          expect.objectContaining({ success: false }),
-          expect.objectContaining({ sessionId: "session-1" }),
-        );
+        expectHook(agentEnd, { success: false });
       } else {
         await waitForEventLoopTurn();
         expectNotCalled(requireSession(sdk).sendAndWait, llmOutput);
@@ -1128,14 +1140,13 @@ describe("runCopilotAttempt", () => {
     );
 
     expect(
-      ((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools ?? []).map(
+      ((requireCreateSessionConfig(sdk).tools as SdkTool[] | undefined) ?? []).map(
         (tool) => tool.name,
       ),
     ).toEqual(["message"]);
-    expect(
-      (requireCreateSessionConfig(sdk) as { systemMessage?: { content?: string } }).systemMessage
-        ?.content,
-    ).toContain("Visible source replies are not automatically delivered");
+    expect(requireSystemMessage(sdk)).toContain(
+      "Visible source replies are not automatically delivered",
+    );
   });
 
   it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
@@ -1190,16 +1201,11 @@ describe("runCopilotAttempt", () => {
     expect((promptError(result) as Error | undefined)?.message).toBe(
       "[copilot-attempt] tool-bridge construction failed: bridge failed",
     );
-    expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect(pool["acquire"]).toHaveBeenCalledTimes(0);
-    expect(pool["release"]).toHaveBeenCalledTimes(0);
-    expect(agentEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: "[copilot-attempt] tool-bridge construction failed: bridge failed",
-        success: false,
-      }),
-      expect.objectContaining({ sessionId: "session-1" }),
-    );
+    expectNotCalled(sdk.createSession, pool.acquire, pool.release);
+    expectHook(agentEnd, {
+      error: "[copilot-attempt] tool-bridge construction failed: bridge failed",
+      success: false,
+    });
   });
 
   it.each([
@@ -1240,10 +1246,7 @@ describe("runCopilotAttempt", () => {
         }
       } else if (stage === "release") {
         await expect(attempt).rejects.toThrow("release failed");
-        expect(agentEnd).toHaveBeenCalledWith(
-          expect.objectContaining({ error: "release failed", success: false }),
-          expect.objectContaining({ sessionId: "session-1" }),
-        );
+        expectHook(agentEnd, { error: "release failed", success: false });
       } else {
         const result = await attempt;
         expect((promptError(result) as Error | undefined)?.message).toBe("disconnect failed");
@@ -1256,14 +1259,7 @@ describe("runCopilotAttempt", () => {
 
     await run({});
 
-    const handler = (
-      (sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as {
-        onPermissionRequest: (
-          request: { kind: string },
-          invocation: { sessionId: string },
-        ) => Promise<{ kind: string; feedback?: string }>;
-      }
-    ).onPermissionRequest;
+    const handler = requirePermissionHandler(requireCreateSessionConfig(sdk));
     const result = await handler({ kind: "write" }, { sessionId: "sess-1" });
     expect(result.kind).toBe("reject");
     expect(result.feedback).toContain("no permission policy installed");
@@ -1440,11 +1436,8 @@ describe("runCopilotAttempt", () => {
         ]),
       });
       expect(result.terminal).toEqual({ kind: "ok" });
-      const submitted = requireCreateSessionConfig(sdk) as {
-        tools?: SdkTool[];
-        systemMessage?: { content?: string };
-      };
-      const content = expectDefined(submitted.systemMessage?.content, "SDK developer instructions");
+      const submitted = requireCreateSessionConfig(sdk) as { tools?: SdkTool[] };
+      const content = requireSystemMessage(sdk);
       await waitForEventLoopTurn();
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),
@@ -1500,11 +1493,7 @@ describe("runCopilotAttempt", () => {
       );
       await waitForEventLoopTurn();
 
-      const content = expectDefined(
-        (requireCreateSessionConfig(sdk) as { systemMessage?: { content?: string } }).systemMessage
-          ?.content,
-        "Copilot appended developer instructions",
-      );
+      const content = requireSystemMessage(sdk);
       expect(requireCreateSessionConfig(sdk).systemMessage).toMatchObject({ mode: "append" });
       expect(content).toContain(
         `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
@@ -1534,10 +1523,9 @@ describe("runCopilotAttempt", () => {
 
         expect(beforePromptBuild).not.toHaveBeenCalled();
         expect(requireCreateSessionConfig(sdk)).not.toHaveProperty("systemMessage");
-        const messageOptions = requireSession(sdk).sendAndWait.mock.calls[0]?.[0] as {
-          prompt?: string;
-        };
-        expect(messageOptions.prompt).toBe("hello");
+        expect(requireSession(sdk).sendAndWait.mock.calls[0]?.[0]).toMatchObject({
+          prompt: "hello",
+        });
       },
     );
   });
@@ -1547,9 +1535,7 @@ describe("runCopilotAttempt", () => {
     const onDeferredCompaction = vi.fn();
     const cleanupToolBridge = vi.fn();
     installHooks({ after_compaction: afterCompaction });
-    let activeSession: FakeSession | undefined;
-    const { run } = makeAttempt((session) => {
-      activeSession = session;
+    const { sdk, run } = makeAttempt((session) => {
       session.sendAndWait.mockRejectedValueOnce(
         new Error("Timeout after 60000ms waiting for session.idle"),
       );
@@ -1559,6 +1545,7 @@ describe("runCopilotAttempt", () => {
     );
 
     const result = await run({}, { createToolBridge, onDeferredCompaction });
+    const activeSession = requireSession(sdk);
 
     expect(result.terminal).toMatchObject({ kind: "timeout", phase: "prompt" });
     expect(onDeferredCompaction).toHaveBeenCalledWith(
@@ -1649,12 +1636,10 @@ describe("runCopilotAttempt", () => {
     it.each(["hidden", "blocked"] as const)(
       "keeps the %s user policy when pre-journal setup fails",
       async (mode) => {
-        const current = {
-          role: "user" as const,
-          content: mode === "blocked" ? "blocked" : "hello",
-          timestamp: 1,
-          ...(mode === "blocked" ? { idempotencyKey: "run-1:user" } : {}),
-        };
+        const current = userMessage(
+          mode === "blocked" ? "blocked" : "hello",
+          mode === "blocked" ? { idempotencyKey: "run-1:user" } : {},
+        );
         const recorder = makeUserTurnRecorder(current);
         if (mode === "blocked") {
           recorder.markBlocked();
@@ -1682,12 +1667,10 @@ describe("runCopilotAttempt", () => {
         const text =
           mode === "legacy key" ? "active" : mode === "current key" ? "keyed current" : "hello";
         const timestamp = mode === "legacy key" || mode === "current key" ? 2 : 1;
-        const current = {
-          role: "user" as const,
-          content: text,
+        const current = userMessage(text, {
           timestamp,
           ...(mode === "current key" ? { idempotencyKey: "run-1:user" } : {}),
-        };
+        });
         const staged = {
           ...current,
           ...(mode === "legacy key"
@@ -1739,17 +1722,11 @@ describe("runCopilotAttempt", () => {
         const { sdk, run } = makeAttempt((session) => {
           if (stage === "tool group") {
             session.sendAndWait.mockImplementationOnce(async () => {
-              session.emit("assistant.message", {
+              emitToolRequest(session, "call-1", "read", {
                 content: "",
                 messageId: "tools",
-                toolRequests: [{ name: "read", toolCallId: "call-1" }],
               });
-              session.emit("tool.execution_start", { toolCallId: "call-1", toolName: "read" });
-              session.emit("tool.execution_complete", {
-                result: { content: "done" },
-                success: true,
-                toolCallId: "call-1",
-              });
+              emitToolResult(session, "call-1", "done");
               session.emit("assistant.message", {
                 __eventId: "assistant-final",
                 content: "final after tool",
@@ -1828,11 +1805,7 @@ describe("runCopilotAttempt", () => {
                 messageId: "tools",
                 toolRequests: [{ name: "read", toolCallId: "call-1" }],
               });
-              session.emit("tool.execution_complete", {
-                result: { content: "done" },
-                success: true,
-                toolCallId: "call-1",
-              });
+              emitToolResult(session, "call-1", "done");
               const final = makeAssistantMessageEvent("final after tool");
               session.emit("assistant.message", { __eventId: "assistant-final", ...final.data });
               return final;
@@ -1869,11 +1842,7 @@ describe("runCopilotAttempt", () => {
             toolRequests: [{ name: "read", toolCallId: "blocked-call" }],
           });
           session.emit("assistant.message", assistant.data);
-          session.emit("tool.execution_complete", {
-            result: { content: "must stay suppressed" },
-            success: true,
-            toolCallId: "blocked-call",
-          });
+          emitToolResult(session, "blocked-call", "must stay suppressed");
           if (blockedRole === "assistant") {
             return assistant;
           }
@@ -1903,11 +1872,12 @@ describe("runCopilotAttempt", () => {
     );
 
     it("removes an explicitly blocked memory user from the returned snapshot", async () => {
-      const recorder = makeUserTurnRecorder({ role: "user", content: "memory", timestamp: 1 });
+      const current = userMessage("memory");
+      const recorder = makeUserTurnRecorder(current);
       recorder.markBlocked();
 
       const result = await makeAttempt().run({
-        messages: [{ role: "user", content: "memory", timestamp: 1 }],
+        messages: [{ ...current }],
         trigger: "memory",
         userTurnTranscriptRecorder: recorder,
       });
@@ -2025,10 +1995,7 @@ describe("runCopilotAttempt", () => {
           );
           expectNotCalled(createToolBridge, sdk.createSession);
           if (mode === "cwd override") {
-            expect(agentEnd).toHaveBeenCalledWith(
-              expect.objectContaining({ success: false }),
-              expect.objectContaining({ sessionId: "session-1" }),
-            );
+            expectHook(agentEnd, { success: false });
           } else {
             expect((promptError(result) as Error | undefined)?.message).toContain("ENOTDIR");
           }
@@ -2055,11 +2022,7 @@ describe("runCopilotAttempt", () => {
           makeFinalizationParams(
             mode === "stale"
               ? {
-                  initialReplayState: {
-                    sdkSessionId: "sdk-stale-session",
-                    hadPotentialSideEffects: false,
-                    replayInvalid: false,
-                  },
+                  initialReplayState: replayState("sdk-stale-session"),
                 }
               : {},
           ),
@@ -2099,21 +2062,13 @@ describe("runCopilotAttempt", () => {
               });
             }
             if (config.suppressResumeEvent !== true) {
-              session.emit("assistant.message", {
+              emitToolRequest(session, "prior-tool-call", "read", {
                 __eventId: "prior-tool-assistant",
                 content: "",
                 messageId: "prior-tool-message",
                 toolRequests: [{ arguments: {}, name: "read", toolCallId: "prior-tool-call" }],
               });
-              session.emit("tool.execution_start", {
-                toolCallId: "prior-tool-call",
-                toolName: "read",
-              });
-              session.emit("tool.execution_complete", {
-                result: { content: "prior tool result" },
-                success: true,
-                toolCallId: "prior-tool-call",
-              });
+              emitToolResult(session, "prior-tool-call", "prior tool result");
             }
             const prompt = (options as { prompt?: unknown } | undefined)?.prompt;
             session.emit("user.message", {
@@ -2213,10 +2168,7 @@ describe("runCopilotAttempt", () => {
       expect(workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mock.calls.length).toBe(
         workspaceBootstrapCalls,
       );
-      const permissionHandler = cfg.onPermissionRequest as (
-        request: unknown,
-        invocation: unknown,
-      ) => Promise<{ kind: string }>;
+      const permissionHandler = requirePermissionHandler(cfg);
       await expect(
         permissionHandler({ kind: "shell" }, { sessionId: "sdk-settled-session" }),
       ).resolves.toMatchObject({ kind: "reject" });

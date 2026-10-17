@@ -33,44 +33,37 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
   return {
     ...actual,
-    cancelPendingAgentQuestionForSession: harnessMocks.cancelPendingAgentQuestionForSession,
-    claimPendingAgentQuestionAnswer: harnessMocks.claimPendingAgentQuestionAnswer,
-    setActiveEmbeddedRun: harnessMocks.setActiveEmbeddedRun,
+    ...harnessMocks,
   };
 });
 
-type RunOptions = Partial<
-  Pick<
-    Parameters<typeof registerCopilotActiveRun>[0],
-    "agentId" | "canAcceptSteering" | "isAborted" | "isSettled" | "startedAtMs" | "session"
-  >
-> & {
+type RunOptions = Partial<Parameters<typeof registerCopilotActiveRun>[0]> & {
   sessionKey?: string;
   receipt?: Promise<void>;
   send?: SessionLike["send"];
   journal?: AttemptTranscriptJournal;
 };
 
-function registerTestRun(params?: RunOptions) {
-  const send = params?.send ?? vi.fn(async () => "steer-1");
-  const waitForSdkUserPersisted = vi.fn(() => params?.receipt ?? Promise.resolve());
-  const session = params?.session ?? { ...createFakeSession(), send };
+function registerTestRun({
+  receipt,
+  send = vi.fn(async () => "steer-1"),
+  journal,
+  sessionKey,
+  ...params
+}: RunOptions = {}) {
+  const waitForSdkUserPersisted = vi.fn(() => receipt ?? Promise.resolve());
   const handle = registerCopilotActiveRun({
     abortActiveSession: vi.fn(),
-    agentId: params?.agentId ?? "main",
+    agentId: "main",
     bridge: undefined,
-    canAcceptSteering: params?.canAcceptSteering ?? (() => true),
-    startedAtMs: params?.startedAtMs ?? 1_750_000_000_000,
-    input: {
-      runId: "run-1",
-      sessionId: "session-1",
-      sessionKey: params?.sessionKey,
-    } as AttemptParamsLike,
-    isAborted: params?.isAborted ?? (() => false),
-    isSettled: params?.isSettled ?? (() => false),
-    session,
+    canAcceptSteering: () => true,
+    startedAtMs: 1_750_000_000_000,
+    input: { runId: "run-1", sessionId: "session-1", sessionKey } as AttemptParamsLike,
+    isAborted: () => false,
+    isSettled: () => false,
+    session: { ...createFakeSession(), send },
     transcriptJournal:
-      params?.journal ??
+      journal ??
       ({
         waitForSdkUserPersisted,
         sendSdkUser: (submit: () => Promise<string>) => submit(),
@@ -79,6 +72,7 @@ function registerTestRun(params?: RunOptions) {
       cancelPending: vi.fn(),
       onUserInputRequest: vi.fn(),
     } as unknown as CopilotUserInputBridge,
+    ...params,
   });
   return { handle, send, waitForSdkUserPersisted };
 }
@@ -108,7 +102,20 @@ async function steeringFixture() {
     fixture.session.emit(event(type, id, data));
   await fixture.journal.persistInitialUser();
   emit("user.message", "initial-user", { content: "inspect both files" });
-  return { ...fixture, emit };
+  const { handle } = registerTestRun({ journal: fixture.journal, session: fixture.session });
+  const queue = (
+    recorder: ReturnType<typeof createSteeringRecorder>,
+    text = recorder.message.content,
+    onQueueAccepted?: (accepted: boolean) => void,
+  ) =>
+    handle.queueMessage(text, {
+      userTurnTranscriptRecorder: recorder,
+      waitForTranscriptCommit: true,
+      onQueueAccepted,
+    });
+  const messages = async () =>
+    transcriptMessages(await readSessionTranscriptEvents(fixture.target));
+  return { ...fixture, emit, queue, messages };
 }
 
 function voiceControl(
@@ -137,13 +144,13 @@ describe("registerCopilotActiveRun", () => {
 
   it("retains the resolved agent for raw global registrations", () => {
     const { handle } = registerTestRun({ agentId: "ops", sessionKey: "global" });
-    expect(harnessMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
+    expect(harnessMocks.setActiveEmbeddedRun.mock.calls).toContainEqual([
       "session-1",
       handle,
       "global",
       undefined,
       "ops",
-    );
+    ]);
   });
 
   it("refuses scoped controls before the real V1 handle while preserving unscoped injection", async () => {
@@ -210,16 +217,19 @@ describe("registerCopilotActiveRun", () => {
 
       let deliverySettled = false;
       const delivery = handle
-        .queueMessage("change course", { onQueueAccepted, onQueueSettled, waitForTranscriptCommit })
-        .then((result) => {
+        .queueMessage("change course", {
+          onQueueAccepted,
+          onQueueSettled,
+          waitForTranscriptCommit,
+        })
+        .finally(() => {
           deliverySettled = true;
-          return result;
         });
 
       await accepted.promise;
       expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
-      expect(send).toHaveBeenCalledWith({ prompt: "change course" });
       expect(waitForSdkUserPersisted).toHaveBeenCalledExactlyOnceWith("steer-1");
+      expect(send).toHaveBeenCalledWith({ prompt: "change course" });
       if (waitForTranscriptCommit) {
         expect(deliverySettled).toBe(false);
       } else {
@@ -247,18 +257,16 @@ describe("registerCopilotActiveRun", () => {
   it.each(["before response", "after response", "during tools", "hook replacement"])(
     "persists decorated reply steering with selected mentions once: %s",
     async (timing) => {
-      const { journal, recorder, session, target, emit } = await steeringFixture();
-      const mentions = [{ profileId: "profile-taylor", start: 3, end: 10 }];
+      const { journal, recorder, session, emit, queue, messages } = await steeringFixture();
       const message = {
         role: "user" as const,
         content: "Hi @Taylor",
         timestamp: 1,
         provenance: { kind: "external_user" as const },
-        __openclaw: { humanMentions: mentions },
+        __openclaw: { humanMentions: [{ profileId: "profile-taylor", start: 3, end: 10 }] },
       };
       const steeringRecorder = createSteeringRecorder(recorder, undefined, message);
       const modelPrompt = `Reply context: earlier message\n\n${message.content}`;
-      const { provenance } = message;
       if (timing === "hook replacement") {
         initializeGlobalHookRunner(
           createMockPluginRegistry([
@@ -292,19 +300,11 @@ describe("registerCopilotActiveRun", () => {
         });
         emit("tool.execution_start", "start-read", { toolCallId: "read-1", toolName: "read" });
       }
-      const { handle } = registerTestRun({ journal, session });
       const onQueueAccepted = vi.fn();
       let confirmed = false;
-      const delivery = handle
-        .queueMessage(modelPrompt, {
-          userTurnTranscriptRecorder: steeringRecorder,
-          onQueueAccepted,
-          waitForTranscriptCommit: true,
-        })
-        .then((result) => {
-          confirmed = true;
-          return result;
-        });
+      const delivery = queue(steeringRecorder, modelPrompt, onQueueAccepted).finally(() => {
+        confirmed = true;
+      });
       await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
       const sdkUser = sdkUserEvent(send.mock.calls[0]![0]);
       expect(onQueueAccepted).not.toHaveBeenCalled();
@@ -325,21 +325,20 @@ describe("registerCopilotActiveRun", () => {
       await expect(delivery).resolves.toBeUndefined();
       session.emit(sdkUser);
       await journal.barrier("steering replay");
-      const rows = transcriptMessages(await readSessionTranscriptEvents(target));
-      const steered = rows.filter(
+      const steered = (await messages()).filter(
         (row) => row.message.idempotencyKey === "copilot-sdk:sdk-session:steer-1",
       );
-      expect(send).toHaveBeenCalledExactlyOnceWith({
-        prompt: modelPrompt,
-        displayPrompt: message.content,
-      });
       expect(steered).toHaveLength(1);
       expect(steered[0]?.message).toMatchObject({
         role: "user",
         content: message.content,
-        provenance,
-        __openclaw: { humanMentions: mentions },
+        provenance: message.provenance,
+        __openclaw: message["__openclaw"],
         idempotencyKey: "copilot-sdk:sdk-session:steer-1",
+      });
+      expect(send).toHaveBeenCalledExactlyOnceWith({
+        prompt: modelPrompt,
+        displayPrompt: message.content,
       });
       expect(steeringRecorder.markRuntimePersisted).toHaveBeenCalledExactlyOnceWith(
         steered[0]?.message,
@@ -354,7 +353,7 @@ describe("registerCopilotActiveRun", () => {
   it.each([false, true])(
     "correlates concurrent identical steering by SDK id and releases rejected sends: reject=%s",
     async (rejectFirst) => {
-      const { journal, recorder, session, target, emit } = await steeringFixture();
+      const { journal, recorder, session, emit, queue, messages } = await steeringFixture();
       const first = createSteeringRecorder(recorder, "agent:first:source");
       const second = createSteeringRecorder(recorder, "agent:second:source");
       const response = createDeferred<string>();
@@ -366,19 +365,11 @@ describe("registerCopilotActiveRun", () => {
           return "second";
         });
       session.send = send;
-      const { handle } = registerTestRun({ journal, session });
-      const firstDelivery = handle.queueMessage(first.message.content, {
-        userTurnTranscriptRecorder: first,
-        waitForTranscriptCommit: true,
-      });
+      const firstDelivery = queue(first);
       const firstOutcome = firstDelivery.catch((error: unknown) => error);
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       const secondAccepted = vi.fn();
-      const secondDelivery = handle.queueMessage(second.message.content, {
-        userTurnTranscriptRecorder: second,
-        waitForTranscriptCommit: true,
-        onQueueAccepted: secondAccepted,
-      });
+      const secondDelivery = queue(second, second.message.content, secondAccepted);
       await vi.waitFor(() => expect(secondAccepted).toHaveBeenCalledWith(true));
       if (rejectFirst) {
         response.reject(new Error("send rejected"));
@@ -391,22 +382,17 @@ describe("registerCopilotActiveRun", () => {
       await expect(secondDelivery).resolves.toBeUndefined();
       emit("user.message", "native", { content: first.message.content });
       await journal.barrier("concurrent steering");
-      const users = transcriptMessages(await readSessionTranscriptEvents(target))
-        .filter((row) => row.message.role === "user")
-        .slice(1);
+      const users = (await messages()).filter((row) => row.message.role === "user").slice(1);
+      const persisted = rejectFirst
+        ? [["second", second] as const]
+        : [["second", second] as const, ["first", first] as const];
       expect(users.map((row) => row.message)).toEqual([
-        expect.objectContaining({
-          idempotencyKey: "copilot-sdk:sdk-session:second",
-          provenance: second.message.provenance,
-        }),
-        ...(!rejectFirst
-          ? [
-              expect.objectContaining({
-                idempotencyKey: "copilot-sdk:sdk-session:first",
-                provenance: first.message.provenance,
-              }),
-            ]
-          : []),
+        ...persisted.map(([id, source]) =>
+          expect.objectContaining({
+            idempotencyKey: `copilot-sdk:sdk-session:${id}`,
+            provenance: source.message.provenance,
+          }),
+        ),
         expect.not.objectContaining({ provenance: expect.anything() }),
       ]);
       expect(first.markRuntimePersisted).toHaveBeenCalledTimes(rejectFirst ? 0 : 1);
@@ -437,15 +423,12 @@ describe("registerCopilotActiveRun", () => {
       });
       if (outcome === "host answered") {
         await expect(delivery).resolves.toBeUndefined();
-        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
       } else {
         await expect(delivery).rejects.toBe(error);
-        if (hostQuestion) {
-          expectNotCalled(onQueueAccepted);
-        } else {
-          expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
-        }
       }
+      expect(onQueueAccepted.mock.calls).toEqual(
+        outcome === "host rejected" ? [] : [[hostQuestion]],
+      );
       expect(onQueueSettled).toHaveBeenCalledOnce();
       if (hostQuestion) {
         expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
