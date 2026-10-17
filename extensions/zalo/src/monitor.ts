@@ -76,6 +76,8 @@ const DEFAULT_MEDIA_MAX_MB = 5;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
+const ZALO_UNSUPPORTED_MESSAGE_GUIDANCE =
+  "This message type isn't supported yet. Please resend the content as text or an image.";
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 type ZaloProcessingContext = {
@@ -228,7 +230,7 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 
 async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> {
   const { update, ...sharedContext } = params;
-  const { account, core, runtime } = sharedContext;
+  const { account, core, runtime, token, fetcher, statusSink } = sharedContext;
   const { event_name, message } = update;
   if (!message) {
     return undefined;
@@ -249,13 +251,31 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
     case "message.sticker.received":
       logVerbose(core, runtime, `[${account.accountId}] Received sticker from ${message.from.id}`);
       break;
-    case "message.unsupported.received":
+    case "message.unsupported.received": {
+      if (message.text?.trim()) {
+        await processMessageWithPipeline({ message, text: message.text, ...sharedContext });
+        break;
+      }
+      const authorization = await authorizeZaloMessage({ message, ...sharedContext });
+      if (!authorization) {
+        break;
+      }
+      await sendMessage(
+        token,
+        {
+          chat_id: authorization.chatId,
+          text: ZALO_UNSUPPORTED_MESSAGE_GUIDANCE,
+        },
+        fetcher,
+      );
+      statusSink?.({ lastOutboundAt: Date.now() });
       logVerbose(
         core,
         runtime,
-        `[${account.accountId}] Received unsupported message type from ${message.from.id}`,
+        `[${account.accountId}] Sent unsupported message guidance to ${message.from.id}`,
       );
       break;
+    }
   }
 }
 
