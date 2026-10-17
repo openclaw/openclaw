@@ -42,9 +42,16 @@ export function createContext(
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     channelsSnapshot?: ChannelsStatusSnapshot | null;
     gatewayCapabilities?: string[];
+    healthRequest?: ReturnType<typeof vi.fn>;
   } = {},
 ): ContextHarness {
-  const client = { request } as unknown as GatewayBrowserClient;
+  let healthSnapshot: unknown = { channels: {} };
+  const client = {
+    request: (method: string, ...args: unknown[]) =>
+      method === "health"
+        ? (options.healthRequest?.(method, ...args) ?? Promise.resolve(healthSnapshot))
+        : request(method, ...args),
+  } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -202,6 +209,9 @@ export function createContext(
       }
     },
     emitGatewayEvent: (event) => {
+      if (event.event === "health") {
+        healthSnapshot = event.payload;
+      }
       for (const listener of eventListeners) {
         listener(event as GatewayEventFrame);
       }

@@ -273,6 +273,12 @@ gateway refreshes that cache in the background; `--verbose` forces a live check 
 Connections and cached health reads share a one-minute background refresh cadence, so
 repeated diagnostic connections do not each rebuild the health snapshot. Explicit live
 checks and refreshes for missing or stale health still run immediately.
+The passive WebSocket `health` event sends the full snapshot only when health changes.
+Refresh timestamps, check duration, session activity summaries, channel traffic
+timestamps, auth age, and event-loop sample readings alone do not trigger an event.
+Channel lifecycle and error changes, event-loop degradation, and other health status
+changes still publish on the next refresh. Use `tick` for connection liveness and the
+`health` RPC for current diagnostic readings; hello snapshots retain their health field.
 Snapshots describe loaded and configured channels. Stored credentials alone do not
 activate a channel or add it to Gateway health; use channel setup to enable it.
 The command reports linked creds/auth age when available, per-channel check summaries,
