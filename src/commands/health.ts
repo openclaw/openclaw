@@ -204,7 +204,9 @@ export async function healthCommand(
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const resolvedAgents =
-      agents.length > 0 ? agents : await buildHealthAgentSummaries(cfg, localAgents);
+      agents.length > 0 || localAgents.ordered.length === 0
+        ? agents
+        : await buildHealthAgentSummaries(cfg, localAgents);
     const displayAgents =
       opts.verbose || !defaultAgentId
         ? resolvedAgents

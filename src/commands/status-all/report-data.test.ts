@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillReadiness: vi.fn<
     typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
   >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
-  resolveStatusSummaryFromOverview: vi.fn(async () => ({})),
+  resolveStatusSummaryFromOverview: vi.fn(async (_params: unknown) => ({})),
 }));
 
 // mock-isolation: Database inspection is covered at its owner, not by unrelated local diagnostics.
@@ -91,8 +91,12 @@ vi.mock("../status-runtime-shared.ts", () => ({
 vi.mock("../status.gateway-connection.ts", () => ({
   resolveStatusAllConnectionDetails: () => "",
 }));
+// mock-isolation: Report assembly consumes fixture summaries without starting local status scans.
 vi.mock("../status.scan-overview.ts", () => ({
-  resolveStatusSummaryFromOverview: mocks.resolveStatusSummaryFromOverview,
+  prepareStatusSummaryFromOverview: async (params: unknown) => {
+    const summary = await mocks.resolveStatusSummaryFromOverview(params);
+    return { publish: () => ({ summary, sessionStores: undefined }) };
+  },
 }));
 
 vi.mock("../../daemon/restart-logs.js", () => ({

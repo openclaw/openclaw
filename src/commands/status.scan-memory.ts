@@ -19,7 +19,7 @@ export function resolveDefaultMemoryDatabasePath(agentId: string): string {
 /** Resolves memory index/cache status for the current status scan. */
 export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: AgentLocalStatusesResult;
+  agentStatus: Pick<AgentLocalStatusesResult, "defaultId">;
   memoryPlugin: MemoryPluginStatus;
   requireDefaultDatabasePath?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {

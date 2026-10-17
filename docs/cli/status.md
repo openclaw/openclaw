@@ -208,6 +208,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   until cleared.
 - Output includes per-agent session stores when multiple agents are
   configured.
+- Session summaries omit namespaces with a committed agent deletion while cleanup drains. Undeleted namespaces in a shared store still contribute to counts and recent sessions, even when its configured reader is deleted.
+- Display defaults follow the surviving roster when the configured default is being deleted. Runtime and System Agent ownership remain unchanged, and explicit fleets without a default still require agent selection.
 - Fleet status works without a System Agent owner. Pending events include each
   agent's main queue; a shared global queue is counted once. `--agent` selects
   credentials only for `--usage`.
