@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
 import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
@@ -50,7 +52,19 @@ afterEach(() => {
 });
 
 describe("GitHub tool identity", () => {
+  let root: string;
+  let env: NodeJS.ProcessEnv;
+  const profileId = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const profilePath = (id = profileId, scope: "system" | "agent" = "system") =>
+    resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId: id, env });
+  const agentConfig = (github: GitHubToolIdentityConfig, agentDir = root): OpenClawConfig => ({
+    agents: { entries: { main: { agentDir, tools: { github } } } },
+  });
+  const statusFor = (config: OpenClawConfig, selectedScope: "system" | "agent" = "system") =>
+    resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope, env });
   beforeEach(() => {
+    root = tempDirs.make("openclaw-github-identity-");
+    env = { OPENCLAW_STATE_DIR: root };
     clearGitHubCredentialVerificationCache();
     vi.stubEnv("GH_TOKEN", undefined);
     vi.stubEnv("GITHUB_TOKEN", undefined);
@@ -71,19 +85,16 @@ describe("GitHub tool identity", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       const token = new Headers(init?.headers).get("Authorization");
       const native = token?.includes("native") || token?.includes("test-token");
-      return new Response(
-        JSON.stringify({
-          id: native ? 101 : 202,
-          login: native ? "native-user" : "managed-user",
-          avatar_url: null,
-        }),
-      );
+      return Response.json({
+        id: native ? 101 : 202,
+        login: native ? "native-user" : "managed-user",
+        avatar_url: null,
+      });
     });
     oauthMocks.inspect.mockReset().mockReturnValue({ state: "missing" });
   });
 
   it("gives a managed agent override complete precedence", async () => {
-    const stateDir = tempDirs.make("openclaw-github-state-");
     const config = {
       tools: {
         github: {
@@ -91,19 +102,10 @@ describe("GitHub tool identity", () => {
           gitAuthor: { name: "System" },
         },
       },
-      agents: {
-        entries: {
-          main: {
-            agentDir: path.join(stateDir, "main"),
-            tools: {
-              github: {
-                profileId: "ghp_22222222222222222222222222222222",
-                gitAuthor: { email: "agent@example.test" },
-              },
-            },
-          },
-        },
-      },
+      ...agentConfig({
+        profileId: "ghp_22222222222222222222222222222222",
+        gitAuthor: { email: "agent@example.test" },
+      }),
     };
 
     expect(prepareGitHubToolEnvironment({ config: {}, agentId: "main" })).toMatchObject({
@@ -111,13 +113,7 @@ describe("GitHub tool identity", () => {
       managedLocalIdentity: false,
     });
 
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const expectedProfileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "agent",
-      profileId: "ghp_22222222222222222222222222222222",
-      env,
-    });
+    const expectedProfileDir = profilePath("ghp_22222222222222222222222222222222", "agent");
     expect(prepareGitHubToolEnvironment({ config, agentId: "main", env })).toMatchObject({
       localIdentityEnv: {
         GH_CONFIG_DIR: expectedProfileDir,
@@ -130,7 +126,13 @@ describe("GitHub tool identity", () => {
       managedLocalIdentity: true,
     });
     const relocatedConfig = structuredClone(config);
-    relocatedConfig.agents.entries.main.agentDir = path.join(stateDir, "relocated");
+    relocatedConfig.agents = agentConfig(
+      {
+        profileId: "ghp_22222222222222222222222222222222",
+        gitAuthor: { email: "agent@example.test" },
+      },
+      path.join(root, "relocated"),
+    ).agents;
     expect(
       prepareGitHubToolEnvironment({ config: relocatedConfig, agentId: "main", env }),
     ).toMatchObject({
@@ -149,22 +151,10 @@ describe("GitHub tool identity", () => {
   });
 
   it("keeps the selected scope distinct from the effective agent override", async () => {
-    const root = tempDirs.make("openclaw-github-scope-status-");
-    const env = { OPENCLAW_STATE_DIR: root };
     const systemProfileId = "ghp_12121212121212121212121212121212";
     const agentProfileId = "ghp_34343434343434343434343434343434";
-    const systemProfileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId: systemProfileId,
-      env,
-    });
-    const agentProfileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "agent",
-      profileId: agentProfileId,
-      env,
-    });
+    const systemProfileDir = profilePath(systemProfileId);
+    const agentProfileDir = profilePath(agentProfileId, "agent");
     for (const profileDir of [systemProfileDir, agentProfileDir]) {
       await writeProfile(
         profileDir,
@@ -183,9 +173,10 @@ describe("GitHub tool identity", () => {
     }));
     vi.mocked(fetch).mockImplementation(async (_url, init) => {
       const isAgent = new Headers(init?.headers).get("Authorization") === "Bearer agent-token";
-      return new Response(
-        JSON.stringify({ id: isAgent ? 202 : 101, login: isAgent ? "agent-user" : "system-user" }),
-      );
+      return Response.json({
+        id: isAgent ? 202 : 101,
+        login: isAgent ? "agent-user" : "system-user",
+      });
     });
     processMocks.runCommandBuffered.mockImplementation(
       async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
@@ -200,22 +191,10 @@ describe("GitHub tool identity", () => {
     );
     const config = {
       tools: { github: { profileId: systemProfileId, kind: "oauth" as const } },
-      agents: {
-        entries: {
-          main: {
-            agentDir: root,
-            tools: { github: { profileId: agentProfileId, kind: "oauth" as const } },
-          },
-        },
-      },
+      ...agentConfig({ profileId: agentProfileId, kind: "oauth" }),
     };
 
-    const systemSelected = await resolveGitHubToolIdentityStatus({
-      config,
-      agentId: "main",
-      selectedScope: "system",
-      env,
-    });
+    const systemSelected = await statusFor(config);
     expect(systemSelected).toMatchObject({
       selectedScope: "system",
       selected: {
@@ -242,12 +221,7 @@ describe("GitHub tool identity", () => {
       },
     });
 
-    const agentSelected = await resolveGitHubToolIdentityStatus({
-      config,
-      agentId: "main",
-      selectedScope: "agent",
-      env,
-    });
+    const agentSelected = await statusFor(config, "agent");
     expect(agentSelected.selected).toEqual({
       scope: "agent",
       configured: true,
@@ -257,22 +231,13 @@ describe("GitHub tool identity", () => {
 
   it.each([
     {
-      failure: undefined,
       pendingRefresh: true,
       refreshExpiresAtMs: Date.now() + 60_000,
       expected: "refreshing",
     },
-    { failure: undefined, pendingRefresh: undefined, refreshExpiresAtMs: 1, expected: "expired" },
+    { pendingRefresh: undefined, refreshExpiresAtMs: 1, expected: "expired" },
   ] as const)("reports OAuth refresh state $expected", async (testCase) => {
-    const root = tempDirs.make("openclaw-github-refresh-status-");
-    const env = { OPENCLAW_STATE_DIR: root };
-    const profileId = "ghp_56565656565656565656565656565656";
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
-    });
+    const profileDir = profilePath();
     await writeProfile(profileDir, "managed-token");
     processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
       argv[0] === "gh"
@@ -287,16 +252,10 @@ describe("GitHub tool identity", () => {
         refreshExpiresAtMs: testCase.refreshExpiresAtMs,
         scopes: ["offline_access", "repo"],
         ...(testCase.pendingRefresh ? { pendingRefresh: true } : {}),
-        ...(testCase.failure ? { refreshFailure: testCase.failure } : {}),
       },
     });
 
-    const status = await resolveGitHubToolIdentityStatus({
-      config: { tools: { github: { profileId, kind: "oauth" } } },
-      agentId: "main",
-      selectedScope: "system",
-      env,
-    });
+    const status = await statusFor({ tools: { github: { profileId, kind: "oauth" } } });
 
     expect(status.effective).toMatchObject({
       credentialKind: "managed-oauth",
@@ -313,11 +272,7 @@ describe("GitHub tool identity", () => {
         headers: { "x-ratelimit-remaining": "0" },
       }),
     );
-    const status = await resolveGitHubToolIdentityStatus({
-      config: {},
-      agentId: "main",
-      selectedScope: "system",
-    });
+    const status = await statusFor({});
     expect(status.effective).toMatchObject({
       credentialKind: "native",
       credentialState: "rate_limited",
@@ -392,21 +347,13 @@ describe("GitHub tool identity", () => {
   );
 
   it("captures a frozen managed publication child environment without ambient tokens", async () => {
-    const root = tempDirs.make("openclaw-github-publication-env-");
-    const profileId = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const env = {
-      OPENCLAW_STATE_DIR: root,
+    Object.assign(env, {
       GH_TOKEN: "ambient-primary",
       GITHUB_TOKEN: "ambient-fallback",
       PREVIEW_SERVICE_TOKEN: "preview-only",
       GIT_EDITOR: "synthetic-before-preparation",
-    };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
     });
+    const profileDir = profilePath();
     await writeProfile(profileDir, "managed-publication-token");
     const accessExpiresAtMs = 1_900_000_000_000;
     oauthMocks.inspect.mockReturnValue({
@@ -465,10 +412,10 @@ describe("GitHub tool identity", () => {
     expect(Object.isFrozen(identity.env)).toBe(true);
     expect(childEnv.GH_TOKEN).toBe("managed-publication-token");
     expect(childEnv.GH_ENTERPRISE_TOKEN).toBe("managed-publication-token");
-    expect(childEnv.GITHUB_TOKEN).toBeUndefined();
-    expect(childEnv.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
     expect(childEnv.GH_CONFIG_DIR).toBe(profileDir);
-    expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
+    for (const name of ["GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "PREVIEW_SERVICE_TOKEN"]) {
+      expect(childEnv[name]).toBeUndefined();
+    }
     expect(
       matchesPreparedGitHubPublicationIdentity({
         config: { tools: { github: { profileId } } },
@@ -494,43 +441,12 @@ describe("GitHub tool identity", () => {
     );
   });
 
-  it.each([
-    {
-      label: "unverified transport failure",
-      httpStatus: 500,
-      credentialState: "unverified",
-    },
-  ])("reports a managed $label honestly", async (testCase) => {
-    const root = tempDirs.make("openclaw-github-status-");
-    const profileId = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const env = { OPENCLAW_STATE_DIR: root };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "agent",
-      profileId,
-      env,
-    });
-    await writeProfile(profileDir, `managed-status-${testCase.httpStatus}`);
-    vi.mocked(fetch).mockResolvedValue(
-      new Response("private diagnostics", { status: testCase.httpStatus }),
-    );
-    const status = await resolveGitHubToolIdentityStatus({
-      config: {
-        agents: {
-          entries: {
-            main: {
-              agentDir: root,
-              tools: { github: { profileId } },
-            },
-          },
-        },
-      },
-      agentId: "main",
-      selectedScope: "agent",
-      env,
-    });
+  it("reports a managed unverified transport failure honestly", async () => {
+    await writeProfile(profilePath(profileId, "agent"), "managed-status-500");
+    vi.mocked(fetch).mockResolvedValue(new Response("private diagnostics", { status: 500 }));
+    const status = await statusFor(agentConfig({ profileId }), "agent");
 
-    expect(status.effective.credentialState).toBe(testCase.credentialState);
+    expect(status.effective.credentialState).toBe("unverified");
     expect(processMocks.runCommandBuffered.mock.calls.every(([argv]) => argv[0] === "git")).toBe(
       true,
     );
@@ -541,7 +457,6 @@ describe("GitHub tool identity", () => {
     "preserves the stable credential when refresh authority closes during %s",
     async (phase) => {
       vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
-      const root = tempDirs.make("openclaw-github-refresh-authority-");
       const profileDir = path.join(root, "profile");
       await fs.mkdir(profileDir, { mode: 0o700 });
       const hosts = path.join(profileDir, "hosts.yml");
@@ -559,7 +474,7 @@ describe("GitHub tool identity", () => {
         if (phase === "verification") {
           revoke();
         }
-        return new Response(JSON.stringify({ id: 202, login: "managed-user" }));
+        return Response.json({ id: 202, login: "managed-user" });
       });
       const open = fs.open.bind(fs);
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -595,7 +510,6 @@ describe("GitHub tool identity", () => {
   );
 
   it("keeps the previous generation after the new version commits", async () => {
-    const root = tempDirs.make("openclaw-github-rotate-");
     const previousProfileDir = path.join(root, "profile-old");
     const profileDir = path.join(root, "profile-new");
     await fs.mkdir(previousProfileDir, { mode: 0o700 });
@@ -628,7 +542,6 @@ describe("GitHub tool identity", () => {
   });
 
   it("deletes only the new profile when the guarded config write fails", async () => {
-    const root = tempDirs.make("openclaw-github-rollback-");
     const previousProfileDir = path.join(root, "profile-old");
     const profileDir = path.join(root, "profile-new");
     await fs.mkdir(previousProfileDir, { mode: 0o700 });

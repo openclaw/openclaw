@@ -11,16 +11,10 @@ import {
   verifyGitHubCredential,
 } from "./github-oauth-client.js";
 
-const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
-
 const DEVICE_CODE = "a".repeat(40);
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
+const jsonResponse = (body: unknown, status = 200) => Response.json(body, { status });
+const reply = (body: unknown, status = 200) =>
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(body, status));
 
 function tokenPair(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -45,12 +39,8 @@ describe("GitHub OAuth client", () => {
     const login = "managed-user_org";
     const token = `synthetic-bound-credential-${login}`;
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          id: 202,
-          login,
-          avatar_url: null,
-        }),
+      Response.json(
+        { id: 202, login, avatar_url: null },
         { headers: { "x-oauth-scopes": "read:org, repo, repo" } },
       ),
     );
@@ -80,7 +70,7 @@ describe("GitHub OAuth client", () => {
       .mockResolvedValueOnce(jsonResponse({ id: 202, login: "revoked-user" }))
       .mockImplementation(async () => jsonResponse({}, 401));
     expect((await verifyGitHubCredential("synthetic-revoked-token")).status).toBe("available");
-    now.mockReturnValue(2_000 + GITHUB_CREDENTIAL_VERIFICATION_TTL_MS + 1);
+    now.mockReturnValue(62_001);
     expect(await verifyGitHubCredential("synthetic-revoked-token")).toEqual({
       status: "unavailable",
     });
@@ -161,16 +151,12 @@ describe("GitHub OAuth client", () => {
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
-  it.each([{ code: 403, headers: new Headers(), status: "unverified" }])(
-    "classifies account HTTP $code as $status without reflecting diagnostics",
-    async ({ code, headers, status }) => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("synthetic-secret-diagnostics", { status: code, headers }),
-      );
-      const token = `synthetic-http-${code}-${status}-${headers.get("retry-after") ?? headers.get("x-ratelimit-remaining") ?? "none"}`;
-      expect(await verifyGitHubCredential(token)).toEqual({ status });
-    },
-  );
+  it("classifies account HTTP 403 without reflecting diagnostics", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("synthetic-secret-diagnostics", { status: 403 }),
+    );
+    expect(await verifyGitHubCredential("synthetic-http-403")).toEqual({ status: "unverified" });
+  });
 
   it.each([
     ["invalid-json", "not-json synthetic-token"],
@@ -202,9 +188,7 @@ describe("GitHub OAuth client", () => {
     });
     expect(
       await verifyGitHubCredential("synthetic-cancellation", { signal: caller.signal }),
-    ).toEqual({
-      status: "unverified",
-    });
+    ).toEqual({ status: "unverified" });
   });
 
   it.each([
@@ -212,27 +196,21 @@ describe("GitHub OAuth client", () => {
     ["verification URI", { verification_uri: "https://example.com/login/device" }],
     ["poll interval", { interval: 0 }],
   ])("rejects an invalid device authorization %s", async (_name, overrides) => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({
-        device_code: DEVICE_CODE,
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 5,
-        ...overrides,
-      }),
-    );
-
+    reply({
+      device_code: DEVICE_CODE,
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://github.com/login/device",
+      expires_in: 900,
+      interval: 5,
+      ...overrides,
+    });
     await expect(requestGitHubOAuthDeviceCode()).rejects.toThrow(
       "GitHub OAuth device authorization response was invalid",
     );
   });
 
   it.each([
-    {
-      body: { error: "authorization_pending" },
-      expected: { status: "authorization_pending" },
-    },
+    { body: { error: "authorization_pending" }, expected: { status: "authorization_pending" } },
     {
       body: {
         error: "slow_down",
@@ -252,18 +230,14 @@ describe("GitHub OAuth client", () => {
       expected: { status: "error", code: "device_flow_disabled" },
     },
   ])("returns the typed polling state for $body.error", async ({ body, expected }) => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(body));
-
+    reply(body);
     await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).resolves.toEqual(
       expected,
     );
   });
 
   it("returns refresh rejection as a typed outcome", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({ error: "bad_refresh_token" }, 400),
-    );
-
+    reply({ error: "bad_refresh_token" }, 400);
     await expect(
       refreshGitHubOAuthToken({ refreshToken: "refresh-token-current" }),
     ).resolves.toEqual({
@@ -278,8 +252,7 @@ describe("GitHub OAuth client", () => {
     ["unknown error", { error: "surprise_error" }],
     ["mixed success and error", { ...tokenPair(), error: "authorization_pending" }],
   ])("rejects a strictly invalid %s response", async (_name, body) => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(body));
-
+    reply(body);
     await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).rejects.toThrow(
       "GitHub OAuth device token response was invalid",
     );

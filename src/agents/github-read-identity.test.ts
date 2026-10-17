@@ -28,6 +28,20 @@ import {
 } from "./github-tool-identity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const native = (env: NodeJS.ProcessEnv) => readNativeGitHubToken(env, true);
+const enterprise = (host: string) => ({ gateway: { github: { host } } });
+const account = (id = 101, login = "native-user") => Response.json({ id, login, avatar_url: null });
+
+beforeEach(() => {
+  mocks.runCommandBuffered.mockReset();
+  vi.stubEnv("GH_TOKEN", undefined);
+  vi.stubEnv("GITHUB_TOKEN", undefined);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
+});
 
 function commandResult(stdout = "", code = 0, stderr = "") {
   return {
@@ -41,17 +55,6 @@ function commandResult(stdout = "", code = 0, stderr = "") {
 }
 
 describe("native GitHub identity absence", () => {
-  beforeEach(() => {
-    mocks.runCommandBuffered.mockReset();
-    vi.stubEnv("GH_TOKEN", undefined);
-    vi.stubEnv("GITHUB_TOKEN", undefined);
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    clearRuntimeConfigSnapshot();
-  });
-
   const launchFailure = (code = "ENOENT") => ({
     ...commandResult("", 1, "synthetic-launch-diagnostic"),
     code: null,
@@ -63,27 +66,22 @@ describe("native GitHub identity absence", () => {
     return { PATH: root, GH_CONFIG_DIR: root, GH_TOKEN: undefined, GITHUB_TOKEN: undefined };
   };
 
-  it.each(["hosts.yml"])(
-    "refuses a present native %s rather than treating it as anonymous",
-    async (name) => {
-      const env = absentEnvironment();
-      await fs.writeFile(path.join(env.GH_CONFIG_DIR, name), "{}\n");
-      mocks.runCommandBuffered.mockResolvedValue(launchFailure());
-      await expect(readNativeGitHubToken(env, true)).rejects.toMatchObject({
-        reason: "unavailable",
-      });
-      expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
-    },
-  );
+  it("refuses present native hosts.yml rather than treating it as anonymous", async () => {
+    const env = absentEnvironment();
+    await fs.writeFile(path.join(env.GH_CONFIG_DIR, "hosts.yml"), "{}\n");
+    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
+    await expect(native(env)).rejects.toMatchObject({ reason: "unavailable" });
+    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+  });
 
   it("rejects a symbolic native configuration directory", async () => {
     const env = absentEnvironment();
     const link = path.join(env.GH_CONFIG_DIR, "native-link");
     await fs.symlink(env.GH_CONFIG_DIR, link, "junction");
     mocks.runCommandBuffered.mockResolvedValue(launchFailure());
-    await expect(
-      readNativeGitHubToken({ ...env, GH_CONFIG_DIR: link }, true),
-    ).rejects.toMatchObject({ reason: "unavailable" });
+    await expect(native({ ...env, GH_CONFIG_DIR: link })).rejects.toMatchObject({
+      reason: "unavailable",
+    });
   });
 
   it("does not interpret unreadable configuration metadata as absence", async () => {
@@ -92,7 +90,7 @@ describe("native GitHub identity absence", () => {
     vi.spyOn(fs, "lstat").mockRejectedValue(
       Object.assign(new Error("Synthetic permission failure"), { code: "EACCES" }),
     );
-    await expect(readNativeGitHubToken(env, true)).rejects.toMatchObject({ reason: "unverified" });
+    await expect(native(env)).rejects.toMatchObject({ reason: "unverified" });
   });
 
   it("detects a broken interpreter installed after a cached executable miss", async () => {
@@ -106,7 +104,7 @@ describe("native GitHub identity absence", () => {
     );
     expect(resolveExecutablePath("gh", { env, cwd })).toBeUndefined();
     mocks.runCommandBuffered.mockResolvedValue(launchFailure());
-    await expect(readNativeGitHubToken(env, true)).rejects.toMatchObject({ reason: "unverified" });
+    await expect(native(env)).rejects.toMatchObject({ reason: "unverified" });
   });
 
   it("rejects an ENOENT caused by an unavailable working directory", async () => {
@@ -115,27 +113,24 @@ describe("native GitHub identity absence", () => {
     vi.spyOn(process, "cwd").mockImplementation(() => {
       throw Object.assign(new Error("Missing cwd"), { code: "ENOENT" });
     });
-    await expect(readNativeGitHubToken(env, true)).rejects.toMatchObject({ reason: "unverified" });
+    await expect(native(env)).rejects.toMatchObject({ reason: "unverified" });
   });
 
   it("uses native environment precedence without needing the optional CLI", async () => {
     await expect(
-      readNativeGitHubToken(
-        { GH_TOKEN: "synthetic-primary", GITHUB_TOKEN: "synthetic-secondary" },
-        true,
-      ),
+      native({ GH_TOKEN: "synthetic-primary", GITHUB_TOKEN: "synthetic-secondary" }),
     ).resolves.toBe("synthetic-primary");
-    await expect(
-      readNativeGitHubToken({ GH_TOKEN: "", GITHUB_TOKEN: "synthetic-secondary" }, true),
-    ).resolves.toBe("synthetic-secondary");
-    await expect(
-      readNativeGitHubToken({ GH_TOKEN: " \n", GITHUB_TOKEN: "synthetic-secondary" }, true),
-    ).rejects.toThrow("one non-empty line");
+    await expect(native({ GH_TOKEN: "", GITHUB_TOKEN: "synthetic-secondary" })).resolves.toBe(
+      "synthetic-secondary",
+    );
+    await expect(native({ GH_TOKEN: " \n", GITHUB_TOKEN: "synthetic-secondary" })).rejects.toThrow(
+      "one non-empty line",
+    );
     expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
   });
 
   it("does not pass public ambient credentials to a ghe.com tenant profile lookup", async () => {
-    setRuntimeConfigSnapshot({ gateway: { github: { host: "tenant.ghe.com" } } });
+    setRuntimeConfigSnapshot(enterprise("tenant.ghe.com"));
     mocks.runCommandBuffered.mockImplementation(async (_argv, options) =>
       commandResult(options.env.GH_TOKEN || options.env.GITHUB_TOKEN || "stored-tenant-token"),
     );
@@ -158,9 +153,9 @@ describe("native GitHub identity absence", () => {
     mocks.runCommandBuffered
       .mockResolvedValueOnce(commandResult("host-a-token"))
       .mockResolvedValueOnce(commandResult("host-b-token"));
-    setRuntimeConfigSnapshot({ gateway: { github: { host: "a.ghe.example.test" } } });
+    setRuntimeConfigSnapshot(enterprise("a.ghe.example.test"));
     await expect(readCachedNativeGitHubToken(env)).resolves.toBe("host-a-token");
-    setRuntimeConfigSnapshot({ gateway: { github: { host: "b.ghe.example.test" } } });
+    setRuntimeConfigSnapshot(enterprise("b.ghe.example.test"));
     await expect(readCachedNativeGitHubToken(env)).resolves.toBe("host-b-token");
     expect(mocks.runCommandBuffered.mock.calls.map(([argv]) => argv)).toEqual([
       ["gh", "auth", "token", "--hostname", "a.ghe.example.test"],
@@ -168,67 +163,48 @@ describe("native GitHub identity absence", () => {
     ]);
   });
 
-  it.each(["other.ghe.example.test"])(
-    "rejects an ambient Enterprise token bound to %s",
-    async (declaredHost) => {
-      setRuntimeConfigSnapshot({ gateway: { github: { host: "ghe.example.test" } } });
-      const env = { GH_ENTERPRISE_TOKEN: "synthetic-host-a-token", GH_HOST: declaredHost };
-      await expect(readCachedNativeGitHubToken(env)).rejects.toMatchObject({
-        reason: "unverified",
-      });
-      expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an ambient Enterprise token bound to another host", async () => {
+    setRuntimeConfigSnapshot(enterprise("ghe.example.test"));
+    const env = {
+      GH_ENTERPRISE_TOKEN: "synthetic-host-a-token",
+      GH_HOST: "other.ghe.example.test",
+    };
+    await expect(readCachedNativeGitHubToken(env)).rejects.toMatchObject({
+      reason: "unverified",
+    });
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+  });
 
   it("preserves explicit undefined scrubs over inherited native environment tokens", async () => {
     vi.stubEnv("GH_TOKEN", "synthetic-preview-token");
     await expect(
-      readNativeGitHubToken({ GH_TOKEN: undefined, GITHUB_TOKEN: "synthetic-source-token" }, true),
+      native({ GH_TOKEN: undefined, GITHUB_TOKEN: "synthetic-source-token" }),
     ).resolves.toBe("synthetic-source-token");
     mocks.runCommandBuffered.mockResolvedValue(launchFailure());
-    await expect(readNativeGitHubToken(absentEnvironment(), true)).resolves.toBeUndefined();
+    await expect(native(absentEnvironment())).resolves.toBeUndefined();
   });
 
   it.each([
-    {
-      env: {
-        GH_CONFIG_DIR: "",
-        XDG_CONFIG_HOME: "C:\\xdg",
-        APPDATA: "C:\\roaming",
-        USERPROFILE: "C:\\user",
-      },
-      expected: "C:\\xdg\\gh",
-    },
-    {
-      env: {
-        GH_CONFIG_DIR: "",
-        XDG_CONFIG_HOME: "",
-        APPDATA: "C:\\roaming",
-        USERPROFILE: "C:\\user",
-      },
-      expected: "C:\\roaming\\GitHub CLI",
-    },
-    {
-      env: { GH_CONFIG_DIR: "", XDG_CONFIG_HOME: "", APPDATA: "", USERPROFILE: "C:\\user" },
-      expected: "C:\\user\\.config\\gh",
-    },
-  ])("checks the canonical Windows native config location $expected", async ({ env, expected }) => {
+    ["C:\\xdg", "C:\\roaming", "C:\\xdg\\gh"],
+    ["", "C:\\roaming", "C:\\roaming\\GitHub CLI"],
+    ["", "", "C:\\user\\.config\\gh"],
+  ])("checks Windows config precedence (%s, %s)", async (xdg, appData, expected) => {
     mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     const metadata = vi
       .spyOn(fs, "lstat")
       .mockRejectedValue(Object.assign(new Error("Absent fixture"), { code: "ENOENT" }));
     await withMockedPlatform("win32", async () => {
       await expect(
-        readNativeGitHubToken(
-          {
-            ...env,
-            HOME: "C:\\wrong-home",
-            PATH: "",
-            GH_TOKEN: undefined,
-            GITHUB_TOKEN: undefined,
-          },
-          true,
-        ),
+        native({
+          GH_CONFIG_DIR: "",
+          XDG_CONFIG_HOME: xdg,
+          APPDATA: appData,
+          USERPROFILE: "C:\\user",
+          HOME: "C:\\wrong-home",
+          PATH: "",
+          GH_TOKEN: undefined,
+          GITHUB_TOKEN: undefined,
+        }),
       ).resolves.toBeUndefined();
     });
     expect(metadata.mock.calls.map(([file]) => file)).toEqual([
@@ -252,9 +228,7 @@ describe("native GitHub identity absence", () => {
       outputs.push(result);
       return result;
     });
-    await expect(readNativeGitHubToken({}, true)).rejects.toThrow(
-      /could not be verified|credential is unavailable/u,
-    );
+    await expect(native({})).rejects.toThrow(/could not be verified|credential is unavailable/u);
     expect(mocks.runCommandBuffered.mock.calls.map(([argv]) => argv)).toEqual([
       ["gh", "auth", "token", "--hostname", "github.com"],
       ["gh", "auth", "status", "--active", "--hostname", "github.com", "--json", "hosts"],
@@ -275,24 +249,10 @@ describe("native GitHub identity absence", () => {
 describe("prepared GitHub read authority", () => {
   beforeEach(() => {
     clearGitHubCredentialVerificationCache();
-    mocks.runCommandBuffered.mockReset();
-    vi.stubEnv("GH_TOKEN", undefined);
-    vi.stubEnv("GITHUB_TOKEN", undefined);
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
-      const native = new Headers(init?.headers).get("Authorization")?.includes("native");
-      return new Response(
-        JSON.stringify({
-          id: native ? 101 : 202,
-          login: native ? "native-user" : "managed-user",
-          avatar_url: null,
-        }),
-      );
+      const isNative = new Headers(init?.headers).get("Authorization")?.includes("native");
+      return account(isNative ? 101 : 202, isNative ? "native-user" : "managed-user");
     });
-  });
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
   });
 
   const readOptions = (env: NodeJS.ProcessEnv = {}, config: OpenClawConfig = {}) => ({
@@ -404,7 +364,7 @@ describe("prepared GitHub read authority", () => {
       });
       vi.mocked(fetch).mockImplementation(async () => {
         phase = "delivery";
-        return new Response(JSON.stringify({ id: 101, login: "native-user", avatar_url: null }));
+        return account();
       });
       const options = {
         ...readOptions(),
@@ -506,7 +466,7 @@ describe("prepared GitHub read authority", () => {
     });
     vi.mocked(fetch).mockImplementation(async () => {
       assertAdmitted();
-      return new Response(JSON.stringify({ id: 101, login: "native-user", avatar_url: null }));
+      return account();
     });
     const identity = await prepareGitHubReadIdentity({
       ...readOptions(),
@@ -606,44 +566,45 @@ describe("prepared GitHub read authority", () => {
     expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
   });
 
-  it.each(["system"] as const)(
-    "binds %s read authority to its selected profile and verified account",
-    async (scope) => {
-      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-read-selection-") };
-      const profileId = `ghp_${"3".repeat(32)}`;
-      const replacementProfileId = `ghp_${"4".repeat(32)}`;
-      const configured = (selectedProfileId: string): OpenClawConfig => {
-        const github = { profileId: selectedProfileId };
-        return { tools: { github } };
-      };
-      let config = configured(profileId);
-      const profileDir = resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId, env });
-      await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-      const hosts = path.join(profileDir, "hosts.yml");
-      await fs.writeFile(hosts, `github.com:\n  oauth_token: read-${scope}-before\n`, {
-        mode: 0o600,
+  it("binds system read authority to its selected profile and verified account", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-read-selection-") };
+    const profileId = `ghp_${"3".repeat(32)}`;
+    const replacementProfileId = `ghp_${"4".repeat(32)}`;
+    const configured = (selectedId: string): OpenClawConfig => ({
+      tools: { github: { profileId: selectedId } },
+    });
+    let config = configured(profileId);
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+      env,
+    });
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    const hosts = path.join(profileDir, "hosts.yml");
+    await fs.writeFile(hosts, "github.com:\n  oauth_token: read-system-before\n", {
+      mode: 0o600,
+    });
+    const prepare = () =>
+      prepareGitHubReadIdentity({
+        ...readOptions(env, config),
+        getCurrentConfig: () => config,
       });
-      const prepare = () =>
-        prepareGitHubReadIdentity({
-          ...readOptions(env, config),
-          getCurrentConfig: () => config,
-        });
-      const identity = await prepare();
-      expect(identity.selection).toEqual({
-        source: "system-configured",
-        profileId,
-        accountId: 202,
-      });
-      await fs.writeFile(hosts, `github.com:\n  oauth_token: read-${scope}-rotated\n`);
-      await expect(identity.revalidate()).rejects.toThrow("identity changed");
-      const rotated = await prepare();
-      expect(rotated.selection).toEqual(identity.selection);
-      expect(rotated.cacheScope).not.toBe(identity.cacheScope);
-      config = configured(replacementProfileId);
-      expect(() => rotated.assertSelected()).toThrow("identity changed");
-      expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
-    },
-  );
+    const identity = await prepare();
+    expect(identity.selection).toEqual({
+      source: "system-configured",
+      profileId,
+      accountId: 202,
+    });
+    await fs.writeFile(hosts, "github.com:\n  oauth_token: read-system-rotated\n");
+    await expect(identity.revalidate()).rejects.toThrow("identity changed");
+    const rotated = await prepare();
+    expect(rotated.selection).toEqual(identity.selection);
+    expect(rotated.cacheScope).not.toBe(identity.cacheScope);
+    config = configured(replacementProfileId);
+    expect(() => rotated.assertSelected()).toThrow("identity changed");
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+  });
 
   it("admits explicit anonymous source reads only while native credentials remain absent", async () => {
     mocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>

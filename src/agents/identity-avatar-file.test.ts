@@ -34,24 +34,38 @@ afterEach(async () => {
   pool.run.mockReset();
 });
 
-function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
+function createWorkspace() {
   const root = tempRoots.make("openclaw-avatar-file-");
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace);
   pool.run.mockImplementation(async (input: LocalAgentAvatarRead) =>
     structuredClone(readLocalAgentAvatarSnapshot(input)),
   );
+  const cfg: OpenClawConfig = { agents: { entries: { main: { workspace } } } };
   return {
     workspace,
-    cfg: { agents: { entries: { main: { workspace } } } },
+    cfg,
+    write: (name: string, body: string | Uint8Array) =>
+      fs.writeFileSync(path.join(workspace, name), body),
+    read: (source = "avatar.png", readBody = true) =>
+      readLocalAgentAvatarSnapshot({ workspaceDir: workspace, source, readBody }),
+    prepare: (source = "avatar.png", readBody = true) =>
+      prepareLocalAgentAvatarFile({ cfg, agentId: "main", source, readBody }),
   };
+}
+
+function expectBody(result: unknown, body: string | undefined) {
+  expect(result).toMatchObject({
+    ok: true,
+    file: { body: body === undefined ? undefined : Buffer.from(body) },
+  });
 }
 
 describe("local agent avatar files", () => {
   it("reads a pinned local file with the shared MIME policy", async () => {
-    const { cfg, workspace } = createWorkspace();
+    const { cfg, write } = createWorkspace();
     const body = Buffer.from("avatar");
-    fs.writeFileSync(path.join(workspace, "avatar.jpeg"), body);
+    write("avatar.jpeg", body);
     expect(await resolveAgentAvatarUrlFromSource(cfg, "main", "avatar.jpeg")).toBe(
       `data:image/jpeg;base64,${body.toString("base64")}`,
     );
@@ -69,8 +83,8 @@ describe("local agent avatar files", () => {
   });
 
   it("does not read bytes for metadata or retransmit an unchanged body", () => {
-    const { workspace } = createWorkspace();
-    fs.writeFileSync(path.join(workspace, "avatar.png"), "avatar");
+    const { workspace, write } = createWorkspace();
+    write("avatar.png", "avatar");
     const input = { workspaceDir: workspace, source: "avatar.png", readBody: false };
     const read = vi.spyOn(fs, "readSync");
     const metadata = readLocalAgentAvatarSnapshot(input);
@@ -99,11 +113,11 @@ describe("local agent avatar files", () => {
   it.each(["replacement", "growth", "failure"] as const)(
     "keeps reads pinned and closes the descriptor after %s",
     (change) => {
-      const { workspace } = createWorkspace();
+      const { workspace, write, read: snapshot } = createWorkspace();
       const avatarPath = path.join(workspace, "avatar.png");
       const replacement = path.join(workspace, "replacement.png");
-      fs.writeFileSync(avatarPath, "original");
-      fs.writeFileSync(replacement, "replacement");
+      write("avatar.png", "original");
+      write("replacement.png", "replacement");
       const readSync = fs.readSync;
       let readFd: number | undefined;
       const read = vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
@@ -119,11 +133,7 @@ describe("local agent avatar files", () => {
         return Reflect.apply(readSync, fs, args);
       });
       const close = vi.spyOn(fs, "closeSync");
-      const result = readLocalAgentAvatarSnapshot({
-        workspaceDir: workspace,
-        source: "avatar.png",
-        readBody: true,
-      });
+      const result = snapshot();
       if (change === "replacement") {
         expect(result).toMatchObject({
           ok: true,
@@ -142,13 +152,13 @@ describe("local agent avatar files", () => {
   );
 
   it("rejects symlink escapes, hardlinks, oversized files, and unsupported extensions", () => {
-    const { workspace } = createWorkspace();
+    const { workspace, write, read } = createWorkspace();
     const outside = path.join(path.dirname(workspace), "outside.png");
     fs.writeFileSync(outside, "outside");
     fs.symlinkSync(outside, path.join(workspace, "symlink.png"));
-    fs.writeFileSync(path.join(workspace, "original.png"), "avatar");
+    write("original.png", "avatar");
     fs.linkSync(path.join(workspace, "original.png"), path.join(workspace, "hardlink.png"));
-    fs.writeFileSync(path.join(workspace, "large.png"), Buffer.alloc(AVATAR_MAX_BYTES + 1));
+    write("large.png", Buffer.alloc(AVATAR_MAX_BYTES + 1));
     for (const [source, reason] of [
       ["symlink.png", "outside_workspace"],
       ["hardlink.png", "unreadable"],
@@ -156,21 +166,17 @@ describe("local agent avatar files", () => {
       ["missing.png", "missing"],
       ["avatar.txt", "unsupported_extension"],
     ] as const) {
-      expect(
-        readLocalAgentAvatarSnapshot({ workspaceDir: workspace, source, readBody: true }),
-      ).toEqual({ ok: false, reason });
+      expect(read(source)).toEqual({ ok: false, reason });
     }
   });
 
   it("keeps the byte budget when a pending revalidation was evicted", async () => {
-    const { cfg, workspace } = createWorkspace();
+    const { write, prepare } = createWorkspace();
     const sources = Array.from({ length: 9 }, (_, index) => `${index}.png`);
     const body = Buffer.alloc(AVATAR_MAX_BYTES);
     for (const source of sources) {
-      fs.writeFileSync(path.join(workspace, source), body);
+      write(source, body);
     }
-    const prepare = (source: string) =>
-      prepareLocalAgentAvatarFile({ cfg, agentId: "main", source, readBody: true });
     await prepare(sources[0]!);
     const started = createDeferred();
     const release = createDeferred();
@@ -197,7 +203,7 @@ describe("local agent avatar files", () => {
   });
 
   it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements, and removal", async () => {
-    const { cfg, workspace } = createWorkspace();
+    const { workspace, prepare } = createWorkspace();
     const avatarPath = path.join(workspace, "avatar.png");
     fs.writeFileSync(avatarPath, "original");
     const unchangedMtime = new Date("2024-01-01T00:00:00Z");
@@ -218,19 +224,15 @@ describe("local agent avatar files", () => {
       }
       return originalFstatSync(fd, options);
     });
-    const params = { cfg, agentId: "main", source: "avatar.png", readBody: true };
-    const [first, duplicate] = await Promise.all([
-      prepareLocalAgentAvatarFile(params),
-      prepareLocalAgentAvatarFile(params),
-    ]);
+    const [first, duplicate] = await Promise.all([prepare(), prepare()]);
     expect(duplicate).toBe(first);
     expect(pool.run).toHaveBeenCalledOnce();
-    expect(await prepareLocalAgentAvatarFile(params)).toBe(first);
+    expect(await prepare()).toBe(first);
     expect(pool.run).toHaveBeenCalledTimes(2);
     fs.writeFileSync(avatarPath, "modified");
     fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
     ctimeMs += 1;
-    expect(await prepareLocalAgentAvatarFile(params)).toMatchObject({
+    expect(await prepare()).toMatchObject({
       ok: true,
       file: {
         body: Buffer.from("modified"),
@@ -246,49 +248,31 @@ describe("local agent avatar files", () => {
     const replacement = path.join(workspace, "replacement.png");
     fs.writeFileSync(replacement, "replacement bytes");
     fs.renameSync(replacement, avatarPath);
-    expect(await prepareLocalAgentAvatarFile(params)).toMatchObject({
-      ok: true,
-      file: { body: Buffer.from("replacement bytes") },
-    });
+    expectBody(await prepare(), "replacement bytes");
     fs.unlinkSync(avatarPath);
-    expect(await prepareLocalAgentAvatarFile(params)).toEqual({ ok: false, reason: "missing" });
+    expect(await prepare()).toEqual({ ok: false, reason: "missing" });
     fs.writeFileSync(avatarPath, "recreated");
-    expect(await prepareLocalAgentAvatarFile(params)).toMatchObject({
-      ok: true,
-      file: { body: Buffer.from("recreated") },
-    });
+    expectBody(await prepare(), "recreated");
   });
 
   it("revalidates cached metadata before acquiring bytes and after symlink or workspace changes", async () => {
-    const { cfg, workspace } = createWorkspace();
+    const { workspace, write, prepare } = createWorkspace();
     const firstPath = path.join(workspace, "first.png");
     const secondPath = path.join(workspace, "second.png");
     const avatarPath = path.join(workspace, "avatar.png");
-    fs.writeFileSync(firstPath, "first");
-    fs.writeFileSync(secondPath, "second");
+    write("first.png", "first");
+    write("second.png", "second");
     fs.symlinkSync(firstPath, avatarPath);
-    const params = { cfg, agentId: "main", source: "avatar.png", readBody: false };
-    expect(await prepareLocalAgentAvatarFile(params)).toMatchObject({
-      ok: true,
-      file: { body: undefined },
-    });
-    expect(await prepareLocalAgentAvatarFile({ ...params, readBody: true })).toMatchObject({
-      ok: true,
-      file: { body: Buffer.from("first") },
-    });
+    expectBody(await prepare("avatar.png", false), undefined);
+    expectBody(await prepare(), "first");
     fs.unlinkSync(avatarPath);
     fs.symlinkSync(secondPath, avatarPath);
-    expect(await prepareLocalAgentAvatarFile({ ...params, readBody: true })).toMatchObject({
-      ok: true,
-      file: { body: Buffer.from("second") },
-    });
+    expectBody(await prepare(), "second");
     fs.linkSync(secondPath, path.join(workspace, "hardlink.png"));
-    expect(await prepareLocalAgentAvatarFile(params)).toEqual({ ok: false, reason: "unreadable" });
+    expect(await prepare("avatar.png", false)).toEqual({ ok: false, reason: "unreadable" });
 
     const changed = createWorkspace();
-    fs.writeFileSync(path.join(changed.workspace, "avatar.png"), "changed workspace");
-    expect(
-      await prepareLocalAgentAvatarFile({ ...params, cfg: changed.cfg, readBody: true }),
-    ).toMatchObject({ ok: true, file: { body: Buffer.from("changed workspace") } });
+    changed.write("avatar.png", "changed workspace");
+    expectBody(await changed.prepare(), "changed workspace");
   });
 });

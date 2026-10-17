@@ -13,9 +13,7 @@ import {
 const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function parseIdentityFromContent(
-  content: string,
-): Promise<import("./identity-file.js").AgentIdentityFile | null> {
+async function parseIdentityFromContent(content: string) {
   const tempDir = tempDirs.make("openclaw-identity-parse-");
   const filePath = path.join(tempDir, "IDENTITY.md");
   fs.writeFileSync(filePath, content, "utf-8");
@@ -36,106 +34,47 @@ describe("parseIdentityMarkdown", () => {
   });
 
   it.each([
-    {
-      content: `
-# IDENTITY.md - Who Am I?
-
-- **Name:** *(pick something you like)*
-- **Creature:** *(AI? robot? familiar? ghost in the machine? something weirder?)*
-- **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*
-- **Emoji:** *(your signature - pick one that feels right)*
-- **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*
-    `,
-      expected: null,
-    },
-    {
-      content: `
-- **Name:** Samantha
-- **Creature:** Robot
-- **Vibe:** Warm
-- **Emoji:** :robot:
-- **Avatar:** avatars/openclaw.png
-`,
-      expected: {
+    [
+      "\n# IDENTITY.md - Who Am I?\n\n- **Name:** *(pick something you like)*\n- **Creature:** *(AI? robot? familiar? ghost in the machine? something weirder?)*\n- **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*\n- **Emoji:** *(your signature - pick one that feels right)*\n- **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*\n    ",
+      null,
+    ],
+    [
+      "\n- **Name:** Samantha\n- **Creature:** Robot\n- **Vibe:** Warm\n- **Emoji:** :robot:\n- **Avatar:** avatars/openclaw.png\n",
+      {
         name: "Samantha",
         creature: "Robot",
         vibe: "Warm",
         emoji: ":robot:",
         avatar: "avatars/openclaw.png",
       },
-    },
-    {
-      content: [
-        "- **Name:** `Samantha`",
-        "- `Creature`: Robot",
-        "- **`Avatar`**: `avatars/openclaw.png`",
-      ].join("\n"),
-      expected: {
-        name: "Samantha",
-        creature: "Robot",
-        avatar: "avatars/openclaw.png",
-      },
-    },
-    {
-      content: "- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`",
-      expected: null,
-    },
-    { content: "- **Avatar:** *(not set yet)*", expected: null },
-  ])(
-    "parses decorated identity values and ignores placeholders: $content",
-    async ({ content, expected }) => {
-      expect(await parseIdentityFromContent(content)).toEqual(expected);
-    },
-  );
+    ],
+    [
+      "- **Name:** `Samantha`\n- `Creature`: Robot\n- **`Avatar`**: `avatars/openclaw.png`",
+      { name: "Samantha", creature: "Robot", avatar: "avatars/openclaw.png" },
+    ],
+    ["- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`", null],
+    ["- **Avatar:** *(not set yet)*", null],
+  ] as const)("parses decorated values and ignores placeholders: %s", async (content, expected) => {
+    expect(await parseIdentityFromContent(content)).toEqual(expected);
+  });
 });
 
 describe("mergeIdentityMarkdownContent", () => {
   it.each([
-    {
-      content: `
-# IDENTITY.md - Agent Identity
-
-- **Name:** C-3PO
-- **Creature:** Flustered Protocol Droid
-- **Vibe:** Anxious, detail-obsessed
-- **Emoji:** 🤖
-
-## Role
-
-Fluent in over six million error messages.
-`,
-      identity: {
-        name: "Patch Agent",
-        emoji: "🦀",
-        avatar: "avatars/patch.png",
-      },
-      expected: `
-# IDENTITY.md - Agent Identity
-
-- Name: Patch Agent
-- **Creature:** Flustered Protocol Droid
-- **Vibe:** Anxious, detail-obsessed
-- Emoji: 🦀
-- Avatar: avatars/patch.png
-
-## Role
-
-Fluent in over six million error messages.
-`,
-    },
-    {
-      content: "\n- Name: Old Name\n- Name: Older Name\n- Emoji: 🙂\n",
-      identity: { name: "New Name", emoji: "🦀" },
-      expected: "\n- Name: New Name\n- Emoji: 🦀\n",
-    },
-    {
-      content: "- **`Name`**: Old Name\n",
-      identity: { name: "New Name" },
-      expected: "- Name: New Name\n",
-    },
-  ])(
-    "normalizes writable fields and preserves rich content: $content",
-    ({ content, identity, expected }) => {
+    [
+      "\n# IDENTITY.md - Agent Identity\n\n- **Name:** C-3PO\n- **Creature:** Flustered Protocol Droid\n- **Vibe:** Anxious, detail-obsessed\n- **Emoji:** 🤖\n\n## Role\n\nFluent in over six million error messages.\n",
+      { name: "Patch Agent", emoji: "🦀", avatar: "avatars/patch.png" },
+      "\n# IDENTITY.md - Agent Identity\n\n- Name: Patch Agent\n- **Creature:** Flustered Protocol Droid\n- **Vibe:** Anxious, detail-obsessed\n- Emoji: 🦀\n- Avatar: avatars/patch.png\n\n## Role\n\nFluent in over six million error messages.\n",
+    ],
+    [
+      "\n- Name: Old Name\n- Name: Older Name\n- Emoji: 🙂\n",
+      { name: "New Name", emoji: "🦀" },
+      "\n- Name: New Name\n- Emoji: 🦀\n",
+    ],
+    ["- **`Name`**: Old Name\n", { name: "New Name" }, "- Name: New Name\n"],
+  ] as const)(
+    "normalizes writable fields and preserves rich content: %s",
+    (content, identity, expected) => {
       expect(mergeIdentityMarkdownContent(content, identity)).toBe(expected);
     },
   );
