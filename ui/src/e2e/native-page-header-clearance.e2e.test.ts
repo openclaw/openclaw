@@ -189,7 +189,10 @@ suite.define(() => {
         expect(box.x).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(width);
         expect(box.y + box.height).toBeLessThanOrEqual(height);
-        expect(box.x >= intro.x + intro.width || box.y >= intro.y + intro.height).toBe(true);
+        expect(
+          box.x >= intro.x + intro.width || box.y >= intro.y + intro.height,
+          `Agent action ${JSON.stringify(box)} overlaps intro ${JSON.stringify(intro)}`,
+        ).toBe(true);
         await action.click({ trial: true });
       }
       await capture(page, `agents-header-${width}-${native ? "native" : "browser"}.png`);
@@ -199,20 +202,24 @@ suite.define(() => {
     },
   );
 
-  it("puts hub tabs in the row instead of a redundant title", async () => {
+  it("shares a stacked title and aligned tabs across Sessions and Worktrees", async () => {
     const { page, toolbar } = await openPage(
       "sessions",
       installNativeWebChrome,
       ".hub-page-header__tabs",
     );
     const header = page.locator(".content .content-header.hub-page-header");
-    const titleBox = (await header.locator(".page-title").boundingBox())!;
-    expect(Math.max(titleBox.width, titleBox.height)).toBeLessThanOrEqual(1);
+    const title = header.locator(".page-title");
+    await expect.poll(() => title.textContent()).toBe("Sessions");
     const tabs = header.locator(".hub-page-header__tabs");
-    await expectAligned(tabs, center(toolbar, "y"), "y");
-    await expectAligned(tabs, header, "x");
+    const titleBox = (await title.boundingBox())!;
     const tabsBox = (await tabs.boundingBox())!;
-    expect(tabsBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
+    expect(titleBox.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+    expect(titleBox.width).toBeGreaterThan(1);
+    expect(tabsBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height);
+    expect(Math.abs(tabsBox.x - titleBox.x)).toBeLessThanOrEqual(1);
+    await tabs.getByRole("tab", { name: "Worktrees" }).click();
+    await expect.poll(() => title.textContent()).toBe("Worktrees");
   });
 
   it.each(["ltr", "rtl"] as const)(
