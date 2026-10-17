@@ -42,6 +42,22 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+const serverOptions = { bind: "loopback", auth: { mode: "none" } } as const;
+
+function lifetimeRegistry(
+  handler: ReturnType<typeof createEmptyPluginRegistry>["gatewayHandlers"][string],
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayHandlers["test.lifetime"] = handler;
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "lifetime-proof",
+      name: "test.lifetime",
+      handler,
+    }),
+  );
+  return registry;
+}
 
 async function closeTwice(
   gateway: GatewayHarness,
@@ -100,9 +116,7 @@ describe("public Gateway close request lifetime", () => {
       let closing: Promise<void> | undefined;
       let releaseTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        gateway = await createGatewaySuiteHarness({
-          serverOptions: { bind: "loopback", auth: { mode: "none" } },
-        });
+        gateway = await createGatewaySuiteHarness({ serverOptions });
         await gateway.server.startupSettled;
         ws = await gateway.openWs();
         // An ephemeral CLI avoids admitting history prewarming alongside the waiter.
@@ -199,8 +213,7 @@ describe("public Gateway close request lifetime", () => {
     const selectedRoots: string[] = [];
     const handlerRuns: Promise<void>[] = [];
     let enteredCount = 0;
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.lifetime"] = ({ respond }) => {
+    const registry = lifetimeRegistry(({ respond }) => {
       const work = (async () => {
         if (++enteredCount === 2) {
           bothEntered.resolve();
@@ -212,14 +225,7 @@ describe("public Gateway close request lifetime", () => {
       })();
       handlerRuns.push(work);
       return work;
-    };
-    registry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "lifetime-proof",
-        name: "test.lifetime",
-        handler: registry.gatewayHandlers["test.lifetime"],
-      }),
-    );
+    });
     setTestPluginRegistry(registry);
     let gateway: GatewayHarness | undefined;
     let ws: WebSocket | undefined;
@@ -228,20 +234,17 @@ describe("public Gateway close request lifetime", () => {
     const unblock = () => release.resolve();
     signal.addEventListener("abort", unblock, { once: true });
     try {
-      gateway = await createGatewaySuiteHarness({
-        serverOptions: { bind: "loopback", auth: { mode: "none" } },
-      });
+      gateway = await createGatewaySuiteHarness({ serverOptions });
       ws = await gateway.openWs();
       await connectOk(ws, { scopes: ["operator.admin"] });
-      const socket = ws;
-      const accepted = [rpcReq(socket, "test.lifetime", {}), rpcReq(socket, "test.lifetime", {})];
+      const accepted = [rpcReq(ws, "test.lifetime", {}), rpcReq(ws, "test.lifetime", {})];
       expect(await Promise.all(accepted)).toEqual([
         expect.objectContaining({ ok: true }),
         expect.objectContaining({ ok: true }),
       ]);
       await bothEntered.promise;
       const shutdown = onceMessage<{ type: string; event: string; payload: { reason: string } }>(
-        socket,
+        ws,
         (frame) => frame.type === "event" && frame.event === "shutdown",
       );
 
@@ -353,9 +356,7 @@ describe("public Gateway close request lifetime", () => {
         });
         return kernel;
       });
-      gateway = await createGatewaySuiteHarness({
-        serverOptions: { bind: "loopback", auth: { mode: "none" } },
-      });
+      gateway = await createGatewaySuiteHarness({ serverOptions });
       await gateway.server.startupSettled;
       ws = await gateway.openWs();
       await connectOk(ws, { scopes: ["operator.admin"] });
@@ -412,19 +413,11 @@ describe("public Gateway close request lifetime", () => {
   }) => {
     const stopping = createDeferredCore();
     const release = createDeferredCore();
-    const registry = createEmptyPluginRegistry();
     let invoked = 0;
-    registry.gatewayHandlers["test.lifetime"] = ({ respond }) => {
+    const registry = lifetimeRegistry(({ respond }) => {
       invoked++;
       respond(true, { executed: true });
-    };
-    registry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "lifetime-proof",
-        name: "test.lifetime",
-        handler: registry.gatewayHandlers["test.lifetime"],
-      }),
-    );
+    });
     registry.typedHooks.push({
       pluginId: "lifetime-proof",
       hookName: "gateway_stop",
@@ -441,9 +434,7 @@ describe("public Gateway close request lifetime", () => {
     const unblock = () => release.resolve();
     signal.addEventListener("abort", unblock, { once: true });
     try {
-      gateway = await createGatewaySuiteHarness({
-        serverOptions: { bind: "loopback", auth: { mode: "none" } },
-      });
+      gateway = await createGatewaySuiteHarness({ serverOptions });
       ws = await gateway.openWs();
       await connectOk(ws, { scopes: ["operator.admin"] });
       initializeGlobalHookRunner(getTestPluginRegistry());

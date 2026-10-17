@@ -29,6 +29,31 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+type ApprovalRecord = { id: string; claimId?: string };
+
+async function expectApproval(
+  id: string,
+  status: "pending" | "cancelled",
+  terminalReason?: string,
+) {
+  expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
+    outcome: "found",
+    record: { status, ...(terminalReason ? { terminalReason } : {}) },
+  });
+}
+
+async function allowApproval(
+  reviewer: WebSocket,
+  id: string,
+  response: Promise<{ stdout: string }>,
+) {
+  expect(
+    (await rpcReq(reviewer, "plugin.approval.resolve", { id, decision: "allow-once" })).ok,
+  ).toBe(true);
+  const result = await response;
+  expect(result.stdout, JSON.stringify({ id, response: result })).not.toBe("");
+  expect(JSON.parse(result.stdout).hookSpecificOutput.decision.behavior).toBe("allow");
+}
 
 describe("native hook relay WebSocket request lifetime", () => {
   it("preserves admitted foreground and claimed-child execution after callGateway closes its connection", async ({
@@ -93,11 +118,9 @@ describe("native hook relay WebSocket request lifetime", () => {
       for (const child of [false, true]) {
         if (child) {
           host.closeHost();
-          const assertForegroundCurrent = expectDefined(
-            assertions.get("foreground-command"),
-            "foreground guard",
-          );
-          expect.soft(assertForegroundCurrent).toThrow("host capability is no longer active");
+          expect
+            .soft(expectDefined(assertions.get("foreground-command"), "foreground guard"))
+            .toThrow("host capability is no longer active");
           relay.unregister();
         }
         const toolUseId = child ? "child-command" : "foreground-command";
@@ -156,7 +179,7 @@ describe("native hook relay WebSocket request lifetime", () => {
     "keeps accepted approval ownership across a lost callback (admitted host: %s)",
     async (owned, { signal }) => {
       const accepted = createDeferredCore<string>();
-      const records = new Map<string, Array<{ id: string; claimId?: string }>>();
+      const records = new Map<string, ApprovalRecord[]>();
       const responses: Array<() => void> = [];
       const handlers: Promise<unknown>[] = [];
       const pending: Promise<unknown>[] = [];
@@ -268,10 +291,7 @@ describe("native hook relay WebSocket request lifetime", () => {
           ]),
           signal,
         );
-        expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
-          outcome: "found",
-          record: { status: "pending" },
-        });
+        await expectApproval(id, "pending");
         const other = owned ? invoke("call-b") : undefined;
         if (owned) {
           await vi.waitFor(() => expect(records.get("call-b")).toHaveLength(1));
@@ -282,25 +302,12 @@ describe("native hook relay WebSocket request lifetime", () => {
         firstAbort.abort();
         await expect(first).rejects.toThrow(/abort/i);
         if (owned) {
-          await vi.waitFor(async () =>
-            expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
-              outcome: "found",
-              record: { status: "cancelled", terminalReason: "run-aborted" },
-            }),
-          );
+          await vi.waitFor(() => expectApproval(id, "cancelled", "run-aborted"));
           await vi.waitFor(() => expect(resolved).toContain(id));
-          expect(
-            await getOperatorApprovalDetailed({ id: records.get("call-b")![0]!.id }),
-          ).toMatchObject({
-            outcome: "found",
-            record: { status: "pending" },
-          });
+          await expectApproval(records.get("call-b")![0]!.id, "pending");
           expect(() => host!.hostCapabilities.assertActive()).not.toThrow();
         } else {
-          expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
-            outcome: "found",
-            record: { status: "pending" },
-          });
+          await expectApproval(id, "pending");
           expect(resolved).not.toContain(id);
         }
         const retry = invoke("call-a");
@@ -318,30 +325,9 @@ describe("native hook relay WebSocket request lifetime", () => {
         }
         releaseResponses();
         const retryId = records.get("call-a")!.at(-1)!.id;
-        expect(
-          (
-            await rpcReq(reviewer, "plugin.approval.resolve", {
-              id: retryId,
-              decision: "allow-once",
-            })
-          ).ok,
-        ).toBe(true);
-        const retryResponse = await retry;
-        expect(retryResponse.stdout, JSON.stringify({ retryId, retryResponse })).not.toBe("");
-        expect(JSON.parse(retryResponse.stdout).hookSpecificOutput.decision.behavior).toBe("allow");
+        await allowApproval(reviewer, retryId, retry);
         if (other) {
-          const otherId = records.get("call-b")![0]!.id;
-          expect(
-            (
-              await rpcReq(reviewer, "plugin.approval.resolve", {
-                id: otherId,
-                decision: "allow-once",
-              })
-            ).ok,
-          ).toBe(true);
-          expect(JSON.parse((await other).stdout).hookSpecificOutput.decision.behavior).toBe(
-            "allow",
-          );
+          await allowApproval(reviewer, records.get("call-b")![0]!.id, other);
           expect(() => host!.hostCapabilities.assertActive()).not.toThrow();
         }
       } finally {

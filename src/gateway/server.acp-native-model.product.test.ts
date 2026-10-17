@@ -105,23 +105,19 @@ it(
       );
       const pluginDir = state.path("acp-plugin");
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
-          name: BACKEND_ID,
-          type: "commonjs",
-          peerDependencies: { openclaw: ">=2026.9.5" },
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: BACKEND_ID,
-          activation: { onStartup: true },
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        }),
-      );
+      const writePluginJson = (name: string, value: unknown) =>
+        fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
+      await writePluginJson("package.json", {
+        name: BACKEND_ID,
+        type: "commonjs",
+        peerDependencies: { openclaw: ">=2026.9.5" },
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      await writePluginJson("openclaw.plugin.json", {
+        id: BACKEND_ID,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      });
       // The only substituted execution boundary is the external ACP backend.
       await fs.writeFile(
         path.join(pluginDir, "index.cjs"),
@@ -195,6 +191,7 @@ module.exports = {
         agentRuntime: { id: "openclaw" },
         params: { transport: "sse", openaiWsWarmup: false },
       };
+      const acpRuntime = { type: "acp", acp: { agent: "cursor", backend: BACKEND_ID } } as const;
       cfg = {
         agents: {
           ownership: "explicit",
@@ -211,14 +208,8 @@ module.exports = {
             },
           },
           entries: {
-            main: {
-              model: ACP_MODEL,
-              runtime: { type: "acp", acp: { agent: "cursor", backend: BACKEND_ID } },
-            },
-            qualified: {
-              model: { primary: qualified.modelRef },
-              runtime: { type: "acp", acp: { agent: "cursor", backend: BACKEND_ID } },
-            },
+            main: { model: ACP_MODEL, runtime: acpRuntime },
+            qualified: { model: { primary: qualified.modelRef }, runtime: acpRuntime },
           },
         },
         acp: { enabled: true, backend: BACKEND_ID, allowedAgents: ["cursor"] },
@@ -287,6 +278,21 @@ module.exports = {
           : { text: extractFirstTextBlock(terminal?.payload?.message) };
       };
       const manager = getAcpSessionManager();
+      const sessionConfig = cfg;
+      const userOverride = (providerOverride: string, modelOverride: string) => ({
+        providerOverride,
+        modelOverride,
+        modelOverrideSource: "user" as const,
+      });
+      const assertOverride = (provider: string, model: string) => {
+        expect(
+          manager.resolveSession({ cfg: sessionConfig, agentId: "main", sessionKey }),
+        ).toMatchObject({
+          kind: "ready",
+          entry: userOverride(provider, model),
+          meta: { runtimeOptions: { model: ACP_MODEL } },
+        });
+      };
       for (const { agentId, harnessModel } of [
         { agentId: "main", harnessModel: ACP_MODEL },
         { agentId: "qualified", harnessModel: qualified.modelRef },
@@ -311,17 +317,12 @@ module.exports = {
         expect(requests).toHaveLength(requestCount);
         expect(
           await send(sessionKey, "/btw Summarize that context.", `${agentId}-btw`),
-        ).toMatchObject({
-          text: `NATIVE:${primary.modelId}`,
-          isError: false,
-        });
+        ).toMatchObject({ text: `NATIVE:${primary.modelId}`, isError: false });
         expect(requests.at(-1)?.model).toBe(primary.modelId);
         expect(JSON.stringify(requests.at(-1)?.input)).toContain(acpAnswer);
         expect(
           await send(sessionKey, "Continue the ACP conversation.", `${agentId}-second`),
-        ).toEqual({
-          text: acpAnswer,
-        });
+        ).toEqual({ text: acpAnswer });
         expect(manager.resolveSession({ cfg, agentId, sessionKey })).toMatchObject({
           kind: "ready",
           entry: { sessionId: initialized.sessionEntry.sessionId },
@@ -335,17 +336,12 @@ module.exports = {
       }
 
       const sessionKey = "agent:main:acp:native-policy";
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        providerOverride: override.providerId,
-        modelOverride: override.modelId,
-        modelOverrideSource: "user",
-      }));
+      const patchOverride = (provider: string, model: string) =>
+        patchSessionEntryCore({ agentId: "main", sessionKey }, () => userOverride(provider, model));
+      await patchOverride(override.providerId, override.modelId);
       expect(
         await send(sessionKey, "/btw Use my native selection.", "native-override"),
-      ).toMatchObject({
-        text: `NATIVE:${override.modelId}`,
-        isError: false,
-      });
+      ).toMatchObject({ text: `NATIVE:${override.modelId}`, isError: false });
       expect(requests.at(-1)?.model).toBe(override.modelId);
 
       const nativeFailureRequestCount = requests.length;
@@ -361,21 +357,9 @@ module.exports = {
         await send(sessionKey, "Continue after the native failure.", "acp-after-failure"),
       ).toEqual({ text: acpAnswers.get("main") });
       expect(requests).toHaveLength(requestCount);
-      expect(manager.resolveSession({ cfg, agentId: "main", sessionKey })).toMatchObject({
-        kind: "ready",
-        entry: {
-          providerOverride: override.providerId,
-          modelOverride: override.modelId,
-          modelOverrideSource: "user",
-        },
-        meta: { runtimeOptions: { model: ACP_MODEL } },
-      });
+      assertOverride(override.providerId, override.modelId);
 
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        providerOverride: MISSING_AUTH_PROVIDER_ID,
-        modelOverride: missingAuth.modelId,
-        modelOverrideSource: "user",
-      }));
+      await patchOverride(MISSING_AUTH_PROVIDER_ID, missingAuth.modelId);
       const missingAuthLogFile = state.path("native-missing-auth.log");
       setLoggerOverride({ file: missingAuthLogFile, level: "warn", consoleLevel: "silent" });
       try {
@@ -410,15 +394,7 @@ module.exports = {
         await send(sessionKey, "Continue after the missing native auth.", "acp-after-missing-auth"),
       ).toEqual({ text: acpAnswers.get("main") });
       expect(requests).toHaveLength(requestCount);
-      expect(manager.resolveSession({ cfg, agentId: "main", sessionKey })).toMatchObject({
-        kind: "ready",
-        entry: {
-          providerOverride: MISSING_AUTH_PROVIDER_ID,
-          modelOverride: missingAuth.modelId,
-          modelOverrideSource: "user",
-        },
-        meta: { runtimeOptions: { model: ACP_MODEL } },
-      });
+      assertOverride(MISSING_AUTH_PROVIDER_ID, missingAuth.modelId);
     } finally {
       try {
         if (cfg) {

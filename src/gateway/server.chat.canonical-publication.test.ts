@@ -20,6 +20,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { parseSseEvents } from "./http-stream.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const privateCaption =
@@ -27,48 +28,40 @@ const privateCaption =
 const publicCaption = "Public attachment caption. ".repeat(200).trimEnd();
 const dryRunFinal = "The attachment was not sent because this was a dry run.";
 const missingMediaFinal = "The attachment could not be sent because the file was not found.";
+function publicationCase<Name extends string>(
+  name: Name,
+  caption: string,
+  expectedText: string[],
+  finalText?: string,
+) {
+  return { name, caption, expectedText, finalText };
+}
 const cases = [
-  { name: "ordinary", caption: "Attached proof.", expectedText: ["Attached proof."] },
-  { name: "internal", caption: privateCaption, expectedText: [] },
-  {
-    name: "delivery",
-    caption:
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-    expectedText: [],
-  },
-  {
-    name: "mixed",
-    caption: `Attached proof.\n${privateCaption}`,
-    expectedText: ["Attached proof."],
-  },
-  {
-    name: "quoted-marker",
-    caption: "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
-    expectedText: ["what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?"],
-  },
-  {
-    name: "details-cap",
-    caption: `${publicCaption}\n${privateCaption}`,
-    expectedText: [publicCaption],
-  },
-  {
-    name: "dry-run",
-    caption: privateCaption,
-    finalText: dryRunFinal,
-    expectedText: [dryRunFinal],
-  },
-  {
-    name: "missing-media",
-    caption: privateCaption,
-    finalText: missingMediaFinal,
-    expectedText: [missingMediaFinal],
-  },
-  {
-    name: "cancel",
-    caption: `Attached proof.\n${privateCaption}`,
-    expectedText: ["Attached proof."],
-  },
-] as const;
+  publicationCase("ordinary", "Attached proof.", ["Attached proof."]),
+  publicationCase("internal", privateCaption, []),
+  publicationCase(
+    "delivery",
+    "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    [],
+  ),
+  publicationCase("mixed", `Attached proof.\n${privateCaption}`, ["Attached proof."]),
+  publicationCase("quoted-marker", "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?", [
+    "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
+  ]),
+  publicationCase("details-cap", `${publicCaption}\n${privateCaption}`, [publicCaption]),
+  publicationCase("dry-run", privateCaption, [dryRunFinal], dryRunFinal),
+  publicationCase("missing-media", privateCaption, [missingMediaFinal], missingMediaFinal),
+  publicationCase("cancel", `Attached proof.\n${privateCaption}`, ["Attached proof."]),
+];
+const messagesFrom = (events: unknown[]) =>
+  events
+    .filter(isRecord)
+    .map((event) => event.message)
+    .filter(isRecord);
+const contentFrom = (messages: Record<string, unknown>[]) =>
+  messages
+    .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+    .filter(isRecord);
 
 it(
   "chat.send preserves canonical sanitized message publication through chat.history and artifacts.download",
@@ -183,7 +176,7 @@ it(
           heldFinalRequest.resolve();
         } else {
           writeOpenAiResponsesText(response, {
-            text: "finalText" in selected ? selected.finalText : "NO_REPLY",
+            text: selected.finalText ?? "NO_REPLY",
             messageId: `msg_${selected.name}`,
             responseId: `final_${selected.name}`,
           });
@@ -200,6 +193,10 @@ it(
       if (!address || typeof address === "string") {
         throw new Error("Missing synthetic endpoint address");
       }
+      const model = buildMockOpenAiResponsesProvider(
+        `http://127.0.0.1:${address.port}/v1`,
+        "canonical-proof",
+      );
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -216,22 +213,9 @@ it(
             mode: "replace",
             providers: {
               openai: {
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                apiKey: "test",
-                api: "openai-responses",
+                ...model.config,
                 request: { allowPrivateNetwork: true },
-                models: [
-                  {
-                    id: "canonical-proof",
-                    name: "canonical-proof",
-                    api: "openai-responses",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 64000,
-                    maxTokens: 8192,
-                  },
-                ],
+                models: [{ ...model.config.models[0], contextWindow: 64000, maxTokens: 8192 }],
               },
             },
           },
@@ -290,12 +274,11 @@ it(
               if (frames.some((frame) => frame.event === "history")) {
                 releaseTool.resolve();
               }
-              const messages = frames
-                .filter((frame) => frame.event === "message")
-                .map((frame): unknown => JSON.parse(frame.data))
-                .filter(isRecord)
-                .map((event) => event.message)
-                .filter(isRecord);
+              const messages = messagesFrom(
+                frames
+                  .filter((frame) => frame.event === "message")
+                  .map((frame): unknown => JSON.parse(frame.data)),
+              );
               if (
                 messages.some(
                   (message) =>
@@ -351,13 +334,10 @@ it(
           sessionKey,
           messageRole: "assistant",
         });
-        const diagnosticCalls = rawEvents
-          .filter(isRecord)
-          .map((event) => event.message)
-          .filter(isRecord)
-          .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-          .filter(isRecord)
-          .filter((block) => block.type === "toolCall");
+        const rawMessages = messagesFrom(rawEvents);
+        const diagnosticCalls = contentFrom(rawMessages).filter(
+          (block) => block.type === "toolCall",
+        );
         expect(diagnosticCalls, scenario.name).toContainEqual(
           expect.objectContaining({
             name: "message",
@@ -378,21 +358,16 @@ it(
           scenario.name,
         ).toBe(false);
         if (scenario.name === "details-cap") {
-          const savedResult = rawEvents
-            .filter(isRecord)
-            .map((event) => event.message)
-            .filter(isRecord)
-            .find((message) => message.role === "toolResult");
+          const savedResult = rawMessages.find((message) => message.role === "toolResult");
           expect(savedResult?.details).toMatchObject({ persistedDetailsTruncated: true });
           expect(savedResult?.details).not.toHaveProperty("idempotencyKey");
           expect(savedResult?.details).not.toHaveProperty("sourceReplyTranscriptOwner");
         }
         expect(page).toMatchObject({ hasMore: true });
         expect(page.messages).toEqual(history.messages.slice(-2));
-        const visibleText = history.messages
-          .filter((message) => message.role === "assistant")
-          .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-          .filter(isRecord)
+        const visibleText = contentFrom(
+          history.messages.filter((message) => message.role === "assistant"),
+        )
           .filter((block) => block.type === "text")
           .map((block) => block.text);
         expect.soft(visibleText, scenario.name).toEqual(scenario.expectedText);
