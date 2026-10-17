@@ -25,8 +25,6 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { prepareAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
-import { prepareCanonicalTranscriptArchiveMigrations } from "../infra/state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -202,16 +200,6 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     };
     try {
       expect(await inspect()).toEqual({ changes: [], warnings: [] });
-      let archives: Promise<void> | undefined;
-      withEngineStoreAdmission(() => {
-        archives = prepareCanonicalTranscriptArchiveMigrations(
-          prepareAgentDatabaseMigrationDiscovery({
-            env: process.env,
-            configuredAgentDatabaseTargets: [{ agentId: target.agentId, path: database.path }],
-          }),
-        );
-      });
-      await archives;
       const raw = withEngineStoreAdmission(() => {
         const row = database.db
           .prepare(
