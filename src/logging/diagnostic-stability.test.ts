@@ -27,6 +27,18 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
+type Memory = NonNullable<DiagnosticStabilitySnapshot["events"][number]["memory"]>;
+function memory(overrides: Partial<Memory> = {}): Memory {
+  return {
+    rssBytes: 100,
+    heapTotalBytes: 80,
+    heapUsedBytes: 40,
+    externalBytes: 10,
+    arrayBuffersBytes: 5,
+    ...overrides,
+  };
+}
+
 function recordExporter(
   update: Pick<DiagnosticExporterHealthUpdate, "status"> & Partial<DiagnosticExporterHealthUpdate>,
   exporter = "diagnostics-otel",
@@ -144,28 +156,15 @@ describe("diagnostic stability recorder", () => {
       "session.turn.created": 1,
     });
     expect(snapshot.events).toMatchObject([
-      {
-        type: "message.received",
-        channel: "signal",
-        source: "dispatchInboundMessage",
-      },
-      {
-        type: "message.dispatch.started",
-        channel: "signal",
-        source: "replyResolver",
-      },
+      { type: "message.received", channel: "signal", source: "dispatchInboundMessage" },
+      { type: "message.dispatch.started", channel: "signal", source: "replyResolver" },
       {
         type: "message.dispatch.completed",
         channel: "signal",
         source: "replyResolver",
         outcome: "completed",
       },
-      {
-        type: "session.turn.created",
-        channel: "signal",
-        source: "main",
-        outcome: "user",
-      },
+      { type: "session.turn.created", channel: "signal", source: "main", outcome: "user" },
     ]);
     for (const event of snapshot.events) {
       expect(event).not.toHaveProperty("messageId");
@@ -261,13 +260,7 @@ describe("diagnostic stability recorder", () => {
       providerWaitEstimateMs: 0.75,
       errorCategory: "TypeError",
       failureKind: "terminated",
-      memory: {
-        rssBytes: 100,
-        heapTotalBytes: 80,
-        heapUsedBytes: 40,
-        externalBytes: 20,
-        arrayBuffersBytes: 10,
-      },
+      memory: memory({ externalBytes: 20, arrayBuffersBytes: 10 }),
     });
     await waitForDiagnosticEventsDrained();
 
@@ -287,13 +280,7 @@ describe("diagnostic stability recorder", () => {
       providerWaitEstimateMs: 0.75,
       reason: "TypeError",
       failureKind: "terminated",
-      memory: {
-        rssBytes: 100,
-        heapTotalBytes: 80,
-        heapUsedBytes: 40,
-        externalBytes: 20,
-        arrayBuffersBytes: 10,
-      },
+      memory: memory({ externalBytes: 20, arrayBuffersBytes: 10 }),
     });
     expect(JSON.stringify(snapshot.events[1])).not.toContain("call-1");
   });
@@ -301,26 +288,14 @@ describe("diagnostic stability recorder", () => {
   it("summarizes memory and large payload events", () => {
     emitDiagnosticEvent({
       type: "diagnostic.memory.sample",
-      memory: {
-        rssBytes: 100,
-        heapTotalBytes: 80,
-        heapUsedBytes: 40,
-        externalBytes: 10,
-        arrayBuffersBytes: 5,
-      },
+      memory: memory(),
     });
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
       level: "warning",
       reason: "rss_threshold",
       thresholdBytes: 90,
-      memory: {
-        rssBytes: 120,
-        heapTotalBytes: 90,
-        heapUsedBytes: 50,
-        externalBytes: 10,
-        arrayBuffersBytes: 5,
-      },
+      memory: memory({ rssBytes: 120, heapTotalBytes: 90, heapUsedBytes: 50 }),
     });
     emitDiagnosticEvent({
       type: "payload.large",
@@ -655,7 +630,6 @@ describe("diagnostic stability recorder", () => {
   });
 
   it("rejects trusted non-model events before copying their payloads", () => {
-    startDiagnosticStabilityRecorder();
     const clone = vi.spyOn(globalThis, "structuredClone");
 
     emitTrustedDiagnosticEvent({ type: "model.usage", usage: { total: 42 } });

@@ -46,6 +46,10 @@ function startModel(
     ...params,
   });
 }
+function requestTwice(params: Parameters<typeof startModel>[0]) {
+  startModel(params);
+  startModel(params);
+}
 function expectRequestAge(ref: ActivityRef, age: number | undefined) {
   expect(getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs).toBe(age);
 }
@@ -209,19 +213,14 @@ describe("argument-churn liveness", () => {
     const sessionId = "same-time-merge-session";
     const sessionKey = "agent:main:same-time-merge";
     const runId = "same-time-merge-run";
+    const ref = { sessionId, sessionKey };
 
     markDiagnosticEmbeddedRunStarted({ sessionId, runId });
     markDiagnosticArgumentChurnObservation({ sessionId, runId, active: true });
     markDiagnosticRunProgress({ sessionKey, reason: "model_call:stream" });
 
     vi.setSystemTime(startedAt + 60_000);
-    expectActivity(
-      { sessionId, sessionKey },
-      {
-        lastProgressAgeMs: 60_000,
-        lastProgressReason: "model_call:stream",
-      },
-    );
+    expectActivity(ref, { lastProgressAgeMs: 60_000, lastProgressReason: "model_call:stream" });
   });
 
   it("keeps overlapping policy waits suspended until every call releases its token", () => {
@@ -234,32 +233,18 @@ describe("argument-churn liveness", () => {
 
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
     markDiagnosticArgumentChurnObservation({ ...run, active: true });
-    markDiagnosticArgumentChurnObservation({
-      ...run,
-      policyWait: "enter",
-      policyWaitToken: firstWait,
-    });
-    markDiagnosticArgumentChurnObservation({
-      ...run,
-      policyWait: "enter",
-      policyWaitToken: secondWait,
-    });
+    const policyWait = (action: "enter" | "exit", policyWaitToken: symbol) =>
+      markDiagnosticArgumentChurnObservation({ ...run, policyWait: action, policyWaitToken });
+    policyWait("enter", firstWait);
+    policyWait("enter", secondWait);
 
     vi.setSystemTime(startedAt + 6 * 60_000);
-    markDiagnosticArgumentChurnObservation({
-      ...run,
-      policyWait: "exit",
-      policyWaitToken: firstWait,
-    });
+    policyWait("exit", firstWait);
     markDiagnosticArgumentChurnObservation({ ...run, active: true });
 
     expectActivity(ref, { lastProgressAgeMs: 0, lastProgressReason: "tool_policy:pending" });
 
-    markDiagnosticArgumentChurnObservation({
-      ...run,
-      policyWait: "exit",
-      policyWaitToken: secondWait,
-    });
+    policyWait("exit", secondWait);
     expectActivity(ref, {
       lastProgressAgeMs: 6 * 60_000,
       lastProgressReason: "tool_loop:argument_churn",
@@ -365,9 +350,7 @@ describe("repeated request liveness", () => {
     const run = { ...ref, runId };
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      startModel({ ...run });
-    }
+    requestTwice({ ...run });
 
     emitTrustedDiagnosticEvent({
       type: "model.call.completed",
@@ -414,20 +397,16 @@ describe("repeated request liveness", () => {
 
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-owner" });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      startModel({
-        ...ref,
-        runId: "first-owner",
-        provider: "cli",
-        model: "turn-model",
-        observationUnit: "turn",
-      });
-    }
+    requestTwice({
+      ...ref,
+      runId: "first-owner",
+      provider: "cli",
+      model: "turn-model",
+      observationUnit: "turn",
+    });
     expectRequestAge(ref, undefined);
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      startModel({ ...ref, runId: "first-owner" });
-    }
+    requestTwice({ ...ref, runId: "first-owner" });
     vi.setSystemTime(startedAt + 6 * 60_000);
     expectRequestAge(ref, 6 * 60_000);
 
@@ -435,8 +414,7 @@ describe("repeated request liveness", () => {
     startModel({ ...ref, runId: "first-owner", model: "delayed-request" });
     expectRequestAge(ref, undefined);
 
-    startModel({ ...ref, runId: "replacement-owner" });
-    startModel({ ...ref, runId: "replacement-owner" });
+    requestTwice({ ...ref, runId: "replacement-owner" });
     vi.setSystemTime(startedAt + 7 * 60_000);
     emitCoreSemanticRunProgressDiagnosticEvent({
       ...ref,
@@ -467,9 +445,7 @@ describe("repeated request liveness", () => {
     });
 
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "queued-new-owner" });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      startModel({ ...ref, runId: "queued-new-owner" });
-    }
+    requestTwice({ ...ref, runId: "queued-new-owner" });
 
     await waitForDiagnosticEventsDrained();
 
@@ -486,9 +462,7 @@ describe("repeated request liveness", () => {
 
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      startModel({ ...run });
-    }
+    requestTwice({ ...run });
 
     emitDiagnosticEvent({
       type: "run.progress",
@@ -563,12 +537,11 @@ describe("repeated request liveness", () => {
     const sessionId = "merge-session";
     const sessionKey = "agent:main:merge";
     const runId = "merge-run";
+    const ref = { sessionId, sessionKey };
 
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ sessionId, runId });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      startModel({ sessionId, runId });
-    }
+    requestTwice({ sessionId, runId });
     markDiagnosticRunProgress({ sessionId, sessionKey, reason: "ownerless:liveness" });
     emitCoreSemanticRunProgressDiagnosticEvent({
       sessionId,
@@ -580,13 +553,10 @@ describe("repeated request liveness", () => {
     await waitForDiagnosticEventsDrained();
 
     vi.setSystemTime(startedAt + 6 * 60_000);
-    expectActivity(
-      { sessionId, sessionKey },
-      {
-        lastProgressReason: "whitespace-owner:semantic",
-        repeatedRequestNoProgressAgeMs: 6 * 60_000,
-      },
-    );
+    expectActivity(ref, {
+      lastProgressReason: "whitespace-owner:semantic",
+      repeatedRequestNoProgressAgeMs: 6 * 60_000,
+    });
 
     emitCoreSemanticRunProgressDiagnosticEvent({
       sessionKey,
@@ -595,13 +565,10 @@ describe("repeated request liveness", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
-    expectActivity(
-      { sessionId, sessionKey },
-      {
-        lastProgressReason: "owned:semantic",
-        repeatedRequestNoProgressAgeMs: undefined,
-      },
-    );
+    expectActivity(ref, {
+      lastProgressReason: "owned:semantic",
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
   });
 
   it("keeps repeated request evidence across same-logical-owner attempt rearming", async () => {
@@ -645,19 +612,9 @@ describe("repeated request liveness", () => {
   });
 });
 
-describe("resolveRunStaleThresholdMs", () => {
-  it.each([
-    {
-      name: "default window for embedded_run",
-      activity: { activeWorkKind: "embedded_run" as const },
-      expected: RUN_STALE_TAKEOVER_MS,
-    },
-    {
-      name: "blocked-tool floor for tool_call",
-      activity: { activeWorkKind: "tool_call" as const },
-      expected: Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS),
-    },
-  ])("$name", ({ activity, expected }) => {
-    expect(resolveRunStaleThresholdMs(activity)).toBe(expected);
-  });
+it.each([
+  ["embedded_run", RUN_STALE_TAKEOVER_MS],
+  ["tool_call", Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)],
+] as const)("uses the stale window for %s", (activeWorkKind, expected) => {
+  expect(resolveRunStaleThresholdMs({ activeWorkKind })).toBe(expected);
 });

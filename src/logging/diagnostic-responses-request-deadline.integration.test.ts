@@ -1,7 +1,14 @@
 import { createServer, type ServerResponse } from "node:http";
-import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { Context, StreamFn } from "@openclaw/llm-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeOpenAIProviderModel } from "../../packages/ai/src/providers/openai-provider.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../packages/ai/src/transports/openai-responses-client.js";
+import {
+  message,
+  outputTextDelta,
+  outputTextPart,
+  startedMessage,
+} from "../../packages/ai/src/transports/openai-responses-stream-parity.test-helpers.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -44,6 +51,10 @@ const STUCK_ABORT_MS = 500;
 const OWNER_START_MS = Date.parse("2026-10-04T00:00:00.000Z");
 
 type FixtureOutcome = { stopReason?: string; errorMessage?: string; error?: unknown };
+type FallbackSettlement = {
+  result?: Awaited<ReturnType<typeof runWithModelFallback<FixtureOutcome>>>;
+  error?: unknown;
+};
 
 async function createResponsesFallbackFixture(signal: AbortSignal) {
   const requests: Array<Record<string, unknown>> = [];
@@ -88,22 +99,6 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
   const writeFrame = (response: ServerResponse, frame: unknown) => {
     response.write("data: " + JSON.stringify(frame) + "\n\n");
   };
-  const outputText = (text: string) => ({ type: "output_text", text, annotations: [] });
-  const message = (status: string, content: ReturnType<typeof outputText>[]) => ({
-    id: "fallback-message",
-    type: "message",
-    status,
-    role: "assistant",
-    content,
-  });
-  const writeContentFrame = (type: string, fields: Record<string, unknown>) =>
-    writeFrame(responseAt(2), {
-      type,
-      item_id: "fallback-message",
-      output_index: 0,
-      content_index: 0,
-      ...fields,
-    });
   return {
     baseUrl: "http://127.0.0.1:" + claim.port + "/v1",
     requests,
@@ -121,20 +116,20 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
       writeFrame(response, {
         type: "response.output_item.added",
         output_index: 0,
-        item: message("in_progress", []),
+        item: startedMessage("fallback-message"),
       });
-      writeContentFrame("response.content_part.added", { part: outputText("") });
-      writeContentFrame("response.output_text.delta", { delta: "synthetic" });
+      writeFrame(response, outputTextPart("fallback-message"));
+      writeFrame(response, outputTextDelta("fallback-message", "synthetic"));
     },
     completeFallbackStream() {
       const response = responseAt(2);
-      writeContentFrame("response.output_text.delta", { delta: " answer" });
+      writeFrame(response, outputTextDelta("fallback-message", " answer"));
       writeFrame(response, {
         type: "response.completed",
         response: {
           id: "fallback-response",
           status: "completed",
-          output: [message("completed", [outputText("synthetic answer")])],
+          output: [message("fallback-message", "synthetic answer")],
           usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
         },
       });
@@ -156,20 +151,18 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
   };
 }
 
-function createModel(baseUrl: string, provider: string, id: string): Model<"openai-responses"> {
-  return {
-    id,
-    provider,
-    baseUrl,
-    name: id,
-    api: "openai-responses",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8_192,
-    maxTokens: 128,
-    [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true },
-  } as Model<"openai-responses">;
+const modelSettings = { reasoning: false, contextWindow: 8_192, maxTokens: 128 };
+function createModel(baseUrl: string, provider: string, id: string) {
+  return Object.assign(
+    makeOpenAIProviderModel("openai-responses", {
+      ...modelSettings,
+      id,
+      name: id,
+      provider,
+      baseUrl,
+    }),
+    { [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true } },
+  );
 }
 
 async function settleModelStream(
@@ -248,12 +241,7 @@ it.for(["success", "expiry"] as const)(
         clearActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
       }
     });
-    let chain:
-      | Promise<{
-          result?: Awaited<ReturnType<typeof runWithModelFallback<FixtureOutcome>>>;
-          error?: unknown;
-        }>
-      | undefined;
+    let chain: Promise<FallbackSettlement> | undefined;
     const waitForStage = (gate: Promise<unknown>, description: string) =>
       wait(awaitGateBeforeSettlement(gate, chain!, description));
     try {
@@ -271,9 +259,7 @@ it.for(["success", "expiry"] as const)(
         fallbacksOverride: ["synthetic-primary/retry", "ollama/local-response"],
         requestedRouteResolution: "resolved",
         skipAuthProfileRuntime: true,
-        runId: ref.runId,
-        sessionId: ref.sessionId,
-        sessionKey: ref.sessionKey,
+        ...ref,
         abortSignal: controller.signal,
         run: async (provider, modelId) => {
           const model = createModel(fixture.baseUrl, provider, modelId);
