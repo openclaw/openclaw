@@ -39,11 +39,11 @@ describe("Claws on Agents Home", () => {
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
-      featured: ["SOUL.md", "AGENTS.md"],
+      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "notes/context.md"],
     },
-    { names: ["USER.md", "notes/context.md"], featured: ["USER.md", "notes/context.md"] },
-    { names: ["IDENTITY.md"], featured: ["IDENTITY.md"] },
-  ])("counts release files and previews $names", async ({ names, featured }) => {
+    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "notes/context.md"] },
+    { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
+  ])("lists every release file inline for $names", async ({ names, ordered }) => {
     const { detail } = createDetail({ clawsEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
     const section = detail.querySelector(".plugin-capabilities")!;
@@ -51,10 +51,11 @@ describe("Claws on Agents Home", () => {
     const titles = [...section.querySelectorAll(".plugin-capability__copy strong")].map(
       (node) => node.textContent,
     );
-    expect(titles).toEqual([...featured, ...(names.length > featured.length ? ["View all"] : [])]);
+    expect(titles).toEqual(ordered);
+    expect(section.querySelectorAll(".claws-workspace-file__info")).toHaveLength(names.length);
   });
 
-  it("opens every release file from View all without treating help as navigation", async () => {
+  it("opens every release file inline without treating help as navigation", async () => {
     const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
     const { detail, request } = createDetail({ clawsEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() =>
@@ -65,11 +66,7 @@ describe("Claws on Agents Home", () => {
     expect(
       request.mock.calls.filter(([method]) => method === "claws.catalog.preview"),
     ).toHaveLength(0);
-    const viewAll = [...section.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "View all",
-    )!;
-    expect(viewAll.querySelector("openclaw-tooltip")).toBeNull();
-    viewAll.click();
+    section.querySelector<HTMLButtonElement>(".claws-workspace-file__open")!.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "claws.catalog.preview",
@@ -78,6 +75,7 @@ describe("Claws on Agents Home", () => {
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
+    expect(section.querySelectorAll(".claws-workspace-file__open")).toHaveLength(names.length);
     for (const name of names) {
       preview.dispatchEvent(
         new CustomEvent("file-preview-select", { detail: name, bubbles: true }),

@@ -33,7 +33,7 @@ describe("Claw workspace file roles", () => {
       const glyph = view.container.querySelector(".plugin-capability__icon svg")!.innerHTML;
       expect(glyph.length).toBeGreaterThan(0);
       glyphs.add(glyph);
-      view.getByRole("button", { name, exact: true }).click();
+      view.container.querySelector<HTMLButtonElement>(".claws-workspace-file__open")!.click();
       expect(onOpen).toHaveBeenCalledExactlyOnceWith(name);
       view.unmount();
     }

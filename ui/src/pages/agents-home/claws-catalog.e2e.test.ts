@@ -313,6 +313,11 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         expect(await detail.getByRole("heading", { name: "Workspace files" }).count()).toBe(1);
         const workspace = detail.locator(".plugin-capabilities").first();
         expect(await workspace.locator("h2 > span").textContent()).toBe("5");
+        expect(
+          await workspace.locator(".claws-workspace-file__open strong").allTextContents(),
+        ).toEqual(["SOUL.md", "AGENTS.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"]);
+        expect(await workspace.locator(".claws-workspace-file__info").count()).toBe(5);
+        expect(await workspace.getByRole("button", { name: "View all" }).count()).toBe(0);
         const help = workspace.getByRole("button", { name: "About SOUL.md" });
         await workspace.getByRole("button", { name: "SOUL.md", exact: true }).focus();
         await page.keyboard.press("Tab");
@@ -400,7 +405,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         await gateway.setMethodResponse("claws.catalog.preview", {
           preview: { kind: "instruction", name: "SOUL.md", content: "# Soul preview" },
         });
-        await workspace.getByRole("button", { name: "View all", exact: true }).click();
+        await workspace.getByRole("button", { name: "SOUL.md", exact: true }).click();
         const preview = page.locator("openclaw-file-preview-modal");
         await preview.locator(".item[data-path='USER.md']").waitFor();
         expect(await preview.locator(".item").count()).toBe(5);

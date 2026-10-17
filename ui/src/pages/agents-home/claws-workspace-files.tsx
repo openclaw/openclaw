@@ -33,11 +33,11 @@ export function ClawWorkspaceFiles(props: {
   files: ClawCatalogDetail["contents"]["instructions"];
   onOpen: (name: string) => void;
 }) {
-  const featured = createMemo(() => {
+  const orderedFiles = createMemo(() => {
     const preferred = ["SOUL.md", "AGENTS.md"].flatMap((name) =>
       props.files.filter((file) => file.name === name),
     );
-    return [...preferred, ...props.files.filter((file) => !preferred.includes(file))].slice(0, 2);
+    return [...preferred, ...props.files.filter((file) => !preferred.includes(file))];
   });
   return (
     <Show when={props.files.length}>
@@ -47,7 +47,7 @@ export function ClawWorkspaceFiles(props: {
           <span>{props.files.length}</span>
         </h2>
         <div>
-          <For each={featured()}>
+          <For each={orderedFiles()}>
             {(file) => (
               <div class="plugin-capability">
                 <div class="plugin-capability__static claws-workspace-file">
@@ -87,21 +87,6 @@ export function ClawWorkspaceFiles(props: {
               </div>
             )}
           </For>
-          <Show when={props.files.length > featured().length}>
-            <div class="plugin-capability">
-              <button type="button" onClick={() => props.onOpen(featured()[0]!.name)}>
-                <span class="plugin-capability__icon" aria-hidden="true">
-                  <Icon name="folder" />
-                </span>
-                <span class="plugin-capability__copy">
-                  <strong>{t("clawsCatalog.viewAll")}</strong>
-                </span>
-                <span class="plugin-capability__chevron" aria-hidden="true">
-                  <Icon name="chevronRight" />
-                </span>
-              </button>
-            </div>
-          </Show>
         </div>
       </section>
     </Show>

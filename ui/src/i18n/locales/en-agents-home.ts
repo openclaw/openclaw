@@ -47,7 +47,6 @@ const enAgentsHome = {
     review: "Claw details",
     publisher: "@openclaw",
     workspaceFiles: "Workspace files",
-    viewAll: "View all",
     aboutFile: "About {name}",
     filePurpose: {
       agents: "Operating instructions, priorities, and workspace conventions for the agent.",
