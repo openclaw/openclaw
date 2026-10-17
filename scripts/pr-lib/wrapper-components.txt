@@ -1135,6 +1135,7 @@ src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
+src/infra/sqlite-maintenance-integrity.ts
 src/infra/sqlite-native-admission.ts
 src/infra/sqlite-native-observer.ts
 src/infra/sqlite-number.ts

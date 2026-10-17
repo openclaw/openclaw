@@ -6,8 +6,13 @@ import {
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-maintenance-context.js";
 import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
-import type { SqliteIntegrityCheckOptions } from "./sqlite-integrity.js";
 import { hasUncommittedSqliteWrites } from "./sqlite-schema-facts.js";
+
+export type SqliteIntegrityCheckOptions = {
+  check?: "quick" | "full";
+  /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
+  tables?: readonly string[];
+};
 
 type CapturedIntegrity = {
   source: FileMutationFingerprint;
