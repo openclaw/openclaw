@@ -1,5 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -13,9 +11,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import {
+  expectHistoryPayload,
+  historyPayload,
+  historyRpc,
+} from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import type { RespondFn } from "./types.js";
 
 describe("chat history registry projection", () => {
   it("keeps an empty history available across unrelated catalog publication", async () => {
@@ -33,22 +34,8 @@ describe("chat history registry projection", () => {
           }
         });
       try {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey: "agent:main:empty" },
-          respond,
-          req: { type: "req", id: "empty-history", method: "chat.history" },
-          client: null,
-          isWebchatConnect: () => false,
-          context,
-        });
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          true,
-          expect.objectContaining({ messages: [], sessionId: undefined }),
-        );
+        const respond = await historyRpc(context, "agent:main:empty")("chat.history");
+        expectHistoryPayload(respond, { messages: [], sessionId: undefined });
       } finally {
         probe.mockRestore();
       }
@@ -68,18 +55,7 @@ describe("chat history registry projection", () => {
           return await prepare(params);
         });
       try {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey: scope.sessionKey },
-          respond,
-          req: { type: "req", id: "created-mid-read", method: "chat.history" },
-          client: null,
-          isWebchatConnect: () => false,
-          context,
-        });
+        const respond = await historyRpc(context, scope.sessionKey)("chat.history");
         expect(respond).toHaveBeenCalledExactlyOnceWith(
           false,
           undefined,
@@ -127,30 +103,16 @@ describe("chat history registry projection", () => {
           });
         }
         const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey: "agent:work:main" },
-          respond,
-          req: { type: "req", id: "selected-global-history", method: "chat.history" },
-          client: null,
-          isWebchatConnect: () => false,
-          context,
-        });
+        const respond = await historyRpc(context, "agent:work:main")("chat.history");
 
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          true,
-          expect.objectContaining({
-            sessionId: "selected-history-work",
-            messages: [expect.objectContaining({ content: "Selected work history" })],
-            sessionInfo: expect.objectContaining({
-              key: sessionScope === "global" ? "global" : "agent:work:home",
-              agentId: "work",
-            }),
+        expectHistoryPayload(respond, {
+          sessionId: "selected-history-work",
+          messages: [expect.objectContaining({ content: "Selected work history" })],
+          sessionInfo: expect.objectContaining({
+            key: sessionScope === "global" ? "global" : "agent:work:home",
+            agentId: "work",
           }),
-        );
+        });
       });
     },
   );
@@ -191,27 +153,13 @@ describe("chat history registry projection", () => {
             ]),
           );
           const context = await createHistoryReadContext();
+          const rpc = historyRpc(context, scope.sessionKey);
           const request = async (cursor?: unknown) => {
-            let result: unknown;
-            await expectDefined(
-              chatHistoryHandlers[method],
-              "history handler",
-            )({
-              params:
-                method === "chat.startup" && !cursor
-                  ? { shortId: "12345678", slugHint: "registry-history", agentId: "main" }
-                  : { sessionKey: scope.sessionKey, ...(cursor ? { cursor } : {}) },
-              context,
-              req: { type: "req", id: "registry-history", method },
-              client: null,
-              isWebchatConnect: () => false,
-              respond: (ok, payload, error) => {
-                expect(error).toBeUndefined();
-                expect(ok).toBe(true);
-                result = payload;
-              },
-            });
-            return expectDefined(asOptionalRecord(result), "history response");
+            const params =
+              method === "chat.startup" && !cursor
+                ? { shortId: "12345678", slugHint: "registry-history", agentId: "main" }
+                : { sessionKey: scope.sessionKey, ...(cursor ? { cursor } : {}) };
+            return historyPayload(await rpc(method, {}, { params }));
           };
           const initial = await request();
           expect(initial.deltaCursor).toEqual(expect.any(String));

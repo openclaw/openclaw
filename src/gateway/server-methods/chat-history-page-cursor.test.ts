@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptEvent,
@@ -13,9 +13,8 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import type { RespondFn } from "./types.js";
 
 const scope = {
   agentId: "main",
@@ -42,27 +41,14 @@ async function seedHistory(
     })),
   ]);
   const context = await createHistoryReadContext();
+  const request = historyRpc(context, scope.sessionKey);
   const send = async (params: Record<string, unknown>) => {
-    const respond = vi.fn<RespondFn>();
-    await expectDefined(
-      chatHistoryHandlers["chat.history"],
-      "history handler",
-    )({
-      params: { sessionKey: scope.sessionKey, ...params },
-      context,
-      req: { type: "req", id: "anchored-page-cursor", method: "chat.history" },
-      client: null,
-      acceptsSerializedJson: true,
-      isWebchatConnect: () => false,
-      respond,
-    });
-    expect(respond).toHaveBeenCalledTimes(1);
+    const respond = await request("chat.history", params, { acceptsSerializedJson: true });
     return respond.mock.calls[0]!;
   };
   const read = async (params: Record<string, unknown>) => {
-    const [ok, payload, error] = await send(params);
-    expect(error).toBeUndefined();
-    expect(ok).toBe(true);
+    const response = await request("chat.history", params, { acceptsSerializedJson: true });
+    const payload = historyPayload(response);
     const frame = serializeGatewayFrame({ type: "res", payload }).toString();
     expect(Buffer.byteLength(frame)).toBeLessThan(1_000_000);
     return expectDefined(asOptionalRecord(JSON.parse(frame).payload), "history response");

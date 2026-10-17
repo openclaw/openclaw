@@ -9,7 +9,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -26,6 +25,10 @@ import { SerializedJsonArray } from "../serialized-json.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import * as historyDelta from "./chat-history-delta.js";
+import {
+  historyPayload as response,
+  seedHistorySession,
+} from "./chat-history-fixture.test-support.js";
 import { handleChatHistoryRequest } from "./chat-history-handler.js";
 import * as historyPages from "./chat-history-pages.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -33,6 +36,21 @@ import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { identifiedClient, sessionReadHandlers } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
+
+const historicalModel = { modelProvider: "example", model: "historical" };
+const allowedModel = { modelProvider: "example", model: "allowed" };
+const activeHistorical = { activeModelProvider: "example", activeModel: "historical" };
+const activeAllowed = { activeModelProvider: "example", activeModel: "allowed" };
+
+function expectModelHidden(value: unknown, provider = "modelProvider") {
+  for (const key of [
+    provider,
+    "model",
+    ...(provider === "modelProvider" ? ["contextBudgetStatus"] : []),
+  ]) {
+    expect(value).not.toHaveProperty(key);
+  }
+}
 
 function fixture() {
   const person = ensureProfileForEmail("history-model-reader@example.test");
@@ -70,12 +88,6 @@ function record(value: unknown) {
   return expectDefined(asOptionalRecord(value), "projected record");
 }
 
-function response(respond: ReturnType<typeof vi.fn<RespondFn>>) {
-  expect(respond.mock.calls).toHaveLength(1);
-  expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
-  return record(respond.mock.calls[0]?.[1]);
-}
-
 function onlyRecord(value: unknown) {
   const rows = expectDefined(Array.isArray(value) ? value : undefined, "record list");
   expect(rows).toHaveLength(1);
@@ -88,14 +100,7 @@ describe("historical model disclosure", () => {
       const f = fixture();
       await state.writeConfig(f.cfg);
       setRuntimeConfigSnapshot(f.cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:projected-history-compression",
-        sessionId: "projected-history-compression",
-      };
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
+      const scope = await seedHistorySession("projected-history-compression", {
         createdActor: { type: "human", source: "profile", id: f.person.id },
       });
       const content = "Synthetic projected history. ".repeat(512);
@@ -160,24 +165,8 @@ describe("historical model disclosure", () => {
       });
       const allowedBudget = contextBudgetStatusFixture({ provider: "example", model: "allowed" });
       for (const [row, expected] of [
-        [
-          {
-            modelProvider: "example",
-            model: "historical",
-            activeModelProvider: "example",
-            activeModel: "allowed",
-          },
-          { activeModelProvider: "example", activeModel: "allowed" },
-        ],
-        [
-          {
-            modelProvider: "example",
-            model: "allowed",
-            activeModelProvider: "example",
-            activeModel: "historical",
-          },
-          { modelProvider: "example", model: "allowed" },
-        ],
+        [{ ...historicalModel, ...activeAllowed }, activeAllowed],
+        [{ ...allowedModel, ...activeHistorical }, allowedModel],
         [{ modelProvider: "example" }, {}],
         [{ modelProvider: null, model: "historical" }, { modelProvider: null }],
         [{ modelProvider: undefined, model: "historical" }, { modelProvider: undefined }],
@@ -235,15 +224,13 @@ describe("historical model disclosure", () => {
         sessionKey: "agent:main:history-policy",
         messageId: "reply",
         messageSeq: 1,
-        modelProvider: "example",
-        model: "historical",
+        ...historicalModel,
         activeModelProvider: null,
         activeModel: null,
         contextBudgetStatus: deniedBudget,
         session: {
           key: "agent:main:history-policy",
-          modelProvider: "example",
-          model: "historical",
+          ...historicalModel,
           contextBudgetStatus: deniedBudget,
         },
         message,
@@ -312,15 +299,12 @@ describe("historical model disclosure", () => {
         model: "historical",
         sessionId: scope.sessionId,
       });
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
+      await seedHistorySession(scope.sessionId, {
         createdActor: { type: "human", source: "profile", id: f.person.id },
         providerOverride: "example",
         modelOverride: "historical",
         modelOverrideSource: "user",
-        modelProvider: "example",
-        model: "historical",
+        ...historicalModel,
         agentHarnessId: "openclaw",
         contextTokens: 200_000,
         contextTokensSource: "runtime",
@@ -345,10 +329,7 @@ describe("historical model disclosure", () => {
       const initial = vi.fn<RespondFn>();
       await handleChatHistoryRequest({ ...historyOptions, respond: initial });
       const initialPayload = response(initial);
-      expect(initialPayload.sessionInfo).toMatchObject({
-        modelProvider: "example",
-        model: "historical",
-      });
+      expect(initialPayload.sessionInfo).toMatchObject(historicalModel);
       expect(initialPayload.sessionInfo).toHaveProperty("contextBudgetStatus", budget);
       const cursor = expectDefined(
         typeof initialPayload.deltaCursor === "string" ? initialPayload.deltaCursor : undefined,
@@ -394,6 +375,11 @@ describe("historical model disclosure", () => {
         ready.resolve();
         await release.promise;
       };
+      const held = async <T>(result: Promise<T>) => {
+        const value = await result;
+        await hold();
+        return value;
+      };
       const restores: Array<() => void> = [];
       let preparedDelta: Awaited<ReturnType<typeof historyDelta.readChatHistoryDelta>> | undefined;
       if (stage === "tail" || stage === "retained") {
@@ -438,11 +424,7 @@ describe("historical model disclosure", () => {
         const read = transcriptReaders.readSessionMessageByIdAsync;
         const spy = vi
           .spyOn(transcriptReaders, "readSessionMessageByIdAsync")
-          .mockImplementationOnce(async (...args) => {
-            const result = await read(...args);
-            await hold();
-            return result;
-          });
+          .mockImplementationOnce((...args) => held(read(...args)));
         restores.push(() => spy.mockRestore());
       } else if (stage === "recent") {
         const prepare = rows.withPreparedExactRows.bind(rows);
@@ -456,11 +438,9 @@ describe("historical model disclosure", () => {
         restores.push(() => spy.mockRestore());
       } else {
         const prepare = rows.prepareSelection.bind(rows);
-        const spy = vi.spyOn(rows, "prepareSelection").mockImplementationOnce(async (...args) => {
-          const result = await prepare(...args);
-          await hold();
-          return result;
-        });
+        const spy = vi
+          .spyOn(rows, "prepareSelection")
+          .mockImplementationOnce((...args) => held(prepare(...args)));
         restores.push(() => spy.mockRestore());
       }
       const respond = vi.fn<RespondFn>();
@@ -515,9 +495,8 @@ describe("historical model disclosure", () => {
           }
           const envelope = onlyRecord(preparedDelta.messages);
           expect(envelope).toMatchObject({
-            modelProvider: "example",
-            model: "historical",
-            session: { modelProvider: "example", model: "historical" },
+            ...historicalModel,
+            session: historicalModel,
             message: { provider: "example", model: "historical" },
           });
           expect(envelope).toHaveProperty("contextBudgetStatus", budget);
@@ -540,18 +519,14 @@ describe("historical model disclosure", () => {
         if (stage === "roster") {
           const row = onlyRecord(payload.sessions);
           expect(row).toMatchObject({ key: scope.sessionKey, sessionId: scope.sessionId });
-          expect(row).not.toHaveProperty("model");
-          expect(row).not.toHaveProperty("modelProvider");
-          expect(row).not.toHaveProperty("contextBudgetStatus");
+          expectModelHidden(row);
         } else {
           if (stage !== "exact message" && stage !== "recent") {
             expect(payload.sessionInfo).toMatchObject({
               key: scope.sessionKey,
               sessionId: currentSessionId,
             });
-            expect(payload.sessionInfo).not.toHaveProperty("model");
-            expect(payload.sessionInfo).not.toHaveProperty("modelProvider");
-            expect(payload.sessionInfo).not.toHaveProperty("contextBudgetStatus");
+            expectModelHidden(payload.sessionInfo);
           }
           let message =
             stage === "exact message" ? record(payload.message) : onlyRecord(payload.messages);
@@ -564,21 +539,16 @@ describe("historical model disclosure", () => {
               messageId: "history-policy-reply",
               sessionKey: scope.sessionKey,
             });
-            expect(message).not.toHaveProperty("model");
-            expect(message).not.toHaveProperty("modelProvider");
-            expect(message).not.toHaveProperty("contextBudgetStatus");
+            expectModelHidden(message);
             expect(message.session).toMatchObject({ key: scope.sessionKey });
-            expect(message.session).not.toHaveProperty("model");
-            expect(message.session).not.toHaveProperty("modelProvider");
-            expect(message.session).not.toHaveProperty("contextBudgetStatus");
+            expectModelHidden(message.session);
             expect(
               preparedDelta?.kind === "delta" ? preparedDelta.messages[0] : undefined,
             ).toHaveProperty("model", "historical");
             message = record(message.message);
           }
           expect(message).toMatchObject({ role: "assistant", content });
-          expect(message).not.toHaveProperty("provider");
-          expect(message).not.toHaveProperty("model");
+          expectModelHidden(message, "provider");
         }
         expect(loadSessionEntry(scope)).toEqual(savedEntry);
         expect(await loadTranscriptEvents(scope)).toEqual(savedTranscript);

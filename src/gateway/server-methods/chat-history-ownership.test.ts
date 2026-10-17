@@ -1,7 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -12,10 +11,20 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { expectHistoryPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
-import type { RespondFn } from "./types.js";
+
+function expectWrongSession(respond: Awaited<ReturnType<ReturnType<typeof historyRpc>>>) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "INVALID_REQUEST",
+      message: "sessionId does not belong to sessionKey",
+    }),
+  );
+}
 
 describe("chat history stored ownership", () => {
   it.each(["retained", " global ", " unknown "])(
@@ -69,24 +78,14 @@ describe("chat history stored ownership", () => {
         }
         const client = identifiedClient("retained-history-operator");
         client.connect.scopes = ["operator.admin"];
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { ...scope, messageId },
-          context: await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
-          client,
-          respond,
-          req: { type: "req", id: "retained-history", method: "chat.history" },
-          isWebchatConnect: () => false,
-        });
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          true,
-          expect.objectContaining({
-            messages: [expect.objectContaining({ content: "Retained legacy history" })],
-          }),
+        const request = historyRpc(
+          await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
+          scope.sessionKey,
         );
+        const respond = await request("chat.history", { ...scope, messageId }, { client });
+        expectHistoryPayload(respond, {
+          messages: [expect.objectContaining({ content: "Retained legacy history" })],
+        });
       });
     },
   );
@@ -127,46 +126,20 @@ describe("chat history stored ownership", () => {
       const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
       const client = identifiedClient("literal-global-operator");
       client.connect.scopes = ["operator.admin"];
-      const read = async (params: {
-        sessionKey: string;
-        sessionId?: string;
-        messageId?: string;
-      }) => {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { ...params, agentId: "research" },
-          context,
-          req: { type: "req", id: "literal-global", method: "chat.history" },
-          client,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        return respond;
-      };
+      const request = historyRpc(context, "global");
+      const read = (params: Record<string, unknown>) =>
+        request("chat.history", { ...params, agentId: "research" }, { client });
       for (const [sessionKey, sessionId] of [
         ["global", "global-research"],
         ["agent:research:main", "main-research"],
       ] as const) {
-        expect(await read({ sessionKey })).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ sessionKey, sessionId }),
-        );
+        expectHistoryPayload(await read({ sessionKey }), { sessionKey, sessionId });
       }
-      expect(
+      expectWrongSession(
         await read({
           sessionKey: "global",
           sessionId: "missing-session",
           messageId: "missing-message",
-        }),
-      ).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: "sessionId does not belong to sessionKey",
         }),
       );
       for (const sentinel of ["global", "unknown"]) {
@@ -176,29 +149,17 @@ describe("chat history stored ownership", () => {
           [qualifiedKey, sentinel, `qualified-${sentinel}-research`],
         ] as const) {
           const messageId = `${sessionId}-message`;
-          expect(
-            await read({ sessionKey: wrongSessionKey, sessionId, messageId }),
-          ).toHaveBeenCalledExactlyOnceWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              code: "INVALID_REQUEST",
-              message: "sessionId does not belong to sessionKey",
-            }),
-          );
-          expect(await read({ sessionKey, sessionId, messageId })).toHaveBeenCalledExactlyOnceWith(
-            true,
-            expect.objectContaining({
-              sessionKey,
-              sessionId,
-              messages: [
-                expect.objectContaining({
-                  __openclaw: expect.objectContaining({ id: messageId }),
-                  content: `Message for ${sessionKey}`,
-                }),
-              ],
-            }),
-          );
+          expectWrongSession(await read({ sessionKey: wrongSessionKey, sessionId, messageId }));
+          expectHistoryPayload(await read({ sessionKey, sessionId, messageId }), {
+            sessionKey,
+            sessionId,
+            messages: [
+              expect.objectContaining({
+                __openclaw: expect.objectContaining({ id: messageId }),
+                content: `Message for ${sessionKey}`,
+              }),
+            ],
+          });
         }
       }
     });

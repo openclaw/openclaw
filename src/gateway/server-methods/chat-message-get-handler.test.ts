@@ -27,25 +27,24 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import {
+  expectHistoryMessage,
+  expectHistoryPayload,
+  historyPayload,
+  historyRpc,
+  seedHistorySession,
+} from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+
+async function seed(id: string, sessionStartedAt?: number) {
+  await captureRuntimeConfigAsyncReader()();
+  return seedHistorySession(id, sessionStartedAt === undefined ? {} : { sessionStartedAt });
+}
 
 describe("chat.message.get recovery visibility", () => {
   it("hides attempt diagnostics across hidden announce chunks while retaining partial replies", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:message-recovery",
-        sessionId: "message-recovery",
-      };
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        sessionStartedAt: 2000,
-      });
+      const scope = await seed("message-recovery", 2000);
       const failure = {
         role: "assistant",
         provider: "openai",
@@ -92,42 +91,15 @@ describe("chat.message.get recovery visibility", () => {
           message,
         })),
       ]);
-      const respond = vi.fn();
       const context = await createHistoryReadContext();
-      const lookup = async (messageId: string) => {
-        respond.mockClear();
-        await expectDefined(
-          chatMessageGetHandlers["chat.message.get"],
-          "message handler",
-        )({
-          params: { sessionKey: scope.sessionKey, messageId },
-          context,
-          req: { type: "req", id: "message-recovery", method: "chat.message.get" },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-        });
-      };
-      const readHistory = async (params: Record<string, unknown>) => {
-        const historyRespond = vi.fn();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey: scope.sessionKey, ...params },
-          context,
-          req: { type: "req", id: "page-recovery", method: "chat.history" },
-          client: null,
-          isWebchatConnect: () => false,
-          respond: historyRespond,
-        });
-        expect(historyRespond.mock.calls[0]?.[0]).toBe(true);
-        return asOptionalRecord(historyRespond.mock.calls[0]?.[1])?.messages;
-      };
+      const request = historyRpc(context, scope.sessionKey);
+      const lookup = (messageId: string) => request("chat.message.get", { messageId });
+      const readHistory = async (params: Record<string, unknown>) =>
+        historyPayload(await request("chat.history", params)).messages;
       const failedMessage = expect.objectContaining({
         __openclaw: expect.objectContaining({ id: "failed" }),
       });
-      await lookup("failed");
+      let respond = await lookup("failed");
       expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
       // Neither a bounded page nor a receipt-less attempt establishes terminal failure.
       expect(await readHistory({ offset: 1, limit: messages.length - 1 })).not.toContainEqual(
@@ -145,7 +117,7 @@ describe("chat.message.get recovery visibility", () => {
         },
       });
       const persisted = await loadTranscriptEvents(scope);
-      await lookup("failed");
+      respond = await lookup("failed");
       expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
       for (const params of [{ messageId: "failed" }, { offset: messages.length - 1 }]) {
         expect(await readHistory({ limit: 1, ...params })).toEqual(
@@ -158,47 +130,23 @@ describe("chat.message.get recovery visibility", () => {
       expect(await readHistory({ offset: 1, limit: messages.length })).not.toContainEqual(
         failedMessage,
       );
-      await lookup("answer");
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          ok: true,
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "Recovered answer" }],
-          }),
-        }),
-      );
+      respond = await lookup("answer");
+      expectHistoryMessage(respond, { content: [{ type: "text", text: "Recovered answer" }] });
       expect(await loadTranscriptEvents(scope)).toEqual(persisted);
 
       await appendTranscriptMessage(scope, {
         eventId: "partial",
         message: { ...failure, content: [{ type: "text", text: "Partial answer" }] },
       });
-      await lookup("partial");
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          ok: true,
-          message: expect.objectContaining({ content: [{ type: "text", text: "Partial answer" }] }),
-        }),
-      );
+      respond = await lookup("partial");
+      expectHistoryMessage(respond, { content: [{ type: "text", text: "Partial answer" }] });
     });
   });
 });
 
 it("resolves one indexed message per worker request while hiding stale announce pairs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:indexed-message-get",
-      sessionId: "indexed-message-get",
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      sessionStartedAt: 2000,
-    });
+    const scope = await seed("indexed-message-get", 2000);
     const messages = [
       { id: "question", role: "user", timestamp: 1000, content: "Previous question" },
       { id: "answer", role: "assistant", timestamp: 1000, content: "Previous answer" },
@@ -222,41 +170,24 @@ it("resolves one indexed message per worker request while hiding stale announce 
       })),
     ]);
     const context = await createHistoryReadContext();
+    const request = historyRpc(context, scope.sessionKey);
     const read = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
     try {
       const lookup = async (messageId: string) => {
         read.mockClear();
-        const respond = vi.fn<RespondFn>();
+        let respond: Awaited<ReturnType<typeof request>>;
         const sql = observeHostDataSql();
         try {
-          await expectDefined(
-            chatMessageGetHandlers["chat.message.get"],
-            "message handler",
-          )({
-            params: { sessionKey: scope.sessionKey, messageId },
-            context,
-            client: null,
-            req: { type: "req", id: "indexed-message-get", method: "chat.message.get" },
-            isWebchatConnect: () => false,
-            respond,
-          });
+          respond = await request("chat.message.get", { messageId });
           expect(sql.queries).toEqual([]);
         } finally {
           sql.restore();
         }
-        expect(read.mock.calls.map(([request]) => request.kind)).toEqual(["message-by-id"]);
+        expect(read.mock.calls.map(([input]) => input.kind)).toEqual(["message-by-id"]);
         if (messageId === "announce" || messageId === "stale-answer") {
           expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
         } else {
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({
-              ok: true,
-              message: expect.objectContaining({
-                __openclaw: expect.objectContaining({ id: messageId }),
-              }),
-            }),
-          );
+          expectHistoryMessage(respond, { __openclaw: expect.objectContaining({ id: messageId }) });
         }
       };
       for (const messageId of [
@@ -286,13 +217,7 @@ it("resolves one indexed message per worker request while hiding stale announce 
 describe("durable tool output inspection", () => {
   it("fetches a retained history reference without crossing conversation or pending-input ownership", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:retained-reference",
-        sessionId: "retained-reference",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const scope = await seed("retained-reference");
       const output = "Retained output\n" + "x".repeat(150_000);
       await appendTranscriptMessage(scope, {
         eventId: "retained-output",
@@ -314,40 +239,19 @@ describe("durable tool output inspection", () => {
       pending.finish("cancelled");
       await pending.settled?.();
       const context = await createHistoryReadContext();
-      const request = async (
-        method: "chat.history" | "chat.message.get",
-        params: Record<string, unknown>,
-      ) => {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          (method === "chat.history" ? chatHistoryHandlers : chatMessageGetHandlers)[method],
-          "history handler",
-        )({
-          params: { sessionKey: scope.sessionKey, ...params },
-          context,
-          req: { type: "req", id: "retained-reference", method },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledTimes(1);
-        return respond;
-      };
+      const request = historyRpc(context, scope.sessionKey);
       const preview = await request("chat.history", {
         messageId: "retained-output",
         maxChars: 200_000,
       });
-      expect(preview).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          sessionId: scope.sessionId,
-          messages: [
-            expect.objectContaining({
-              __openclaw: expect.objectContaining({ id: "retained-output", truncated: true }),
-            }),
-          ],
-        }),
-      );
+      expectHistoryPayload(preview, {
+        sessionId: scope.sessionId,
+        messages: [
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({ id: "retained-output", truncated: true }),
+          }),
+        ],
+      });
       await upsertSessionEntryCore(scope, { sessionId: "current-reference", updatedAt: 2 });
       await appendTranscriptMessage(
         { ...scope, sessionId: "current-reference" },
@@ -356,18 +260,13 @@ describe("durable tool output inspection", () => {
           message: { role: "user", content: "Same ID in a different physical session" },
         },
       );
-      expect(
+      expectHistoryMessage(
         await request("chat.message.get", {
           messageId: "retained-output",
           sessionId: scope.sessionId,
           maxChars: 200_000,
         }),
-      ).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          ok: true,
-          message: expect.objectContaining({ content: output }),
-        }),
+        { content: output },
       );
       expect(
         await request("chat.message.get", {
@@ -402,13 +301,7 @@ describe("durable tool output inspection", () => {
 
   it("reopens SQLite with bounded history previews and exact recoverable tool text", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:tool-output",
-        sessionId: "tool-output",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const scope = await seed("tool-output");
       const literal = " \n[[reply_to_current]]\r\n<untrusted>  \t";
       const output = literal + "line of output\n".repeat(12_000) + "\n😀 tail  \t\n";
       const largeOutput = literal + "x".repeat(1_050_000) + "\nEND  \n";
@@ -479,27 +372,8 @@ describe("durable tool output inspection", () => {
       }
 
       const context = await createHistoryReadContext();
-      const handlers: GatewayRequestHandlers = {
-        ...chatHistoryHandlers,
-        ...chatMessageGetHandlers,
-      };
-      const request = async (method: string, params: Record<string, unknown> = {}) => {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          handlers[method],
-          "history handler",
-        )({
-          params: { sessionKey: scope.sessionKey, ...params },
-          context,
-          req: { type: "req", id: "tool-output", method },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledTimes(1);
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "RPC result");
-      };
+      const rpc = historyRpc(context, scope.sessionKey);
+      const request = async (...args: Parameters<typeof rpc>) => historyPayload(await rpc(...args));
       const history = await request("chat.history");
       expect(Array.isArray(history.messages)).toBe(true);
       const messages = history.messages as Array<Record<string, unknown>>;
@@ -568,13 +442,7 @@ describe("durable tool output inspection", () => {
 
   it("rejects a full structured message above the transport budget", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:tool-transport",
-        sessionId: "tool-transport",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const scope = await seed("tool-transport");
       // Every individual block fits maxChars, but their combined JSON does not.
       await appendTranscriptMessage(scope, {
         eventId: "large-result",
@@ -588,17 +456,10 @@ describe("durable tool output inspection", () => {
           })),
         },
       });
-      const respond = vi.fn<RespondFn>();
-      await expectDefined(
-        chatMessageGetHandlers["chat.message.get"],
-        "message handler",
-      )({
-        params: { sessionKey: scope.sessionKey, messageId: "large-result", maxChars: 2_000_000 },
-        context: await createHistoryReadContext(),
-        client: null,
-        req: { type: "req", id: "tool-transport", method: "chat.message.get" },
-        isWebchatConnect: () => false,
-        respond,
+      const request = historyRpc(await createHistoryReadContext(), scope.sessionKey);
+      const respond = await request("chat.message.get", {
+        messageId: "large-result",
+        maxChars: 2_000_000,
       });
       expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "oversized" });
     });
@@ -643,22 +504,15 @@ it.each([
         },
       });
       const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
+      const rpc = historyRpc(context, scope.sessionKey);
       const request = { sessionKey: scope.sessionKey, messageId: "retained-message" };
       const readMessage = vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync");
       try {
         for (const explicitOwner of [false, true]) {
           readMessage.mockClear();
-          const respond = vi.fn();
-          await expectDefined(
-            chatMessageGetHandlers["chat.message.get"],
-            "message handler",
-          )({
-            params: { ...request, ...(explicitOwner ? { agentId } : {}) },
-            context,
-            req: { type: "req", id: "retired-message", method: "chat.message.get" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
+          const respond = await rpc("chat.message.get", {
+            ...request,
+            ...(explicitOwner ? { agentId } : {}),
           });
           expect(respond).toHaveBeenCalledOnce();
           if (explicitOwner && !explicitOwnerAllowed) {
@@ -672,16 +526,10 @@ it.each([
             );
             expect(readMessage).not.toHaveBeenCalled();
           } else {
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              expect.objectContaining({
-                ok: true,
-                message: expect.objectContaining({
-                  role: "assistant",
-                  content: [{ type: "text", text: "Retained retired-agent reply" }],
-                }),
-              }),
-            );
+            expectHistoryMessage(respond, {
+              role: "assistant",
+              content: [{ type: "text", text: "Retained retired-agent reply" }],
+            });
             expect(readMessage).toHaveBeenCalledOnce();
           }
         }

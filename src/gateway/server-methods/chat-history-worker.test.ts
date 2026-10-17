@@ -1,5 +1,4 @@
 import { StatementSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
@@ -24,9 +23,12 @@ import {
   createPreparedSessionHistorySubagentProjection,
   prepareSessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import {
+  historyPayload,
+  historyRpc,
+  seedHistorySession,
+} from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import type { RespondFn } from "./types.js";
 
 function expectHistoryThreadSql(queries: string[]) {
   const isVersionProbe = (sql: string) =>
@@ -41,31 +43,15 @@ function expectHistoryThreadSql(queries: string[]) {
 it("serves committed history while transcript searches wait on a stuck writer", async (test) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:writer-isolation",
-      sessionId: "writer-isolation",
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const scope = await seedHistorySession("writer-isolation");
     await appendTranscriptMessage(scope, {
       eventId: "committed-message",
       now: 1,
       message: { role: "user", content: "Committed needle", timestamp: 1 },
     });
     const context = await createHistoryReadContext();
-    const request = async () => {
-      const respond = vi.fn<RespondFn>();
-      await chatHistoryHandlers["chat.history"]!({
-        params: { sessionKey: scope.sessionKey },
-        client: null,
-        context,
-        respond,
-        req: { type: "req", id: "writer-isolation", method: "chat.history" },
-        isWebchatConnect: () => false,
-      });
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return asOptionalRecord(respond.mock.calls[0]?.[1])?.messages;
-    };
+    const rpc = historyRpc(context, scope.sessionKey);
+    const request = async () => historyPayload(await rpc("chat.history")).messages;
     const committed = await request();
     expect(committed).toMatchObject([{ content: "Committed needle" }]);
     const writerEntered = createDeferred();
@@ -112,12 +98,7 @@ it.each(["native", "acp"])(
   async (sourceKind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:worker-delta",
-        sessionId: "worker-delta",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const scope = await seedHistorySession("worker-delta");
       const sourceSessionKey = `agent:main:${sourceKind === "native" ? "subagent" : "acp"}:worker`;
       if (sourceKind === "acp") {
         await upsertSessionEntryCore(
@@ -163,20 +144,9 @@ it.each(["native", "acp"])(
         },
       });
       const context = await createHistoryReadContext();
-      const call = async (cursor?: string) => {
-        const respond = vi.fn<RespondFn>();
-        await chatHistoryHandlers["chat.history"]!({
-          params: { sessionKey: scope.sessionKey, ...(cursor ? { cursor } : {}) },
-          client: null,
-          context,
-          respond,
-          req: { type: "req", id: "worker-delta", method: "chat.history" },
-          isWebchatConnect: () => false,
-        });
-        const response = expectDefined(respond.mock.calls[0], "history response");
-        expect(response[0]).toBe(true);
-        return expectDefined(asOptionalRecord(response[1]), "history payload");
-      };
+      const rpc = historyRpc(context, scope.sessionKey);
+      const call = async (cursor?: string) =>
+        historyPayload(await rpc("chat.history", cursor ? { cursor } : {}));
       const initial = await call();
       const initialCounter = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -328,12 +298,7 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
 it("forwards worker history as text JSON while preserving object callers and tiny budgets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:encoded-history",
-      sessionId: "encoded-history",
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const scope = await seedHistorySession("encoded-history");
     await appendTranscriptMessages(scope, {
       messages: Array.from({ length: 3 }, (_, index) => ({
         eventId: `large-${index}`,
@@ -345,25 +310,23 @@ it("forwards worker history as text JSON while preserving object callers and tin
       })),
     });
     const context = await createHistoryReadContext();
+    const rpc = historyRpc(context, scope.sessionKey);
     const request = async (
       acceptsSerializedJson: boolean,
       maxBytes = 200_000,
       method = "chat.history",
       maxChars = 50_000,
     ) => {
-      const respond = vi.fn<RespondFn>();
-      await chatHistoryHandlers["chat.history"]!({
-        params: { sessionKey: scope.sessionKey, maxChars, maxBytes },
-        client: null,
-        context,
-        respond,
-        acceptsSerializedJson,
-        req: { type: "req", id: "encoded-history", method },
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledTimes(1);
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "history payload");
+      return historyPayload(
+        await rpc(
+          "chat.history",
+          { maxChars, maxBytes },
+          {
+            acceptsSerializedJson,
+            req: { type: "req", id: "encoded-history", method },
+          },
+        ),
+      );
     };
     const ordinary = await request(false);
     const encoded = await request(true);
