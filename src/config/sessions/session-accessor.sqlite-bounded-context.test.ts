@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -17,29 +18,27 @@ import {
   readTranscriptStatsSync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptBoundedActiveContextCore as boundedContext } from "./session-accessor.sqlite-active-context.js";
 import {
-  readRecentSessionTranscriptActiveEvents,
-  readSessionTranscriptMessageEventPage,
-  readSessionTranscriptBoundedMessageTailPage,
+  readRecentSessionTranscriptActiveEvents as recentEvents,
+  readSessionTranscriptMessageEventPage as messagePage,
+  readSessionTranscriptBoundedMessageTailPage as tailPage,
 } from "./session-accessor.sqlite-active-events.js";
 import {
-  readActiveTranscriptStats,
-  readSessionTranscriptHistoryEventById,
-  withRecentActiveTranscriptEvents,
+  readActiveTranscriptStats as activeStats,
+  readSessionTranscriptHistoryEventById as historyEvent,
+  withRecentActiveTranscriptEvents as visitRecentEvents,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  reconcileSessionTranscriptIndexes,
-  waitForSessionTranscriptProjection,
+  reconcileSessionTranscriptIndexes as reconcileIndexes,
+  waitForSessionTranscriptProjection as waitProjection,
 } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const readSessionTranscriptMessageEventCount = (
-  scope: Parameters<typeof readSessionTranscriptMessageEventPage>[0],
-): number =>
-  readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
+const readSessionTranscriptMessageEventCount = (scope: Parameters<typeof messagePage>[0]): number =>
+  messagePage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
 
 type Scope = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 function persist(
@@ -57,6 +56,38 @@ function assistant(id: string, parent: string | null, content = id) {
   return transcriptMessage(id, parent, { role: "assistant", content });
 }
 
+function storedMessage(
+  id: string,
+  parentId: string | null,
+  role: "user" | "assistant",
+  content: string,
+) {
+  return { type: "message", id, parentId, message: { role, content } };
+}
+
+function compaction(id: string, parentId: string, firstKeptEntryId: string, summary: string) {
+  return {
+    type: "compaction",
+    id,
+    parentId,
+    firstKeptEntryId,
+    summary,
+    timestamp: "2026-08-30T00:00:00.000Z",
+    tokensBefore: 100,
+  };
+}
+
+function reset(id: string, parentId: string, firstKeptEntryId?: string) {
+  return {
+    type: "reset",
+    id,
+    parentId,
+    firstKeptEntryId,
+    reason: "new",
+    timestamp: "2026-08-30T00:00:00.000Z",
+  };
+}
+
 function eventIds(events: unknown[]) {
   return events.map((event) => (event as { id: string }).id);
 }
@@ -72,9 +103,9 @@ function readContext(
   scope: Scope,
   maxBytes = 1024,
   maxEvents = 10,
-  onRead?: Parameters<typeof readSessionTranscriptBoundedActiveContextCore>[1]["onRead"],
+  onRead?: Parameters<typeof boundedContext>[1]["onRead"],
 ) {
-  return readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes, maxEvents, onRead });
+  return boundedContext(scope, { maxBytes, maxEvents, onRead });
 }
 
 async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Promise<void> {
@@ -91,10 +122,7 @@ async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Pr
   });
 }
 
-async function seedImportedTranscript(
-  scope: Parameters<Parameters<typeof withBoundedContextScope>[0]>[0],
-  events: unknown[],
-) {
+async function seedImportedTranscript(scope: Scope, events: unknown[]) {
   await seedUnindexedTranscriptForTest({
     ...scope,
     entry: { sessionId: scope.sessionId, updatedAt: 1 },
@@ -107,18 +135,15 @@ async function seedImportedTranscript(
   });
 }
 
-function readHistory(
-  scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
-  maxBytes = 1024 * 1024,
-) {
-  return readSessionTranscriptBoundedMessageTailPage(scope, {
-    maxBytes,
+function readHistory(scope: Scope) {
+  return tailPage(scope, {
+    maxBytes: 1024 * 1024,
     maxMessages: 100,
     offset: 0,
   });
 }
 
-function countAcquiredTranscriptPayloadBytes(
+function acquiredPayloadBytes(
   connection: ReturnType<typeof openOpenClawAgentDatabase>["db"],
   marker: string,
   read: () => void,
@@ -251,73 +276,59 @@ it("enforces context count and byte budgets and releases rejected reads for late
   });
 });
 
-it("rejects an oversized header before acquiring its payload", async () => {
-  await withBoundedContextScope(async (scope) => {
-    const marker = "synthetic-oversized-header:";
-    await appendTranscriptEvent(scope, {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: scope.sessionId,
-      cwd: marker + "x".repeat(4096),
+it.each(["header", "compaction"] as const)(
+  "bounds oversized %s before acquiring its payload",
+  async (kind) => {
+    await withBoundedContextScope(async (scope) => {
+      const marker = "synthetic-oversized-payload:";
+      const payload = marker + "x".repeat(4096);
+      if (kind === "header") {
+        await appendTranscriptEvent(scope, {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: scope.sessionId,
+          cwd: payload,
+        });
+      } else {
+        const kept = SessionManager.open(scope).appendMessage({
+          role: "user",
+          content: "retained",
+          timestamp: 1,
+        });
+        await appendTranscriptEvent(scope, {
+          ...compaction("oversized-boundary", kept, kept, "summary"),
+          details: { payload },
+        });
+        await appendTranscriptMessage(scope, {
+          eventId: "tail",
+          message: { role: "user", content: "latest", timestamp: 2 },
+        });
+        await waitProjection(scope);
+      }
+      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const bytes = acquiredPayloadBytes(db, marker, () => {
+        if (kind === "header") {
+          expect(() => readContext(scope)).toThrow(
+            "Session transcript header exceeds the active-context byte limit",
+          );
+        } else {
+          const context = readContext(scope, 1024, 1);
+          expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
+          expect(context).toMatchObject({ truncated: true, boundaryCount: 1 });
+          expect(context.serializedBytes).toBe(serializedBytes(context.events));
+        }
+      });
+      expect(bytes).toBe(0);
     });
-    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
-      expect(() => readContext(scope, 1024, 10)).toThrow(
-        "Session transcript header exceeds the active-context byte limit",
-      );
-    });
-    expect(acquiredBytes).toBe(0);
-  });
-});
-
-it("omits an oversized latest compaction boundary before acquiring its payload", async () => {
-  await withBoundedContextScope(async (scope) => {
-    const manager = SessionManager.open(scope);
-    const kept = manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
-    const marker = "synthetic-oversized-boundary:";
-    await appendTranscriptEvent(scope, {
-      type: "compaction",
-      id: "oversized-boundary",
-      parentId: kept,
-      timestamp: "2026-08-30T00:00:00.000Z",
-      firstKeptEntryId: kept,
-      summary: "summary",
-      tokensBefore: 100,
-      details: { payload: marker + "x".repeat(4096) },
-    });
-    await appendTranscriptMessage(scope, {
-      eventId: "tail",
-      message: { role: "user", content: "latest", timestamp: 2 },
-    });
-    await waitForSessionTranscriptProjection(scope);
-    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
-      const context = readContext(scope, 1024, 1);
-      expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
-      expect(context.truncated).toBe(true);
-      expect(context.boundaryCount).toBe(1);
-      expect(context.serializedBytes).toBe(serializedBytes(context.events));
-    });
-    expect(acquiredBytes).toBe(0);
-  });
-});
+  },
+);
 
 it("selects imported headers and retention anchors before later indexed duplicates", async () => {
   await withBoundedContextScope(async (scope) => {
     const events = [
-      {
-        type: "message",
-        id: "mirror",
-        parentId: null,
-        message: { role: "assistant", content: "New session started." },
-      },
+      storedMessage("mirror", null, "assistant", "New session started."),
       { type: "session", version: 3, id: scope.sessionId },
-      {
-        type: "message",
-        id: "kept",
-        parentId: "mirror",
-        message: { role: "user", content: "Imported kept question." },
-      },
+      storedMessage("kept", "mirror", "user", "Imported kept question."),
       {
         type: "compaction",
         id: "cut",
@@ -325,12 +336,7 @@ it("selects imported headers and retention anchors before later indexed duplicat
         firstKeptEntryId: "kept",
         summary: "Summary.",
       },
-      {
-        type: "message",
-        id: "reply",
-        parentId: "cut",
-        message: { role: "assistant", content: "Original reply." },
-      },
+      storedMessage("reply", "cut", "assistant", "Original reply."),
     ];
     await seedImportedTranscript(scope, events);
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
@@ -354,31 +360,15 @@ it("selects imported headers and retention anchors before later indexed duplicat
         message: { role: "user", content: "Imported kept question." },
       }),
     ]);
-    expect(
-      readSessionTranscriptHistoryEventById(scope, "kept", { currentOnly: true, maxBytes: 100 }),
-    ).toBeUndefined();
+    expect(historyEvent(scope, "kept", { currentOnly: true, maxBytes: 100 })).toBeUndefined();
   });
 });
 
 it("retains the latest boundary and counts earlier resets before a truncated tail", async () => {
   await withBoundedContextScope(async (scope) => {
     await persist(scope, [user("old", null)]);
-    await appendTranscriptEvent(scope, {
-      type: "reset",
-      id: "prior-reset",
-      parentId: "old",
-      timestamp: "2026-08-24T00:00:00.000Z",
-      reason: "new",
-    });
-    await appendTranscriptEvent(scope, {
-      type: "compaction",
-      id: "summary",
-      parentId: "prior-reset",
-      timestamp: "2026-08-25T00:00:00.000Z",
-      summary: "earlier work",
-      firstKeptEntryId: "old",
-      tokensBefore: 100,
-    });
+    await appendTranscriptEvent(scope, reset("prior-reset", "old"));
+    await appendTranscriptEvent(scope, compaction("summary", "prior-reset", "old", "earlier work"));
     await persist(scope, [user("middle", "summary"), assistant("new", "middle")]);
 
     const context = readContext(scope, 2048, 1);
@@ -403,7 +393,7 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       manager.appendMessage({ role: "user", content, timestamp: 1 });
     const settle = async () => {
       manager.flushPendingPersistence();
-      await waitForSessionTranscriptProjection(scope);
+      await waitProjection(scope);
     };
     const expectHistory = (ids: string[]) => {
       const page = readHistory(scope);
@@ -429,12 +419,12 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       { role: "compactionSummary", summary: "fresh-only summary" },
       { role: "user", content: "fresh user" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
+    expect(activeStats(scope).eventCount).toBe(2);
 
     const nextUserId = appendUser("after compaction");
     await settle();
     expectHistory([freshUserId, nextUserId]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(activeStats(scope).eventCount).toBe(3);
 
     // A newer reset wins for both scopes; another compaction must not revive older resets.
     manager.appendResetBoundary("new", nextUserId);
@@ -445,7 +435,7 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       { role: "user", content: "after compaction" },
       { role: "user", content: "after second reset" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
+    expect(activeStats(scope).eventCount).toBe(2);
 
     manager.appendCompaction("newest-only summary", newestUserId, 100);
     await settle();
@@ -455,7 +445,7 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       { role: "compactionSummary", summary: "newest-only summary" },
       { role: "user", content: "after second reset" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
+    expect(activeStats(scope).eventCount).toBe(2);
   });
 });
 
@@ -486,17 +476,10 @@ it("counts paired reset tool results without counting discarded orphan results",
         timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
       }),
     ]);
-    await appendTranscriptEvent(scope, {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: "discarded-orphan",
-      timestamp: "2026-08-15T00:00:03.000Z",
-      reason: "new",
-      firstKeptEntryId: "kept-user",
-    });
+    await appendTranscriptEvent(scope, reset("reset-boundary", "discarded-orphan", "kept-user"));
     await persist(scope, [user("post-reset", "reset-boundary", "fresh turn")]);
 
-    const stats = readActiveTranscriptStats(scope);
+    const stats = activeStats(scope);
     expect(stats.eventCount).toBe(4);
     expect(stats.sizeBytes).toBeGreaterThan(3_000);
     expect(stats.sizeBytes).toBeLessThan(8_000);
@@ -505,21 +488,16 @@ it("counts paired reset tool results without counting discarded orphan results",
     await persist(scope, [assistant("second-post-reset", "post-reset", "fresh answer")]);
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      expect(readActiveTranscriptStats(scope).eventCount).toBe(5);
+      expect(activeStats(scope).eventCount).toBe(5);
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       parseSpy.mockRestore();
     }
 
-    await appendTranscriptEvent(scope, {
-      type: "compaction",
-      id: "fresh-compaction",
-      parentId: "second-post-reset",
-      timestamp: "2026-08-15T00:00:04.000Z",
-      summary: "fresh-only summary",
-      firstKeptEntryId: "post-reset",
-      tokensBefore: 100,
-    });
+    await appendTranscriptEvent(
+      scope,
+      compaction("fresh-compaction", "second-post-reset", "post-reset", "fresh-only summary"),
+    );
     const history = readHistory(scope);
     expect(history.totalMessages).toBe(4);
     expect(history.events.map(({ event }) => (event as { id: string }).id)).toEqual([
@@ -528,8 +506,8 @@ it("counts paired reset tool results without counting discarded orphan results",
       "post-reset",
       "second-post-reset",
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
-    expect(readActiveTranscriptStats(scope).sizeBytes).toBeLessThan(8_000);
+    expect(activeStats(scope).eventCount).toBe(3);
+    expect(activeStats(scope).sizeBytes).toBeLessThan(8_000);
   });
 });
 
@@ -545,7 +523,7 @@ it("counts retained raw bytes without hydrating private native payloads", async 
       __openclaw: { upstreamUserText: privateText },
     } as Parameters<SessionManager["appendMessage"]>[0]);
     manager.appendResetBoundary("new", kept);
-    await waitForSessionTranscriptProjection(scope);
+    await waitProjection(scope);
     const originalParse = JSON.parse;
     let privateBytes = 0;
     const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
@@ -555,7 +533,7 @@ it("counts retained raw bytes without hydrating private native payloads", async 
       return originalParse(text, reviver);
     });
     try {
-      const stats = readActiveTranscriptStats(scope);
+      const stats = activeStats(scope);
       expect(stats.eventCount).toBe(1);
       expect(stats.sizeBytes).toBeGreaterThan(privateText.length);
       expect(privateBytes).toBe(0);
@@ -569,12 +547,7 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
   await withBoundedContextScope(async (scope) => {
     const events = [
       { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
-      {
-        type: "message",
-        id: "imported-user",
-        parentId: null,
-        message: { role: "user", content: "Imported conversation." },
-      },
+      storedMessage("imported-user", null, "user", "Imported conversation."),
     ];
     await seedImportedTranscript(scope, events);
     const admitted = await appendTranscriptMessage(scope, {
@@ -583,9 +556,7 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
       message: { role: "user", content: "Current request.", timestamp: 2 },
     });
     const anchor = admitted.anchor;
-    if (!anchor) {
-      throw new Error("missing admission anchor");
-    }
+    assert(anchor, "missing admission anchor");
     const marker = "synthetic-later-feedback-payload:";
     const privateText = marker + "x".repeat(4096);
     const details: unknown = JSON.parse(
@@ -606,9 +577,9 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
         },
       }),
     ).toBe(true);
-    await waitForSessionTranscriptProjection(scope);
+    await waitProjection(scope);
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
+    const acquiredBytes = acquiredPayloadBytes(db, marker, () => {
       runWithSessionTranscriptReadFence(
         { ...anchor, logicalTurnId: "current", role: "user" },
         () => {
@@ -655,12 +626,12 @@ it("keeps usage and bootstrap facts in the rebuilt bounded tail despite display 
         "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
       )
       .run(scope.sessionId);
-    expect(await reconcileSessionTranscriptIndexes(scope)).toEqual({ reconciledSessions: 1 });
-    const tail = readRecentSessionTranscriptActiveEvents(scope, 2);
+    expect(await reconcileIndexes(scope)).toEqual({ reconciledSessions: 1 });
+    const tail = recentEvents(scope, 2);
     expect(eventIds(tail)).toEqual(["bootstrap", "usage"]);
     expect(tail[1]).toMatchObject({ message: { usage: { input: 86_000, output: 2_000 } } });
     const visited: unknown[] = [];
-    withRecentActiveTranscriptEvents(scope, 2, (visit) => {
+    visitRecentEvents(scope, 2, (visit) => {
       visit((event) => visited.push(event));
     });
     expect(visited).toEqual(tail.toReversed());
@@ -678,18 +649,12 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
     const first: unknown[] = [];
     const second: unknown[] = [];
     try {
-      withRecentActiveTranscriptEvents(scope, 1, (visit) => {
+      visitRecentEvents(scope, 1, (visit) => {
         savedVisit = visit;
         visit((event) => first.push(event));
-        writer.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
-          JSON.stringify({
-            type: "message",
-            id: "seed",
-            parentId: null,
-            message: { role: "user", content: "after" },
-          }),
-          scope.sessionId,
-        );
+        writer
+          .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?")
+          .run(JSON.stringify(storedMessage("seed", null, "user", "after")), scope.sessionId);
         visit((event) => second.push(event));
       });
     } finally {
@@ -697,9 +662,7 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
     }
     expect(first).toMatchObject([{ message: { content: "before" } }]);
     expect(second).toEqual(first);
-    expect(readRecentSessionTranscriptActiveEvents(scope, 1)).toMatchObject([
-      { message: { content: "after" } },
-    ]);
+    expect(recentEvents(scope, 1)).toMatchObject([{ message: { content: "after" } }]);
     expect(() => savedVisit?.(() => {})).toThrow("outside its read snapshot");
   });
 });
@@ -742,14 +705,14 @@ it.each(["json", "sql", "consumer"] as const)(
       try {
         if (failureKind === "consumer") {
           expect(() =>
-            withRecentActiveTranscriptEvents(scope, 3, (visit) => {
+            visitRecentEvents(scope, 3, (visit) => {
               visit(() => {
                 throw failure;
               });
             }),
           ).toThrow(failure);
         } else {
-          expect(() => readRecentSessionTranscriptActiveEvents(scope, 3)).toThrow(
+          expect(() => recentEvents(scope, 3)).toThrow(
             failureKind === "sql" ? "malformed JSON" : parseFailure,
           );
         }
@@ -762,9 +725,9 @@ it.each(["json", "sql", "consumer"] as const)(
       expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
         busy: 0,
       });
-      expect(readRecentSessionTranscriptActiveEvents(scope, 3)).toHaveLength(3);
+      expect(recentEvents(scope, 3)).toHaveLength(3);
       await appendTranscriptEvent(scope, { type: "custom", id: "after", parentId: "newest" });
-      expect(readRecentSessionTranscriptActiveEvents(scope, 1)).toMatchObject([{ id: "after" }]);
+      expect(recentEvents(scope, 1)).toMatchObject([{ id: "after" }]);
     });
   },
 );
@@ -787,13 +750,9 @@ it.each(["unbounded", "reset"] as const)(
         transcriptMessage("display-prefix", "kept-user", activity),
         assistant("kept-assistant", "display-prefix", "answer"),
       ]);
-      if (boundary !== "unbounded") {
+      if (boundary === "reset") {
         await appendTranscriptEvent(scope, {
-          type: boundary,
-          id: "boundary",
-          parentId: "kept-assistant",
-          timestamp: "2026-08-28T00:00:00.000Z",
-          firstKeptEntryId: "kept-user",
+          ...reset("boundary", "kept-assistant", "kept-user"),
           reason: "reset",
         });
       }
@@ -805,12 +764,12 @@ it.each(["unbounded", "reset"] as const)(
         eventCount: contextEvents.length,
         sizeBytes: serializedBytes(contextEvents),
       };
-      expect(readActiveTranscriptStats(scope)).toEqual(expected);
+      expect(activeStats(scope)).toEqual(expected);
       const physicalBefore = readTranscriptStatsSync(scope);
       const historyBefore = readSessionTranscriptMessageEventCount(scope);
       await persist(scope, [{ eventId: "display-tail", message: activity }]);
 
-      expect(readActiveTranscriptStats(scope)).toEqual(expected);
+      expect(activeStats(scope)).toEqual(expected);
       expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(
         physicalBefore.sizeBytes + 32_000,
       );

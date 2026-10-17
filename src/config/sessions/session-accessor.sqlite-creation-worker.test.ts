@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { deserialize } from "node:v8";
@@ -58,6 +59,18 @@ import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-hea
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+
+function ownerAssignment(id: string, assignedAt = 1) {
+  return {
+    actor: { type: "human" as const, id },
+    assignedBy: { type: "system" as const, id: "fixture" },
+    assignedAt,
+  };
+}
+
+function unboundCreation(): never {
+  throw new Error("Creation has not bound its owner");
+}
 
 function registerHarness(id: string, withSessionDeletion: AgentHarness["withSessionDeletion"]) {
   const registry = createEmptyPluginRegistry();
@@ -163,9 +176,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof databaseIdentity !== "string") {
-      throw new Error("Expected a durable session database identity");
-    }
+    assert(typeof databaseIdentity === "string", "Expected a durable session database identity");
     const key = "agent:main:creation-worker";
     const commands: string[] = [];
     using _ = observePostedCommands(commands);
@@ -185,9 +196,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
       sessionKey: key,
       allowMissing: true,
     });
-    let assertCreation: () => void = () => {
-      throw new Error("Creation has not bound its owner");
-    };
+    let assertCreation: () => void = unboundCreation;
     runOpenClawAgentWriteTransaction(
       (db) => {
         writeSessionEntry(db, "agent:main:sibling", {
@@ -214,11 +223,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
       }
     });
     const sql = observeHostDataSql();
-    const owner = {
-      actor: { type: "human" as const, id: "creator" },
-      assignedBy: { type: "system" as const, id: "fixture" },
-      assignedAt: 1,
-    };
+    const owner = ownerAssignment("creator");
     try {
       const result = await createEntry(
         { agentId: "main", storePath, sessionKey: key, env },
@@ -334,9 +339,7 @@ it.each(["replaced", "closed"] as const)(
       const alias = state.path("agent-alias");
       await fs.symlink(path.dirname(database.path), alias, "junction");
       const storePath = path.join(alias, path.basename(database.path));
-      let assertCreation: () => void = () => {
-        throw new Error("Creation has not bound its owner");
-      };
+      let assertCreation: () => void = unboundCreation;
       let closing: Promise<unknown> | undefined;
       const message =
         kind === "closed"
@@ -492,9 +495,7 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
     addSessionMember(scope, { identityId: "member", addedBy: "creator", addedAt: 1 });
     const transcript = transcriptRows(database, original.sessionId);
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected durable alias fixture");
-    }
+    assert(typeof identity === "string", "Expected durable alias fixture");
     const sharing = retainPreparedSessionSharingFacts({
       databaseIdentity: "file:" + identity,
       sessionKey: alias,
@@ -513,11 +514,7 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
         moves.push([...mutation.previous.sessionKeys, ...mutation.current.sessionKeys]);
       }
     });
-    const owner = {
-      actor: { type: "human" as const, id: "adopter" },
-      assignedBy: { type: "system" as const, id: "fixture" },
-      assignedAt: 2,
-    };
+    const owner = ownerAssignment("adopter", 2);
     let committed = false;
     let sourceHeld = false;
     const sql = observeHostDataSql();
@@ -655,18 +652,15 @@ it.each([false, true])(
       const alias = sessionKey.toLowerCase();
       const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
       const repositories = createSessionRepositoryWorkspaceStore();
-      const workspace = await repositories.create({
-        agentId: "main",
-        sessionKey: alias,
-        url: "https://github.com/example/alias.git",
-        assertCurrent: () => {},
-      });
-      const siblingWorkspace = await repositories.create({
-        agentId: "other",
-        sessionKey: alias,
-        url: "https://github.com/example/sibling.git",
-        assertCurrent: () => {},
-      });
+      const workspaceFor = (agentId: string, name: string) =>
+        repositories.create({
+          agentId,
+          sessionKey: alias,
+          url: `https://github.com/example/${name}.git`,
+          assertCurrent: () => {},
+        });
+      const workspace = await workspaceFor("main", "alias");
+      const siblingWorkspace = await workspaceFor("other", "sibling");
       seedAlias(database, sessionKey, original);
       const order: string[] = [];
       const registry = registerHarness("alias-owner", async (params, run) => {
