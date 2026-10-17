@@ -14,7 +14,6 @@ import {
   assembleModelCatalogBundleV2,
   enrichModelCatalogPricing,
   hydrateModelCatalogFromModelsDev,
-  MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
   resolveProviderFeaturedModels,
@@ -31,6 +30,7 @@ import { resolveModelCostConfig } from "../../src/utils/usage-format.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   setRemoteModelCatalogOverlaySourcesForTest();
   MODELS_JSON_STATE.costCache.clear();
   vi.unstubAllEnvs();
@@ -39,10 +39,45 @@ afterEach(() => {
   }
 });
 
+function captureWarnings() {
+  const messages: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+    messages.push(String(value));
+    return true;
+  });
+  return () => messages.join("");
+}
 type FixtureModel = RemoteModelCatalogBundle["providers"][string]["models"][number];
 type Manifest = Parameters<typeof assembleModelCatalogBundle>[0]["manifests"][number]["manifest"];
 function manifestEntry(pluginId: string, manifest: Manifest) {
   return { pluginId, manifestPath: `${pluginId}.json`, manifest };
+}
+function routerModel(
+  id: string,
+  prompt: string,
+  completion: string,
+  extra: Record<string, unknown> = {},
+) {
+  return { id, pricing: { prompt, completion, ...extra } };
+}
+function deepInfraModel(
+  model_name: string,
+  input: number,
+  output: number,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    model_name,
+    pricing: {
+      type: "tokens",
+      cents_per_input_token: input,
+      cents_per_output_token: output,
+      ...extra,
+    },
+  };
+}
+function tier(input: number, output: number, range: number[]) {
+  return { input_cost_per_token: input, output_cost_per_token: output, range };
 }
 function liteLLMPrice(provider: string, input: number, output: number) {
   return { litellm_provider: provider, input_cost_per_token: input, output_cost_per_token: output };
@@ -148,35 +183,34 @@ function assembleFixtureBundle(
   });
 }
 
+async function catalogFixture(manifests: Parameters<typeof assembleFixtureBundle>[0]) {
+  const bundle = await assembleFixtureBundle(manifests);
+  return {
+    bundle,
+    hydrate: (fetchImpl: typeof fetch) =>
+      hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
+    enrich: (fetchImpl: typeof fetch) =>
+      enrichModelCatalogPricing({ bundle, manifests, fetchImpl }),
+  };
+}
+
 function nativeManifests(source: "OpenCode" | "Venice" | "DeepInfra") {
   const provider = source.toLowerCase();
   const sourceId = source === "OpenCode" ? "openCode" : provider;
-  return [
-    {
-      pluginId: "fixture",
-      manifestPath: "fixture.json",
-      manifest: {
-        providers: ["anthropic", "openai", provider],
-        modelCatalog: {
-          providers: {
-            anthropic: fixtureProvider("claude", 100),
-            openai: fixtureProvider("gpt", 100),
-            [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
-          },
-        },
-        modelPricing: {
-          providers: {
-            [provider]: {
-              external: true,
-              [sourceId]: { provider: source === "OpenCode" ? "upstream-zen" : provider },
-              openRouter: { provider },
-              liteLLM: { provider },
-            },
-          },
-        },
+  const manifests = fixtureManifests({
+    [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
+  });
+  manifests[0]!.manifest.modelPricing = {
+    providers: {
+      [provider]: {
+        external: true,
+        [sourceId]: { provider: source === "OpenCode" ? "upstream-zen" : provider },
+        openRouter: { provider },
+        liteLLM: { provider },
       },
     },
-  ];
+  };
+  return manifests;
 }
 
 function openCodePrices(
@@ -195,9 +229,9 @@ const OPENCODE_PRICING_URL = "https://models.opencode.ai/api.json";
 const VENICE_PRICING_URL = "https://api.venice.ai/api/v1/models";
 
 describe("publish model catalog", () => {
-  it("publishes native DeepInfra array prices with discounts rather than generic rates", async () => {
+  it("uses DeepInfra native discounts, not generic rates", async () => {
     const manifests = nativeManifests("DeepInfra");
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, enrich } = await catalogFixture(manifests);
     const provider = bundle.providers.deepinfra!;
     for (const id of ["qualified", "absent", "free"]) {
       provider.models.push({
@@ -212,37 +246,19 @@ describe("publish model catalog", () => {
       const url = requestUrl(input);
       if (url === "https://api.deepinfra.com/models/list") {
         return Response.json([
-          {
-            model_name: "priced-fixture",
-            pricing: {
-              type: "tokens",
-              cents_per_input_token: 0.0002,
-              cents_per_output_token: 0.001,
-              discount: 0.5,
-              rate_per_input_token_cached: 0.2,
-            },
-          },
-          {
-            model_name: "qualified",
-            pricing: {
-              type: "tokens",
-              cents_per_input_token: 0.0002,
-              cents_per_output_token: 0.001,
-              full: "Higher rates at long context",
-            },
-          },
-          ...["free", "standalone-free", "foreign/hidden"].map((model_name) => ({
-            model_name,
-            pricing: { type: "tokens", cents_per_input_token: 0, cents_per_output_token: 0 },
-          })),
+          deepInfraModel("priced-fixture", 0.0002, 0.001, {
+            discount: 0.5,
+            rate_per_input_token_cached: 0.2,
+          }),
+          deepInfraModel("qualified", 0.0002, 0.001, { full: "Higher rates at long context" }),
+          ...["free", "standalone-free", "foreign/hidden"].map((id) => deepInfraModel(id, 0, 0)),
         ]);
       }
       if (url === OPENROUTER_MODELS_URL) {
         return Response.json({
-          data: ["priced-fixture", "qualified", "absent", "absent-unbundled"].map((id) => ({
-            id: `deepinfra/${id}`,
-            pricing: { prompt: "1", completion: "1" },
-          })),
+          data: ["priced-fixture", "qualified", "absent", "absent-unbundled"].map((id) =>
+            routerModel(`deepinfra/${id}`, "1", "1"),
+          ),
         });
       }
       if (url === MODELS_DEV_CATALOG_URL) {
@@ -253,7 +269,7 @@ describe("publish model catalog", () => {
         absent: liteLLMPrice("deepinfra", 1, 1),
       });
     });
-    await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
+    await enrich(fetchImpl);
     expect(bundle.providers.deepinfra?.models[0]?.cost).toEqual({
       input: 1,
       output: 5,
@@ -266,15 +282,13 @@ describe("publish model catalog", () => {
       expect(model).toMatchObject({ name: `Fixture ${id}`, contextWindow: 123456 });
       expect(model?.cost).toBeUndefined();
     }
-    for (const id of ["priced-fixture", "qualified", "absent", "absent-unbundled"]) {
-      expect(bundle.pricing).not.toHaveProperty(`deepinfra/${id}`);
-    }
-    expect(bundle.pricing).not.toHaveProperty("absent");
-    expect(bundle.pricing).not.toHaveProperty("foreign/hidden");
+    expect(bundle.pricing).toEqual({
+      "deepinfra/free": { input: 0, output: 0 },
+      "deepinfra/standalone-free": { input: 0, output: 0 },
+    });
     expect(bundle.providers).not.toHaveProperty("foreign");
     const params = await publishedPricingParams(bundle, "deepinfra");
     for (const model of ["free", "standalone-free"]) {
-      expect(bundle.pricing?.[`deepinfra/${model}`]).toEqual({ input: 0, output: 0 });
       expect(resolveModelCostConfig({ ...params, model })).toEqual({
         input: 0,
         output: 0,
@@ -285,21 +299,17 @@ describe("publish model catalog", () => {
     expect(resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
   });
 
-  it("rejects DeepInfra object response before mutating the previous bundle", async () => {
+  it("rejects DeepInfra objects without mutating the bundle", async () => {
     const manifests = nativeManifests("DeepInfra");
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, enrich } = await catalogFixture(manifests);
     const previous = serializeModelCatalogBundle(bundle);
     await expect(
-      enrichModelCatalogPricing({
-        bundle,
-        manifests,
-        fetchImpl: async (input) => {
-          const url = requestUrl(input);
-          if (url === "https://api.deepinfra.com/models/list") {
-            return Response.json({ data: [] });
-          }
-          return Response.json(url === OPENROUTER_MODELS_URL ? { data: [] } : {});
-        },
+      enrich(async (input) => {
+        const url = requestUrl(input);
+        if (url === "https://api.deepinfra.com/models/list") {
+          return Response.json({ data: [] });
+        }
+        return Response.json(url === OPENROUTER_MODELS_URL ? { data: [] } : {});
       }),
     ).rejects.toThrow("DeepInfra pricing");
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
@@ -322,7 +332,6 @@ describe("publish model catalog", () => {
       costModels: 0,
       pricingEntries: 0,
     });
-    expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
   });
 
   it("omits empty static catalogs owned by runtime discovery", async () => {
@@ -333,38 +342,28 @@ describe("publish model catalog", () => {
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({ providers: 2, models: 200 });
   });
 
-  it("rejects missing required providers, low counts, and invalid provider rows", async () => {
-    const makeEntry = (providers: Record<string, unknown>) => [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: { modelCatalog: { providers } },
+  it.each([
+    { providers: { anthropic: fixtureProvider("claude", 200) }, error: "anthropic and openai" },
+    {
+      providers: { anthropic: fixtureProvider("claude", 100), openai: fixtureProvider("gpt", 99) },
+      error: "below required floor 200",
+    },
+    {
+      providers: {
+        anthropic: fixtureProvider("claude", 100),
+        openai: { models: [{ id: "" }, ...fixtureProvider("gpt", 100).models] },
       },
-    ];
+      error: undefined,
+    },
+  ])("rejects incomplete or invalid provider rows: $error", async ({ providers, error }) => {
     await expect(
-      assembleFixtureBundle(makeEntry({ anthropic: fixtureProvider("claude", 200) })),
-    ).rejects.toThrow("anthropic and openai");
-    await expect(
-      assembleFixtureBundle(
-        makeEntry({
-          anthropic: fixtureProvider("claude", 100),
-          openai: fixtureProvider("gpt", 99),
-        }),
-      ),
-    ).rejects.toThrow("below required floor 200");
-    await expect(
-      assembleFixtureBundle(
-        makeEntry({
-          anthropic: fixtureProvider("claude", 100),
-          openai: { models: [{ id: "" }, ...fixtureProvider("gpt", 100).models] },
-        }),
-      ),
-    ).rejects.toThrow();
+      assembleFixtureBundle([manifestEntry("fixture", { modelCatalog: { providers } })]),
+    ).rejects.toThrow(error);
   });
 
-  it("hydrates missing models and fills only undefined manifest metadata", async () => {
+  it("hydrates missing models without replacing manifest metadata", async () => {
     const anthropic = fixtureProvider("claude", 100);
-    anthropic.models[0] = {
+    const manifestOwned: FixtureModel = {
       id: "manifest-owned",
       name: "Manifest name",
       reasoning: false,
@@ -372,23 +371,19 @@ describe("publish model catalog", () => {
       contextWindow: 999,
       maxTokens: 888,
     };
+    anthropic.models[0] = structuredClone(manifestOwned);
     anthropic.models[1] = { id: "manifest-partial" };
     const manifests = fixtureManifests(
       { anthropic },
       { modelsDev: { anthropic: "upstream-anthropic" } },
     );
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, hydrate } = await catalogFixture(manifests);
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
       return Response.json(
         modelsDevCatalog({
           "upstream-anthropic": [
-            modelsDevModel("manifest-owned", {
-              name: "Feed name",
-              reasoning: true,
-              modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-              limit: { context: 128000, output: 32000 },
-            }),
+            modelsDevModel("manifest-owned", { name: "Feed name" }),
             modelsDevModel("manifest-partial"),
             modelsDevModel("new-model"),
           ],
@@ -396,20 +391,13 @@ describe("publish model catalog", () => {
       );
     });
 
-    await expect(
-      hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
-    ).resolves.toEqual({ anthropic: { added: 1, filled: 1, skipped: 0 } });
+    await expect(hydrate(fetchImpl)).resolves.toEqual({
+      anthropic: { added: 1, filled: 1, skipped: 0 },
+    });
     const models = bundle.providers.anthropic?.models ?? [];
     expect(models[0]?.id).toBe("manifest-owned");
     expect(models[1]?.id).toBe("manifest-partial");
-    expect(models.find((model) => model.id === "manifest-owned")).toEqual({
-      id: "manifest-owned",
-      name: "Manifest name",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 999,
-      maxTokens: 888,
-    });
+    expect(models.find((model) => model.id === "manifest-owned")).toEqual(manifestOwned);
     for (const id of ["manifest-partial", "new-model"]) {
       expect(models.find((model) => model.id === id)).toEqual({
         id,
@@ -423,7 +411,7 @@ describe("publish model catalog", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("skips rows without tool calls or text output, suppressions, and unmapped providers", async () => {
+  it("filters non-chat, suppressed and unmapped feed rows", async () => {
     const manifests = [
       ...fixtureManifests(
         { featherless: { models: [{ id: "existing-featherless" }] } },
@@ -439,44 +427,28 @@ describe("publish model catalog", () => {
           ],
         },
       ),
-      {
-        pluginId: "unrelated",
-        manifestPath: "unrelated.json",
-        manifest: {
-          providers: [],
-          modelCatalog: {
-            suppressions: [{ provider: "openai", model: "allowed-model" }],
-          },
-        },
-      },
+      manifestEntry("unrelated", {
+        providers: [],
+        modelCatalog: { suppressions: [{ provider: "openai", model: "allowed-model" }] },
+      }),
     ];
-    const bundle = await assembleFixtureBundle(manifests);
-    const result = await hydrateModelCatalogFromModelsDev({
-      bundle,
-      manifests,
-      fetchImpl: async (input) => {
-        expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
-        return Response.json({
-          openai: {
-            id: "openai",
-            models: {
-              "image-model": modelsDevModel("image-model", {
-                modalities: { input: ["text"], output: ["image"] },
-              }),
-              "embedding-model": modelsDevModel("embedding-model", { tool_call: false }),
-              "suppressed-model": modelsDevModel("suppressed-model"),
-              "endpoint-model": modelsDevModel("endpoint-model"),
-              "deprecated-model": modelsDevModel("deprecated-model", { status: "deprecated" }),
-              "malformed-model": { id: "malformed-model" },
-              "allowed-model": modelsDevModel("allowed-model"),
-            },
-          },
-          featherless: {
-            id: "featherless",
-            models: { "feed-model": modelsDevModel("feed-model") },
-          },
-        });
-      },
+    const { bundle, hydrate } = await catalogFixture(manifests);
+    const result = await hydrate(async (input) => {
+      expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
+      return Response.json(
+        modelsDevCatalog({
+          openai: [
+            modelsDevModel("image-model", { modalities: { input: ["text"], output: ["image"] } }),
+            modelsDevModel("embedding-model", { tool_call: false }),
+            modelsDevModel("suppressed-model"),
+            modelsDevModel("endpoint-model"),
+            modelsDevModel("deprecated-model", { status: "deprecated" }),
+            { id: "malformed-model" },
+            modelsDevModel("allowed-model"),
+          ],
+          featherless: [modelsDevModel("feed-model")],
+        }),
+      );
     });
     expect(result.openai).toEqual({ added: 2, filled: 0, skipped: 5 });
     expect(bundle.providers.openai?.models.map((model) => model.id)).toEqual([
@@ -493,34 +465,23 @@ describe("publish model catalog", () => {
     const anthropic = fixtureProvider("claude", 100);
     anthropic.models[0] = { id: "manifest-anthropic", api: "anthropic-messages" };
     const manifests = fixtureManifests({ anthropic }, { modelsDev: { anthropic: "anthropic" } });
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, hydrate } = await catalogFixture(manifests);
     const previous = serializeModelCatalogBundle(bundle);
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      const result = await hydrateModelCatalogFromModelsDev({
-        bundle,
-        manifests,
-        fetchImpl: async () =>
-          Response.json(modelsDevCatalog({ anthropic: [modelsDevModel("new-model")] })),
-      });
-      expect(result.anthropic).toBeUndefined();
-    } finally {
-      stderr.mockRestore();
-    }
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const result = await hydrate(async () =>
+      Response.json(modelsDevCatalog({ anthropic: [modelsDevModel("new-model")] })),
+    );
+    expect(result.anthropic).toBeUndefined();
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
   });
 
   it("rejects models.dev malformed feed before changing the bundle", async () => {
     const manifests = fixtureManifests({}, { modelsDev: { anthropic: "anthropic" } });
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, hydrate } = await catalogFixture(manifests);
     const previous = serializeModelCatalogBundle(bundle);
     await expect(
-      hydrateModelCatalogFromModelsDev({
-        bundle,
-        manifests,
-        fetchImpl: async () => {
-          return Response.json([]);
-        },
+      hydrate(async () => {
+        return Response.json([]);
       }),
     ).rejects.toThrow("models.dev");
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
@@ -531,7 +492,7 @@ describe("publish model catalog", () => {
     { paddingMiB: 40, outcome: "rejects" },
   ])("$outcome a models.dev feed padded by $paddingMiB MiB", async ({ paddingMiB, outcome }) => {
     const manifests = fixtureManifests({}, { modelsDev: { anthropic: "anthropic" } });
-    const bundle = await assembleFixtureBundle(manifests);
+    const { hydrate } = await catalogFixture(manifests);
     const encoder = new TextEncoder();
     const feed = encoder.encode(
       JSON.stringify(modelsDevCatalog({ anthropic: [modelsDevModel("new-model")] })),
@@ -539,10 +500,8 @@ describe("publish model catalog", () => {
     // JSON whitespace keeps the padded feed valid; no content-length forces the streamed bound.
     const padding = encoder.encode(" ".repeat(1024 * 1024));
     let sent = -1;
-    const hydration = hydrateModelCatalogFromModelsDev({
-      bundle,
-      manifests,
-      fetchImpl: async () =>
+    const hydration = hydrate(
+      async () =>
         new Response(
           new ReadableStream<Uint8Array>({
             pull(controller) {
@@ -555,7 +514,7 @@ describe("publish model catalog", () => {
             },
           }),
         ),
-    });
+    );
     if (outcome === "accepts") {
       await expect(hydration).resolves.toEqual({
         anthropic: { added: 1, filled: 0, skipped: 0 },
@@ -566,38 +525,26 @@ describe("publish model catalog", () => {
     }
   });
 
-  it("publishes a provider unhydrated when its models.dev source disappears", async () => {
+  it("keeps authored rows when an upstream provider disappears", async () => {
     const manifests = fixtureManifests(
       {},
       {
         modelsDev: { anthropic: "anthropic", openai: "renamed-upstream" },
       },
     );
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, hydrate } = await catalogFixture(manifests);
     const openaiBefore = JSON.stringify(bundle.providers.openai);
-    const warnings: string[] = [];
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
-      warnings.push(String(value));
-      return true;
-    });
-    const result = await hydrateModelCatalogFromModelsDev({
-      bundle,
-      manifests,
-      fetchImpl: async () =>
-        Response.json({
-          anthropic: {
-            id: "anthropic",
-            models: { "hydrated-claude": modelsDevModel("hydrated-claude") },
-          },
-        }),
-    }).finally(() => stderr.mockRestore());
+    const warnings = captureWarnings();
+    const result = await hydrate(async () =>
+      Response.json(modelsDevCatalog({ anthropic: [modelsDevModel("hydrated-claude")] })),
+    );
     expect(result.anthropic).toEqual({ added: 1, filled: 0, skipped: 0 });
     expect(result.openai).toBeUndefined();
     expect(JSON.stringify(bundle.providers.openai)).toBe(openaiBefore);
     expect(bundle.providers.anthropic?.models.map((model) => model.id)).toContain(
       "hydrated-claude",
     );
-    expect(warnings.join("")).toContain("renamed-upstream");
+    expect(warnings()).toContain("renamed-upstream");
   });
 
   function inventoryManifests() {
@@ -632,16 +579,11 @@ describe("publish model catalog", () => {
     });
     expect(bundle.providers.nvidia?.models).toEqual([
       { id: "z-ai/glm-5.3" },
-      {
-        id: "z-ai/glm-5.2",
+      ...["z-ai/glm-5.2", "Z-AI/GLM-5.3-FLASH"].map((id) => ({
+        id,
         status: "deprecated",
         statusReason: "nvidia no longer lists this model in its public model inventory.",
-      },
-      {
-        id: "Z-AI/GLM-5.3-FLASH",
-        status: "deprecated",
-        statusReason: "nvidia no longer lists this model in its public model inventory.",
-      },
+      })),
       { id: "z-ai/glm5", status: "deprecated", statusReason: "authored" },
     ]);
     expect(bundle.providers.novita?.models[0]).toEqual({ id: "sao10K/l3-70b-euryale-v2.1" });
@@ -656,20 +598,14 @@ describe("publish model catalog", () => {
   ])("publishes rows as authored when the inventory is %s", async (_scenario, respond) => {
     const bundle = await assembleFixtureBundle(inventoryManifests());
     const before = JSON.stringify(bundle);
-    const warnings: string[] = [];
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
-      warnings.push(String(value));
-      return true;
-    });
+    const warnings = captureWarnings();
 
-    const result = await retireUnservedModels({ bundle, fetchImpl: async () => respond() }).finally(
-      () => stderr.mockRestore(),
-    );
+    const result = await retireUnservedModels({ bundle, fetchImpl: async () => respond() });
 
     expect(result).toEqual({});
     expect(JSON.stringify(bundle)).toBe(before);
-    expect(warnings.join("")).toContain("publishing nvidia without inventory retirement");
-    expect(warnings.join("")).toContain("publishing novita without inventory retirement");
+    expect(warnings()).toContain("publishing nvidia without inventory retirement");
+    expect(warnings()).toContain("publishing novita without inventory retirement");
   });
 
   const FEATURED_MODELS_URL =
@@ -761,15 +697,9 @@ describe("publish model catalog", () => {
     ["unmatched", () => featuredFeed(["nvidia/unserved-model"]), true],
     ["empty", () => featuredFeed([]), false],
   ])("falls back to the global list when the featured feed is %s", async (_s, respond, warns) => {
-    const warnings: string[] = [];
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
-      warnings.push(String(value));
-      return true;
-    });
+    const warnings = captureWarnings();
 
-    const { recommended } = await featuredRecommendations(respond).finally(() =>
-      stderr.mockRestore(),
-    );
+    const { recommended } = await featuredRecommendations(respond);
 
     expect(recommended).toEqual([
       "moonshotai/kimi-k3",
@@ -778,7 +708,7 @@ describe("publish model catalog", () => {
       "z-ai/glm-5.3-flash",
       "nvidia/nemotron-3-ultra-550b-a55b",
     ]);
-    expect(warnings.join("")).toEqual(
+    expect(warnings()).toEqual(
       warns ? expect.stringContaining("publishing nvidia with global recommendations only") : "",
     );
   });
@@ -787,11 +717,9 @@ describe("publish model catalog", () => {
     const modelsDev = { other: "upstream-other" };
     const manifests = fixtureManifests({}, { modelsDev });
     manifests[0]!.manifest.providers = ["anthropic", "openai", "other"];
-    const bundle = await assembleFixtureBundle(manifests);
+    const { hydrate } = await catalogFixture(manifests);
     const fetchImpl = vi.fn<typeof fetch>();
-    await expect(
-      hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
-    ).resolves.toEqual({});
+    await expect(hydrate(fetchImpl)).resolves.toEqual({});
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -846,30 +774,22 @@ describe("publish model catalog", () => {
         },
       }),
     ];
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, enrich } = await catalogFixture(manifests);
     const fetchImpl = async (input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url === OPENROUTER_MODELS_URL) {
         return Response.json({
           data: [
-            {
-              id: "anthropic/claude-3.5-sonnet",
-              pricing: { prompt: "0.000001", completion: "0.000002" },
-            },
-            {
-              id: "openai/gpt-special",
-              pricing: {
-                prompt: "0.000003",
-                completion: "0.000004",
-                input_cache_read: "0.0000005",
-                input_cache_write: "0.0000025",
-                overrides: [{ min_prompt_tokens: 1000, prompt: "0.000007" }],
-              },
-            },
-            { id: "openai/gpt-2", pricing: { prompt: "-1", completion: "0.000004" } },
-            { id: "unknown/new-model", pricing: { prompt: "1", completion: "1" } },
-            { id: "custom/secondary-wins", pricing: { prompt: "0", completion: "0" } },
-            { id: "mapped/wrong-source", pricing: { prompt: "0.000013", completion: "0.000014" } },
+            routerModel("anthropic/claude-3.5-sonnet", "0.000001", "0.000002"),
+            routerModel("openai/gpt-special", "0.000003", "0.000004", {
+              input_cache_read: "0.0000005",
+              input_cache_write: "0.0000025",
+              overrides: [{ min_prompt_tokens: 1000, prompt: "0.000007" }],
+            }),
+            routerModel("openai/gpt-2", "-1", "0.000004"),
+            routerModel("unknown/new-model", "1", "1"),
+            routerModel("custom/secondary-wins", "0", "0"),
+            routerModel("mapped/wrong-source", "0.000013", "0.000014"),
           ],
         });
       }
@@ -895,7 +815,7 @@ describe("publish model catalog", () => {
       });
     };
 
-    await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
+    await expect(enrich(fetchImpl)).resolves.toEqual({
       modelsEnriched: 1,
       pricingEntries: 10,
     });
@@ -943,7 +863,7 @@ describe("publish model catalog", () => {
 
   it("replaces declared context pricing when LiteLLM supplies tiers", async () => {
     const manifests = fixtureManifests({}, {}, false);
-    const bundle = await assembleFixtureBundle(manifests);
+    const { bundle, enrich } = await catalogFixture(manifests);
     const model = bundle.providers.openai!.models[0]!;
     const declared: NonNullable<typeof model.cost> = {
       input: 10,
@@ -954,43 +874,21 @@ describe("publish model catalog", () => {
       ],
     };
     model.cost = declared;
-    await enrichModelCatalogPricing({
-      bundle,
-      manifests,
-      fetchImpl: async (input) => {
-        if (requestUrl(input) === OPENROUTER_MODELS_URL) {
-          return Response.json({
-            data: [
-              {
-                id: "openai/gpt-0",
-                pricing: {
-                  prompt: "0.000002",
-                  completion: "0.000003",
-                },
-              },
-            ],
-          });
-        }
+    await enrich(async (input) => {
+      if (requestUrl(input) === OPENROUTER_MODELS_URL) {
         return Response.json({
-          "gpt-0": {
-            litellm_provider: "openai",
-            input_cost_per_token: 0.000002,
-            output_cost_per_token: 0.000003,
-            tiered_pricing: [
-              {
-                input_cost_per_token: 0.000002,
-                output_cost_per_token: 0.000003,
-                range: [0, 272_001],
-              },
-              {
-                input_cost_per_token: 0.000004,
-                output_cost_per_token: 0.000003,
-                range: [272_001],
-              },
-            ],
-          },
+          data: [routerModel("openai/gpt-0", "0.000002", "0.000003")],
         });
-      },
+      }
+      return Response.json({
+        "gpt-0": {
+          ...liteLLMPrice("openai", 0.000002, 0.000003),
+          tiered_pricing: [
+            tier(0.000002, 0.000003, [0, 272_001]),
+            tier(0.000004, 0.000003, [272_001]),
+          ],
+        },
+      });
     });
     const published = bundle.providers.openai!.models[0]!.cost;
     expect(published).toMatchObject({ input: 2, output: 3 });
@@ -1003,113 +901,83 @@ describe("publish model catalog", () => {
     expect(bundle.pricing).not.toHaveProperty("gpt-0");
   });
 
-  describe("OpenCode native source", () => {
-    const source = "OpenCode";
-    const provider = "opencode";
-    const url = OPENCODE_PRICING_URL;
-    it("preserves zero model metadata without inventing an unavailable native price", async () => {
-      const manifests = nativeManifests(source);
-      const bundle = await assembleFixtureBundle(manifests);
-      const model = bundle.providers[provider]!.models[0]!;
-      model.cost = { input: 0, output: 0 };
-      model.name = "Existing explicit model";
-      model.contextWindow = 123_456;
-      model.status = "deprecated";
-      const expected = { ...model };
-      delete expected.cost;
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-      try {
-        await enrichModelCatalogPricing({
-          bundle,
-          manifests,
-          fetchImpl: async (input) => {
-            const request = requestUrl(input);
-            if (request === url) {
-              return Response.json(openCodePrices({ input: 2, output: 3 }, ["new-priced-fixture"]));
-            }
-            if (request === OPENROUTER_MODELS_URL) {
-              return Response.json({
-                data: [
-                  {
-                    id: `${provider}/priced-fixture`,
-                    pricing: { prompt: "1", completion: "1" },
-                  },
-                  {
-                    id: `${provider}/absent-unbundled`,
-                    pricing: { prompt: "1", completion: "1" },
-                  },
-                ],
-              });
-            }
-            return Response.json({
-              "priced-fixture": {
-                litellm_provider: provider,
-                input_cost_per_token: 1,
-                output_cost_per_token: 1,
-              },
-            });
-          },
-        });
-        expect(bundle.providers[provider]?.models[0]).toEqual(expected);
-        expect(bundle.pricing).not.toHaveProperty(`${provider}/priced-fixture`);
-        expect(bundle.pricing).not.toHaveProperty(`${provider}/absent-unbundled`);
-        expect(bundle.pricing).not.toHaveProperty("priced-fixture");
-        expect(bundle.pricing?.[`${provider}/new-priced-fixture`]).toEqual({
-          input: 2,
-          output: 3,
-        });
-        expect(stderr.mock.calls.map(([message]) => String(message)).join("")).toContain(
-          `${source} pricing unavailable for ${provider}/priced-fixture`,
-        );
-        expect(
-          resolveModelCostConfig({
-            ...(await publishedPricingParams(bundle, provider)),
-            model: "priced-fixture",
-          }),
-        ).toBeUndefined();
-      } finally {
-        stderr.mockRestore();
+  it("keeps metadata but removes unavailable OpenCode prices", async () => {
+    const manifests = nativeManifests("OpenCode");
+    const { bundle, enrich } = await catalogFixture(manifests);
+    const model = bundle.providers.opencode!.models[0]!;
+    model.cost = { input: 0, output: 0 };
+    model.name = "Existing explicit model";
+    model.contextWindow = 123_456;
+    model.status = "deprecated";
+    const expected = { ...model };
+    delete expected.cost;
+    const warnings = captureWarnings();
+    await enrich(async (input) => {
+      const request = requestUrl(input);
+      if (request === OPENCODE_PRICING_URL) {
+        return Response.json(openCodePrices({ input: 2, output: 3 }, ["new-priced-fixture"]));
       }
+      if (request === OPENROUTER_MODELS_URL) {
+        return Response.json({
+          data: [
+            routerModel("opencode/priced-fixture", "1", "1"),
+            routerModel("opencode/absent-unbundled", "1", "1"),
+          ],
+        });
+      }
+      return Response.json({
+        "priced-fixture": liteLLMPrice("opencode", 1, 1),
+      });
     });
-
-    it.each(["malformed body", "invalid zero seed"])(
-      "rejects %s instead of publishing unverified prices",
-      async (scenario) => {
-        const manifests = nativeManifests(source);
-        const bundle = await assembleFixtureBundle(manifests);
-        if (scenario === "invalid zero seed") {
-          bundle.providers[provider]!.models[0]!.cost = { input: 0, output: 0 };
-        }
-        const fetchImpl: typeof fetch = async (input) => {
-          const request = requestUrl(input);
-          if (request === OPENROUTER_MODELS_URL) {
-            return Response.json({ data: [] });
-          }
-          if (
-            request === LITELLM_PRICING_URL ||
-            (request === MODELS_DEV_CATALOG_URL && url !== MODELS_DEV_CATALOG_URL)
-          ) {
-            return Response.json({});
-          }
-          expect(request).toBe(url);
-          if (scenario === "malformed body") {
-            return Response.json({});
-          }
-          return Response.json(openCodePrices({ input: -1, output: 2 }));
-        };
-        await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).rejects.toThrow(
-          `${source} pricing`,
-        );
-      },
-    );
+    expect(bundle.providers.opencode?.models[0]).toEqual(expected);
+    expect(bundle.pricing).not.toHaveProperty("opencode/priced-fixture");
+    expect(bundle.pricing).not.toHaveProperty("opencode/absent-unbundled");
+    expect(bundle.pricing).not.toHaveProperty("priced-fixture");
+    expect(bundle.pricing?.["opencode/new-priced-fixture"]).toEqual({
+      input: 2,
+      output: 3,
+    });
+    expect(warnings()).toContain("OpenCode pricing unavailable for opencode/priced-fixture");
+    expect(
+      resolveModelCostConfig({
+        ...(await publishedPricingParams(bundle, "opencode")),
+        model: "priced-fixture",
+      }),
+    ).toBeUndefined();
   });
+
+  it.each(["malformed body", "invalid zero seed"])(
+    "rejects %s instead of publishing unverified prices",
+    async (scenario) => {
+      const manifests = nativeManifests("OpenCode");
+      const { bundle, enrich } = await catalogFixture(manifests);
+      if (scenario === "invalid zero seed") {
+        bundle.providers.opencode!.models[0]!.cost = { input: 0, output: 0 };
+      }
+      const fetchImpl: typeof fetch = async (input) => {
+        const request = requestUrl(input);
+        if (request === OPENROUTER_MODELS_URL) {
+          return Response.json({ data: [] });
+        }
+        if (request === LITELLM_PRICING_URL || request === MODELS_DEV_CATALOG_URL) {
+          return Response.json({});
+        }
+        expect(request).toBe(OPENCODE_PRICING_URL);
+        if (scenario === "malformed body") {
+          return Response.json({});
+        }
+        return Response.json(openCodePrices({ input: -1, output: 2 }));
+      };
+      await expect(enrich(fetchImpl)).rejects.toThrow("OpenCode pricing");
+    },
+  );
 
   it("does not fetch Venice without an owning opt-in", async () => {
     const manifests = nativeManifests("Venice");
     manifests[0]!.manifest.providers = ["anthropic", "openai"];
-    const bundle = await assembleFixtureBundle(manifests);
+    const { enrich } = await catalogFixture(manifests);
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ data: [] }));
-    await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
+    await enrich(fetchImpl);
     const urls = fetchImpl.mock.calls.map(([input]) => requestUrl(input));
     expect(urls.filter((fetched) => fetched === VENICE_PRICING_URL)).toHaveLength(0);
     expect(urls.toSorted()).toEqual(
@@ -1117,32 +985,20 @@ describe("publish model catalog", () => {
     );
   });
 
-  it("fails soft when pricing sources are unreachable or malformed", async () => {
+  it("fails soft on unreachable or malformed generic pricing", async () => {
     const manifests = fixtureManifests({}, {}, false);
-    const bundle = await assembleFixtureBundle(manifests);
-    const warnings: string[] = [];
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
-      warnings.push(String(value));
-      return true;
-    });
-    try {
-      await expect(
-        enrichModelCatalogPricing({
-          bundle,
-          manifests,
-          fetchImpl: async (input) => {
-            if (requestUrl(input) === OPENROUTER_MODELS_URL) {
-              throw new Error("offline");
-            }
-            return new Response("not-json", { status: 200 });
-          },
-        }),
-      ).resolves.toEqual({ modelsEnriched: 0, pricingEntries: 0 });
-    } finally {
-      stderr.mockRestore();
-    }
-    expect(warnings.join("")).toContain("OpenRouter pricing unavailable");
-    expect(warnings.join("")).toContain("LiteLLM pricing unavailable");
+    const { bundle, enrich } = await catalogFixture(manifests);
+    const warnings = captureWarnings();
+    await expect(
+      enrich(async (input) => {
+        if (requestUrl(input) === OPENROUTER_MODELS_URL) {
+          throw new Error("offline");
+        }
+        return new Response("not-json", { status: 200 });
+      }),
+    ).resolves.toEqual({ modelsEnriched: 0, pricingEntries: 0 });
+    expect(warnings()).toContain("OpenRouter pricing unavailable");
+    expect(warnings()).toContain("LiteLLM pricing unavailable");
     expect(summarizeModelCatalogBundle(bundle).costModels).toBe(0);
   });
 
@@ -1180,11 +1036,10 @@ globalThis.fetch = async (url) => {
   return Response.json({ data: [] });
 };`,
     );
-    const runtimeArgs = process.versions.bun ? [] : ["--import", "tsx"];
     const result = spawnSync(
       process.execPath,
       [
-        ...runtimeArgs,
+        ...(process.versions.bun ? [] : ["--import", "tsx"]),
         "--import",
         preload,
         "scripts/publish-model-catalog.mts",

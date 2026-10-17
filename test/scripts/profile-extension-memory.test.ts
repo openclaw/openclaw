@@ -1,20 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Transform } from "node:stream";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RESOURCE_MARKER } from "../../scripts/lib/extension-import-profile.mts";
 import {
   hasUnjoinedWork,
@@ -31,11 +23,40 @@ import {
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
 const TSX_PRELOAD = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
 const testNodeExecPath = resolveTestNodeExecPath();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const successCounts = { totalEntries: 1, ok: 1, fail: 0, timeout: 0 };
+function profileFixture(files: Record<string, string>, reportName = "report.json") {
+  const root = tempDirs.make("openclaw-extension-memory #test-");
+  for (const [relative, body] of Object.entries(files)) {
+    const file = path.join(root, relative);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, body, "utf8");
+  }
+  const reportPath = path.join(root, reportName);
+  const run = (ids: string[], combined = false, code = 0) => {
+    const result = runProfileExtensionMemory(
+      [
+        ...ids.flatMap((id) => ["--extension", id]),
+        ...(combined ? [] : ["--skip-combined"]),
+        "--concurrency",
+        "1",
+        "--json",
+        reportPath,
+      ],
+      root,
+    );
+    expect(result.status, result.stderr).toBe(code);
+    return { result, report: readJson(reportPath) };
+  };
+  return { root, reportPath, run };
+}
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -203,10 +224,6 @@ async function cleanupProfileFixture(
             `profile group still alive; retained fixture: ${root}`,
             signal,
           );
-          expect(
-            inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }),
-            `retained fixture: ${root}`,
-          ).toBe("dead");
         },
       );
       if (childClosed) {
@@ -230,160 +247,100 @@ describe("scripts/profile-extension-memory", () => {
     });
   });
 
-  it("rejects loose numeric flags before scanning built plugin artifacts", () => {
-    const cases = [
-      ["--concurrency", "2abc"],
-      ["--timeout-ms", "1e3"],
-      ["--combined-timeout-ms", "90000ms"],
-      ["--top", "0x10"],
-    ] as const;
-
-    for (const [flag, value] of cases) {
-      expect(() => parseArgs([flag, value])).toThrow(`${flag} must be a positive integer`);
-    }
-
-    const result = runProfileExtensionMemory([...cases[0]]);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(`[extension-memory] ${cases[0][0]} must be a positive integer`);
-    expect(result.stderr).not.toContain("dist/extensions");
-    expect(result.stderr).not.toContain("at ");
-  });
-
-  it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
-    const cases = [
-      ["--extension", "-h"],
-      ["--json", "-h"],
-    ] as const;
-    for (const [flag, value] of cases) {
-      expect(() => parseArgs([flag, value])).toThrow(`${flag} requires a value`);
-    }
-
-    const result = runProfileExtensionMemory([...cases[0]]);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(`[extension-memory] ${cases[0][0]} requires a value`);
-    expect(result.stderr).not.toContain("dist/extensions");
-    expect(result.stderr).not.toContain("at ");
-  });
-
   it.each([
     {
-      name: "package-local output without a root dist tree",
-      files: ["extensions/external/dist/index.js"],
-      selected: ["external"],
-      expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
+      flags: [
+        ["--concurrency", "2abc"],
+        ["--timeout-ms", "1e3"],
+        ["--combined-timeout-ms", "90000ms"],
+        ["--top", "0x10"],
+      ],
+      error: "must be a positive integer",
     },
-  ])("profiles $name", ({ files, selected, expected }) => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
-    try {
-      for (const relativeFile of [
-        ...files,
-        "extensions/external/index.ts",
-        "extensions/internal/index.ts",
-        "extensions/source-only/index.ts",
-      ]) {
-        const file = path.join(root, relativeFile);
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(
-          file,
-          file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
-          "utf8",
-        );
+    {
+      flags: [
+        ["--extension", "-h"],
+        ["--json", "-h"],
+      ],
+      error: "requires a value",
+    },
+  ] as const)(
+    "rejects invalid flag values before artifact discovery: $error",
+    ({ flags, error }) => {
+      for (const [flag, value] of flags) {
+        expect(() => parseArgs([flag, value])).toThrow(`${flag} ${error}`);
       }
-      const reportPath = path.join(root, "report.json");
-      const result = runProfileExtensionMemory(
-        [
-          ...selected.flatMap((id) => ["--extension", id]),
-          "--concurrency",
-          "1",
-          "--json",
-          reportPath,
-        ],
-        root,
-      );
+      const args = flags[0];
+      const result = runProfileExtensionMemory([...args]);
+      expect(result).toMatchObject({ status: 1, stdout: "" });
+      expect(result.stderr).toContain(`[extension-memory] ${args[0]} ${error}`);
+      expect(result.stderr).not.toContain("dist/extensions");
+      expect(result.stderr).not.toContain("at ");
+    },
+  );
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).not.toContain("cliStartup");
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.repoRoot).toBe(root);
-      expect(report.selectedExtensions).toEqual(expected.map(({ dir }) => dir));
-      expect(report.results).toEqual(
-        expected.map(({ dir, file }) =>
-          expect.objectContaining({
-            dir,
-            file: path.join(root, file),
-            relativeFile: file,
-            status: "ok",
-            maxRssMb: expect.any(Number),
-          }),
-        ),
+  it("profiles package-local output without a root dist tree", () => {
+    const relativeFile = "extensions/external/dist/index.js";
+    const f = profileFixture({
+      [relativeFile]: "export {};\n",
+      ...Object.fromEntries(
+        ["external", "internal", "source-only"].map((id) => [
+          `extensions/${id}/index.ts`,
+          'throw new Error("source imported");\n',
+        ]),
+      ),
+    });
+    const { result, report } = f.run(["external"], true);
+    expect(result.stderr).not.toContain("cliStartup");
+    expect(report).toMatchObject({
+      repoRoot: f.root,
+      selectedExtensions: ["external"],
+      scope: "cold-import",
+      qualification: { qualified: false, temporaryHomeRemoved: true },
+      combined: { status: "ok", maxRssMb: expect.any(Number) },
+    });
+    expect(report.results).toEqual([
+      expect.objectContaining({
+        dir: "external",
+        file: path.join(f.root, relativeFile),
+        relativeFile,
+        status: "ok",
+        maxRssMb: expect.any(Number),
+      }),
+    ]);
+    expect(report.qualification.gaps).toContain("canonical build identity unavailable");
+    for (const row of [report.combined, ...report.results]) {
+      expect(row).toMatchObject({ completion: "imports", cleanup: { childClosed: true } });
+      expect(row.resources.totalCpuUs).toBe(row.resources.userCpuUs + row.resources.systemCpuUs);
+      expect(row.cpuDeltaFromBaseline.totalCpuUs).toBe(
+        row.resources.totalCpuUs - report.baseline.resources.totalCpuUs,
       );
-      expect(report.scope).toBe("cold-import");
-      expect(report.qualification).toMatchObject({
-        qualified: false,
-        temporaryHomeRemoved: true,
-      });
-      expect(report.qualification.gaps).toContain("canonical build identity unavailable");
-      for (const row of [report.combined, ...report.results]) {
-        expect(row.completion).toBe("imports");
-        expect(row.resources.totalCpuUs).toBe(row.resources.userCpuUs + row.resources.systemCpuUs);
-        expect(row.cpuDeltaFromBaseline.totalCpuUs).toBe(
-          row.resources.totalCpuUs - report.baseline.resources.totalCpuUs,
-        );
-        expect(row.cleanup.childClosed).toBe(true);
-      }
-      expect(report.combined).toMatchObject({ status: "ok", maxRssMb: expect.any(Number) });
-      expect(report.counts).toEqual({
-        totalEntries: expected.length,
-        ok: expected.length,
-        fail: 0,
-        timeout: 0,
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
     }
+    expect(report.counts).toEqual(successCounts);
   });
 
   it("bounds noisy child output without losing RSS samples", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    try {
-      const extensionDir = path.join(root, "dist", "extensions", "noisy");
-      const reportPath = path.join(root, "report.json");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(
-        path.join(extensionDir, "index.js"),
-        [
-          `const fs = require("node:fs");`,
-          `fs.writeSync(2, "old stderr " + "x".repeat(160000) + "\\n");`,
-          `fs.writeSync(1, "old stdout " + "y".repeat(160000) + "\\n");`,
-          `process.on("exit", () => fs.writeSync(2, "exit tail\\n"));`,
-        ].join("\n"),
-        "utf8",
-      );
-
-      const result = runProfileExtensionMemory(
-        ["--extension", "noisy", "--skip-combined", "--concurrency", "1", "--json", reportPath],
-        root,
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.results).toHaveLength(1);
-      expect(report.results[0].status).toBe("ok");
-      expect(report.results[0].maxRssMb).toEqual(expect.any(Number));
-      expect(report.results[0].stderrPreview).toContain("[output truncated");
-      expect(report.results[0].stderrPreview).toContain("[stderr preview truncated");
-      expect(report.results[0].stderrPreview).toContain("exit tail");
-      expect(report.results[0].stderrPreview).not.toContain("old stderr");
-      expect(report.results[0].stderrPreview.length).toBeLessThan(9_000);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const f = profileFixture({
+      "dist/extensions/noisy/index.js": [
+        `const fs = require("node:fs");`,
+        `fs.writeSync(2, "old stderr " + "x".repeat(160000) + "\\n");`,
+        `fs.writeSync(1, "old stdout " + "y".repeat(160000) + "\\n");`,
+        `process.on("exit", () => fs.writeSync(2, "exit tail\\n"));`,
+      ].join("\n"),
+    });
+    const { report } = f.run(["noisy"]);
+    expect(report.results).toHaveLength(1);
+    const row = report.results[0];
+    expect(row).toMatchObject({ status: "ok", maxRssMb: expect.any(Number) });
+    for (const text of ["[output truncated", "[stderr preview truncated", "exit tail"]) {
+      expect(row.stderrPreview).toContain(text);
     }
+    expect(row.stderrPreview).not.toContain("old stderr");
+    expect(row.stderrPreview.length).toBeLessThan(9_000);
   });
 
   it("preserves split UTF-8 output and rejects later descendant resource samples", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-utf8-"));
+    const { root } = profileFixture({ "hook.mjs": "" });
     const hookPath = path.join(root, "hook.mjs");
     const stdout = "stdout: café 🦞";
     const stderr = "stderr: 東京\n__OPENCLAW_MAX_RSS_KB__=2048\nfin: é";
@@ -409,13 +366,11 @@ describe("scripts/profile-extension-memory", () => {
           callback();
         },
       });
-    try {
-      writeFileSync(hookPath, "", "utf8");
-      const result = await fixtureCase({
-        repoRoot: root,
-        hookPath,
-        name: "utf8-output",
-        body: `
+    const result = await fixtureCase({
+      repoRoot: root,
+      hookPath,
+      name: "utf8-output",
+      body: `
           process.stdout.write(${JSON.stringify(stdout)});
           process.stderr.write(${JSON.stringify(stderr)} + "\\n");
           const sample = { ...${JSON.stringify(observed)}, pid: process.pid };
@@ -423,68 +378,51 @@ describe("scripts/profile-extension-memory", () => {
           process.stderr.write(${JSON.stringify(RESOURCE_MARKER)} + JSON.stringify({ ...sample, pid: process.pid + 1, maxRssKb: 999999, userCpuUs: 999999 }) + "\\n");
           process.stderr.write("__OPENCLAW_MAX_RSS_KB__=999999\\n");
         `,
-        spawnImpl(command, args, options) {
-          const child = spawn(command, args, options);
-          leaderPid = child.pid;
-          // Preserve actual pipe bytes while forcing character boundaries apart.
-          child.stdout = child.stdout.pipe(splitBytes());
-          child.stderr = child.stderr.pipe(splitBytes());
-          return child;
-        },
-      });
+      spawnImpl(command, args, options) {
+        const child = spawn(command, args, options);
+        leaderPid = child.pid;
+        // Preserve actual pipe bytes while forcing character boundaries apart.
+        child.stdout = child.stdout.pipe(splitBytes());
+        child.stderr = child.stderr.pipe(splitBytes());
+        return child;
+      },
+    });
 
-      expect(result).toEqual({
-        name: "utf8-output",
-        code: 0,
-        signal: null,
-        timedOut: false,
-        error: null,
-        stdout,
-        stderr: expect.stringContaining(stderr),
-        maxRssMb: 2,
-        resources: { ...observed, pid: leaderPid, totalCpuUs: 12 },
-        completion: "imports",
-        cleanup: {
-          childClosed: true,
-          processGroup: process.platform === "win32" ? "unavailable" : "verified",
-        },
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(result).toEqual({
+      name: "utf8-output",
+      code: 0,
+      signal: null,
+      timedOut: false,
+      error: null,
+      stdout,
+      stderr: expect.stringContaining(stderr),
+      maxRssMb: 2,
+      resources: { ...observed, pid: leaderPid, totalCpuUs: 12 },
+      completion: "imports",
+      cleanup: {
+        childClosed: true,
+        processGroup: process.platform === "win32" ? "unavailable" : "verified",
+      },
+    });
   });
 
   it("creates parent directories for nested JSON report paths", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    try {
-      const reportPath = path.join(root, ".artifacts", "memory", "report.json");
-      writeExtension(root, "simple", "export default {};\n");
-
-      const result = runProfileExtensionMemory(
-        ["--extension", "simple", "--skip-combined", "--concurrency", "1", "--json", reportPath],
-        root,
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.counts).toMatchObject({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const f = profileFixture(
+      { "dist/extensions/simple/index.js": "export default {};\n" },
+      ".artifacts/memory/report.json",
+    );
+    expect(f.run(["simple"]).report.counts).toMatchObject(successCounts);
   });
 
   it("uses distinct default JSON report paths for separate runs", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
+    const { root } = profileFixture({ "dist/extensions/simple/index.js": "export default {};\n" });
     const reportPaths: string[] = [];
     try {
-      writeExtension(root, "simple", "export default {};\n");
-
       for (let index = 0; index < 2; index += 1) {
         const result = runProfileExtensionMemory(
           ["--extension", "simple", "--skip-combined", "--concurrency", "1"],
           root,
         );
-
         expect(result.status, result.stderr).toBe(0);
         const reportPath = extractReportPath(result.stdout);
         reportPaths.push(reportPath);
@@ -492,20 +430,13 @@ describe("scripts/profile-extension-memory", () => {
         expect(path.basename(reportPath)).toMatch(
           /^openclaw-extension-memory-\d+-\d+-[0-9a-f-]+\.json$/u,
         );
-        expect(JSON.parse(readFileSync(reportPath, "utf8")).counts).toMatchObject({
-          totalEntries: 1,
-          ok: 1,
-          fail: 0,
-          timeout: 0,
-        });
+        expect(readJson(reportPath).counts).toMatchObject(successCounts);
       }
-
       expect(reportPaths[0]).not.toBe(reportPaths[1]);
     } finally {
       for (const reportPath of reportPaths) {
         rmSync(reportPath, { force: true });
       }
-      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -513,67 +444,37 @@ describe("scripts/profile-extension-memory", () => {
     { body: 'throw new Error("broken plugin import");', code: 1 },
     { body: "process.exit(0);", code: 0 },
   ])(
-    "rejects incomplete imports and skipped combined entries (child code $code)",
+    "rejects incomplete imports and skips later combined entries: code $code",
     ({ body, code }) => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-      try {
-        const reportPath = path.join(root, "report.json");
-        writeExtension(root, "broken", body);
-
-        const laterDir = path.join(root, "dist/extensions/later");
-        const laterRuns = path.join(root, "later-runs.txt");
-        mkdirSync(laterDir, { recursive: true });
-        writeFileSync(
-          path.join(laterDir, "index.js"),
-          `require("node:fs").appendFileSync(${JSON.stringify(laterRuns)}, "later\\n");`,
-        );
-        const result = runProfileExtensionMemory(
-          [
-            "--extension",
-            "broken",
-            "--extension",
-            "later",
-            "--concurrency",
-            "1",
-            "--json",
-            reportPath,
-          ],
-          root,
-        );
-
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("[extension-memory] broken import fail");
-        const report = JSON.parse(readFileSync(reportPath, "utf8"));
-        expect(report.counts).toMatchObject({ fail: 1, ok: 1, timeout: 0 });
-        expect(report.results[0]).toMatchObject({
-          dir: "broken",
-          status: "fail",
-          code,
-          completion: null,
-        });
-        expect(report.combined).toMatchObject({ status: "fail", code, completion: null });
-        expect(report.baseline.completion).toBe("baseline");
-        expect(report.results[1].completion).toBe("imports");
-        // The combined sequence never reached later; only its independent case did.
-        expect(readFileSync(laterRuns, "utf8")).toBe("later\n");
-        expect(report.qualification.qualified).toBe(false);
-        expect(report.qualification.gaps).toContain("awaited sequence completion unavailable");
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+      const f = profileFixture({ "dist/extensions/broken/index.js": body });
+      const laterRuns = path.join(f.root, "later-runs.txt");
+      writeExtension(
+        f.root,
+        "later",
+        `require("node:fs").appendFileSync(${JSON.stringify(laterRuns)}, "later\\n");`,
+      );
+      const { result, report } = f.run(["broken", "later"], true, 1);
+      expect(result.stderr).toContain("[extension-memory] broken import fail");
+      expect(report).toMatchObject({
+        counts: { fail: 1, ok: 1, timeout: 0 },
+        results: [
+          { dir: "broken", status: "fail", code, completion: null },
+          { completion: "imports" },
+        ],
+        combined: { status: "fail", code, completion: null },
+        baseline: { completion: "baseline" },
+        qualification: { qualified: false },
+      });
+      expect(readFileSync(laterRuns, "utf8")).toBe("later\n");
+      expect(report.qualification.gaps).toContain("awaited sequence completion unavailable");
     },
   );
 
   it("resolves spawn errors without waiting for the timeout", async () => {
     const startedAt = Date.now();
     const result = await fixtureCase({
-      completionKind: "imports",
-      repoRoot: process.cwd(),
-      env: process.env,
       hookPath: "missing-hook.mjs",
       name: "spawn-error",
-      body: "",
-      timeoutMs: 30_000,
       spawnImpl: (() => {
         const child = new EventEmitter() as EventEmitter & {
           kill: () => boolean;
@@ -599,44 +500,25 @@ describe("scripts/profile-extension-memory", () => {
   });
 
   it.runIf(process.platform !== "win32").each([
-    ...["mapper failure", "unverified group", "parent signal", "home deletion failure"].map(
-      (scenario) => ({
-        name: `settles admitted mappers and stops admission on ${scenario}`,
-        scenario,
-        signalFailureCase: null as string | null,
-      }),
-    ),
-    {
-      name: "isolates inherited child environment",
-      scenario: "environment isolation",
+    ...[
+      "mapper failure",
+      "unverified group",
+      "parent signal",
+      "home deletion failure",
+      "environment isolation",
+      "report home deletion failure",
+      "delayed parent close",
+      "linux cleanup deadline",
+      "linux parent deadline",
+    ].map((scenario) => ({
+      scenario,
       signalFailureCase: null,
-    },
-    {
-      name: "does not qualify a completed import report before home cleanup",
-      scenario: "report home deletion failure",
-      signalFailureCase: null,
-    },
-    {
-      name: "parent shutdown joins delayed case closure before exit",
-      scenario: "delayed parent close",
-      signalFailureCase: null,
-    },
-    {
-      name: "bounds Linux snapshots across initial and final case cleanup probes",
-      scenario: "linux cleanup deadline",
-      signalFailureCase: null,
-    },
-    {
-      name: "bounds Linux snapshots by parent escalation and final drainage",
-      scenario: "linux parent deadline",
-      signalFailureCase: null,
-    },
+    })),
     ...["baseline", "combined", "a-held"].map((signalFailureCase) => ({
-      name: `reports signal failure after verified cleanup for ${signalFailureCase}`,
       scenario: "settled signal failure",
       signalFailureCase,
     })),
-  ])("$name", ({ scenario, signalFailureCase }) => {
+  ])("handles $scenario ($signalFailureCase)", ({ scenario, signalFailureCase }) => {
     const unverifiedGroup = scenario === "unverified group";
     const delayedParentClose = scenario === "delayed parent close";
     const linuxDeadline = scenario.startsWith("linux ");
@@ -798,18 +680,20 @@ describe("scripts/profile-extension-memory", () => {
           env: {
             ...process.env,
             ...(environmentIsolation
-              ? {
-                  HOME: path.join(root, "inherited-home"),
-                  USERPROFILE: path.join(root, "inherited-userprofile"),
-                  OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
-                  OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
-                  OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
-                  XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
-                  XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
-                  XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
-                  XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
-                  XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
-                }
+              ? Object.fromEntries(
+                  [
+                    "HOME",
+                    "USERPROFILE",
+                    "OPENCLAW_HOME",
+                    "OPENCLAW_STATE_DIR",
+                    "OPENCLAW_CONFIG_PATH",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_STATE_HOME",
+                    "XDG_RUNTIME_DIR",
+                  ].map((key) => [key, path.join(root, `inherited-${key}`)]),
+                )
               : {}),
             TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
           },
@@ -846,10 +730,9 @@ describe("scripts/profile-extension-memory", () => {
         }
       } else if (reportHomeFailure) {
         const report = JSON.parse(readFileSync(reportPath, "utf8"));
-        expect(report.counts.fail).toBe(0);
-        expect(report.qualification).toMatchObject({
-          qualified: false,
-          temporaryHomeRemoved: false,
+        expect(report).toMatchObject({
+          counts: { fail: 0 },
+          qualification: { qualified: false, temporaryHomeRemoved: false },
         });
         expect(report.qualification.gaps).toContain("temporary-home cleanup incomplete");
         expect(report.qualification.gaps).not.toContain("resource counters unavailable");
@@ -913,102 +796,48 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
-    "cleans descendants after an ordinary leader exit before resolving the case",
-    async ({ signal, onTestFinished }) => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-exit-"));
-      const hookPath = path.join(root, "rss-hook.mjs");
-      const descendantPidPath = path.join(root, "descendant.pid");
-      let cleanup = async () => rmSync(root, { recursive: true, force: true });
-      // Vitest can finish the timed-out body before its async cleanup settles.
-      // Its finalization hook joins the same cleanup as the body.
-      let cleanupPromise: Promise<void> | undefined;
-      const joinCleanup = () => (cleanupPromise ??= cleanup());
-      onTestFinished(joinCleanup);
-      await runQaGatewayFixture(
-        async () => {
-          writeFileSync(hookPath, "", "utf8");
-          const descendantScript = descendantSource(descendantPidPath, "process.send('ready');");
-          const body = [
-            "import { spawn } from 'node:child_process';",
-            `const child = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(descendantScript)}],`,
-            "  { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
-            "await new Promise((resolve) => child.once('message', resolve));",
-            "child.disconnect(); child.unref();",
-          ].join("\n");
-          const result = await withinTest(
-            fixtureCase({
-              body,
-              hookPath,
-              name: "ordinary-exit-descendant",
-              repoRoot: root,
-              shutdownGraceMs: 1_000,
-              timeoutMs: 5_000,
-              spawnImpl: (command, args, options) => {
-                const child = spawn(command, args, options);
-                const closed = new Promise<void>((resolve) => {
-                  child.once("close", () => resolve());
-                });
-                cleanup = () =>
-                  cleanupProfileFixture(root, child, closed, descendantPidPath, signal);
-                return child;
-              },
-            }),
-            signal,
-          );
-          // The leader awaits descendant readiness before runCase can complete.
-          const descendantPid = readDescendantPid(descendantPidPath);
-          expect(result).toMatchObject({ code: 0, error: null, signal: null, timedOut: false });
-          expect(isProcessAlive(descendantPid)).toBe(false);
-        },
-        () => joinCleanup(),
-      );
+  it.runIf(process.platform !== "win32").each(["alive", "EPERM"] as const)(
+    "rejects when the owned group is %s after SIGKILL",
+    async (groupState) => {
+      const child = fakeChild();
+      const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
+        expect(pid).toBe(-child.pid);
+        if (requestedSignal === 0) {
+          if (groupState !== "alive") {
+            throw Object.assign(new Error(`group inspection failed: ${groupState}`), {
+              code: groupState,
+            });
+          }
+          return true;
+        }
+        expect(requestedSignal).toBe("SIGKILL");
+        queueMicrotask(() => {
+          child.signalCode = "SIGKILL";
+          child.stdout.end();
+          child.stderr.end();
+          child.emit("close", null, "SIGKILL");
+        });
+        return true;
+      });
+      try {
+        await expect(
+          fixtureCase({
+            name: "unverified-cleanup",
+            shutdownGraceMs: 0,
+            timeoutMs: 5,
+            spawnImpl: (() => child) as unknown as typeof spawn,
+          }),
+        ).rejects.toThrow(/cleanup/i);
+      } finally {
+        signal.mockRestore();
+      }
     },
   );
 
-  describe.runIf(process.platform !== "win32")("unverified timeout cleanup", () => {
-    it.each(["alive", "EPERM"] as const)(
-      "rejects when the owned group is %s after SIGKILL",
-      async (groupState) => {
-        const child = fakeChild();
-        const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
-          expect(pid).toBe(-child.pid);
-          if (requestedSignal === 0) {
-            if (groupState !== "alive") {
-              throw Object.assign(new Error(`group inspection failed: ${groupState}`), {
-                code: groupState,
-              });
-            }
-            return true;
-          }
-          expect(requestedSignal).toBe("SIGKILL");
-          queueMicrotask(() => {
-            child.signalCode = "SIGKILL";
-            child.stdout.end();
-            child.stderr.end();
-            child.emit("close", null, "SIGKILL");
-          });
-          return true;
-        });
-        try {
-          await expect(
-            fixtureCase({
-              name: "unverified-cleanup",
-              shutdownGraceMs: 0,
-              timeoutMs: 5,
-              spawnImpl: (() => child) as unknown as typeof spawn,
-            }),
-          ).rejects.toThrow(/cleanup/i);
-        } finally {
-          signal.mockRestore();
-        }
-      },
-    );
-  });
-
-  it.runIf(process.platform !== "win32").each(["EPERM"])(
-    "preserves %s group-signal and primary failures alongside unverified cleanup",
-    async (errorCode) => {
+  it.runIf(process.platform !== "win32")(
+    "preserves EPERM group-signal and primary failures with unverified cleanup",
+    async () => {
+      const errorCode = "EPERM";
       const primary = new Error("case failed");
       const groupSignalError = Object.assign(new Error("group signal failed"), { code: errorCode });
       const child = fakeChild({
@@ -1052,12 +881,10 @@ describe("scripts/profile-extension-memory", () => {
     },
   );
 
-  it
-    .runIf(process.platform !== "win32")
-    .each([{ label: "signal exit", code: null, signal: "SIGTERM" as const }])(
-    "cleanup preserves terminal evidence without an error event: $label",
-    async (outcome) => {
-      const child = fakeChild({ exitCode: outcome.code, signalCode: outcome.signal });
+  it.runIf(process.platform !== "win32")(
+    "preserves SIGTERM evidence without an error event",
+    async () => {
+      const child = fakeChild({ signalCode: "SIGTERM" });
       const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
         expect(pid).toBe(-child.pid);
         expect([0, "SIGKILL"]).toContain(requestedSignal);
@@ -1071,8 +898,8 @@ describe("scripts/profile-extension-memory", () => {
             queueMicrotask(() => {
               child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
               child.stdout.end();
-              child.emit("exit", outcome.code, outcome.signal);
-              child.emit("close", outcome.code, outcome.signal);
+              child.emit("exit", null, "SIGTERM");
+              child.emit("close", null, "SIGTERM");
             });
             return child;
           }) as unknown as typeof spawn,
@@ -1087,7 +914,7 @@ describe("scripts/profile-extension-memory", () => {
           throw new Error("missing cleanup failure");
         }
         expect(hasUnjoinedWork(failure)).toBe(true);
-        expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
+        expect(failure.message).toMatch(/SIGTERM/u);
         expect(failure.message).toContain("primary import diagnostic");
         expect(failure.message).toMatch(/cleanup/i);
         expect(failure.message.length).toBeLessThan(10_000);
@@ -1097,162 +924,108 @@ describe("scripts/profile-extension-memory", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "cleans timeout descendants before resolving the case",
-    async ({ signal, onTestFinished }) => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-timeout-"));
+  it.runIf(process.platform !== "win32").for(["exit", "timeout", "parent signal"] as const)(
+    "cleans native descendants on %s before settlement",
+    async (mode, { signal, onTestFinished }) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-descendant-"));
       const hookPath = path.join(root, "rss-hook.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
       let cleanup = async () => rmSync(root, { recursive: true, force: true });
       let cleanupPromise: Promise<void> | undefined;
       const joinCleanup = () => (cleanupPromise ??= cleanup());
       onTestFinished(joinCleanup);
-      await runQaGatewayFixture(
-        async () => {
-          writeFileSync(hookPath, "", "utf8");
-          const descendantScript = descendantSource(
-            descendantPidPath,
-            "process.send(process.pid);",
-            "process.on('SIGTERM', () => {});",
-          );
-          const body = [
-            "const childProcess = await import('node:child_process');",
-            "const descendant = childProcess.spawn(process.execPath, [",
-            "  '--input-type=module',",
-            `  '--eval', ${JSON.stringify(descendantScript)},`,
-            "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
-            "descendant.once('message', (pid) => process.stdout.write('descendant-ready ' + pid + '\\n'));",
-            "descendant.once('error', (error) => { throw error; });",
-            "setInterval(() => {}, 1000);",
-            "await new Promise(() => {});",
-          ].join("\n");
-          const child = spawn(
-            testNodeExecPath,
-            ["--import", hookPath, "--input-type=module", "--eval", body],
-            {
-              cwd: root,
-              detached: true,
-              stdio: ["ignore", "pipe", "pipe"],
-            },
-          );
-          const childClosed = new Promise<void>((resolve) => {
-            child.once("close", () => resolve());
-          });
-          cleanup = () =>
-            cleanupProfileFixture(root, child, childClosed, descendantPidPath, signal);
-          const ready = createDeferred<number>();
-          let readyOutput = "";
-          const readReady = (chunk: string) => {
-            readyOutput += chunk;
-            const match = /^descendant-ready (\d+)\n/mu.exec(readyOutput);
-            if (match) {
-              child.stdout.off("data", readReady);
-              ready.resolve(Number(match[1]));
-            }
-          };
-          child.stdout.setEncoding("utf8").on("data", readReady);
-          await withinTest(once(child, "spawn"), signal);
-          const descendantPid = await withinTest(
-            awaitGateBeforeSettlement(
-              ready.promise,
-              childClosed,
-              `timeout waiting for pid in ${descendantPidPath}`,
-            ),
+      const own = (child: ReturnType<typeof spawn>, detached = true) => {
+        const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => {
+            child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+          },
+        );
+        cleanup = () =>
+          cleanupProfileFixture(root, child, closed, descendantPidPath, signal, detached);
+        return closed;
+      };
+      await runQaGatewayFixture(async () => {
+        writeFileSync(hookPath, "", "utf8");
+        const parentSignal = mode === "parent signal";
+        const descendantScript = descendantSource(
+          descendantPidPath,
+          parentSignal
+            ? `sendReceipt(${JSON.stringify(descendantPidPath)}, 'ready');`
+            : "process.send(process.pid);",
+          [
+            ...(parentSignal ? [fixtureReceiptClientSource(receipts.endpoint)] : []),
+            ...(mode === "exit" ? [] : ["process.on('SIGTERM', () => {});"]),
+          ].join("\n"),
+        );
+        const body = [
+          "const childProcess = await import('node:child_process');",
+          `const descendant = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(descendantScript)}],`,
+          `  { stdio: ${parentSignal ? "'ignore'" : "['ignore', 'ignore', 'ignore', 'ipc']"} });`,
+          ...(mode === "exit"
+            ? [
+                "await new Promise((resolve) => descendant.once('message', resolve));",
+                "descendant.disconnect(); descendant.unref();",
+              ]
+            : [
+                ...(parentSignal
+                  ? []
+                  : [
+                      "descendant.once('message', (pid) => process.stdout.write('descendant-ready ' + pid + '\\n'));",
+                      "descendant.once('error', (error) => { throw error; });",
+                    ]),
+                "setInterval(() => {}, 1000);",
+                "await new Promise(() => {});",
+              ]),
+        ].join("\n");
+        if (mode === "exit") {
+          const result = await withinTest(
+            fixtureCase({
+              body,
+              hookPath,
+              name: "ordinary-exit-descendant",
+              repoRoot: root,
+              shutdownGraceMs: 1_000,
+              timeoutMs: 5_000,
+              spawnImpl: (command, args, options) => {
+                const child = spawn(command, args, options);
+                own(child);
+                return child;
+              },
+            }),
             signal,
           );
-          expect(Number.isInteger(descendantPid)).toBe(true);
-          expect(isProcessAlive(descendantPid)).toBe(true);
-
-          // Start the timeout only once a real descendant exists, independent of host startup load.
-          const resultPromise = fixtureCase({
-            body,
-            hookPath,
-            name: "timeout-descendant",
-            repoRoot: root,
-            shutdownGraceMs: 100,
-            timeoutMs: 250,
-            spawnImpl: () => child,
-          });
-          await expect(withinTest(resultPromise, signal)).resolves.toMatchObject({
-            name: "timeout-descendant",
-            signal: "SIGKILL",
-            timedOut: true,
-          });
-          await waitForProcessCleanup(
-            () => !isProcessAlive(descendantPid),
-            `process still alive: ${descendantPid}`,
-            signal,
-          );
-        },
-        () => joinCleanup(),
-      );
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "cleans active case descendants on parent signal",
-    async ({ signal, onTestFinished }) => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-parent-signal-"));
-      const hookPath = path.join(root, "rss-hook.mjs");
-      const runnerPath = path.join(root, "parent-signal-runner.mjs");
-      const descendantPidPath = path.join(root, "descendant.pid");
-      let cleanup = async () => rmSync(root, { recursive: true, force: true });
-      let cleanupPromise: Promise<void> | undefined;
-      const joinCleanup = () => (cleanupPromise ??= cleanup());
-      onTestFinished(joinCleanup);
-      await runQaGatewayFixture(
-        async () => {
-          writeFileSync(hookPath, "", "utf8");
-          const descendantScript = descendantSource(
-            descendantPidPath,
-            `sendReceipt(${JSON.stringify(descendantPidPath)}, 'ready');`,
-            fixtureReceiptClientSource(receipts.endpoint) + "\nprocess.on('SIGTERM', () => {});",
-          );
-          const body = [
-            "const childProcess = await import('node:child_process');",
-            "const descendant = childProcess.spawn(process.execPath, [",
-            "  '--input-type=module',",
-            `  '--eval', ${JSON.stringify(descendantScript)},`,
-            "], { stdio: 'ignore' });",
-            "setInterval(() => {}, 1000);",
-            "await new Promise(() => {});",
-          ].join("\n");
+          expect(result).toMatchObject({ code: 0, error: null, signal: null, timedOut: false });
+          expect(isProcessAlive(readDescendantPid(descendantPidPath))).toBe(false);
+          return;
+        }
+        if (parentSignal) {
+          const runnerPath = path.join(root, "parent-signal-runner.mjs");
           writeFileSync(
             runnerPath,
             [
-              `const { runCase } = await import(${JSON.stringify(
-                pathToFileURL(path.resolve("scripts/profile-extension-memory.mts")).href,
-              )});`,
-              "void runCase({",
-              "  completionKind: 'imports',",
-              `  body: ${JSON.stringify(body)},`,
-              "  env: process.env,",
-              `  hookPath: ${JSON.stringify(hookPath)},`,
-              "  name: 'parent-signal-descendant',",
-              `  repoRoot: ${JSON.stringify(root)},`,
-              "  shutdownGraceMs: 100,",
-              "  timeoutMs: 30000,",
-              "});",
+              `const { runCase } = await import(${JSON.stringify(pathToFileURL(SCRIPT_PATH).href)});`,
+              `void runCase({ ...${JSON.stringify({
+                completionKind: "imports",
+                body,
+                hookPath,
+                name: "parent-signal-descendant",
+                repoRoot: root,
+                shutdownGraceMs: 100,
+                timeoutMs: 30_000,
+              })}, env: process.env });`,
             ].join("\n"),
             "utf8",
           );
           const runner = spawn(testNodeExecPath, ["--import", TSX_PRELOAD, runnerPath], {
             stdio: "ignore",
           });
-
-          const runnerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-            (resolve) => {
-              runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
-            },
-          );
-          cleanup = () =>
-            cleanupProfileFixture(root, runner, runnerClosed, descendantPidPath, signal, false);
+          const runnerClosed = own(runner, false);
           await withinTest(once(runner, "spawn"), signal);
           await withinTest(
             Promise.race([
               receipts.waitFor(descendantPidPath, "ready"),
               runnerClosed.then(() => {
-                // The receipt pipe and process exit are unordered; the child writes first.
+                // Receipt delivery and exit race; the descendant writes its PID first.
                 if (!existsSync(descendantPidPath)) {
                   throw new Error(`timeout waiting for pid in ${descendantPidPath}`);
                 }
@@ -1261,22 +1034,68 @@ describe("scripts/profile-extension-memory", () => {
             ]),
             signal,
           );
-          const descendantPid = readDescendantPid(descendantPidPath);
-          expect(isProcessAlive(descendantPid)).toBe(true);
-
+          expect(isProcessAlive(readDescendantPid(descendantPidPath))).toBe(true);
           process.kill(runner.pid!, "SIGTERM");
           await expect(withinTest(runnerClosed, signal)).resolves.toEqual({
             code: 143,
             signal: null,
           });
-          await waitForProcessCleanup(
-            () => !isProcessAlive(descendantPid),
-            `process still alive: ${descendantPid}`,
+        } else {
+          const child = spawn(
+            testNodeExecPath,
+            ["--import", hookPath, "--input-type=module", "--eval", body],
+            { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] },
+          );
+          const childClosed = own(child);
+          const ready = createDeferred<number>();
+          let output = "";
+          const readReady = (chunk: string) => {
+            output += chunk;
+            const match = /^descendant-ready (\d+)\n/mu.exec(output);
+            if (match) {
+              child.stdout.off("data", readReady);
+              ready.resolve(Number(match[1]));
+            }
+          };
+          child.stdout.setEncoding("utf8").on("data", readReady);
+          await withinTest(once(child, "spawn"), signal);
+          const pid = await withinTest(
+            awaitGateBeforeSettlement(
+              ready.promise,
+              childClosed,
+              `timeout waiting for pid in ${descendantPidPath}`,
+            ),
             signal,
           );
-        },
-        () => joinCleanup(),
-      );
+          expect(Number.isInteger(pid)).toBe(true);
+          expect(isProcessAlive(pid)).toBe(true);
+          // Admission starts the timer only after native readiness, independent of host load.
+          await expect(
+            withinTest(
+              fixtureCase({
+                body,
+                hookPath,
+                name: "timeout-descendant",
+                repoRoot: root,
+                shutdownGraceMs: 100,
+                timeoutMs: 250,
+                spawnImpl: () => child,
+              }),
+              signal,
+            ),
+          ).resolves.toMatchObject({
+            name: "timeout-descendant",
+            signal: "SIGKILL",
+            timedOut: true,
+          });
+        }
+        const descendantPid = readDescendantPid(descendantPidPath);
+        await waitForProcessCleanup(
+          () => !isProcessAlive(descendantPid),
+          `process still alive: ${descendantPid}`,
+          signal,
+        );
+      }, joinCleanup);
     },
   );
 });
