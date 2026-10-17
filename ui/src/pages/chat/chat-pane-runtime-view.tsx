@@ -22,6 +22,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { chatGoalOperations } from "./chat-goals.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -39,6 +40,11 @@ import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
   const viewOwner = getOwner();
+  projectChatFields(runtime.tasks);
+  projectChatFields(runtime.publication);
+  projectChatFields(runtime.repository);
+  projectChatFields(runtime.headerPresentation);
+  projectChatFields(runtime.collaboration);
   const [ready, setReady] = createSignal(false);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let disposed = false;
@@ -109,6 +115,18 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
 
   function MountedPane() {
     const context = runtime.context;
+    const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
+    const repository = createMemo(() => {
+      const target = runtime.repository.target;
+      return target
+        ? projectOwner(target.store, (owner) => owner.get(target.key), Object.is)
+        : undefined;
+    });
+    const publication = createMemo(() => {
+      const binding = runtime.publication.binding;
+      return binding ? projectOwner(binding, (owner) => owner.view()) : undefined;
+    });
+    const presence = projectOwner(runtime.presence, (owner) => owner.snapshot);
     const gateway = projectGateway(context.gateway);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.readState();
@@ -190,6 +208,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       presented: () => presented() && document.visibilityState !== "hidden",
       read: () => {
         revision();
+        publication()?.read();
+        repository()?.read();
+        parentSession.read();
+        presence.read();
         progress.read();
         composerCapabilities.read();
         realtime()?.read();

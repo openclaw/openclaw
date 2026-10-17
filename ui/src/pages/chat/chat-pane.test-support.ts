@@ -61,11 +61,7 @@ import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./cha
 import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import type {
-  ChatTypingActorState,
-  ChatTypingActorView,
-  ChatTypingOverflow,
-} from "./chat-typing-presence.ts";
+import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -131,6 +127,11 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
   readonly history: ChatPaneRuntime["history"];
+  readonly tasks: ChatPaneRuntime["tasks"];
+  readonly repository: ChatPaneRuntime["repository"];
+  readonly headerPresentation: ChatPaneRuntime["headerPresentation"];
+  readonly collaboration: ChatPaneRuntime["collaboration"];
+  readonly presence: ChatPaneRuntime["presence"];
   readonly sessionDiscussion: ChatPaneRuntime["sessionDiscussion"];
   active: boolean;
   presented: boolean;
@@ -184,18 +185,13 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   githubRepo: MarkdownRenderOptions["githubRepo"];
-  taskSuggestions: TaskSuggestion[];
   suggestionChatProps: (
     connected: boolean,
     archived: boolean,
     multiIdentity: boolean,
   ) => ChatTaskSuggestionTrayProps;
-  presencePayload?: { presence: unknown[] };
-  sessionSuggestionAddOperation: symbol | undefined;
-  sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
   addCurrentSessionSuggestion: () => Promise<void>;
   resetSessionSuggestions: () => void;
-  sessionSuggestions: SessionSuggestion[];
   sessionSuggestionsRequestVersion: number;
   sessionSuggestionsRefreshPromise: Promise<void> | undefined;
   sessionSuggestionTargetSignature: string;
@@ -205,7 +201,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
-  typingOverflow?: ChatTypingOverflow;
   clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
@@ -237,8 +232,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   olderCursorsSeen: Set<string>;
-  headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
-  headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
   handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
   onboarding: boolean;
@@ -256,9 +249,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
-  headerPlacementMovingKey: string | null;
-  headerPlacementReclaimingKey: string | null;
-  headerPlacementRestartingKey: string | null;
   changeHeaderPlacement: (
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",

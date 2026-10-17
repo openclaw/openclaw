@@ -49,6 +49,7 @@ import {
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -675,16 +676,25 @@ export function createPageState(
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
-  return projectChatFields(projectChatErrors(projectChatRun(projectChatOutboxQueue(state))), [
-    "chatSending",
-    "chatLoading",
-    "chatHistoryPagination",
-    "chatDisplayedLeafEntryId",
-    "chatBranches",
-    "chatBranchesSessionKey",
-    "chatBranchesConnectionEpoch",
-    "currentSessionId",
-    "chatGoalDraftMode",
-    "chatReplyTarget",
-  ]);
+  return projectChatFields(
+    projectChatSessionPresentation(
+      projectChatErrors(projectChatRun(projectChatOutboxQueue(state))),
+      context,
+    ),
+    [
+      "chatSending",
+      "chatLoading",
+      "chatHistoryPagination",
+      "chatDisplayedLeafEntryId",
+      "chatBranches",
+      "chatBranchesSessionKey",
+      "chatBranchesConnectionEpoch",
+      "currentSessionId",
+      "chatGoalDraftMode",
+      "chatReplyTarget",
+      "selectedChatSessionArchived",
+      "selectedChatSessionIncognito",
+      "pendingAbort",
+    ],
+  );
 }
