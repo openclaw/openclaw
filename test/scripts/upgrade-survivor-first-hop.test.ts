@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -12,19 +11,14 @@ import {
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observer = resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs");
+const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
 function runNode(args: string[], env: NodeJS.ProcessEnv) {
-  return spawnSync(process.execPath, args, {
-    env: { ...process.env, ...env },
-    encoding: "utf8",
-    timeout: 10_000,
-  });
+  return runProcess(process.execPath, args, { ...process.env, ...env }, 10_000);
 }
 
 function rollbackSuccessSummary() {
@@ -129,7 +123,7 @@ async function publishSuccess(summary: unknown, logs: Record<string, unknown> = 
 }
 
 describe("upgrade survivor rollback publication", () => {
-  it("retains producer results and distinguishes canonical rollback from omitted raw transcripts", async () => {
+  it("publishes rollback proof without claiming omitted transcripts", async () => {
     const summary = rollbackSuccessSummary();
     const omission = {
       relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
@@ -262,77 +256,56 @@ describe("upgrade survivor rollback publication", () => {
     },
   );
 
-  it.each([
-    "missing",
-    "null",
-    "unfinished",
-    "wrong-candidate",
-    "missing-preflight",
-    "duplicate-read",
-    "wrong-count",
-    "wrong-schema",
-    "invalid-hash",
-    "unsafe-table-name",
-    "oversized-collection",
-    "no-history",
-    "unbound-omission",
-    "unsupported-restoration-claim",
-    "invalid-volatile-count",
-  ])("refuses %s rollback evidence without writing a successful receipt", async (kind) => {
+  it.each<[string, (proof: ReturnType<typeof rollbackSuccessSummary>["backupRollback"]) => void]>([
+    ["missing", () => undefined],
+    ["null", () => undefined],
+    ["unfinished", (p) => Object.assign(p, { status: "captured" })],
+    ["wrong-candidate", (p) => Object.assign(p, { candidateVersion: "2026.9.6" })],
+    ["missing-preflight", (p) => Object.assign(p, { preflights: [] })],
+    ["duplicate-read", (p) => p.sessionReads.push(p.sessionReads[0]!)],
+    ["wrong-count", (p) => Object.assign(p.sessionReads[0]!, { count: 2 })],
+    ["wrong-schema", (p) => Object.assign(p.preflights[0]!, { targetVersion: 21 })],
+    ["invalid-hash", (p) => Object.assign(p.archive, { sha256: "PRIVATE_HASH" })],
+    [
+      "unsafe-table-name",
+      (p) => Object.assign(p.before.databases[1]!.tables![0]!, { table: "/private/host/table" }),
+    ],
+    [
+      "oversized-collection",
+      (p) =>
+        Object.assign(p.before, { files: Array.from({ length: 129 }, () => p.before.files[0]!) }),
+    ],
+    ["no-history", (p) => Object.assign(p.before.databases[1]!.tables![1]!, { rows: 0 })],
+    [
+      "unbound-omission",
+      (p) =>
+        Object.assign(p, {
+          backupCreate: { skippedVolatileCount: 1 },
+          rawTranscriptRestoration: "unsupported-by-published-backup",
+          omittedRawTranscripts: [
+            {
+              kind: "transcript",
+              relative: "agents/main/sessions/unrecorded.jsonl",
+              archiveMember: "backup/payload/unrecorded.jsonl",
+              sha256: "b".repeat(64),
+              canonicalEventCount: 2,
+              reason: "published-2026.9.4-volatile-transcript",
+            },
+          ],
+        }),
+    ],
+    [
+      "unsupported-restoration-claim",
+      (p) => Object.assign(p, { rawTranscriptRestoration: "unsupported-by-published-backup" }),
+    ],
+    [
+      "invalid-volatile-count",
+      (p) => Object.assign(p, { backupCreate: { skippedVolatileCount: -1 } }),
+    ],
+  ])("refuses invalid rollback proof: %s", async (kind, alter) => {
     const summary = rollbackSuccessSummary();
     const proof = summary.backupRollback;
-    if (kind === "unfinished") {
-      proof.status = "captured";
-    }
-    if (kind === "wrong-candidate") {
-      proof.candidateVersion = "2026.9.6";
-    }
-    if (kind === "missing-preflight") {
-      proof.preflights = [];
-    }
-    if (kind === "duplicate-read") {
-      proof.sessionReads.push(proof.sessionReads[0]!);
-    }
-    if (kind === "wrong-count") {
-      proof.sessionReads[0]!.count = 2;
-    }
-    if (kind === "wrong-schema") {
-      proof.preflights[0]!.targetVersion = 21;
-    }
-    if (kind === "invalid-hash") {
-      proof.archive.sha256 = "PRIVATE_HASH";
-    }
-    if (kind === "unsafe-table-name") {
-      proof.before.databases[1]!.tables![0]!.table = "/private/host/table";
-    }
-    if (kind === "oversized-collection") {
-      proof.before.files = Array.from({ length: 129 }, () => proof.before.files[0]!);
-    }
-    if (kind === "no-history") {
-      proof.before.databases[1]!.tables![1]!.rows = 0;
-    }
-    if (kind === "unbound-omission") {
-      Object.assign(proof, {
-        backupCreate: { skippedVolatileCount: 1 },
-        rawTranscriptRestoration: "unsupported-by-published-backup",
-        omittedRawTranscripts: [
-          {
-            kind: "transcript",
-            relative: "agents/main/sessions/unrecorded.jsonl",
-            archiveMember: "backup/payload/unrecorded.jsonl",
-            sha256: "b".repeat(64),
-            canonicalEventCount: 2,
-            reason: "published-2026.9.4-volatile-transcript",
-          },
-        ],
-      });
-    }
-    if (kind === "unsupported-restoration-claim") {
-      Object.assign(proof, { rawTranscriptRestoration: "unsupported-by-published-backup" });
-    }
-    if (kind === "invalid-volatile-count") {
-      Object.assign(proof, { backupCreate: { skippedVolatileCount: -1 } });
-    }
+    alter(proof);
     const { publish, published } = await publishSuccess({
       ...summary,
       backupRollback: kind === "missing" ? undefined : kind === "null" ? null : proof,
@@ -359,28 +332,20 @@ function seedSessionMigration(root: string, issueCount = 1) {
       sessionKey: "private-session-key",
     })),
   };
-  const manifest = `${JSON.stringify(
-    {
-      runId,
-      manifestVersion: 3,
-      openClawVersion: "2026.8.1",
-      startedAt: "2026-09-16T03:22:21.490Z",
-      failureReports: { jsonPath: "/outside/do-not-read.json" },
-      targets: [{ ...target, completedMoves: [], plannedMoves: [] }],
-    },
-    null,
-    2,
-  )}\n`;
-  const failureReport = `${JSON.stringify(
-    {
-      runId,
-      version: "2026.8.1",
-      restoreStatus: "not_attempted",
-      targets: [{ ...target, completedMoves: 0, plannedMoves: 0 }],
-    },
-    null,
-    2,
-  )}\n`;
+  const manifest = prettyJson({
+    runId,
+    manifestVersion: 3,
+    openClawVersion: "2026.8.1",
+    startedAt: "2026-09-16T03:22:21.490Z",
+    failureReports: { jsonPath: "/outside/do-not-read.json" },
+    targets: [{ ...target, completedMoves: [], plannedMoves: [] }],
+  });
+  const failureReport = prettyJson({
+    runId,
+    version: "2026.8.1",
+    restoreStatus: "not_attempted",
+    targets: [{ ...target, completedMoves: 0, plannedMoves: 0 }],
+  });
   writeFileSync(join(directory, `${runId}.json`), manifest);
   writeFileSync(join(directory, `${runId}.failure.json`), failureReport);
   return { directory, runId, manifest, failureReport };
@@ -571,7 +536,7 @@ if (process.argv[2] === 'update') {
     ["oversized", "input exceeds cap; omitted whole"],
     ["malformed", "invalid observation; omitted"],
     ...(process.platform === "win32" ? [] : [["symlink", "missing or unsafe file"]]),
-  ])("retains manifest evidence when the migration failure report is %s", async (kind, reason) => {
+  ])("retains the manifest with a %s failure report", async (kind, reason) => {
     const root = realpathSync(tempDirs.make("survivor-migration-evidence-"));
     const artifacts = join(root, "artifacts");
     mkdirSync(artifacts);
@@ -634,62 +599,59 @@ if (process.argv[2] === 'update') {
       missingLoadPath: { applicability: "unsupported-driver", reason: "private-invalid-value" },
       invalid: true,
     },
-  ])(
-    "publishes $name coverage in successful receipts",
-    async ({ availability, missingLoadPath, invalid }) => {
-      const root = realpathSync(tempDirs.make("survivor-companion-receipt-"));
-      const baselineCompanion =
-        availability === "absent"
-          ? null
-          : {
-              package: "@openclaw/discord",
-              version: "2026.8.1-beta.1",
-              availability,
-              reason:
-                availability === "available"
-                  ? null
-                  : "Exact companion version is not published on npm (E404).",
-            };
-      writeJson(join(root, "summary.json"), {
-        status: "passed",
-        baseline: { spec: "2026.8.1-beta.1", version: "2026.8.1-beta.1" },
-        candidate: { kind: "package", version: "2026.9.4" },
-        scenario: "legacy-operator-state",
-        installedVersion: "2026.9.4",
-        candidateInstallMode: "published",
-        updateRestartMode: "manual",
-        updateOutcome: "success",
-        phases: [],
-        baselineCompanion,
-        missingLoadPath,
-      });
-      const { publishDiagnostics } = await import(observer);
-      const published = join(root, "published");
-      const publish = () =>
-        publishDiagnostics(
-          root,
-          published,
-          (text: string) => text.replaceAll("E404", "redacted"),
-          "passed",
-        );
-      if (availability === "invalid" || invalid) {
-        expect(publish).toThrow();
-        expect(existsSync(join(published, "summary.json"))).toBe(false);
-        return;
-      }
-      publish();
-      const receipt = readJson(join(published, "summary.json"));
-      expect(receipt.missingLoadPath).toEqual(missingLoadPath);
-      expect(receipt.baselineCompanion).toEqual(
-        baselineCompanion
-          ? {
-              ...baselineCompanion,
-              reason: baselineCompanion.reason?.replaceAll("E404", "redacted") ?? null,
-            }
-          : null,
+  ])("publishes $name in success receipts", async ({ availability, missingLoadPath, invalid }) => {
+    const root = realpathSync(tempDirs.make("survivor-companion-receipt-"));
+    const baselineCompanion =
+      availability === "absent"
+        ? null
+        : {
+            package: "@openclaw/discord",
+            version: "2026.8.1-beta.1",
+            availability,
+            reason:
+              availability === "available"
+                ? null
+                : "Exact companion version is not published on npm (E404).",
+          };
+    writeJson(join(root, "summary.json"), {
+      status: "passed",
+      baseline: { spec: "2026.8.1-beta.1", version: "2026.8.1-beta.1" },
+      candidate: { kind: "package", version: "2026.9.4" },
+      scenario: "legacy-operator-state",
+      installedVersion: "2026.9.4",
+      candidateInstallMode: "published",
+      updateRestartMode: "manual",
+      updateOutcome: "success",
+      phases: [],
+      baselineCompanion,
+      missingLoadPath,
+    });
+    const { publishDiagnostics } = await import(observer);
+    const published = join(root, "published");
+    const publish = () =>
+      publishDiagnostics(
+        root,
+        published,
+        (text: string) => text.replaceAll("E404", "redacted"),
+        "passed",
       );
-    },
-  );
+    if (availability === "invalid" || invalid) {
+      expect(publish).toThrow();
+      expect(existsSync(join(published, "summary.json"))).toBe(false);
+      return;
+    }
+    publish();
+    const receipt = readJson(join(published, "summary.json"));
+    expect(receipt.missingLoadPath).toEqual(missingLoadPath);
+    expect(receipt.baselineCompanion).toEqual(
+      baselineCompanion
+        ? {
+            ...baselineCompanion,
+            reason: baselineCompanion.reason?.replaceAll("E404", "redacted") ?? null,
+          }
+        : null,
+    );
+  });
 
   it.each([
     "outside",
@@ -815,7 +777,7 @@ it.each([
       ]),
     ),
   })),
-])("publishes $name after a successful upgrade", async ({ scenario, version, mode, logs }) => {
+])("publishes $name", async ({ scenario, version, mode, logs }) => {
   const summary = rollbackSuccessSummary();
   summary.baseline = { spec: `openclaw@${version}`, version };
   summary.backupRollback.baselineVersion = version;

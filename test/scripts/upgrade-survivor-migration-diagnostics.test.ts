@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagn
 import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -57,6 +57,8 @@ function fixture() {
     root,
     artifacts,
     state,
+    writeArtifact: (name: string, value: unknown) => write(path.join(artifacts, name), value),
+    writeLog: (name: string, value: string) => fs.writeFileSync(path.join(artifacts, name), value),
     env: {
       PATH: process.env.PATH,
       HOME: root,
@@ -73,11 +75,11 @@ function fixture() {
 
 function write(file: string, value: unknown) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value));
+  writeJson(file, value);
 }
 
 function runNode(f: ReturnType<typeof fixture>, args: string[], env: NodeJS.ProcessEnv = {}) {
-  return spawnSync(node, args, { env: { ...f.env, ...env }, encoding: "utf8", timeout: 10_000 });
+  return runProcess(node, args, { ...f.env, ...env }, 10_000);
 }
 
 function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "failed") {
@@ -102,6 +104,16 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
   return JSON.parse(text);
 }
 
+function expectOmitted(
+  report: { logs: Record<string, unknown>; omissions: Record<string, string> },
+  entries: Record<string, string>,
+) {
+  for (const [name, reason] of Object.entries(entries)) {
+    expect(report.logs[name]).toBeNull();
+    expect(report.omissions[name]).toBe(reason);
+  }
+}
+
 it.each([
   { name: "update.json", prefix: "", failure: { exitCode: 1 } },
   { name: "recovery-update.json", prefix: "", failure: { exitCode: null, termination: "timeout" } },
@@ -110,62 +122,59 @@ it.each([
     prefix: "Update warning before JSON\n",
     failure: { exitCode: 0, outputLimitExceeded: true },
   },
-])(
-  "keeps a later failed update step visible before successful output exhausts $name ($failure)",
-  ({ name, prefix, failure }) => {
-    const f = fixture();
-    const update = {
-      status: "error",
-      reason: "runtime-verification-failed",
-      steps: [
-        {
-          name: "candidate-doctor-lint",
-          exitCode: 0,
-          warnings: Array(64).fill(`Routine Doctor advisory: ${"x".repeat(400)}`),
-        },
-        {
-          name: "candidate-plugins",
-          exitCode: 1,
-          advisory: { kind: "recoverable-maintenance", message: "Optional repair deferred" },
-        },
-        {
-          name: "candidate-gateway-startup",
-          ...failure,
-          durationMs: 12824,
-          failureFacts: [{ code: "candidate-startup-failed", message: "Candidate import failed" }],
-          stderrTail: `Candidate import failed: token=${secret}\nStartup stack location`,
-        },
-        {
-          name: "gateway recovery verification",
-          exitCode: 1,
-          stderrTail: "Secondary recovery error",
-        },
-      ],
-    };
-    write(path.join(f.artifacts, "diagnostics/raw.json"), {
-      phase: "update-candidate",
-      exitStatus: 1,
-      signal: null,
-      logs: { [name]: `${prefix}${JSON.stringify(update, null, 2)}` },
-    });
-    const output = path.join(f.root, "public");
-    publishDiagnostics(f.artifacts, output, redactSensitiveText);
-    const report = JSON.parse(fs.readFileSync(path.join(output, "failure.json"), "utf8"));
-    const log = report.logs[name];
-    expect(log).toContain("Reported failing update step 3 of 4");
-    expect(log).toContain("Candidate import failed");
-    expect(log).toContain("Startup stack location");
-    expect(log).not.toContain(secret);
-    expect(log.indexOf("candidate-gateway-startup")).toBeLessThan(
-      log.indexOf("candidate-doctor-lint"),
-    );
-    expect(log).toContain("candidate-doctor-lint");
-    expect(Buffer.byteLength(JSON.stringify(log))).toBeLessThanOrEqual(16 * 1024);
-    expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
-  },
-);
+])("prioritizes failed update steps in $name ($failure)", ({ name, prefix, failure }) => {
+  const f = fixture();
+  const update = {
+    status: "error",
+    reason: "runtime-verification-failed",
+    steps: [
+      {
+        name: "candidate-doctor-lint",
+        exitCode: 0,
+        warnings: Array(64).fill(`Routine Doctor advisory: ${"x".repeat(400)}`),
+      },
+      {
+        name: "candidate-plugins",
+        exitCode: 1,
+        advisory: { kind: "recoverable-maintenance", message: "Optional repair deferred" },
+      },
+      {
+        name: "candidate-gateway-startup",
+        ...failure,
+        durationMs: 12824,
+        failureFacts: [{ code: "candidate-startup-failed", message: "Candidate import failed" }],
+        stderrTail: `Candidate import failed: token=${secret}\nStartup stack location`,
+      },
+      {
+        name: "gateway recovery verification",
+        exitCode: 1,
+        stderrTail: "Secondary recovery error",
+      },
+    ],
+  };
+  f.writeArtifact("diagnostics/raw.json", {
+    phase: "update-candidate",
+    exitStatus: 1,
+    signal: null,
+    logs: { [name]: `${prefix}${JSON.stringify(update, null, 2)}` },
+  });
+  const output = path.join(f.root, "public");
+  publishDiagnostics(f.artifacts, output, redactSensitiveText);
+  const report = readJson(path.join(output, "failure.json"));
+  const log = report.logs[name];
+  expect(log).toContain("Reported failing update step 3 of 4");
+  expect(log).toContain("Candidate import failed");
+  expect(log).toContain("Startup stack location");
+  expect(log).not.toContain(secret);
+  expect(log.indexOf("candidate-gateway-startup")).toBeLessThan(
+    log.indexOf("candidate-doctor-lint"),
+  );
+  expect(log).toContain("candidate-doctor-lint");
+  expect(Buffer.byteLength(JSON.stringify(log))).toBeLessThanOrEqual(16 * 1024);
+  expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
+});
 
-it("returns only redacted failure coordinates after safe publication", () => {
+it("returns only redacted failure coordinates", () => {
   const f = fixture();
   vi.stubEnv("GITHUB_ACTIONS", "true");
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
@@ -177,7 +186,7 @@ it("returns only redacted failure coordinates after safe publication", () => {
     command: privateBody,
     environment: { TOKEN: secret },
   };
-  write(path.join(f.artifacts, "diagnostics/raw.json"), raw);
+  f.writeArtifact("diagnostics/raw.json", raw);
   const output = path.join(f.root, "public");
   const redact = (text: string) =>
     text === raw.phase ? "safe%phase\r\n::error::not-another-command" : redactSensitiveText(text);
@@ -190,7 +199,7 @@ it("returns only redacted failure coordinates after safe publication", () => {
   expect(JSON.stringify(failure)).not.toContain(secret);
   expect(JSON.stringify(failure)).not.toContain(privateBody);
   expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
-  expect(JSON.parse(fs.readFileSync(path.join(output, "failure.json"), "utf8"))).toMatchObject({
+  expect(readJson(path.join(output, "failure.json"))).toMatchObject({
     phase: raw.phase,
     exitStatus: 143,
     signal: "SIGTERM",
@@ -217,9 +226,9 @@ it("does not annotate local runs, invalid snapshots, or failed publication", () 
   expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
 });
 
-it("emits the published failure metadata through the host CLI without changing its exit status", () => {
+it("publishes CLI failure metadata without changing exit status", () => {
   const f = fixture();
-  write(path.join(f.artifacts, "diagnostics/raw.json"), {
+  f.writeArtifact("diagnostics/raw.json", {
     phase: "recovery-update-restart",
     exitStatus: 1,
     signal: null,
@@ -283,87 +292,79 @@ function policySuccessSummary(pluginPolicy: unknown) {
   };
 }
 
-it.each([false, true])(
-  "requires missing policy evidence only after a completed probe: %s",
-  (completed) => {
-    const f = fixture();
-    vi.stubEnv("GITHUB_ACTIONS", "true");
-    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    write(path.join(f.artifacts, "summary.json"), {
-      ...policySuccessSummary(undefined),
-      phases: completed
-        ? [{ phase: "verify-sole-plugin-policy", status: "passed", at: "2026-09-25T12:00:00.000Z" }]
-        : [],
-    });
-    write(path.join(f.artifacts, "webhooks-only-policy/result.json"), { privateBody });
-    if (completed) {
-      expect(() =>
-        publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
-      ).toThrow("Missing sole-plugin policy evidence after completed probe");
-    } else {
-      const report = capture(f, "passed");
-      expect(report).not.toHaveProperty("pluginPolicy");
-      expect(report.logs).not.toHaveProperty("webhooks-only-policy/result.json");
-    }
-    expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
-  },
-);
+it.each([false, true])("requires policy evidence after a completed probe: %s", (completed) => {
+  const f = fixture();
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  f.writeArtifact("summary.json", {
+    ...policySuccessSummary(undefined),
+    phases: completed
+      ? [{ phase: "verify-sole-plugin-policy", status: "passed", at: "2026-09-25T12:00:00.000Z" }]
+      : [],
+  });
+  f.writeArtifact("webhooks-only-policy/result.json", { privateBody });
+  if (completed) {
+    expect(() =>
+      publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
+    ).toThrow("Missing sole-plugin policy evidence after completed probe");
+  } else {
+    const report = capture(f, "passed");
+    expect(report).not.toHaveProperty("pluginPolicy");
+    expect(report.logs).not.toHaveProperty("webhooks-only-policy/result.json");
+  }
+  expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+});
 
-it.each([false, true])(
-  "publishes bounded redacted sole-policy evidence with unsafe logs: %s",
-  (unsafe) => {
-    const f = fixture();
-    const policy = pluginPolicyReceipt();
-    write(path.join(f.artifacts, "summary.json"), policySuccessSummary({ ...policy, privateBody }));
-    const policyRoot = path.join(f.artifacts, "webhooks-only-policy");
-    if (unsafe) {
-      fs.mkdirSync(policyRoot);
-      const outside = path.join(f.root, "outside.json");
-      write(outside, { privateBody });
-      fs.symlinkSync(outside, path.join(policyRoot, "result.json"));
-      fs.writeFileSync(path.join(policyRoot, "update.json"), "x".repeat(256 * 1024 + 1));
-    } else {
-      write(path.join(policyRoot, "result.json"), policy);
-      write(path.join(policyRoot, "update.json"), {
-        status: "ok",
-        before: { version: "2026.9.2" },
-        after: { version: "2026.9.6" },
-        warning: `token=${secret}`,
-      });
-    }
-    write(path.join(f.artifacts, "webhooks-only-policy/candidate-runtime.out"), {
-      plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
+it.each([false, true])("publishes sole-policy proof with unsafe logs: %s", (unsafe) => {
+  const f = fixture();
+  const policy = pluginPolicyReceipt();
+  f.writeArtifact("summary.json", policySuccessSummary({ ...policy, privateBody }));
+  const policyRoot = path.join(f.artifacts, "webhooks-only-policy");
+  if (unsafe) {
+    fs.mkdirSync(policyRoot);
+    const outside = path.join(f.root, "outside.json");
+    write(outside, { privateBody });
+    fs.symlinkSync(outside, path.join(policyRoot, "result.json"));
+    fs.writeFileSync(path.join(policyRoot, "update.json"), "x".repeat(256 * 1024 + 1));
+  } else {
+    write(path.join(policyRoot, "result.json"), policy);
+    write(path.join(policyRoot, "update.json"), {
+      status: "ok",
+      before: { version: "2026.9.2" },
+      after: { version: "2026.9.6" },
       warning: `token=${secret}`,
     });
-    write(path.join(f.artifacts, "webhooks-only-policy/baseline-runtime.out"), {
-      plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }],
+  }
+  f.writeArtifact("webhooks-only-policy/candidate-runtime.out", {
+    plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
+    warning: `token=${secret}`,
+  });
+  f.writeArtifact("webhooks-only-policy/baseline-runtime.out", {
+    plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }],
+  });
+  f.writeArtifact("webhooks-only-policy/openclaw.json", { privateBody, secret });
+  const report = capture(f, "passed");
+  expect(report.pluginPolicy).toEqual(policy);
+  if (unsafe) {
+    expectOmitted(report, {
+      "webhooks-only-policy/result.json": "missing or unsafe file",
+      "webhooks-only-policy/update.json": "input exceeds cap; omitted whole",
     });
-    write(path.join(f.artifacts, "webhooks-only-policy/openclaw.json"), { privateBody, secret });
-    const report = capture(f, "passed");
-    expect(report.pluginPolicy).toEqual(policy);
-    if (unsafe) {
-      expect(report.logs["webhooks-only-policy/result.json"]).toBeNull();
-      expect(report.omissions["webhooks-only-policy/result.json"]).toBe("missing or unsafe file");
-      expect(report.logs["webhooks-only-policy/update.json"]).toBeNull();
-      expect(report.omissions["webhooks-only-policy/update.json"]).toBe(
-        "input exceeds cap; omitted whole",
-      );
-    } else {
-      expect(JSON.parse(report.logs["webhooks-only-policy/result.json"])).toEqual(policy);
-      expect(JSON.parse(report.logs["webhooks-only-policy/update.json"])).toMatchObject({
-        before: { version: "2026.9.2" },
-        after: { version: "2026.9.6" },
-      });
-    }
-    expect(JSON.parse(report.logs["webhooks-only-policy/candidate-runtime.out"]).plugins).toEqual([
-      { id: "telegram", enabled: true, runtime: { state: "unloaded" } },
-    ]);
-    expect(JSON.parse(report.logs["webhooks-only-policy/baseline-runtime.out"]).plugins).toEqual([
-      { id: "telegram", installed: true, enabled: true, state: "enabled" },
-    ]);
-    expect(report.logs).not.toHaveProperty("webhooks-only-policy/openclaw.json");
-  },
-);
+  } else {
+    expect(JSON.parse(report.logs["webhooks-only-policy/result.json"])).toEqual(policy);
+    expect(JSON.parse(report.logs["webhooks-only-policy/update.json"])).toMatchObject({
+      before: { version: "2026.9.2" },
+      after: { version: "2026.9.6" },
+    });
+  }
+  expect(JSON.parse(report.logs["webhooks-only-policy/candidate-runtime.out"]).plugins).toEqual([
+    { id: "telegram", enabled: true, runtime: { state: "unloaded" } },
+  ]);
+  expect(JSON.parse(report.logs["webhooks-only-policy/baseline-runtime.out"]).plugins).toEqual([
+    { id: "telegram", installed: true, enabled: true, state: "enabled" },
+  ]);
+  expect(report.logs).not.toHaveProperty("webhooks-only-policy/openclaw.json");
+});
 
 it.each([
   { candidateVersion: "2026.9.5" },
@@ -375,10 +376,7 @@ it.each([
   { ordinaryHooksPreserved: false },
 ])("rejects inconsistent sole-policy success receipts: %j", (patch) => {
   const f = fixture();
-  write(
-    path.join(f.artifacts, "summary.json"),
-    policySuccessSummary({ ...pluginPolicyReceipt(), ...patch }),
-  );
+  f.writeArtifact("summary.json", policySuccessSummary({ ...pluginPolicyReceipt(), ...patch }));
   expect(() =>
     publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
   ).toThrow("Invalid sole-plugin policy evidence");
@@ -388,7 +386,7 @@ it.each(["failed", "passed"] as const)(
   "retains redacted sibling refusal evidence after a %s attempt",
   (outcome) => {
     const f = fixture();
-    write(path.join(f.artifacts, "summary.json"), {
+    f.writeArtifact("summary.json", {
       status: "passed",
       baseline: { spec: "openclaw@2026.9.6", version: "2026.9.6" },
       candidate: { kind: "tarball", version: "2026.9.5" },
@@ -399,28 +397,30 @@ it.each(["failed", "passed"] as const)(
       updateOutcome: "success",
       phases: [],
     });
-    write(path.join(f.artifacts, "update.json"), { status: "ok", runId: "healthy-retry" });
-    write(path.join(f.artifacts, "sibling-refusal-update.json"), {
+    f.writeArtifact("update.json", { status: "ok", runId: "healthy-retry" });
+    f.writeArtifact("sibling-refusal-update.json", {
       status: "error",
       runId: "refused-run",
       reason: `output-limit; token=${secret}`,
     });
-    write(path.join(f.artifacts, "sibling-refusal-status.json"), {
+    f.writeArtifact("sibling-refusal-status.json", {
       lastRun: { runId: "refused-run", status: "failed" },
     });
-    write(path.join(f.artifacts, "sibling-refusal-worker.json"), { worker: { pid: 123 } });
-    write(path.join(f.artifacts, "sibling-refusal-cleanup.json"), { survivors: [] });
+    f.writeArtifact("sibling-refusal-worker.json", { worker: { pid: 123 } });
+    f.writeArtifact("sibling-refusal-cleanup.json", { survivors: [] });
     const report = capture(f, outcome);
-    expect(JSON.parse(report.logs["update.json"]).runId).toBe("healthy-retry");
-    expect(JSON.parse(report.logs["sibling-refusal-update.json"])).toMatchObject({
-      status: "error",
-      runId: "refused-run",
-      reason: expect.stringContaining("output-limit"),
-    });
-    expect(JSON.parse(report.logs["sibling-refusal-status.json"]).lastRun.runId).toBe(
-      "refused-run",
-    );
-    expect(JSON.parse(report.logs["sibling-refusal-worker.json"]).worker.pid).toBe(123);
+    for (const [name, value] of Object.entries({
+      "update.json": { runId: "healthy-retry" },
+      "sibling-refusal-update.json": {
+        status: "error",
+        runId: "refused-run",
+        reason: expect.stringContaining("output-limit"),
+      },
+      "sibling-refusal-status.json": { lastRun: { runId: "refused-run" } },
+      "sibling-refusal-worker.json": { worker: { pid: 123 } },
+    })) {
+      expect(JSON.parse(report.logs[name])).toMatchObject(value);
+    }
     expect(JSON.parse(report.logs["sibling-refusal-cleanup.json"]).survivors).toEqual([]);
   },
 );
@@ -430,7 +430,7 @@ function integrityFixture(
   telemetry: Record<string, unknown> = {},
 ) {
   const f = fixture();
-  write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
+  f.writeArtifact("diagnostics/process-42-started.json", {
     event: "started",
     role: "update",
     packageVersion: "2026.9.4",
@@ -464,7 +464,7 @@ function integrityFixture(
   return f;
 }
 
-it("captures only the actual baseline updater's released integrity envelope and preserves failure", () => {
+it("binds integrity evidence to the failing baseline updater", () => {
   const f = fixture();
   write(path.join(f.root, "package.json"), {
     name: "openclaw",
@@ -510,7 +510,7 @@ process.exit(1);`,
   expect(report).toMatchObject({ phase: "update-candidate", outcome: "failed", exitStatus: 1 });
   expect(report.packageIntegrity).toEqual({ availability: "captured", observations: expected });
   const rawPath = path.join(f.artifacts, "diagnostics/raw.json");
-  const raw = JSON.parse(fs.readFileSync(rawPath, "utf8"));
+  const raw = readJson(rawPath);
   expect(fs.readFileSync(rawPath, "utf8")).not.toContain(privateBody);
   raw.packageIntegrity.observations[0].message = privateBody;
   raw.packageIntegrity.observations[0].secret = secret;
@@ -525,7 +525,7 @@ process.exit(1);`,
   write(rawPath, raw);
   const invalid = path.join(f.root, "invalid");
   publishDiagnostics(f.artifacts, invalid, redactSensitiveText);
-  expect(JSON.parse(fs.readFileSync(path.join(invalid, "failure.json"), "utf8"))).toMatchObject({
+  expect(readJson(path.join(invalid, "failure.json"))).toMatchObject({
     exitStatus: 1,
     packageIntegrity: { availability: "unavailable" },
     omissions: { "package integrity": "invalid observation; omitted" },
@@ -584,46 +584,44 @@ it.each(invalidIntegrityCases)(
   },
 );
 
-it("publishes bounded and redacted Gateway, Cron, native recovery, and update failures", () => {
+it("bounds and redacts Gateway, Cron, recovery, and update logs", () => {
   const f = fixture();
-  write(path.join(f.artifacts, "update-noop.json"), {
+  f.writeArtifact("update-noop.json", {
     status: "error",
     reason: "second update failed",
     warning: `token=${secret}`,
   });
-  fs.writeFileSync(
-    path.join(f.artifacts, "update-noop.err"),
-    `No-op update refused: token=${secret}\n` + "Update diagnostic line\n".repeat(1000),
-  );
+  const boundedLogs = {
+    "update-noop.err": "No-op update refused",
+    ...Object.fromEntries(cronCliLogs.map((name) => [name, "Published Cron run failed"])),
+  };
+  const messages = {
+    ...boundedLogs,
+    ...Object.fromEntries(baselineGatewayLogs.map((name) => [name, "Baseline startup failed"])),
+    ...Object.fromEntries(
+      ["baseline", "candidate"].flatMap((stage) => [
+        [`legacy-operator-${stage}-turn.err`, `Provider request failed during ${stage}`],
+        [`legacy-operator-${stage}-turn.out`, `Agent ${stage} turn ended before completion`],
+      ]),
+    ),
+  };
   fs.mkdirSync(path.join(f.artifacts, "missing-load-path"));
-  for (const name of baselineGatewayLogs) {
-    fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
-  }
-  for (const name of cronCliLogs) {
-    fs.writeFileSync(
-      path.join(f.artifacts, name),
-      `Published Cron run failed: token=${secret}\n` + "Cron run diagnostic line\n".repeat(1000),
-    );
-  }
-  for (const stage of ["baseline", "candidate"]) {
-    fs.writeFileSync(
-      path.join(f.artifacts, `legacy-operator-${stage}-turn.err`),
-      `Provider request failed during ${stage}: token=${secret}\n`,
-    );
-    fs.writeFileSync(
-      path.join(f.artifacts, `legacy-operator-${stage}-turn.out`),
-      `Agent ${stage} turn ended before completion: apiKey=${secret}\n`,
+  for (const [name, message] of Object.entries(messages)) {
+    f.writeLog(
+      name,
+      `${message}: ${name.endsWith("turn.out") ? "apiKey" : "token"}=${secret}\n` +
+        (name in boundedLogs ? "Diagnostic detail line\n".repeat(1000) : ""),
     );
   }
   for (const name of nativeRecoveryLogs) {
-    write(path.join(f.artifacts, name), {
+    f.writeArtifact(name, {
       runId: "native-recovery-probe",
       status: "error",
       error: `Native resume failed: token=${secret}`,
     });
   }
-  fs.writeFileSync(
-    path.join(f.artifacts, "native-assignment-messages.jsonl"),
+  f.writeLog(
+    "native-assignment-messages.jsonl",
     JSON.stringify({ phase: "seed-history", marker: "EARLY_NATIVE_SEED" }) +
       "\n" +
       (JSON.stringify({ phase: "seed-history", direction: "response" }) + "\n").repeat(1000) +
@@ -647,40 +645,24 @@ it("publishes bounded and redacted Gateway, Cron, native recovery, and update fa
     status: "error",
     reason: "second update failed",
   });
-  expect(report.logs["update-noop.err"]).toContain("No-op update refused");
-  expect(Buffer.byteLength(JSON.stringify(report.logs["update-noop.err"]))).toBeLessThanOrEqual(
-    16 * 1024,
-  );
-  expect(report.omissions["update-noop.err"]).toBe(
-    "redacted output truncated at a complete line (16 KiB)",
-  );
-  for (const name of baselineGatewayLogs) {
-    expect(report.logs[name]).toContain("Baseline startup failed");
-  }
-  for (const name of cronCliLogs) {
-    expect(report.logs[name]).toContain("Published Cron run failed");
-    expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
-    expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
-  }
-  for (const stage of ["baseline", "candidate"]) {
-    expect(report.logs[`legacy-operator-${stage}-turn.err`]).toContain(
-      `Provider request failed during ${stage}`,
-    );
-    expect(report.logs[`legacy-operator-${stage}-turn.out`]).toContain(
-      `Agent ${stage} turn ended before completion`,
-    );
+  for (const [name, message] of Object.entries(messages)) {
+    expect(report.logs[name]).toContain(message);
+    if (name in boundedLogs) {
+      expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
+      expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
+    }
   }
 });
 
-it("retains failed rollback producer evidence without converting qualified omissions into restored files", () => {
+it("publishes failed rollback proof without claiming omitted files", () => {
   const f = fixture();
-  write(path.join(f.artifacts, "backup-rollback-create.json"), {
+  f.writeArtifact("backup-rollback-create.json", {
     verified: true,
     skippedVolatileCount: 3,
     skipped: [],
     warning: `token=${secret}`,
   });
-  write(path.join(f.artifacts, "backup-rollback-restore.json"), { ok: true });
+  f.writeArtifact("backup-rollback-restore.json", { ok: true });
   const proof = {
     status: "failed",
     runtime: {
@@ -699,8 +681,8 @@ it("retains failed rollback producer evidence without converting qualified omiss
     ],
     failure: { command: "verify", message: "baseline preflight failed" },
   };
-  write(path.join(f.artifacts, "backup-rollback.json"), proof);
-  fs.writeFileSync(path.join(f.artifacts, "backup-rollback-restore.json.err"), `token=${secret}\n`);
+  f.writeArtifact("backup-rollback.json", proof);
+  f.writeLog("backup-rollback-restore.json.err", `token=${secret}\n`);
   const report = capture(f);
   expect(report.outcome).toBe("failed");
   expect(JSON.parse(report.logs["backup-rollback-create.json"])).toMatchObject({
@@ -711,8 +693,7 @@ it("retains failed rollback producer evidence without converting qualified omiss
   expect(JSON.parse(report.logs["backup-rollback-restore.json"])).toEqual({ ok: true });
   expect(JSON.parse(report.logs["backup-rollback.json"])).toEqual(proof);
   expect(report.logs["backup-rollback-restore.json.err"]).not.toContain(secret);
-  expect(report.logs["backup-rollback-create.json.err"]).toBeNull();
-  expect(report.omissions["backup-rollback-create.json.err"]).toBe("missing or unsafe file");
+  expectOmitted(report, { "backup-rollback-create.json.err": "missing or unsafe file" });
 });
 
 it.each([
@@ -851,7 +832,7 @@ it.each([
   expect(report.migration.doctor.processes[0].result).not.toHaveProperty("configChanges");
 });
 
-it("projects retained-import obligations and archive receipts without reading session bodies or migrating SQLite", () => {
+it("observes retained imports and archives without modifying state", () => {
   const f = fixture();
   const store = path.join(f.state, "agents/main/sessions/sessions.json");
   const transcript = path.join(f.state, "agents/main/sessions/retained.jsonl");
@@ -933,7 +914,7 @@ it("projects retained-import obligations and archive receipts without reading se
   expect(fs.readFileSync(transcript, "utf8")).toBe(privateBody);
 });
 
-it("retains the custom fixture's actual Doctor module and callback identities without argv contents", () => {
+it("records Doctor module and callback identities without argv", () => {
   const f = fixture();
   const seeded = runNode(f, [sibling, "seed"]);
   expect(seeded.status, seeded.stderr).toBe(0);
@@ -957,7 +938,7 @@ it("retains the custom fixture's actual Doctor module and callback identities wi
   expect(report.migration.sibling.registrations[0]).not.toHaveProperty("value");
 });
 
-it("omits unsafe migration files and oversized registration collections without treating missing evidence as success", () => {
+it("omits unsafe files and oversized registration collections", () => {
   const f = fixture();
   const outside = path.join(f.root, "outside");
   fs.writeFileSync(outside, privateBody);
@@ -966,11 +947,11 @@ it("omits unsafe migration files and oversized registration collections without 
   fs.writeFileSync(path.join(f.root, "baseline-gateway.log"), privateBody);
   fs.symlinkSync(f.root, path.join(f.artifacts, "missing-load-path"));
   fs.symlinkSync(outside, path.join(f.artifacts, "backup-rollback-create.json"));
-  fs.writeFileSync(path.join(f.artifacts, "backup-rollback.json"), "x".repeat(262145));
+  f.writeLog("backup-rollback.json", "x".repeat(262145));
   fs.symlinkSync(outside, path.join(f.artifacts, "update-noop.json"));
-  fs.writeFileSync(path.join(f.artifacts, "update-noop.err"), "x".repeat(262145));
-  fs.writeFileSync(
-    path.join(f.artifacts, "sibling-registrations.jsonl"),
+  f.writeLog("update-noop.err", "x".repeat(262145));
+  f.writeLog(
+    "sibling-registrations.jsonl",
     Array.from({ length: 129 }, () =>
       JSON.stringify({
         surface: "runtime",
@@ -982,20 +963,15 @@ it("omits unsafe migration files and oversized registration collections without 
     ).join("\n"),
   );
   const report = capture(f);
-  expect(report.logs["backup-rollback-create.json"]).toBeNull();
-  expect(report.omissions["backup-rollback-create.json"]).toBe("missing or unsafe file");
-  expect(report.logs["backup-rollback.json"]).toBeNull();
-  expect(report.omissions["backup-rollback.json"]).toBe("input exceeds cap; omitted whole");
-  expect(report.logs["update-noop.json"]).toBeNull();
-  expect(report.omissions["update-noop.json"]).toBe("missing or unsafe file");
-  expect(report.logs["update-noop.err"]).toBeNull();
-  expect(report.omissions["update-noop.err"]).toBe("input exceeds cap; omitted whole");
+  expectOmitted(report, {
+    "backup-rollback-create.json": "missing or unsafe file",
+    "backup-rollback.json": "input exceeds cap; omitted whole",
+    "update-noop.json": "missing or unsafe file",
+    "update-noop.err": "input exceeds cap; omitted whole",
+    ...Object.fromEntries(baselineGatewayLogs.map((name) => [name, "missing or unsafe file"])),
+  });
   for (const section of ["sessions", "archives", "sibling", "doctor"]) {
     expect(report.migration[section].availability).toBe("unavailable");
-  }
-  for (const name of baselineGatewayLogs) {
-    expect(report.logs[name]).toBeNull();
-    expect(report.omissions[name]).toBe("missing or unsafe file");
   }
   expect(report.limits).toMatchObject({
     inputBytesPerFile: 262144,
@@ -1005,7 +981,7 @@ it("omits unsafe migration files and oversized registration collections without 
   });
 });
 
-it("does not reuse sibling or startup observations when an attempt fails before fixture seeding", () => {
+it("clears stale proof before seeding without following symlinks", () => {
   const f = fixture();
   const turnLogs = ["baseline", "candidate"].flatMap((stage) =>
     ["out", "err"].map((extension) => `legacy-operator-${stage}-turn.${extension}`),
@@ -1038,10 +1014,10 @@ it("does not reuse sibling or startup observations when an attempt fails before 
   ];
   for (const name of logs) {
     fs.mkdirSync(path.dirname(path.join(f.artifacts, name)), { recursive: true });
-    fs.writeFileSync(path.join(f.artifacts, name), "previous attempt failure");
+    f.writeLog(name, "previous attempt failure");
   }
-  fs.writeFileSync(
-    path.join(f.artifacts, "sibling-registrations.jsonl"),
+  f.writeLog(
+    "sibling-registrations.jsonl",
     JSON.stringify({
       surface: "doctor-contract",
       stateDir: f.state,
@@ -1059,7 +1035,7 @@ it("does not reuse sibling or startup observations when an attempt fails before 
   for (const name of baselineGatewayLogs) {
     fs.writeFileSync(path.join(outsideLogs, path.basename(name)), "outside capture ownership");
   }
-  const prepared = spawnSync(
+  const prepared = runProcess(
     "bash",
     [
       "-c",
@@ -1076,11 +1052,8 @@ it("does not reuse sibling or startup observations when an attempt fails before 
       path.resolve("scripts/lib/upgrade-survivor-diagnostics.sh"),
       unsafeArtifacts,
     ],
-    {
-      env: { ...f.env, ARTIFACT_DIR: f.artifacts },
-      encoding: "utf8",
-      timeout: 10_000,
-    },
+    { ...f.env, ARTIFACT_DIR: f.artifacts },
+    10_000,
   );
   expect(prepared.status, prepared.stderr).toBe(0);
   for (const name of baselineGatewayLogs) {
