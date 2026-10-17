@@ -28,13 +28,8 @@ export function parseMinimalGatewayRequestFrame(
 }
 
 export function sendMinimalGatewayConnectChallenge(ws: WebSocket, nonce = "test-nonce"): void {
-  ws.send(
-    JSON.stringify({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce, ts: Date.now() },
-    }),
-  );
+  const payload = { nonce, ts: Date.now() };
+  ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload }));
 }
 
 export function buildMinimalGatewayHelloOkPayload(params?: {

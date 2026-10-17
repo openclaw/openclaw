@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import {
@@ -10,6 +11,8 @@ import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -97,9 +100,9 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   const clients: GatewayClient[] = [aliceClient, bobClient, bobSecond, carolClient];
   const broadcast = vi.fn();
   const push = vi.fn<NonNullable<Parameters<typeof createMentionInbox>[0]["onMentionCreated"]>>();
-  const setSession = (entry: Partial<SessionEntry>, sessionKey = SESSION_KEY) =>
+  const setSession = (entry: Partial<SessionEntry>, sessionKey = SESSION_KEY, storePath?: string) =>
     upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
+      { agentId: "main", sessionKey, storePath },
       {
         sessionId: SESSION_ID,
         updatedAt: Date.now(),
@@ -179,6 +182,17 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     broadcast,
     push,
     setSession,
+    async replaceSessionIdentity(sessionId = "replacement-session") {
+      await setSession({ sessionId });
+      const file = statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), { bigint: true });
+      emitSessionIdentityMutation({
+        agentId: "main",
+        databaseIdentity: `${file.dev}:${file.ino}`,
+        kind: "replace",
+        previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
+        current: { sessionId, sessionKeys: [SESSION_KEY] },
+      });
+    },
     openInbox,
     async dispose() {
       try {

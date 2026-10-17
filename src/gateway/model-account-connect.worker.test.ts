@@ -92,6 +92,11 @@ const operator = (profileId: string) =>
   });
 const resolvePin = (rawProfile: string, requesterProfileId: string) =>
   resolveProfileOverride({ rawProfile, provider: credential.provider, requesterProfileId });
+const rolesConfig = (
+  roles: NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>,
+): OpenClawConfig => ({ gateway: { roles } });
+const expectLinked = async (owner: string, authProfileId: string) =>
+  expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([{ authProfileId }]);
 
 async function withoutSql<T>(run: () => T | Promise<T>): Promise<T> {
   const sql = observeHostDataSql();
@@ -115,14 +120,34 @@ function calibrateSql(queries: string[]) {
   queries.length = 0;
 }
 
+function observeGrantSql() {
+  let active = false;
+  const queries: string[] = [];
+  const sql = observeHostDataSql((query) => {
+    if (active) {
+      queries.push(query);
+    }
+  });
+  const within = (run: () => void) => {
+    active = true;
+    try {
+      run();
+    } finally {
+      active = false;
+    }
+  };
+  return { queries, within, restore: () => sql.restore() };
+}
+
 function accountContext(
   client: ReturnType<typeof createOperatorClient>,
   getRuntimeConfig = (): OpenClawConfig => ({}),
+  isConnected = () => true,
 ) {
   const context = createContext();
   context.getRuntimeConfig = getRuntimeConfig;
   context.getClientConnIds = (filter) =>
-    new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []);
+    new Set(isConnected() && client.connId && (!filter || filter(client)) ? [client.connId] : []);
   return context;
 }
 
@@ -157,18 +182,11 @@ it("prepares cold personal account policy with GitHub assignments and current ro
     }).id;
     const client = createOperatorClient({ profileId: owner, scopes: ["operator.write"] });
     const writer: GatewayOperatorRoleDefinition = { ...role(["operator.write"]), agents: "*" };
-    const cfg: OpenClawConfig = {
-      gateway: {
-        roles: {
-          default: "denied",
-          definitions: {
-            denied: role([]),
-            writer,
-          },
-          assignments: { byGithubLogin: { "account-owner": "writer" } },
-        },
-      },
-    };
+    const cfg = rolesConfig({
+      default: "denied",
+      definitions: { denied: role([]), writer },
+      assignments: { byGithubLogin: { "account-owner": "writer" } },
+    });
     const context = accountContext(client, () => cfg);
 
     expect(isUserProfileCatalogReady()).toBe(false);
@@ -282,13 +300,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
   withAccount("worker-accounts@example.test", async (owner) => {
     const client = operator(owner);
     const clients = new Set([client]);
-    const context = createContext();
-    context.getClientConnIds = (filter) =>
-      new Set(
-        [...clients]
-          .filter((current) => !filter || filter(current))
-          .flatMap((current) => (current.connId ? [current.connId] : [])),
-      );
+    const context = accountContext(client, undefined, () => clients.has(client));
     const changed = createDeferredCore();
     const settled = createDeferredCore();
     const committed = createDeferredCore();
@@ -325,16 +337,12 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
     const rpc = async (method: string, params: Record<string, unknown> = {}) => {
       const respond = await callAccount(client, context, method, { profileId: owner, ...params });
       const [ok, payload, error] = respond.mock.calls[0] ?? [];
-      expect(error).toBeUndefined();
-      expect(ok).toBe(true);
+      expect({ ok, error }).toEqual({ ok: true, error: undefined });
       return payload;
     };
     const sql = observeHostDataSql();
     try {
       calibrateSql(sql.queries);
-      for (const call of sql.calls) {
-        call.mockClear();
-      }
       const started = await rpc("users.authConnect.start", {
         provider: "synthetic",
         method: "token",
@@ -370,7 +378,8 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       ) {
         throw new Error("personal account did not connect");
       }
-      const link = { provider: "synthetic", authProfileId: connected.authProfileId };
+      const { authProfileId } = connected;
+      const link = { provider: "synthetic", authProfileId };
       expect(connected.links).toMatchObject([link]);
       expect(await rpc("users.listModelAccounts")).toMatchObject({
         profileId: owner,
@@ -381,14 +390,12 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       expect(await rpc("users.unlinkAuthProfile", { provider: "synthetic" })).toEqual({
         links: [],
       });
-      expect(
-        await rpc("users.linkAuthProfile", { authProfileId: connected.authProfileId }),
-      ).toMatchObject({ links: [link] });
-      expect(
-        await rpc("users.selectModelAccount", { authProfileId: connected.authProfileId }),
-      ).toMatchObject({ links: [link] });
-      expect(JSON.stringify(await rpc("users.listModelAccounts"))).not.toContain(credential.token);
-      expect(JSON.stringify(connected)).not.toContain(credential.token);
+      for (const method of ["users.linkAuthProfile", "users.selectModelAccount"]) {
+        expect(await rpc(method, { authProfileId })).toMatchObject({ links: [link] });
+      }
+      expect(JSON.stringify([await rpc("users.listModelAccounts"), connected])).not.toContain(
+        credential.token,
+      );
 
       const action = await prepareUserModelAccountAction({ client, context }, owner);
       const staleList = service.listAsync(action);
@@ -399,9 +406,6 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       clients.clear();
       await expect(staleStatus).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
       expect(sql.queries).toEqual([]);
-      for (const call of sql.calls) {
-        expect(call).not.toHaveBeenCalled();
-      }
     } finally {
       deliverCommit.resolve();
       sql.restore();
@@ -422,24 +426,11 @@ it.each(["transaction", "commit"] as const)(
       const context = accountContext(client, () => cfg);
       const service = createModelAccountConnectService({ getConfig: () => cfg });
       context.modelAccountConnectService = service;
-      const enabled: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "fallback",
-            definitions: {
-              member: role([]),
-              fallback: role(["operator.write"]),
-            },
-          },
-        },
-      };
-      let inGrant = false;
-      const grantSql: string[] = [];
-      const sql = observeHostDataSql((query) => {
-        if (inGrant) {
-          grantSql.push(query);
-        }
+      const enabled = rolesConfig({
+        default: "fallback",
+        definitions: { member: role([]), fallback: role(["operator.write"]) },
       });
+      const sql = observeGrantSql();
       const stages: string[] = [];
       const admission = probe.admission(workerAdmission, (request, grant, admit) => {
         if (!isRecord(request.facts) || request.facts.kind !== "model-account-links") {
@@ -450,20 +441,10 @@ it.each(["transaction", "commit"] as const)(
         if (request.stage === stage) {
           cfg = enabled;
         }
-        inGrant = true;
-        try {
-          admit(request, grant);
-        } finally {
-          inGrant = false;
-        }
+        sql.within(() => admit(request, grant));
       });
       try {
-        try {
-          inGrant = true;
-          calibrateSql(grantSql);
-        } finally {
-          inGrant = false;
-        }
+        sql.within(() => calibrateSql(sql.queries));
         const respond = await callAccount(client, context, "users.selectModelAccount", {
           profileId: owner,
           authProfileId: first.authProfileId,
@@ -477,10 +458,8 @@ it.each(["transaction", "commit"] as const)(
         expect(stages).toEqual(
           stage === "transaction" ? ["transaction"] : ["transaction", "commit"],
         );
-        expect(grantSql).toEqual([]);
-        expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
-          { authProfileId: second.authProfileId },
-        ]);
+        expect(sql.queries).toEqual([]);
+        await expectLinked(owner, second.authProfileId);
       } finally {
         admission.mockRestore();
         sql.restore();
@@ -558,9 +537,7 @@ it.each(["credential", "selection"] as const)(
           token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
         });
         expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(2);
-        expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
-          { authProfileId: result.authProfileId },
-        ]);
+        await expectLinked(owner, result.authProfileId);
       } finally {
         admission.mockRestore();
       }
