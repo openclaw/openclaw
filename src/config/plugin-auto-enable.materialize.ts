@@ -28,6 +28,8 @@ function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandi
       return `${candidate.channelId} configured`;
     case "provider-auth-configured":
       return `${candidate.providerId} auth configured`;
+    case "provider-endpoint-configured":
+      return `${candidate.providerId} provider endpoint configured`;
     case "provider-model-configured":
       return `${candidate.modelRef} model configured`;
     case "speech-provider-selected":

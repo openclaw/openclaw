@@ -13,6 +13,10 @@ import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-s
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
+import {
+  matchesPluginProviderEndpoint,
+  normalizePluginProviderBaseUrl,
+} from "../plugins/plugin-metadata-provider-facts.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
@@ -82,6 +86,51 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
       return Boolean(provider) && provider === normalized;
     },
   );
+}
+
+/**
+ * Custom provider ids still reach the plugin that declares their native endpoint.
+ * Exact registered provider ids keep precedence, matching runtime hook selection.
+ */
+function resolveConfiguredProviderEndpointCandidates(params: {
+  config: OpenClawConfig;
+  registry: PluginManifestRegistry;
+}): PluginAutoEnableCandidate[] {
+  const providers = asOptionalObjectRecord(params.config.models?.providers);
+  if (!providers) {
+    return [];
+  }
+  const registeredProviderIds = new Set(
+    params.registry.plugins
+      .flatMap((plugin) => [
+        ...(plugin.providers ?? []),
+        ...(plugin.autoEnableWhenConfiguredProviders ?? []),
+      ])
+      .map((providerId) => normalizeProviderId(providerId)),
+  );
+  const candidates: PluginAutoEnableCandidate[] = [];
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (registeredProviderIds.has(normalizeProviderId(providerId))) {
+      continue;
+    }
+    const baseUrl = isRecord(providerConfig) ? providerConfig.baseUrl : undefined;
+    const normalizedBaseUrl =
+      typeof baseUrl === "string" ? normalizePluginProviderBaseUrl(baseUrl) : undefined;
+    if (!normalizedBaseUrl) {
+      continue;
+    }
+    const { hostname: host } = new URL(normalizedBaseUrl);
+    for (const plugin of params.registry.plugins) {
+      if (
+        (plugin.providerEndpoints ?? []).some((endpoint) =>
+          matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl }),
+        )
+      ) {
+        candidates.push({ pluginId: plugin.id, kind: "provider-endpoint-configured", providerId });
+      }
+    }
+  }
+  return candidates;
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
@@ -306,6 +355,8 @@ export function resolveConfiguredPluginAutoEnableCandidates(
       changes.push({ pluginId, kind: "provider-auth-configured", providerId });
     }
   }
+
+  changes.push(...resolveConfiguredProviderEndpointCandidates(params));
 
   const configuredModelPluginIds = new Set<string>();
   for (const modelRef of new Set(

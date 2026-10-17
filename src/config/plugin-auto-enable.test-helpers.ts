@@ -2,6 +2,7 @@ import path from "node:path";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestProviderEndpoint } from "../plugins/manifest-types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 // Provides fixtures for plugin auto-enable config tests.
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
@@ -67,6 +68,7 @@ export function makeRegistry(
       tools?: string[];
     };
     providers?: string[];
+    providerEndpoints?: PluginManifestProviderEndpoint[];
     cliBackends?: string[];
     origin?: PluginOrigin;
     configSchema?: Record<string, unknown>;
@@ -87,6 +89,7 @@ export function makeRegistry(
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
       providers: plugin.providers ?? [],
+      providerEndpoints: plugin.providerEndpoints,
       cliBackends: plugin.cliBackends ?? [],
       skills: [],
       hooks: [],
