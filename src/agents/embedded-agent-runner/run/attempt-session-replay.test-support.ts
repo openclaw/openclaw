@@ -104,9 +104,7 @@ export async function appendOversizedCacheSnapshot(manager: SessionManager) {
   state.replacements.set("prior-result", {
     content: [{ type: "text", text: "x".repeat(64_000) }],
   });
-  await persistToolResultProjections(state, (type, data) =>
-    manager.appendCustomEntryAsync(type, data),
-  );
+  await persistToolResultProjections(state, manager.appendCustomEntryAsync.bind(manager));
 }
 
 export async function withInterruptedTurn(
@@ -268,14 +266,13 @@ export async function withInterruptedTurn(
       userTurnTranscriptRecorder: recorder,
     } as EmbeddedRunAttemptParams;
     const lifecycle = createEmbeddedAttemptTranscriptLifecycle(attempt);
-    const selected = options.selectedOwner ? await loadSessionEntryForAdmission(target) : undefined;
-    const sessionReader =
-      selected && "kind" in selected.databaseClaim && selected.databaseClaim.kind === "worker"
-        ? selected.databaseClaim.reader
-        : undefined;
-    if (selected && !sessionReader) {
-      throw new Error("Replay fixture requires a selected worker reader");
-    }
+    const claim = options.selectedOwner
+      ? (await loadSessionEntryForAdmission(target)).databaseClaim
+      : undefined;
+    assert(
+      !claim || ("kind" in claim && claim.kind === "worker"),
+      "Replay fixture requires a selected worker reader",
+    );
     let active = true;
     const withOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) =>
       withOwnedSessionTranscriptWrites(
@@ -285,13 +282,13 @@ export async function withInterruptedTurn(
             expectedLifecycleRevision: "current-generation",
             expectedWriterRunId: runId,
           },
-          sessionReader,
+          sessionReader: claim?.reader,
           assertCommitAllowed: () => {
             if (!active) {
               throw new Error("original writer closed");
             }
           },
-          withTranscriptWrite: (write) => lifecycle.withTranscriptWrite(write),
+          withTranscriptWrite: lifecycle.withTranscriptWrite,
         },
         async () => await lifecycle.withTranscriptWrite(operation),
       );
@@ -319,7 +316,7 @@ export async function withInterruptedTurn(
     } finally {
       recorder.finishPendingInput!("interrupted");
       await lifecycle.dispose();
-      await selected?.databaseClaim.release();
+      await claim?.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);
     }
   });

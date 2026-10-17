@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -63,8 +64,8 @@ function transcriptMessages(entries: ReturnType<typeof loadTranscriptEventsSync>
 
 function expectCapturedCurrentUserPrefix(
   before: ReturnType<typeof loadTranscriptEventsSync>,
-  after: ReturnType<typeof loadTranscriptEventsSync>,
   fixture: ReplayFixture,
+  after = loadTranscriptEventsSync(fixture.target),
 ) {
   const admission = fixture.attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
   assert(admission, "Expected the replayed current user's admission");
@@ -76,20 +77,15 @@ function expectCapturedCurrentUserPrefix(
     content: fixture.attempt.prompt,
     idempotencyKey: `${fixture.attempt.runId}:user`,
   });
-  // First dispatch records this projection even when the admitted text is unchanged.
-  // Every prior entry and every other field on this exact user remain byte-identical.
-  expect(after.slice(0, before.length)).toEqual(
-    before.with(index, {
-      ...current,
-      message: {
-        ...current.message,
-        __openclaw: {
-          ...(isRecord(current.message["__openclaw"]) ? current.message["__openclaw"] : {}),
-          modelPromptProjection: { version: 1, text: fixture.attempt.prompt },
-        },
-      },
-    }),
-  );
+  // First dispatch adds only this projection; every other persisted field stays unchanged.
+  const message = {
+    ...current.message,
+    __openclaw: {
+      ...(isRecord(current.message["__openclaw"]) ? current.message["__openclaw"] : {}),
+      modelPromptProjection: { version: 1, text: fixture.attempt.prompt },
+    },
+  };
+  expect(after.slice(0, before.length)).toEqual(before.with(index, { ...current, message }));
 }
 
 it("bootstraps the context engine under the admitted user turn's read fence", async () => {
@@ -137,17 +133,13 @@ it("bootstraps the context engine under the admitted user turn's read fence", as
   );
 });
 it.each([
-  { boundary: "same-run progress", sourceReply: { final: false }, resumes: true },
-  { boundary: "same-run final", sourceReply: { final: true }, resumes: false },
-  { boundary: "unmarked mirror", sourceReply: {}, resumes: false },
-  {
-    boundary: "other-run progress",
-    sourceReply: { final: false, runId: "unrelated-run" },
-    resumes: false,
-  },
-])(
-  "resumes only unfinished same-run source replies across $boundary",
-  async ({ sourceReply, resumes }) => {
+  ["same-run progress", { final: false }, true],
+  ["same-run final", { final: true }, false],
+  ["unmarked mirror", {}, false],
+  ["other-run progress", { final: false, runId: "unrelated-run" }, false],
+] as const)(
+  "resumes only unfinished same-run source replies across %s",
+  async (_boundary, sourceReply, resumes) => {
     await withInterruptedTurn(
       false,
       async (fixture) => {
@@ -170,7 +162,7 @@ it.each([
           );
           expect(JSON.stringify(messages)).not.toContain("Still working after restart.");
           const after = loadTranscriptEventsSync(fixture.target);
-          expectCapturedCurrentUserPrefix(before, after, fixture);
+          expectCapturedCurrentUserPrefix(before, fixture, after);
           expect(transcriptMessages(after, "user")).toHaveLength(1);
         });
       },
@@ -258,20 +250,12 @@ it("discards unpersisted assistant mutations before deciding replay", async () =
 });
 
 it.each([
-  { appendOnly: false, interruptedTurn: false },
-  {
-    appendOnly: true,
-    interruptedTurn: true,
-    oversizedMetadata: true,
-  },
-  {
-    appendOnly: true,
-    interruptedTurn: true,
-    partialText: "Already streamed answer",
-  },
-])(
-  "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, oversized metadata=$oversizedMetadata, partial=$partialText)",
-  async ({ appendOnly, interruptedTurn, oversizedMetadata, partialText }) => {
+  [false, false, undefined, undefined],
+  [true, true, true, undefined],
+  [true, true, undefined, "Already streamed answer"],
+] as const)(
+  "replays one user after restart (carrier=%s, abort row=%s, oversized metadata=%s, partial=%s)",
+  async (appendOnly, interruptedTurn, oversizedMetadata, partialText) => {
     let observedWalks = 0;
     const nativeReadFailures: unknown[] = [];
     const prepare = persistedReplay.preparePersistedCurrentUserTurn;
@@ -344,7 +328,7 @@ it.each([
           }
           expect(session.getLastAssistantText()).toBe("Continued from completed work");
           const after = loadTranscriptEventsSync(fixture.target);
-          expectCapturedCurrentUserPrefix(before, after, fixture);
+          expectCapturedCurrentUserPrefix(before, fixture, after);
           if (oversizedMetadata) {
             expect(transcriptMessages(after, "toolResult")).toHaveLength(2);
           }
@@ -380,15 +364,12 @@ it("reports a replayed durable user as persisted when its append is suppressed",
   );
 });
 
-it.each([
-  { appendOnly: false, queue: "steer" },
-  { appendOnly: false, queue: "follow-up" },
-])(
-  "persists the next $queue user after replay with append-only context $appendOnly",
-  async ({ appendOnly, queue }) => {
-    await withInterruptedTurn(appendOnly, async (fixture) => {
+it.each(["steer", "follow-up"])(
+  "persists the next %s user after replay with transient context",
+  async (queue) => {
+    await withInterruptedTurn(false, async (fixture) => {
       const before = loadTranscriptEventsSync(fixture.target);
-      await withReplaySession(fixture, appendOnly, async (session, submit) => {
+      await withReplaySession(fixture, false, async (session, submit) => {
         const queuedText = "A distinct queued user request";
         const recorder =
           queue === "steer"
@@ -414,11 +395,7 @@ it.each([
               JSON.stringify(context.messages).includes(queuedText),
             ),
           ).toBe(true);
-          expectCapturedCurrentUserPrefix(
-            before,
-            loadTranscriptEventsSync(fixture.target),
-            fixture,
-          );
+          expectCapturedCurrentUserPrefix(before, fixture);
           for (const [, context] of streamMocks.streamSimple.mock.calls) {
             expect(currentUsers(context.messages, fixture.attempt.prompt)).toHaveLength(1);
           }
@@ -455,11 +432,7 @@ it("hydrates one current user through the built-in owner without interruption", 
           const users = currentUsers(messages, fixture.attempt.prompt);
           expect(users).toHaveLength(1);
           expect(users[0]?.content).toContainEqual(image);
-          expectCapturedCurrentUserPrefix(
-            before,
-            loadTranscriptEventsSync(fixture.target),
-            fixture,
-          );
+          expectCapturedCurrentUserPrefix(before, fixture);
           expect(
             transcriptMessages(SessionManager.open(fixture.target).getBranch(), "user"),
           ).toHaveLength(1);
@@ -655,17 +628,20 @@ it.each(
   await withInterruptedTurn(false, async (fixture) => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
+    const waitForMutation = async () => {
+      entered.resolve();
+      await release.promise;
+    };
     await withReplaySession(
       fixture,
       false,
       async (_session, submit) => {
         const settled = Promise.allSettled([submit()]);
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          settled.then(() => {
-            throw new Error("Replay settled before the mutation barrier");
-          }),
-        ]);
+          settled,
+          "Replay settled before the mutation barrier",
+        );
         const other = SessionManager.open(fixture.target);
         if (change === "later-user" || change.startsWith("excluded-user")) {
           const laterUser = makeReplayUser("new request", {
@@ -707,18 +683,8 @@ it.each(
         expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
       },
       phase === "SDK hooks"
-        ? {
-            beforeStart: async () => {
-              entered.resolve();
-              await release.promise;
-            },
-          }
-        : {
-            afterReplayPreparation: async () => {
-              entered.resolve();
-              await release.promise;
-            },
-          },
+        ? { beforeStart: waitForMutation }
+        : { afterReplayPreparation: waitForMutation },
     );
   });
 });
