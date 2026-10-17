@@ -53,6 +53,21 @@ function makeEnv() {
   } satisfies Parameters<typeof RunScenario>[0]["env"];
 }
 
+function expectAggregate(error: unknown, ...errors: unknown[]) {
+  expect(error).toBeInstanceOf(AggregateError);
+  if (!(error instanceof AggregateError)) {
+    throw error;
+  }
+  expect(error.errors).toHaveLength(errors.length);
+  errors.forEach((cause, index) => expect(error.errors[index]).toBe(cause));
+  return error;
+}
+
+function track<T>(pending: Promise<T>, tracked: Promise<unknown>[]) {
+  tracked.push(pending.catch((error: unknown) => error));
+  return pending;
+}
+
 beforeEach(() => {
   vi.resetModules();
   launch.mockReset();
@@ -100,32 +115,23 @@ describe("QA web acquisition across the real scenario DSL", () => {
         captures.push(params);
         const runSteps = params.api.runScenario;
         const open = params.api.webOpenPage as ReturnType<typeof web.createQaWebPageOpener>;
-        return actualFlow.runScenarioFlow({
-          ...params,
-          api: {
-            ...params.api,
-            webOpenPage: (input: Parameters<typeof open>[0]) => {
-              const opening = open(input).then((page) => {
-                fulfilled(params, page);
-                return page;
-              });
-              openings.push(opening.catch((error: unknown) => error));
-              return opening;
-            },
-            runScenario: (name, steps) =>
-              runSteps(
-                name,
-                steps.map((step) => ({
-                  ...step,
-                  run: () => {
-                    const pending = step.run();
-                    rawSteps.push(pending.catch((error: unknown) => error));
-                    return pending;
-                  },
-                })),
-              ),
-          },
-        });
+        params.api.webOpenPage = (input: Parameters<typeof open>[0]) =>
+          track(
+            open(input).then((page) => {
+              fulfilled(params, page);
+              return page;
+            }),
+            openings,
+          );
+        params.api.runScenario = (name, steps) =>
+          runSteps(
+            name,
+            steps.map((step) => ({
+              ...step,
+              run: () => track(step.run(), rawSteps),
+            })),
+          );
+        return actualFlow.runScenarioFlow(params);
       });
       const scenario = makeQaSuiteTestScenario("web-deadline-ownership", { config: {} });
       if (scenario.execution.kind !== "flow") {
@@ -161,20 +167,20 @@ describe("QA web acquisition across the real scenario DSL", () => {
         ],
       };
       const runs: Promise<unknown>[] = [];
-      const runAttempt = (nextScenario = scenario) => {
-        const run = runtime.runQaSuiteScenarioDefinition({
-          env,
-          scenario: nextScenario,
-          runScenario: runtime.runQaSuiteScenarioSteps,
-          constants: {
-            imageUnderstandingPngBase64: "small",
-            imageUnderstandingLargePngBase64: "large",
-            imageUnderstandingValidPngBase64: "valid",
-          },
-        });
-        runs.push(run);
-        return run;
-      };
+      const runAttempt = (nextScenario = scenario) =>
+        track(
+          runtime.runQaSuiteScenarioDefinition({
+            env,
+            scenario: nextScenario,
+            runScenario: runtime.runQaSuiteScenarioSteps,
+            constants: {
+              imageUnderstandingPngBase64: "small",
+              imageUnderstandingLargePngBase64: "large",
+              imageUnderstandingValidPngBase64: "valid",
+            },
+          }),
+          runs,
+        );
 
       vi.useFakeTimers();
       try {
@@ -200,15 +206,9 @@ describe("QA web acquisition across the real scenario DSL", () => {
         const reason = captures[0]?.api.signal?.reason;
         expect(reason).toBeInstanceOf(Error);
         expect(reason).toHaveProperty("message", "QA scenario flow timed out after 30ms");
-        const failedOpen = await openings[0];
-        expect(failedOpen).toBeInstanceOf(AggregateError);
+        const failedOpen = expectAggregate(await openings[0], reason, contextError);
         await expect(rawSteps[0]).resolves.toBe(failedOpen);
-        if (!(failedOpen instanceof AggregateError)) {
-          throw failedOpen;
-        }
         expect(failedOpen.cause).toBe(reason);
-        expect(failedOpen.errors[0]).toBe(reason);
-        expect(failedOpen.errors[1]).toBe(contextError);
         expect(fulfilled.mock.calls.some(([params]) => params === captures[0])).toBe(false);
         expect(captures[0]?.vars).not.toHaveProperty("normalPage");
         expect(captures[0]?.vars).not.toHaveProperty("laterAction");
@@ -229,13 +229,7 @@ describe("QA web acquisition across the real scenario DSL", () => {
           { phase: "gateway", run: stopGateway },
         ]);
         expect(failures).toMatchObject([{ phase: "web sessions" }]);
-        const cleanupError = failures[0]?.error;
-        expect(cleanupError).toBeInstanceOf(AggregateError);
-        if (!(cleanupError instanceof AggregateError)) {
-          throw cleanupError;
-        }
-        expect(cleanupError.errors).toHaveLength(1);
-        expect(cleanupError.errors[0]).toBe(contextError);
+        expectAggregate(failures[0]?.error, contextError);
         expect(env.webSessionIds.size).toBe(1);
         expect(finishTransport).toHaveBeenCalledOnce();
         expect(stopGateway).toHaveBeenCalledOnce();
