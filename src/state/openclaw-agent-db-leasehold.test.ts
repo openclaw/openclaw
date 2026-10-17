@@ -44,6 +44,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
                 ...options,
                 workerData: {
                   ...options.workerData,
+                  fixtureEntrypoint: String(filename),
                   fixtureNow: heartbeat.now,
                   fixtureCompletion: completion!.buffer,
                 },

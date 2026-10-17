@@ -24,4 +24,4 @@ on("message", (message) => {
   Atomics.notify(completion, 0);
 });
 
-await import("./openclaw-state-lease-heartbeat.worker.ts");
+await import(workerData.fixtureEntrypoint);
