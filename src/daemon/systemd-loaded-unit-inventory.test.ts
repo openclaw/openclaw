@@ -25,16 +25,26 @@ const success = (stdout: string): ExecResult => ({
   stdout,
   stderr: "",
 });
+const execStart =
+  "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }";
+const buses = {
+  DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus",
+  DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/system-bus",
+};
+const unitProperties = (name: string, fragmentPath: string) =>
+  `Id=${name}\nFragmentPath=${fragmentPath}\nExecStart=${execStart}\nActiveState=active\n`;
+const listEntry = (name: string) => success(`${name} loaded active running Gateway\n`);
 
 function withFixture(work: (home: string) => Promise<void>) {
   return withTestDir({ prefix: "openclaw-loaded-unit-" }, async (home) => {
-    try {
-      await work(home);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    userctl.mockResolvedValue(success(""));
+    systemctl.mockResolvedValue(success(""));
+    vi.spyOn(fs, "readdir").mockResolvedValue([]);
+    await work(home).finally(() => vi.restoreAllMocks());
   });
 }
+const withLinuxFixture = (work: (home: string) => Promise<void>) =>
+  withMockedPlatform("linux", () => withFixture(work));
 const publication = (root: string, env: Record<string, string>) =>
   assertManagedGatewayArtifactPublication({
     roots: [root],
@@ -53,19 +63,17 @@ beforeEach(() => {
 it.each([false, true])("inspects removed system units (partial=%s)", async (partial) => {
   const name = "custom-rescue.service";
   const fragmentPath = "/etc/systemd/system/custom-rescue.service";
-  const execStart =
-    "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }";
   systemctl.mockImplementation(async (args) =>
     args.includes("list-units")
-      ? success(`${name} loaded active running custom Gateway\n`)
+      ? listEntry(name)
       : success(
           partial
             ? "Id=unrelated.service\nFragmentPath=\nActiveState=active\n"
-            : `Id=${name}\nFragmentPath=${fragmentPath}\nExecStart=${execStart}\nActiveState=active\n`,
+            : unitProperties(name, fragmentPath),
         ),
   );
   const inventory = listLoadedSystemdUnits("system", {
-    DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus",
+    DBUS_SYSTEM_BUS_ADDRESS: buses.DBUS_SYSTEM_BUS_ADDRESS,
   });
   if (partial) {
     await expect(inventory).rejects.toThrow("properties could not be inspected");
@@ -83,127 +91,97 @@ it.each(
     [false, true].map((uncertain) => ({ scope, uncertain })),
   ),
 )("preserves cleanup custody: $scope uncertain=$uncertain", ({ scope, uncertain }) =>
-  withMockedPlatform("linux", () =>
-    withFixture(async (home) => {
-      const failure = uncertain
-        ? new CommandProcessCleanupError()
-        : new Error("Synthetic service inventory unavailable");
-      userctl.mockResolvedValue(success(""));
-      systemctl.mockResolvedValue(success(""));
-      const native = scope === "user" ? userctl : systemctl;
-      native.mockRejectedValue(failure);
-      vi.spyOn(fs, "readdir").mockResolvedValue([]);
-      const publishing = publication(home, {
-        HOME: home,
-        DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus",
-        DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/system-bus",
-      });
-      if (uncertain) {
-        await expect(publishing).rejects.toBe(failure);
-      } else {
-        await expect(publishing).resolves.toBeUndefined();
-      }
-      expect(native).toHaveBeenCalled();
-    }),
-  ),
+  withLinuxFixture(async (home) => {
+    const failure = uncertain
+      ? new CommandProcessCleanupError()
+      : new Error("Synthetic service inventory unavailable");
+    const native = scope === "user" ? userctl : systemctl;
+    native.mockRejectedValue(failure);
+    const publishing = publication(home, { HOME: home, ...buses });
+    if (uncertain) {
+      await expect(publishing).rejects.toBe(failure);
+    } else {
+      await expect(publishing).resolves.toBeUndefined();
+    }
+    expect(native).toHaveBeenCalled();
+  }),
 );
 
-it.skipIf(process.platform !== "linux")(
-  "binds running custom-profile Gateways with removed unit files",
-  async () => {
-    await withFixture(async (home) => {
-      const name = "openclaw-gateway-rescue.service";
-      const removedPath = path.join(home, name);
-      const execStart =
-        "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }";
-      userctl.mockImplementation(async (_env, args) =>
-        args.includes("list-units")
-          ? success(`${name} loaded active running Gateway\n`)
-          : success(
-              `Id=${name}\nFragmentPath=${removedPath}\nExecStart=${execStart}\nActiveState=active\n`,
-            ),
-      );
-      systemctl.mockResolvedValue(success(""));
-      vi.spyOn(fs, "readdir").mockResolvedValue([]);
-      const env = {
-        HOME: home,
-        XDG_CONFIG_HOME: home,
-        XDG_DATA_HOME: home,
-        XDG_CONFIG_DIRS: home,
-        XDG_DATA_DIRS: home,
-        XDG_RUNTIME_DIR: home,
-        DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus",
-        DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/system-bus",
-      };
-      expect(await listLoadedSystemdUnits("user", env)).toEqual([
-        { name, fragmentPath: removedPath, execStart },
-      ]);
-      const inventory = await listManagedOpenClawGatewayServices(env, { requireComplete: true });
-      expect(inventory.errors).toEqual([]);
-      expect(inventory.services).toEqual([
-        expect.objectContaining({
-          label: name,
-          detail: `unit: ${removedPath}`,
-          scope: "user",
-        }),
-      ]);
-      const bindings = await discoverManagedGatewayBindings(env, { requireComplete: true });
-      expect(bindings).toEqual([
-        expect.objectContaining({
-          env: expect.objectContaining({ OPENCLAW_SYSTEMD_UNIT: name }),
-          systemdReadTarget: { scope: "user", unitName: name, unitPath: removedPath },
-        }),
-      ]);
-      const checkout = path.join(home, "checkout");
-      await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
-      await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
-      await fs.writeFile(path.join(checkout, "dist/index.js"), "gateway\n");
-      const command = {
-        programArguments: [process.execPath, path.join(checkout, "dist/index.js"), "gateway"],
-        sourcePath: removedPath,
-      };
-      vi.spyOn(systemdServiceFiles, "readSystemdServiceCommandLocation").mockImplementation(
-        async (_env, target) =>
-          target?.unitName === name ? { kind: "command", command } : { kind: "not-loaded" },
-      );
-      vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-        installed: true,
-        loadState: { status: "loaded" },
-        running: true,
-        env: {},
-        command,
-      } satisfies GatewayServiceState);
-      const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("unexpected write"));
-      await expect(
-        resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
-      ).resolves.toMatchObject({ refuse: true });
-      await expect(publication(checkout, env)).rejects.toThrow(
-        `another managed Gateway (systemd user unit ${JSON.stringify(name)})`,
-      );
-      expect(writes).not.toHaveBeenCalled();
+it.skipIf(process.platform !== "linux")("binds removed custom-profile units", () =>
+  withFixture(async (home) => {
+    const name = "openclaw-gateway-rescue.service";
+    const removedPath = path.join(home, name);
+    userctl.mockImplementation(async (_env, args) =>
+      args.includes("list-units") ? listEntry(name) : success(unitProperties(name, removedPath)),
+    );
+    const env = {
+      HOME: home,
+      XDG_CONFIG_HOME: home,
+      XDG_DATA_HOME: home,
+      XDG_CONFIG_DIRS: home,
+      XDG_DATA_DIRS: home,
+      XDG_RUNTIME_DIR: home,
+      ...buses,
+    };
+    expect(await listLoadedSystemdUnits("user", env)).toEqual([
+      { name, fragmentPath: removedPath, execStart },
+    ]);
+    const inventory = await listManagedOpenClawGatewayServices(env, { requireComplete: true });
+    expect(inventory).toMatchObject({
+      errors: [],
+      services: [{ label: name, detail: `unit: ${removedPath}`, scope: "user" }],
     });
-  },
+    expect(await discoverManagedGatewayBindings(env, { requireComplete: true })).toEqual([
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_SYSTEMD_UNIT: name }),
+        systemdReadTarget: { scope: "user", unitName: name, unitPath: removedPath },
+      }),
+    ]);
+    const checkout = path.join(home, "checkout");
+    await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
+    await fs.writeFile(path.join(checkout, "dist/index.js"), "gateway\n");
+    const command = {
+      programArguments: [process.execPath, path.join(checkout, "dist/index.js"), "gateway"],
+      sourcePath: removedPath,
+    };
+    vi.spyOn(systemdServiceFiles, "readSystemdServiceCommandLocation").mockImplementation(
+      async (_env, target) =>
+        target?.unitName === name ? { kind: "command", command } : { kind: "not-loaded" },
+    );
+    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: true,
+      env: {},
+      command,
+    } satisfies GatewayServiceState);
+    const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("unexpected write"));
+    await expect(
+      resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
+    ).resolves.toMatchObject({ refuse: true });
+    await expect(publication(checkout, env)).rejects.toThrow(
+      `another managed Gateway (systemd user unit ${JSON.stringify(name)})`,
+    );
+    expect(writes).not.toHaveBeenCalled();
+  }),
 );
 
-// Manager socket absence is native evidence, while an advertised but unreadable
-// manager must continue to fence test builds. No service lifecycle calls occur.
 it.each([false, true])("fences possible managers (present=%s)", (present) =>
-  withMockedPlatform("linux", () =>
-    withFixture(async (home) => {
-      vi.spyOn(fs, "lstat").mockRejectedValue(
-        Object.assign(new Error("Synthetic path absent"), { code: "ENOENT" }),
-      );
-      vi.spyOn(fs, "readdir").mockResolvedValue([]);
-      userctl.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
-      systemctl.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
-      const env = {
-        HOME: home,
-        XDG_RUNTIME_DIR: home,
-        ...(present ? { DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus" } : {}),
-      };
-      await expect(
-        resolveLiveManagedGatewayDistFence(home, { env, requireVerified: true }),
-      ).resolves.toMatchObject({ refuse: present });
-    }),
-  ),
+  withLinuxFixture(async (home) => {
+    vi.spyOn(fs, "lstat").mockRejectedValue(
+      Object.assign(new Error("Synthetic path absent"), { code: "ENOENT" }),
+    );
+    for (const native of [userctl, systemctl]) {
+      native.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
+    }
+    const env = {
+      HOME: home,
+      XDG_RUNTIME_DIR: home,
+      ...(present ? { DBUS_SESSION_BUS_ADDRESS: buses.DBUS_SESSION_BUS_ADDRESS } : {}),
+    };
+    await expect(
+      resolveLiveManagedGatewayDistFence(home, { env, requireVerified: true }),
+    ).resolves.toMatchObject({ refuse: present });
+  }),
 );

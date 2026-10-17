@@ -44,7 +44,7 @@ const result = (stdout = "", code = 0, stderr = "", termination: "exit" | "signa
   stderr,
   termination,
 });
-async function createInstallFixture() {
+async function createInstallFixture(absentInput = false) {
   const root = temporary.make("openclaw-systemd-rollback-");
   const env = {
     HOME: root,
@@ -69,12 +69,40 @@ async function createInstallFixture() {
     environment: { SERVICE_VALUE: "candidate" },
     environmentValueSources: { SERVICE_VALUE: "file" as const },
   };
+  if (absentInput) {
+    await fs.rm(environment);
+  }
   return { env, unit, environment, originals, installArgs };
 }
 
+function authority() {
+  let current = true;
+  return {
+    revoke() {
+      current = false;
+      assertGatewayServiceUpdateCurrent();
+    },
+    run<T>(operation: () => Promise<T>) {
+      return withGatewayServiceUpdateAuthority(
+        () => {
+          if (!current) {
+            throw new Error("Doctor custody revoked");
+          }
+        },
+        operation,
+        { updateOwned: false, assertRecoveryCurrent: () => {} },
+      );
+    },
+  };
+}
+function expectText(text: string, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).toContain(part);
+  }
+}
+
 it.each([false, true])("retains concurrent unit inputs (replacement=%s)", async (replacement) => {
-  const { unit, environment, installArgs } = await createInstallFixture();
-  await fs.rm(environment);
+  const { unit, environment, installArgs } = await createInstallFixture(true);
   const rename = fs.rename.bind(fs);
   let edited = false;
   vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
@@ -91,19 +119,16 @@ it.each([false, true])("retains concurrent unit inputs (replacement=%s)", async 
   });
 
   await expect(stageSystemdService(installArgs)).rejects.toThrow("changed during publication");
-  expect(await read(unit)).toContain("# concurrent edit");
-  expect(await read(unit)).toContain(environment);
+  expectText(await read(unit), "# concurrent edit", environment);
   expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
 });
 
 it.each(["success", "failure", "interruption"] as const)(
   "retains cached inputs until rollback reload (%s)",
   async (reload) => {
-    const { unit, environment, originals, installArgs } = await createInstallFixture();
-    await fs.rm(environment);
+    const { unit, environment, originals, installArgs } = await createInstallFixture(true);
     let cachedUnit = originals.get(unit)!;
     let activationFailed = false;
-    let restoredReload = false;
     let inputPresentAtReload = false;
     const warnings: string[] = [];
     native.active.mockResolvedValue({ ok: true, value: true });
@@ -117,14 +142,8 @@ it.each(["success", "failure", "interruption"] as const)(
             () => false,
           );
           if (reload !== "success") {
-            return result(
-              "",
-              1,
-              `rollback reload ${reload}`,
-              reload === "failure" ? "exit" : "signal",
-            );
+            return result("", 1, `reload ${reload}`, reload === "failure" ? "exit" : "signal");
           }
-          restoredReload = true;
         }
         cachedUnit = diskUnit;
       }
@@ -143,23 +162,19 @@ it.each(["success", "failure", "interruption"] as const)(
     expect(await read(unit)).toBe(originals.get(unit));
     expect(inputPresentAtReload).toBe(true);
     if (reload === "success") {
-      expect(restoredReload).toBe(true);
       expect(cachedUnit).toBe(originals.get(unit));
       await expect(fs.stat(environment)).rejects.toMatchObject({ code: "ENOENT" });
       expect(warnings).toEqual([]);
     } else {
       expect(cachedUnit).toContain(environment);
       expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
-      expect(warnings.join("\n")).toContain("retained");
-      expect(warnings.join("\n")).toContain(environment);
-      expect(warnings.join("\n")).toContain("Retry");
+      expectText(warnings.join("\n"), "retained", environment, "Retry");
     }
   },
 );
 
 it("retries rollback reload before retiring inputs", async () => {
-  const { env, unit, environment, originals } = await createInstallFixture();
-  await fs.rm(environment);
+  const { env, unit, environment, originals } = await createInstallFixture(true);
   const warnings: string[] = [];
   await withSystemdDefinitionMutation(
     env,
@@ -197,11 +212,7 @@ it.each([
   let enabled = prior.enabled;
   let running = prior.running;
   let failed = false;
-  let current = true;
-  const revoke = () => {
-    current = false;
-    assertGatewayServiceUpdateCurrent();
-  };
+  const { revoke, run } = authority();
   if (prior.failure === "availability-read") {
     native.available.mockImplementationOnce(async () => revoke());
   }
@@ -241,15 +252,7 @@ it.each([
     }
     return result(stdout);
   });
-  const installation = withGatewayServiceUpdateAuthority(
-    () => {
-      if (!current) {
-        throw new Error("Doctor custody revoked during service preparation");
-      }
-    },
-    () => installSystemdService(installArgs),
-    { updateOwned: false, assertRecoveryCurrent: () => {} },
-  );
+  const installation = run(() => installSystemdService(installArgs));
   if (prior.failure === "activation") {
     await expect(installation).rejects.toThrow("candidate failed");
   } else {
@@ -270,11 +273,7 @@ it.each(["publication", "activation"])(
   "leaves %s recovery to the definition transaction",
   async (failure) => {
     const { unit, environment, originals, installArgs } = await createInstallFixture();
-    let current = true;
-    const revoke = () => {
-      current = false;
-      assertGatewayServiceUpdateCurrent();
-    };
+    const { revoke, run } = authority();
     native.exec.mockImplementation(async (_env, args) => {
       assertGatewayServiceUpdateCurrent();
       if (failure === "activation" && args[0] === "restart") {
@@ -285,36 +284,28 @@ it.each(["publication", "activation"])(
     const check = async () => {
       assertGatewayServiceUpdateCurrent();
     };
-    const installation = withGatewayServiceUpdateAuthority(
-      () => {
-        if (!current) {
-          throw new Error("Doctor custody revoked during transaction-owned installation");
-        }
-      },
-      () =>
-        installSystemdService({
-          ...installArgs,
-          definitionTransaction: {
-            assertCurrent: assertGatewayServiceUpdateCurrent,
-            beforeWrite: check,
-            filePrepared: check,
-            fileWritten: async (file) => {
-              if (failure === "publication" && file === unit) {
-                revoke();
-              }
-              await check();
-            },
-            taskPrepared: check,
-            taskWritten: check,
+    const installation = run(() =>
+      installSystemdService({
+        ...installArgs,
+        definitionTransaction: {
+          assertCurrent: assertGatewayServiceUpdateCurrent,
+          beforeWrite: check,
+          filePrepared: check,
+          fileWritten: async (file) => {
+            if (failure === "publication" && file === unit) {
+              revoke();
+            }
+            await check();
           },
-        }),
-      { updateOwned: false, assertRecoveryCurrent: () => {} },
+          taskPrepared: check,
+          taskWritten: check,
+        },
+      }),
     );
     await expect(installation).rejects.toMatchObject({
       code: "service-authority-revoked",
       outcome: undefined,
     });
-    // The central receipt owner must restore these together in its own order.
     expect(await read(unit)).toContain("/prefix-b/");
     expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
     expect(await read(`${unit}.bak`)).toBe(originals.get(unit));

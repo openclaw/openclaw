@@ -32,8 +32,17 @@ const env = {
   XDG_RUNTIME_DIR: "/custom/runtime",
   DBUS_SESSION_BUS_ADDRESS: "unix:path=/custom/bus",
 };
-const admit = (selected = env) =>
+const admit = (selected: Parameters<typeof admitSystemdServiceReadBinding>[0] = env) =>
   admitSystemdServiceReadBinding(selected, performance.now() + 1000);
+const broker = () => ({ query, close: closeBroker, verify: () => {} });
+function replies(...values: (string | number)[]) {
+  for (const value of values) {
+    query.mockResolvedValueOnce([[value]]);
+  }
+}
+function expectBroker(address = env.DBUS_SESSION_BUS_ADDRESS) {
+  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(address, expect.any(Number));
+}
 function expectNoPeer() {
   expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
   expect(closeBroker).toHaveBeenCalledOnce();
@@ -57,12 +66,8 @@ beforeEach(() => {
   query.mockImplementation(async (args) => [
     [args[4] === "GetNameOwner" ? ":1.0" : args[4] === "GetConnectionUnixUser" ? 1000 : 1234],
   ]);
-  vi.mocked(openSystemdBroker).mockResolvedValue({ query, close: closeBroker, verify: () => {} });
-  vi.mocked(openSystemdPrivatePeer).mockResolvedValue({
-    query,
-    close: closePeer,
-    verify: () => {},
-  });
+  vi.mocked(openSystemdBroker).mockResolvedValue(broker());
+  vi.mocked(openSystemdPrivatePeer).mockResolvedValue({ ...broker(), close: closePeer });
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -75,17 +80,11 @@ it("pins the broker despite ambient selector changes", async () => {
   vi.mocked(openSystemdBroker).mockImplementation(async () => {
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/other/bus");
     vi.stubEnv("XDG_RUNTIME_DIR", "/other/runtime");
-    return { query, close: closeBroker, verify: () => {} };
+    return broker();
   });
-  const binding = await admitSystemdServiceReadBinding(
-    { HOME: env.HOME },
-    performance.now() + 1000,
-  );
+  const binding = await admit({ HOME: env.HOME });
   expect(binding).toBeDefined();
-  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
-    env.DBUS_SESSION_BUS_ADDRESS,
-    expect.any(Number),
-  );
+  expectBroker();
   expect(openSystemdPrivatePeer).toHaveBeenCalledWith(
     "unix:path=/custom/runtime/systemd/private",
     { uid: 1000, pid: 1234, startTime: 100 },
@@ -121,10 +120,7 @@ it("replaces stale shell addresses with the runtime bus", async () => {
     XDG_RUNTIME_DIR: runtime,
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/dbus-stale",
   });
-  expect(openSystemdBroker).toHaveBeenCalledExactlyOnceWith(
-    `unix:path=${path.posix.join(runtime, "bus").replaceAll(",", "%2C")}`,
-    expect.any(Number),
-  );
+  expectBroker(`unix:path=${path.posix.join(runtime, "bus").replaceAll(",", "%2C")}`);
   expect(binding).toBeDefined();
   await binding?.close();
 });
@@ -153,41 +149,25 @@ it("refuses broker loss between credential observations without reconnecting", a
   expectNoPeer();
 });
 
-it("closes the peer when the manager changes during admission", async () => {
-  query
-    .mockResolvedValueOnce([[":1.0"]])
-    .mockResolvedValueOnce([[1000]])
-    .mockResolvedValueOnce([[1234]])
-    .mockResolvedValueOnce([[":1.1"]]);
+it.each([
+  { changed: "account", values: [":1.0", 2001] },
+  { changed: "process", values: [":1.0", 1000, 1234, ":1.0", 4321] },
+  { changed: "manager", values: [":1.0", 1000, 1234, ":1.1"] },
+  { changed: "native peer", values: [] },
+])("preserves $changed refusal without fallback", async ({ changed, values }) => {
+  replies(...values);
+  if (changed === "native peer") {
+    vi.mocked(openSystemdPrivatePeer).mockRejectedValueOnce(
+      new ServiceOwnershipRefusalError("systemd-manager-changed"),
+    );
+  }
   await expect(admit()).rejects.toMatchObject({ reason: "systemd-manager-changed" });
-  expect(closePeer).toHaveBeenCalledOnce();
+  if (changed === "manager") {
+    expect(closePeer).toHaveBeenCalledOnce();
+  }
+  expect(openSystemdBroker).toHaveBeenCalledOnce();
   expect(closeBroker).toHaveBeenCalledOnce();
 });
-
-it.each(["account", "process", "native peer"])(
-  "preserves %s refusal without fallback",
-  async (changed) => {
-    if (changed === "account") {
-      query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[2001]]);
-    } else if (changed === "process") {
-      query
-        .mockResolvedValueOnce([[":1.0"]])
-        .mockResolvedValueOnce([[1000]])
-        .mockResolvedValueOnce([[1234]])
-        .mockResolvedValueOnce([[":1.0"]])
-        .mockResolvedValueOnce([[4321]]);
-    } else {
-      vi.mocked(openSystemdPrivatePeer).mockRejectedValueOnce(
-        new ServiceOwnershipRefusalError("systemd-manager-changed"),
-      );
-    }
-    await expect(admit()).rejects.toMatchObject({
-      reason: "systemd-manager-changed",
-    });
-    expect(openSystemdBroker).toHaveBeenCalledOnce();
-    expect(closeBroker).toHaveBeenCalledOnce();
-  },
-);
 
 it.each([null, -1, 0xffffffff, 1000.5, "1000"])(
   "keeps malformed manager UID %j diagnostic",
