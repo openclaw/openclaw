@@ -83,7 +83,7 @@ describe("chat transcript invalidation", () => {
       } finally {
         setCurrentThemeBranding(previousBranding);
         render(null, container);
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -136,13 +136,13 @@ describe("chat transcript invalidation", () => {
       const rerender = () => {
         render(renderTranscriptSearch(paneId, rerender), searchContainer);
         render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       const ownName = () =>
         container.querySelector(".chat-group.user:not(.chat-group--peer) .chat-sender-name");
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         expect(container.textContent).toContain(ownMessage.content);
         expect(ownName()).toBeNull();
@@ -186,7 +186,7 @@ describe("chat transcript invalidation", () => {
         expect(container.textContent).not.toContain(peerMessage.content);
         expect(ownName()?.textContent).toBe("Alex");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -236,15 +236,15 @@ describe("chat transcript invalidation", () => {
       };
       container = document.body.appendChild(document.createElement("div"));
       transcript = createTestTranscript();
-      transcript.hostConnected();
+      transcript.start();
     });
     afterEach(() => {
       render(null, container);
-      transcript.hostDisconnected();
+      transcript.dispose();
     });
     async function renderPreview() {
       render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
+      transcript.update();
       await flushDeferredRowPrune();
     }
 
@@ -441,12 +441,12 @@ describe("chat transcript invalidation", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         const finalBubble = expectDefined(
           container.querySelector('[data-entry-id="settled-final"]'),
@@ -479,7 +479,7 @@ describe("chat transcript invalidation", () => {
           [],
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -548,11 +548,11 @@ describe("chat transcript invalidation", () => {
     const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
     const rerender = () => {
       render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
+      transcript.update();
     };
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       await flushDeferredRowPrune();
       expect(container.textContent).toContain("Received · waiting for worker setup");
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
@@ -579,7 +579,7 @@ describe("chat transcript invalidation", () => {
       expect(container.textContent).not.toContain("Received · waiting for worker setup");
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -650,12 +650,12 @@ describe("chat transcript invalidation", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const rerender = () => {
       render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
+      transcript.update();
     };
     props.onRequestUpdate = rerender;
     rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
     expect(container.querySelector("img.chat-message-image")).not.toBeNull();
 
@@ -674,7 +674,7 @@ describe("chat transcript invalidation", () => {
     }
     expect(fetchMock).toHaveBeenCalledTimes(4);
     releaseChatMediaResourceSubscriber(rerender);
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
 
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
@@ -737,14 +737,14 @@ describe("chat transcript invalidation", () => {
         ),
         container,
       );
-      transcript.hostUpdated();
+      transcript.update();
     };
     state.requestUpdate = renderPane;
     vi.spyOn(pane.chatState, "requestBackgroundUpdate").mockImplementation(renderPane);
 
     renderPane();
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -773,7 +773,7 @@ describe("chat transcript invalidation", () => {
     expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
 
     releaseChatMediaResourceSubscriber(renderPane);
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
 
   it("updates MCP App pinning when the same provider's capability changes", async () => {
@@ -830,13 +830,13 @@ describe("chat transcript invalidation", () => {
     );
     onTestFinished(() => {
       render(null, container);
-      transcript.hostDisconnected();
+      transcript.dispose();
       container.remove();
     });
 
     render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
 
     expect(container.querySelector('[data-content-kind="mcp-app"]')).not.toBeNull();
@@ -844,14 +844,14 @@ describe("chat transcript invalidation", () => {
 
     provider.canPinMcpApps = true;
     render(renderChatThread(props, transcript), container);
-    transcript.hostUpdated();
+    transcript.update();
 
     expect(container.querySelector("[data-pin-widget]")).not.toBeNull();
     expect(provider.snapshot$.value.revision).toBe(1);
 
     provider.canPinMcpApps = false;
     render(renderChatThread(props, transcript), container);
-    transcript.hostUpdated();
+    transcript.update();
 
     expect(container.querySelector("[data-pin-widget]")).toBeNull();
     expect(provider.snapshot$.value.revision).toBe(1);
@@ -953,15 +953,15 @@ describe("chat transcript invalidation", () => {
       anchorToEnd: false,
     });
     const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
-    onTestFinished(() => toolVisibilityController.hostDisconnected());
+    onTestFinished(() => toolVisibilityController.dispose());
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
     const renderToolVisibility = async (next = toolVisibilityProps) => {
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);
-      toolVisibilityController.hostUpdated();
+      toolVisibilityController.update();
       await settleToolBridges(toolVisibilityPane);
     };
     await renderToolVisibility();
-    toolVisibilityController.hostConnected();
+    toolVisibilityController.start();
     const visibilityState = getExpandedToolCards(toolVisibilitySession);
     const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
     const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");

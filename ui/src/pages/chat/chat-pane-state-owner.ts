@@ -107,9 +107,7 @@ export abstract class ChatPaneStateOwner {
       // live textarea while visibility change can still reach browser storage.
       state.handleChatDraftChange(liveDraft);
     }
-    if (draftChanged || state.chatStreamRenderFrame != null) {
-      requestChatPageUpdate(state);
-    }
+    requestChatPageUpdate(state);
   };
   start() {
     if (this.chatState.disposed) {
@@ -121,10 +119,12 @@ export abstract class ChatPaneStateOwner {
     this.isConnected = true;
     this.transcript.start();
     this.refreshBoardSubscriptions();
+    // Focus ownership hands off draft persistence synchronously, before another input event.
     this.chatState.addCleanup(
       chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
     );
     this.activeChanged(this.active);
+    // Approval publications reconcile live request ownership even when rendering is parked.
     this.chatState.addCleanup(
       this.context.overlays?.subscribe((snapshot) => {
         if (this.state) {
@@ -133,6 +133,7 @@ export abstract class ChatPaneStateOwner {
         this.invalidate();
       }) ?? (() => {}),
     );
+    // Configuration publications reconcile the scoped swarm hydrator outside rendering.
     this.chatState.addCleanup(
       this.context.runtimeConfig?.subscribe(() => {
         this.refreshSwarmRoster();
@@ -614,7 +615,7 @@ export abstract class ChatPaneStateOwner {
     public context: ApplicationContext,
   ) {}
 
-  private subscribedBoardProvider: BoardProvider | undefined;
+  subscribedBoardProvider: BoardProvider | undefined;
   private stopBoardSubscriptions: (() => void) | undefined;
 
   refreshBoardSubscriptions(): void {
@@ -627,14 +628,10 @@ export abstract class ChatPaneStateOwner {
     }
     this.stopBoardSubscriptions?.();
     this.subscribedBoardProvider = provider;
-    const stopSnapshot = provider.snapshot$.subscribe(this.invalidate);
-    const stopError = provider.loadError$.subscribe(this.invalidate);
-    const stopEvents = provider.events.subscribe((event) => this.handleBoardCommand(event));
-    this.stopBoardSubscriptions = () => {
-      stopSnapshot();
-      stopError();
-      stopEvents();
-    };
+    // Commands must reach the synchronous pane owner in order, including while parked.
+    this.stopBoardSubscriptions = provider.events.subscribe((event) =>
+      this.handleBoardCommand(event),
+    );
   }
 
   protected abstract refreshSessionPullRequests(options?: {

@@ -101,8 +101,8 @@ describe("chat transcript replies", () => {
       ]);
       props.replyMessageAccess = { revision: 0, navigationId: null, read: () => undefined, open };
       render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       await flushDeferredRowPrune();
 
       const preview = container.querySelector<HTMLButtonElement>(
@@ -141,10 +141,10 @@ describe("chat transcript replies", () => {
         preview?.click();
         await Promise.resolve();
         await commitReplyLayout();
-        transcript.hostDisconnected();
+        transcript.dispose();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },
@@ -176,11 +176,11 @@ describe("chat transcript replies", () => {
       };
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
 
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
@@ -199,7 +199,7 @@ describe("chat transcript replies", () => {
         preview?.click();
         expect(open).toHaveBeenCalledWith("source-message");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -222,11 +222,11 @@ describe("chat transcript replies", () => {
       };
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         const viewport = requireElement(container, ".chat-thread");
         viewport.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
@@ -264,7 +264,7 @@ describe("chat transcript replies", () => {
           "The original answer",
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -292,8 +292,8 @@ describe("chat transcript replies", () => {
       Object.assign(getTranscriptState(props.paneId), { searchOpen: true, searchQuery });
     }
     render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
     try {
       const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map(
@@ -303,7 +303,7 @@ describe("chat transcript replies", () => {
       expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
       return strips;
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   }
 
@@ -503,12 +503,12 @@ describe("chat transcript replies", () => {
         renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
         threadContainer,
       );
-      transcript.hostUpdated();
+      transcript.update();
     };
     try {
       toggleTranscriptSearch(paneId, requestUpdate);
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       const input = requireElement(searchContainer, "input") as HTMLInputElement;
       input.value = "Follow up";
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -531,7 +531,7 @@ describe("chat transcript replies", () => {
         expect(open).toHaveBeenCalledWith(sourceId);
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       vi.useRealTimers();
     }
   });
@@ -587,7 +587,7 @@ describe("chat transcript replies", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       const attribution = () =>
         expectDefined(
@@ -600,7 +600,7 @@ describe("chat transcript replies", () => {
       const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         // The snapshot names an original outside the loaded history; it still navigates.
         expect(
@@ -639,7 +639,7 @@ describe("chat transcript replies", () => {
           );
         }
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );

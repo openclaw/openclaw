@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import * as backupShared from "../commands/backup-shared.js";
-import { verifyBackupArchive } from "../commands/backup-verify.js";
+import { prepareBackupArchive, verifyBackupArchive } from "../commands/backup-verify.js";
 import { createConfigIO } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -96,6 +96,12 @@ describe("full backup config include capture", () => {
         }
         await fs.writeFile(state.statePath("ordinary.txt"), "ordinary");
         const { archive, restoredPath } = await restore(state, state.path("backup.tar.gz"));
+        expect((await prepareBackupArchive(archive.archivePath)).recoveryConfigPath).toBe(
+          backupShared.buildBackupArchivePath(
+            archive.archiveRoot,
+            await fs.realpath(state.configPath),
+          ),
+        );
         const entries = await listArchiveEntries(archive.archivePath);
         expect(new Set(entries).size).toBe(entries.length);
         for (const [source, raw] of graph.files) {

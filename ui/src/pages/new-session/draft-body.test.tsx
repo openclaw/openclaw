@@ -82,7 +82,9 @@ it("replaces startup progress with an actionable completion while retaining the 
       onOpenImage={() => {}}
     />
   ));
-  expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull(),
+  );
   expect(container.querySelector("textarea")).not.toBeNull();
   setCompletion({ label: "Session ready", onOpen: open });
   await waitForSolid(() => {

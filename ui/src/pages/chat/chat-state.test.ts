@@ -2703,35 +2703,37 @@ describe("chat state render lifecycle", () => {
     { handled: true, selection: 0 },
     { handled: false, selection: 5 },
   ] as const)(
-    "invalidates input history only when recall is handled: $handled",
+    "publishes the recalled draft only when history handles the key: $handled",
     ({ handled, selection }) => {
-      const requestUpdate = vi.fn();
-      const { controller, dispose } = createOwner(createRenderer({ invalidate: requestUpdate }));
+      const { controller, dispose } = createOwner(createRenderer());
       const renderLifecycle = controller.createRenderLifecycle();
-      const navigateHistory = vi.fn().mockReturnValue({
-        handled,
-        preventDefault: handled,
-        restoreCaret: handled ? "up" : null,
-      });
       const state = createPageState(createChatPageStateContext(), renderLifecycle, {
         sessionKey: "agent:main:current",
         dispatchEvent: () => true,
         querySelector: () => null,
       });
+      const navigateHistory = vi.fn(() => {
+        if (handled) {
+          state.chatMessage = "recalled draft";
+        }
+        return { handled, preventDefault: handled, restoreCaret: handled ? "up" : null } as const;
+      });
       state.handleChatInputHistoryKey = navigateHistory;
+      const publishedDrafts: string[] = [];
+      let unsubscribe = () => {};
       try {
         controller.attach(state);
+        unsubscribe = controller.composerDraft.subscribe(() => {
+          publishedDrafts.push(controller.composerDraft.read().draft);
+        });
         const input = createInputHistoryKey(selection, selection);
         const result = state.handleChatInputHistoryKey!(input);
 
         expect(result.handled).toBe(handled);
         expect(navigateHistory).toHaveBeenCalledWith(input);
-        if (handled) {
-          expect(requestUpdate).toHaveBeenCalled();
-        } else {
-          expect(requestUpdate).not.toHaveBeenCalled();
-        }
+        expect(publishedDrafts).toEqual(handled ? ["recalled draft"] : []);
       } finally {
+        unsubscribe();
         dispose();
       }
     },

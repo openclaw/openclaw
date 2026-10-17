@@ -6,161 +6,94 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { createSlackMonitorContext, normalizeSlackChannelType } from "./context.js";
 
-type SlackChannelConfigResult = ReturnType<typeof resolveSlackChannelConfig>;
-
-function expectSlackChannelConfig(
-  res: SlackChannelConfigResult,
-  expected: {
-    allowed?: boolean;
-    requireMention?: boolean;
-    matchKey?: string;
-    matchSource?: "direct" | "wildcard";
-  },
-) {
-  if (!res) {
-    throw new Error("expected Slack channel config result");
-  }
-  if (expected.allowed !== undefined) {
-    expect(res.allowed).toBe(expected.allowed);
-  }
-  if (expected.requireMention !== undefined) {
-    expect(res.requireMention).toBe(expected.requireMention);
-  }
-  if (expected.matchKey !== undefined) {
-    expect(res.matchKey).toBe(expected.matchKey);
-  }
-  if (expected.matchSource !== undefined) {
-    expect(res.matchSource).toBe(expected.matchSource);
-  }
-}
-
 describe("resolveSlackChannelConfig", () => {
   it("does not match a bare channel ID when workspace scope is required", () => {
     const channels = { C01234567: { enabled: true, requireMention: false } };
-
-    expectSlackChannelConfig(
-      resolveSlackChannelConfig({
-        teamId: "T11111111",
-        channelId: "C01234567",
-        channels,
-      }),
-      { allowed: false, requireMention: true },
-    );
-    expectSlackChannelConfig(
-      resolveSlackChannelConfig({
-        teamId: "T11111111",
-        allowUnscoped: true,
-        channelId: "C01234567",
-        channels,
-      }),
-      {
-        allowed: true,
-        requireMention: false,
-        matchKey: "C01234567",
-        matchSource: "direct",
-      },
-    );
-  });
-
-  it("preserves org-wide and workspace-qualified per-channel user identities", () => {
-    const channels = {
-      "team:T11111111:channel:C01234567": {
-        users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
-      },
-      "team:T22222222:channel:C01234567": {
-        users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
-      },
-    };
-
-    expect(
-      resolveSlackChannelConfig({
-        teamId: "T11111111",
-        channelId: "C01234567",
-        channels,
-      })?.users,
-    ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
-    expect(
-      resolveSlackChannelConfig({
-        teamId: "T22222222",
-        channelId: "C01234567",
-        channels,
-      })?.users,
-    ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
-  });
-
-  it("blocks channel-name route matches by default", () => {
-    const res = resolveSlackChannelConfig({
-      channelId: "C1",
-      channelName: "ops-room",
-      channels: { "ops-room": { enabled: true, requireMention: false } },
-      defaultRequireMention: true,
+    const params = { teamId: "T11111111", channelId: "C01234567", channels };
+    expect(resolveSlackChannelConfig(params)).toMatchObject({
+      allowed: false,
+      requireMention: true,
     });
-    expectSlackChannelConfig(res, { allowed: false, requireMention: true });
-  });
-
-  it("allows channel-name route matches when dangerous name matching is enabled", () => {
-    const res = resolveSlackChannelConfig({
-      channelId: "C1",
-      channelName: "ops-room",
-      channels: { "ops-room": { enabled: true, requireMention: false } },
-      defaultRequireMention: true,
-      allowNameMatching: true,
-    });
-    expectSlackChannelConfig(res, {
+    expect(resolveSlackChannelConfig({ ...params, allowUnscoped: true })).toMatchObject({
       allowed: true,
       requireMention: false,
-      matchKey: "ops-room",
+      matchKey: "C01234567",
       matchSource: "direct",
     });
   });
-});
 
-const baseParams = () => ({
-  cfg: {} as OpenClawConfig,
-  accountId: "default",
-  botToken: "token",
-  app: { client: {} } as App,
-  runtime: {} as RuntimeEnv,
-  botUserId: "B1",
-  botId: "B1",
-  identityHealth: { lifecycle: "ready" as const, lastError: null },
-  teamId: "T1",
-  apiAppId: "A1",
-  historyLimit: 0,
-  sessionScope: "per-sender" as const,
-  mainKey: "main",
-  dmEnabled: true,
-  dmPolicy: "open" as const,
-  allowFrom: [],
-  allowNameMatching: false,
-  groupDmEnabled: true,
-  groupDmChannels: [],
-  defaultRequireMention: true,
-  groupPolicy: "open" as const,
-  useAccessGroups: false,
-  reactionMode: "off" as const,
-  reactionAllowlist: [],
-  replyToMode: "off" as const,
-  slashCommand: {
-    enabled: false,
-    name: "openclaw",
-    sessionPrefix: "slack:slash",
-    ephemeral: true,
-  },
-  textLimit: 4000,
-  typingReaction: "",
-  mediaMaxBytes: 1,
-  threadHistoryScope: "thread" as const,
-  threadInheritParent: false,
-});
+  it("preserves org-wide and workspace-qualified per-channel user identities", () => {
+    const users = ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"];
+    const channels = {
+      "team:T11111111:channel:C01234567": { users },
+      "team:T22222222:channel:C01234567": { users },
+    };
 
-function createListedChannelsContext(groupPolicy: "open" | "allowlist") {
-  return createSlackMonitorContext({
-    ...baseParams(),
-    groupPolicy,
-    channelsConfig: {
-      C_LISTED: { requireMention: true },
+    for (const teamId of ["T11111111", "T22222222"]) {
+      expect(
+        resolveSlackChannelConfig({ teamId, channelId: "C01234567", channels })?.users,
+      ).toEqual(["team:t11111111:user:u01234567", "team:t22222222:user:u12345678", "u23456789"]);
+    }
+  });
+
+  it.each([false, true])(
+    "gates channel-name routes on dangerous name matching: %s",
+    (allowNameMatching) => {
+      const res = resolveSlackChannelConfig({
+        channelId: "C1",
+        channelName: "ops-room",
+        channels: { "ops-room": { enabled: true, requireMention: false } },
+        defaultRequireMention: true,
+        allowNameMatching,
+      });
+      expect(res).toMatchObject(
+        allowNameMatching
+          ? { allowed: true, requireMention: false, matchKey: "ops-room", matchSource: "direct" }
+          : { allowed: false, requireMention: true },
+      );
     },
+  );
+});
+
+function createContext(overrides: Partial<Parameters<typeof createSlackMonitorContext>[0]> = {}) {
+  return createSlackMonitorContext({
+    cfg: {} as OpenClawConfig,
+    accountId: "default",
+    botToken: "token",
+    app: { client: {} } as App,
+    runtime: {} as RuntimeEnv,
+    botUserId: "B1",
+    botId: "B1",
+    identityHealth: { lifecycle: "ready" as const, lastError: null },
+    teamId: "T1",
+    apiAppId: "A1",
+    historyLimit: 0,
+    sessionScope: "per-sender" as const,
+    mainKey: "main",
+    dmEnabled: true,
+    dmPolicy: "open" as const,
+    allowFrom: [],
+    allowNameMatching: false,
+    groupDmEnabled: true,
+    groupDmChannels: [],
+    defaultRequireMention: true,
+    groupPolicy: "open" as const,
+    useAccessGroups: false,
+    reactionMode: "off" as const,
+    reactionAllowlist: [],
+    replyToMode: "off" as const,
+    slashCommand: {
+      enabled: false,
+      name: "openclaw",
+      sessionPrefix: "slack:slash",
+      ephemeral: true,
+    },
+    textLimit: 4000,
+    typingReaction: "",
+    mediaMaxBytes: 1,
+    threadHistoryScope: "thread" as const,
+    threadInheritParent: false,
+    ...overrides,
   });
 }
 
@@ -174,8 +107,7 @@ describe("normalizeSlackChannelType", () => {
 
 describe("resolveSlackSystemEventRoute", () => {
   it("uses the sole configured agent for fallback system-event sessions", async () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
+    const ctx = createContext({
       cfg: {
         agents: { entries: { ops: {} } },
       },
@@ -187,8 +119,7 @@ describe("resolveSlackSystemEventRoute", () => {
   });
 
   it("routes DM system events through direct-peer bindings when sender is known", async () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
+    const ctx = createContext({
       accountId: "work",
       cfg: {
         bindings: [
@@ -217,8 +148,7 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   it("repeats disabled-channel warnings on a fixed interval despite steady traffic", () => {
     vi.useFakeTimers();
     try {
-      const ctx = createSlackMonitorContext({
-        ...baseParams(),
+      const ctx = createContext({
         groupPolicy: "open",
         channelsConfig: { C_DENIED: { enabled: false } },
       });
@@ -238,8 +168,7 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   });
 
   it("warns for wildcard disablement under allowlist policy", () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
+    const ctx = createContext({
       groupPolicy: "allowlist",
       channelsConfig: { "*": { enabled: false } },
     });
@@ -263,7 +192,10 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   });
 
   it("does not warn for allowlist misses or globally disabled groups", () => {
-    const allowlistCtx = createListedChannelsContext("allowlist");
+    const allowlistCtx = createContext({
+      groupPolicy: "allowlist",
+      channelsConfig: { C_LISTED: { requireMention: true } },
+    });
     const allowlistWarnSpy = vi
       .spyOn(allowlistCtx.logger, "warn")
       .mockImplementation(() => undefined);
@@ -272,8 +204,7 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
     );
     expect(allowlistWarnSpy).not.toHaveBeenCalled();
 
-    const disabledCtx = createSlackMonitorContext({
-      ...baseParams(),
+    const disabledCtx = createContext({
       groupPolicy: "disabled",
       channelsConfig: { C_DENIED: { enabled: false } },
     });
@@ -287,8 +218,7 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   });
 
   it("allows all channels when groupPolicy is open and channelsConfig is empty", () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
+    const ctx = createContext({
       groupPolicy: "open",
       channelsConfig: undefined,
     });

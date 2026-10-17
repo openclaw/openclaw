@@ -52,6 +52,7 @@ function createLoading(context?: ApplicationContext) {
     onTestFinished(dispose);
     return new ShellCommandPaletteOwner(
       {
+        elements: {},
         context,
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
         lazyCustomElements: createLazyCustomElementRequests(),

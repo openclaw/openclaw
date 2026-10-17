@@ -4,18 +4,18 @@ import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Canonical Gateway config paths whose values may be plaintext or secret refs. */
-export type SupportedGatewaySecretInputPath =
-  | "gateway.auth.token"
-  | "gateway.auth.password"
-  | "gateway.remote.token"
-  | "gateway.remote.password";
-
-/** Stable scan order for Gateway secret-ref credential selection. */
-export const ALL_GATEWAY_SECRET_INPUT_PATHS: SupportedGatewaySecretInputPath[] = [
+export const GATEWAY_AUTH_SURFACE_PATHS = [
   "gateway.auth.token",
   "gateway.auth.password",
   "gateway.remote.token",
   "gateway.remote.password",
+] as const;
+
+export type SupportedGatewaySecretInputPath = (typeof GATEWAY_AUTH_SURFACE_PATHS)[number];
+
+/** Stable scan order for Gateway secret-ref credential selection. */
+export const ALL_GATEWAY_SECRET_INPUT_PATHS: SupportedGatewaySecretInputPath[] = [
+  ...GATEWAY_AUTH_SURFACE_PATHS,
 ];
 
 /** Narrow an arbitrary error/config path to one of the supported Gateway secret inputs. */

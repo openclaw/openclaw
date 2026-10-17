@@ -1,12 +1,14 @@
 import "./unsupported-browser.css";
 import { i18n, t } from "../i18n/lib/translate.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { postNativeExternalLink } from "./native-link-routing.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 import fallbackDocument from "./unsupported-browser.html?raw";
 
 export function showUnsupportedBrowser(): void {
   registerLoginEnglish();
+  // This fallback stays a static HTML island so unsupported browsers can render it.
   const parsed = new DOMParser().parseFromString(fallbackDocument, "text/html");
   const surface = parsed.querySelector<HTMLElement>("main")!;
   let actionResult: "opened" | "failed" | undefined;
@@ -31,7 +33,7 @@ export function showUnsupportedBrowser(): void {
   i18n.subscribe(translate);
   if (webKitHostWindow()?.webkit?.messageHandlers?.openclawLink) {
     surface.querySelector<HTMLElement>("[data-native-action]")!.hidden = false;
-    surface.querySelector("button")!.addEventListener("click", () => {
+    listen(surface.querySelector("button")!, "click", () => {
       actionResult = postNativeExternalLink(window.location.href) ? "opened" : "failed";
       translate();
     });

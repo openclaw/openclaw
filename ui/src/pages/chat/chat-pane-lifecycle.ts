@@ -17,6 +17,7 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -42,10 +43,7 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
-import {
-  CHAT_COMPOSER_TEXTAREA_SELECTOR,
-  focusChatComposerFromPrintableKeydown,
-} from "./chat-pane-shared.ts";
+import { focusChatComposerFromPrintableKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   subscribeChatPaneSnapshotInvalidation,
@@ -67,7 +65,8 @@ import {
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
@@ -166,6 +165,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
+    // Native draft commands must pass through the synchronous editing owner in order.
     this.nativeDraftCleanup = this.context.nativeChatDrafts.subscribe((draft) => {
       const state = this.state;
       if (!state || !this.active || !this.presented) {
@@ -203,7 +203,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     // A null mount binds only when its first annotation ownership begins.
     this.stagedAttachmentGatewayOwner ??= this.context.gateway.snapshot.client;
     focusBrowserAnnotationComposerAfterUpdate({
-      querySelector: this.element.querySelector.bind(this.element),
+      composer: () => getChatComposerState(this.presentationId).composerTextarea,
       updateComplete: this.updateComplete,
     });
   }
@@ -271,18 +271,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       });
       this.paneResizeObserver.observe(this.element);
     }
-    this.element.addEventListener("pointerdown", this.handlePaneFocus);
-    this.element.addEventListener("focusin", this.handlePaneFocus);
-    this.element.addEventListener("input", this.handlePaneInput);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
-    chatState.addCleanup(() => {
-      document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-      this.element.removeEventListener("pointerdown", this.handlePaneFocus);
-      this.element.removeEventListener("focusin", this.handlePaneFocus);
-      this.element.removeEventListener("input", this.handlePaneInput);
-    });
+    chatState.addCleanup(listen(this.element, "pointerdown", this.handlePaneFocus));
+    chatState.addCleanup(listen(this.element, "focusin", this.handlePaneFocus));
+    chatState.addCleanup(listen(this.element, "input", this.handlePaneInput));
+    chatState.addCleanup(
+      listen(document, "keydown", { handleEvent: this.handleDocumentKeydown }, true),
+    );
     const pageState = createPageState(
       this.context,
       chatState.createRenderLifecycle(),
@@ -303,10 +299,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         void this.refreshTaskSuggestions({ automatic: true });
       }
     };
-    document.addEventListener("visibilitychange", refreshPresentedReads);
-    chatState.addCleanup(() =>
-      document.removeEventListener("visibilitychange", refreshPresentedReads),
-    );
+    chatState.addCleanup(listen(document, "visibilitychange", refreshPresentedReads));
     const paneAgentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId;
     if (paneAgentId) {
       pageState.assistantAgentId = paneAgentId;
@@ -376,6 +369,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         pageState.requestUpdate?.();
       }),
     );
+    // Identity publications start scoped loads even when this retained pane is hidden.
     chatState.addCleanup(
       this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
     );
@@ -405,10 +399,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.state.handleChatDraftChange(this.draft, []);
     }
     const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
-    window.addEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation);
-    chatState.addCleanup(() =>
-      window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
-    );
+    chatState.addCleanup(listen(window, BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation));
+    // Each connection edge retires media custody and transcript subscriptions synchronously.
     chatState.addCleanup(
       this.context.gateway.subscribe((next) => {
         this.applyGatewaySnapshot(next);
@@ -416,6 +408,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeForegroundTranscript();
       }),
     );
+    // Chat actions read these synchronous owner settings before any render commits.
     chatState.addCleanup(
       this.context.theme.subscribe(() => {
         pageState.settings = {
@@ -425,6 +418,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         pageState.requestUpdate();
       }),
     );
+    // Agent changes retire scoped owners and subscriptions before admitting another action.
     chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
         const previousAgentId = this.state?.assistantAgentId;
@@ -515,8 +509,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     this.applyApplicationConfig(this.context.config.current);
+    // Apply execution/media policy at publication, not at Solid's deferred render boundary.
     chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
     this.applySessionsState(this.context.sessions.state);
+    // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
     chatState.addCleanup(
@@ -623,10 +619,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   override afterRender(focusComposerChanged: boolean) {
     this.panelActions?.syncLaunch();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
-    if (
-      !this.chatRouteReadyReported &&
-      this.element.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)
-    ) {
+    const textarea = getChatComposerState(this.presentationId).composerTextarea;
+    if (!this.chatRouteReadyReported && textarea) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
       this.chatRouteReadyReported = true;
@@ -635,9 +629,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       );
     }
     if (focusComposerChanged && this.focusComposer) {
-      const textarea = this.element.querySelector<HTMLTextAreaElement>(
-        CHAT_COMPOSER_TEXTAREA_SELECTOR,
-      );
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");
       textarea?.focus({ preventScroll: true });
       if (input && this.draft) {

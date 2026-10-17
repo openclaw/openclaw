@@ -1,9 +1,9 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { BLOAT_MIN_FILE_BYTES } from "./doctor-db-bloat.constants.js";
 import type { SqliteBloatStats } from "./doctor-db-bloat.read.js";
 import { formatBytes } from "./doctor-disk-space.js";
 
-const BLOAT_MIN_FILE_BYTES = 128 * 1024 * 1024;
 const BLOAT_MIN_FREE_BYTES = 32 * 1024 * 1024;
 const BLOAT_FREE_RATIO = 0.25;
 const LARGE_DB_WARN_BYTES = 1024 * 1024 * 1024;

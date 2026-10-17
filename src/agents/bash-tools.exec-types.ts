@@ -89,6 +89,8 @@ export type ExecToolDefaults = {
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   /** An explicit snapshot, including an empty one, replaces local store access. */
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
+  /** Host-prepared routing hint; remote workers have no Gateway session database. */
+  preparedSubagentExecution?: boolean;
   autoReviewer?: ExecAutoReviewer;
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;

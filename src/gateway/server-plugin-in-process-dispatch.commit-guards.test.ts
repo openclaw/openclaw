@@ -38,33 +38,31 @@ it.each(["runtime", "legacy"] as const)(
           },
         },
       });
-      const context = createContext();
       let nativeMutation = false;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "approval.get",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "approvals" },
-            handler: async (options: GatewayRequestHandlerOptions) => {
-              using authority = createApprovalRequestAuthority(options);
-              const sql = observeHostDataSql();
-              try {
-                const result = await getOperatorApprovalDetailed({
-                  id: "approval-expiry-routing",
-                  nowMs: 3,
-                  guard: authority.guard,
-                });
-                nativeMutation = sql.queries.some((query) =>
-                  /^update "operator_approvals" set\b/i.test(query),
-                );
-                options.respond(true, result);
-              } finally {
-                sql.restore();
-              }
-            },
+      const context = createContext([
+        [
+          "approval.get",
+          "operator.approvals",
+          "approvals",
+          async (options: GatewayRequestHandlerOptions) => {
+            using authority = createApprovalRequestAuthority(options);
+            const sql = observeHostDataSql();
+            try {
+              const result = await getOperatorApprovalDetailed({
+                id: "approval-expiry-routing",
+                nowMs: 3,
+                guard: authority.guard,
+              });
+              nativeMutation = sql.queries.some((query) =>
+                /^update "operator_approvals" set\b/i.test(query),
+              );
+              options.respond(true, result);
+            } finally {
+              sql.restore();
+            }
           },
-        ]);
+        ],
+      ]);
       const result = await withPluginRuntimeGatewayRequestScope(
         {
           context,

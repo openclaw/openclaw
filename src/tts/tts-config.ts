@@ -19,6 +19,25 @@ import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+export function isTtsConfigReservedKey(key: string): boolean {
+  return TTS_CONFIG_RESERVED_KEYS.has(key);
+}
+
 /** Routing context used to layer global, agent, channel, and account TTS config. */
 export type TtsConfigResolutionContext = {
   agentId?: string;

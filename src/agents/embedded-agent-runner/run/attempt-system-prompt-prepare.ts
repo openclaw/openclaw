@@ -20,10 +20,7 @@ import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
-import {
-  buildProjectMemoryWriteInstruction,
-  prepareProjectMemoryBootstrap,
-} from "../../project-memory-bootstrap.js";
+import { prepareProjectMemoryBootstrap } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
@@ -211,6 +208,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const openClawReferences =
     params.referencePaths ??
     (await resolveOpenClawReferencePaths({
+      sandbox: params.setup.sandbox,
       workspaceDir: params.setup.effectiveWorkspace,
       argv1: process.argv[1],
       cwd: params.setup.effectiveCwd,
@@ -237,6 +235,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       runtimeHandle: params.setup.getProviderRuntimeHandle(),
       context: promptContributionContext,
     });
+  const projectKey = attempt.preparedModelRuntime?.projectKey ?? undefined;
   const includeMemorySection =
     !params.activeContextEngine || params.activeContextEngine.info.id === "legacy";
   const prepareToolContextSections = async (
@@ -256,6 +255,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         citationsMode: attempt.config?.memory?.citations,
         agentId: runtimePrompt.runtimeInfo.agentId,
         agentSessionKey: runtimePrompt.runtimeInfo.sessionKey,
+        projectKey,
       }),
       preparedWatchedSessions: await prepareWatchedSessionsPromptAsync({
         ...toolContext,
@@ -295,12 +295,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             : undefined,
         })
       : [];
-  const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
-    attempt.preparedModelRuntime?.projectKey,
-  );
   const extraSystemPrompt = joinPresentTextSegments([
     attempt.extraSystemPrompt,
-    projectMemoryWriteInstruction,
     buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
   ]);
 
@@ -361,6 +357,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       preparedWatchedSessions,
       projectMemoryBootstrap,
       activeProjectKeys,
+      projectKey,
       promptContribution,
     },
   };

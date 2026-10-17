@@ -22,7 +22,7 @@ export type PanelLoadingSkeletonProps = {
   overlay?: boolean;
 };
 
-export type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
+type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
 
 type LineWidth = "short" | "medium" | "long";
 

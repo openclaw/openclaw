@@ -41,7 +41,7 @@ import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import {
   dismissThreadPortals,
@@ -199,7 +199,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (archived && this.currentSessionArchived === false) {
       dismissThreadPortals(this.presentationId, this.element);
       if (this.archiveFocusOwned) {
-        this.element.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+        this.transcript.scrollElement?.focus({ preventScroll: true });
       }
     }
     this.currentSessionArchived = archived;
@@ -503,6 +503,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       void refreshCurrentChatSessionList(this.state).catch(() => undefined);
       void resumeStoredChatOutboxes(this.state);
     }
+    // Parked transcript snapshots do not rerender; update their component-owned live region now.
     this.element
       .querySelector(".chat-transcript-announcement")
       ?.setAttribute("aria-live", active ? "polite" : "off");
@@ -581,6 +582,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       clearSessionWorkspacePreviews(state);
       state.requestUpdate?.();
     }
+    // Hidden snapshots stay parked, so the retained live region must be silenced synchronously.
     this.element.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
   }
 

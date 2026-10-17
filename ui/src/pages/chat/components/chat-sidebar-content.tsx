@@ -213,7 +213,11 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       </Match>
       <Match when={!model().src || model().imagePreview}>
         <div
-          class={`chat-assistant-attachment-card chat-assistant-attachment-card--${model().kind} sidebar-attachment-preview__state-card`}
+          class={[
+            "chat-assistant-attachment-card",
+            `chat-assistant-attachment-card--${model().kind}`,
+            "sidebar-attachment-preview__state-card",
+          ]}
           aria-busy={model().pending ? "true" : undefined}
         >
           <AttachmentCardHeader
@@ -416,7 +420,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const markdownRef = markdownBlocksRef(markdownPresented);
   return (
     <div
-      class={fillHost() ? "sidebar-panel-host--fill" : ""}
+      class={{ "sidebar-panel-host--fill": fillHost() }}
       ref={markdownRef}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}

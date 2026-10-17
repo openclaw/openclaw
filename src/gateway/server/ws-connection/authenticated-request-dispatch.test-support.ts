@@ -78,6 +78,7 @@ export function createDispatchTestHarness(
   const context = { broadcast: vi.fn(), getRuntimeConfig: () => config };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
+      socket: { acceptsDeflatedSegments: false },
       clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},

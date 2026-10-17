@@ -27,10 +27,11 @@ import {
 } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
-} from "./components/chat-message-confirmation.ts";
+} from "./components/chat-message-confirmation-view.tsx";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -163,7 +164,7 @@ it("renews the attention cue for repeated draft prefill", () => {
   const input = document.body.appendChild(document.createElement("div"));
   input.className = "agent-chat__input";
   const textarea = input.appendChild(document.createElement("textarea"));
-  vi.spyOn(pane, "querySelector").mockReturnValue(textarea);
+  getChatComposerState(pane.presentationId).composerTextarea = textarea;
   const lifecycle = pane as TestChatPane & {
     draft?: string;
     focusComposer: boolean;
@@ -538,6 +539,7 @@ afterEach(() => {
   }
   confirmationOwners.clear();
   chatThread.resetThreadPresentation();
+  resetChatComposerState();
   window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
   vi.unstubAllGlobals();
 });

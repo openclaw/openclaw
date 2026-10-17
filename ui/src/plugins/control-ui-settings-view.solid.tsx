@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createControlUiSettingsComponents } from "./control-ui-settings-components.solid.tsx";
 
 function authority(snapshot: ControlUiSettingsSnapshot): string {
@@ -15,6 +16,7 @@ function authority(snapshot: ControlUiSettingsSnapshot): string {
     snapshot.agentId,
     snapshot.engine,
     snapshot.connected,
+    snapshot.advertisedMethods,
     snapshot.connectionEpoch,
     snapshot.routeIntent,
   ]);
@@ -52,9 +54,7 @@ export function ControlUiSettingsPresentation(props: {
   };
   const fail = (error: unknown) => {
     retire();
-    if (container) {
-      container.textContent = formatUiError(error, "Settings presentation could not load.");
-    }
+    container?.append(formatUiError(error, "Settings presentation could not load."));
   };
   const sync = () => {
     if (!active || !container) {
@@ -83,20 +83,7 @@ export function ControlUiSettingsPresentation(props: {
     void props.application.plugins
       .loadSettingsView(props.placement, next.abort.signal)
       .then((loaded) => {
-        if (owner !== next || next.abort.signal.aborted) {
-          loaded.dispose();
-          return;
-        }
         lifetime = loaded.signal;
-        let assetsDisposed = false;
-        const disposeAssets = () => {
-          if (assetsDisposed) {
-            return;
-          }
-          assetsDisposed = true;
-          loaded.dispose();
-        };
-        next.dispose = disposeAssets;
         current();
         const context: ControlUiSettingsContext = {
           props: props.readSnapshot(),
@@ -134,23 +121,15 @@ export function ControlUiSettingsPresentation(props: {
           },
         };
         const mounted = loaded.view.mount(container!, context);
-        let disposed = false;
-        next.dispose = () => {
-          if (disposed) {
-            return;
-          }
-          disposed = true;
-          try {
-            mounted.dispose();
-          } finally {
-            disposeAssets();
-          }
-        };
+        // The runtime owns assets through abort; this owner disposes only the mounted view.
+        next.dispose = () => mounted.dispose();
         if (lifetime.aborted || owner !== next) {
           next.dispose();
           return;
         }
-        lifetime.addEventListener(
+        // The loaded view's abort also owns retirement of its mounted presentation.
+        listen(
+          lifetime,
           "abort",
           () => {
             if (owner === next) {

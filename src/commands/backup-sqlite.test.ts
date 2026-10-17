@@ -111,101 +111,85 @@ function createGlobalDatabase(databasePath: string): void {
 }
 
 describe("SQLite backup commands", () => {
-  it.each(["backup", "restore"] as const)(
-    "refuses mixed engines before %s creates snapshot or target files",
-    async (operation) => {
-      configMocks.getRuntimeConfig.mockReturnValue({
-        database: { families: { workboard: { engine: "postgres" } } },
-      });
-      const repositoryPath = state.path("snapshots");
-      const targetPath = state.path("restored", "openclaw.sqlite");
+  it.each([false, true])(
+    "creates, lists, verifies, and fresh-restores the global database (mixed: %s)",
+    async (mixed) => {
+      if (mixed) {
+        configMocks.getRuntimeConfig.mockReturnValue({
+          database: { families: { workboard: { engine: "postgres" } } },
+        });
+      }
+      const tempDir = state.root;
+      const repositoryPath = path.join(tempDir, "snapshots");
+      const scratchPath = path.join(tempDir, "scratch");
+      const restorePath = path.join(tempDir, "restore", "openclaw.sqlite");
+      const databasePath = resolveOpenClawStateSqlitePath();
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.mkdir(scratchPath, { mode: 0o700 });
+      await fs.chmod(scratchPath, 0o700);
+      createGlobalDatabase(databasePath);
       const runtime = createRuntimeCapture();
 
+      const created = await backupSqliteCreateCommand(runtime, {
+        global: true,
+        repository: repositoryPath,
+        json: true,
+      });
+      expect(created.manifest.database).toMatchObject({
+        role: "global",
+        basename: "openclaw.sqlite",
+        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(JSON.parse(runtime.logs.shift() ?? "{}")).toEqual(created);
+
+      const listed = await backupSqliteListCommand(runtime, {
+        repository: repositoryPath,
+        json: true,
+      });
+      expect(listed.snapshots).toHaveLength(1);
+      expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
+
+      const missingScratchPath = path.join(tempDir, "missing-scratch");
       await expect(
-        operation === "backup"
-          ? backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath })
-          : backupSqliteRestoreCommand(runtime, path.join(repositoryPath, "snapshot"), {
-              target: targetPath,
-            }),
+        backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+          scratch: missingScratchPath,
+        }),
       ).rejects.toThrow(
-        `${operation} for mixed-engine installs is not supported yet; use a single engine`,
+        `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
       );
-      await expect(fs.access(repositoryPath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(path.dirname(targetPath))).rejects.toMatchObject({ code: "ENOENT" });
+
+      const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+        scratch: scratchPath,
+        json: true,
+      });
+      expect(verified.manifest).toEqual(created.manifest);
+      await expect(fs.readdir(scratchPath)).resolves.toEqual([]);
+
+      const restored = await backupSqliteRestoreCommand(runtime, created.snapshotPath, {
+        target: restorePath,
+        json: true,
+      });
+      expect(restored).toMatchObject({
+        ok: true,
+        snapshotPath: created.snapshotPath,
+        targetPath: restorePath,
+      });
+      expect(runtime.errors).toEqual([]);
+
+      const sqlite = requireNodeSqlite();
+      const restoredDatabase = new sqlite.DatabaseSync(restorePath, { readOnly: true });
+      try {
+        expect(
+          restoredDatabase.prepare("SELECT value FROM durable_entries ORDER BY id").all(),
+        ).toEqual([{ value: "checkpointed" }, { value: "committed-in-wal" }]);
+        expect(
+          restoredDatabase.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        restoredDatabase.close();
+      }
     },
   );
-
-  it("creates, lists, verifies, and fresh-restores the global database", async () => {
-    const tempDir = state.root;
-    const repositoryPath = path.join(tempDir, "snapshots");
-    const scratchPath = path.join(tempDir, "scratch");
-    const restorePath = path.join(tempDir, "restore", "openclaw.sqlite");
-    const databasePath = resolveOpenClawStateSqlitePath();
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    await fs.mkdir(scratchPath, { mode: 0o700 });
-    await fs.chmod(scratchPath, 0o700);
-    createGlobalDatabase(databasePath);
-    const runtime = createRuntimeCapture();
-
-    const created = await backupSqliteCreateCommand(runtime, {
-      global: true,
-      repository: repositoryPath,
-      json: true,
-    });
-    expect(created.manifest.database).toMatchObject({
-      role: "global",
-      basename: "openclaw.sqlite",
-      userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    expect(JSON.parse(runtime.logs.shift() ?? "{}")).toEqual(created);
-
-    const listed = await backupSqliteListCommand(runtime, {
-      repository: repositoryPath,
-      json: true,
-    });
-    expect(listed.snapshots).toHaveLength(1);
-    expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
-
-    const missingScratchPath = path.join(tempDir, "missing-scratch");
-    await expect(
-      backupSqliteVerifyCommand(runtime, created.snapshotPath, {
-        scratch: missingScratchPath,
-      }),
-    ).rejects.toThrow(
-      `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
-    );
-
-    const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
-      scratch: scratchPath,
-      json: true,
-    });
-    expect(verified.manifest).toEqual(created.manifest);
-    await expect(fs.readdir(scratchPath)).resolves.toEqual([]);
-
-    const restored = await backupSqliteRestoreCommand(runtime, created.snapshotPath, {
-      target: restorePath,
-      json: true,
-    });
-    expect(restored).toMatchObject({
-      ok: true,
-      snapshotPath: created.snapshotPath,
-      targetPath: restorePath,
-    });
-    expect(runtime.errors).toEqual([]);
-
-    const sqlite = requireNodeSqlite();
-    const restoredDatabase = new sqlite.DatabaseSync(restorePath, { readOnly: true });
-    try {
-      expect(
-        restoredDatabase.prepare("SELECT value FROM durable_entries ORDER BY id").all(),
-      ).toEqual([{ value: "checkpointed" }, { value: "committed-in-wal" }]);
-      expect(
-        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      restoredDatabase.close();
-    }
-  });
 
   it("reports missing snapshot paths for verify and restore", async () => {
     const tempDir = state.root;

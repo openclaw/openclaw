@@ -28,8 +28,10 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import {
   closeCachedOpenClawAgentDatabase,
+  recordOpenClawAgentDatabaseOpenFailure,
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
 import {
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
@@ -40,14 +42,16 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import * as verification from "./openclaw-database-verify.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  getPendingOpenClawAgentDatabasePreparation,
+} from "./openclaw-agent-execution.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -160,6 +164,136 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
     }),
   };
 }
+
+it.for(["revoked", "aborted"] as const)(
+  "keeps shared integrity preparation alive after its initiating caller is %s",
+  async (cancellation, { signal }) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-stale-shared-")) };
+    const options = { agentId: "main", env };
+    const database = openOpenClawAgentDatabase(options);
+    const stale = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE agent_database_leases SET owner_start_time = -1 WHERE lease_id = ?")
+      .run(stale);
+    closeOpenClawAgentDatabaseByPath(database.path);
+    invalidateOpenClawAgentDatabaseValidation(database.path);
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
+    expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
+
+    counter.path = database.path;
+    counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+    Atomics.store(gate, 0, 1);
+    counter.gate = gate.buffer;
+    const initiator = captureOpenClawAgentDatabaseExecution(options);
+    const borrowers = [
+      initiator,
+      ...Array.from({ length: 2 }, () => captureOpenClawAgentDatabaseExecution(options)),
+    ];
+    const source = createNativeSource(() => {});
+    const retainedRegistry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env }, () => false);
+    const controller = new AbortController();
+    let initiatingCallerCurrent = true;
+    const refused = new Error("Initiating caller cancelled after integrity started");
+    const initiatingSource = createNativeSource(() => {
+      controller.signal.throwIfAborted();
+      if (!initiatingCallerCurrent) {
+        throw refused;
+      }
+    });
+    const initialize = (scope: AgentDatabaseExecutionScope, sessionId: string) =>
+      scope.execute({
+        type: "session.transcript.initialize",
+        input: { sessionKey: `agent:main:${sessionId}`, sessionId },
+      });
+    const initiatingOperation = vi.fn((scope: AgentDatabaseExecutionScope) =>
+      initialize(scope, "initiator"),
+    );
+    const initiating =
+      cancellation === "aborted"
+        ? initiator.prepare(initiatingSource, controller.signal)
+        : initiator.runExisting(initiatingSource, initiatingOperation);
+    void initiating.catch(() => {});
+    let peers: Promise<unknown>[] = [];
+    try {
+      await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+      if (cancellation === "aborted") {
+        controller.abort(refused);
+        await expect(initiating).rejects.toBe(refused);
+        // Discovery still joins physical preparation after its only waiter leaves.
+        expect(getPendingOpenClawAgentDatabasePreparation(database.path)).toBeDefined();
+      } else {
+        initiatingCallerCurrent = false;
+      }
+      peers = borrowers.slice(1).map((borrower, index) => {
+        const registry =
+          index === 0
+            ? retainedRegistry
+            : prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env }, () => false);
+        return borrower.runExisting(
+          {
+            ...createNativeSource(() => registry.assertCurrent()),
+            onRegistryChange: registry.followRegistration,
+          },
+          (scope) => initialize(scope, `peer-${index}`),
+        );
+      });
+      void Promise.allSettled(peers);
+    } finally {
+      Atomics.store(gate, 0, 0);
+      Atomics.notify(gate, 0);
+      counter.gate = undefined;
+    }
+    try {
+      expect(await Promise.allSettled(peers)).toEqual([
+        {
+          status: "fulfilled",
+          value: expect.objectContaining({
+            kind: "session-transcript-initialized",
+            sessionKey: "agent:main:peer-0",
+          }),
+        },
+        {
+          status: "fulfilled",
+          value: expect.objectContaining({
+            kind: "session-transcript-initialized",
+            sessionKey: "agent:main:peer-1",
+          }),
+        },
+      ]);
+      await expect(initiating).rejects.toBe(refused);
+      expect(initiatingOperation).not.toHaveBeenCalled();
+      await expect(initiator.runExisting(initiatingSource, initiatingOperation)).rejects.toBe(
+        refused,
+      );
+      expect(Array.from(new Int32Array(counter.checks))).toEqual([1, 1]);
+    } finally {
+      await Promise.all(borrowers.map((borrower) => borrower.release()));
+    }
+    await closeOpenClawAgentDatabasesAsync();
+    using persisted = openNodeSqliteDatabase(database.path, { readOnly: true });
+    expect(
+      persisted
+        .prepare("SELECT session_key, current_session_id FROM session_nodes ORDER BY session_key")
+        .all(),
+    ).toEqual([
+      { session_key: "agent:main:peer-0", current_session_id: "peer-0" },
+      { session_key: "agent:main:peer-1", current_session_id: "peer-1" },
+    ]);
+    const reopened = createNativeGeneration(
+      database.agentId,
+      database.path,
+      captureOpenClawStateWorkerContext({ env }),
+      () => {},
+    );
+    try {
+      expect(await reopened.run(source, async () => "reopened")).toBe("reopened");
+      expect(Array.from(new Int32Array(counter.checks))).toEqual([1, 1]);
+    } finally {
+      await reopened.close();
+    }
+  },
+);
 
 it.for(["warm", "cold"] as const)(
   "admits durable channel messages while agent integrity is pending (%s shared writer)",
@@ -579,7 +713,6 @@ it.each([
     invalidateOpenClawAgentDatabaseValidation(database.path);
     revokeSqliteDatabaseAdmissionsForPath(database.path);
   }
-  const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
     if (proof === "revoked-after-verification-admission") {
       const operation = vi.fn(async () => "not admitted");
@@ -602,7 +735,6 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    expect(integrityCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
@@ -617,7 +749,6 @@ it.each([
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
-    integrityCheck.mockRestore();
     try {
       await generation.close();
     } finally {
@@ -734,14 +865,12 @@ it.runIf(process.platform === "linux")(
       const generation = createNativeGeneration(agentId, pathname, context, assertCurrent, () =>
         context.admission.assertCurrent(),
       );
-      const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
       try {
         if (agentId === "corrupt-page") {
           await expect(generation.run(source, async () => "opened")).rejects.toThrow(
             /integrity|malformed|corrupt/i,
           );
           expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
-          expect(integrityCheck).not.toHaveBeenCalled();
           continue;
         }
         const sessionKey = `agent:${agentId}:after-crash`;
@@ -758,12 +887,10 @@ it.runIf(process.platform === "linux")(
         };
         await initialize();
         expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual([1, 1]);
-        expect(integrityCheck).not.toHaveBeenCalled();
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
           verifiedAt: expect.any(Number),
         });
       } finally {
-        integrityCheck.mockRestore();
         await generation.close();
       }
       expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);

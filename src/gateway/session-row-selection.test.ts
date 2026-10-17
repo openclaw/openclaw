@@ -28,11 +28,17 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import * as sessionOrder from "./session-list-order.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { create as createSessionRow } from "./session-row-projection-record.js";
+import {
+  create as createSessionRow,
+  identity,
+  selectionRow,
+} from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
@@ -47,6 +53,80 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("coalesces row updates until a list reads the latest order and metadata", () => {
+  const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
+  const selection = createSessionRowSelection(
+    {},
+    {
+      paths: new Map([["store", 0]]),
+      path: "store",
+      ownerAgentIds: new Set(["main"]),
+      agentId: undefined,
+      configuredAgentIds: undefined,
+    },
+    false,
+    () => projection.state.rowContext,
+  );
+  const row = (key: string, updatedAt: number) => {
+    const entry = { sessionId: key, updatedAt, label: `revision ${updatedAt}` };
+    return selectionRow({
+      ...createSessionRow(
+        { key, agentId: "main", storeTarget: { agentId: "main", storePath: "store" } },
+        entry,
+      ),
+      entry,
+    })!;
+  };
+  const first = row("agent:main:first", 1);
+  const second = row("agent:main:second", 2);
+  selection.add(first);
+  selection.add(second);
+  for (let index = 0; index < 128; index++) {
+    selection.add(row(`agent:main:idle-${index}`, 0));
+  }
+  const read = selection.read("updatedAt");
+  expect(
+    read
+      .entries(false)
+      .slice(0, 2)
+      .map(([key]) => key),
+  ).toEqual([second.key, first.key]);
+  const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
+  try {
+    for (let revision = 3; revision <= 12; revision++) {
+      const changed = row(first.key, revision);
+      selection.change({ kind: "row", id: identity(changed), ...changed, row: changed });
+    }
+    expect(compare).not.toHaveBeenCalled();
+    expect(read.partitions?.flatMap((partition) => [...partition.entries.values()])).toContainEqual(
+      [first.key, expect.objectContaining({ label: "revision 12" })],
+    );
+    expect(
+      read
+        .entries(false)
+        .slice(0, 2)
+        .map(([key]) => key),
+    ).toEqual([first.key, second.key]);
+    expect(read.get(first.key)?.entry.label).toBe("revision 12");
+    const comparisons = compare.mock.calls.length;
+    expect(comparisons).toBeGreaterThan(0);
+    expect(comparisons).toBeLessThan(20);
+    const stable = read.entries(false);
+    expect(selection.read("updatedAt").entries(false)).toBe(stable);
+    expect(compare).toHaveBeenCalledTimes(comparisons);
+
+    selection.change({ kind: "row", id: identity(first), ...first, row: undefined });
+    const recreated = row(first.key, 13);
+    selection.change({ kind: "row", id: identity(recreated), ...recreated, row: recreated });
+    const residentOrder = selection.read().entries(false);
+    expect(residentOrder[0]?.[0]).toBe(second.key);
+    expect(residentOrder.at(-1)?.[0]).toBe(first.key);
+  } finally {
+    compare.mockRestore();
+    projection.dispose();
+  }
 });
 
 it("maintains list order across metadata changes and archived-row rematerialization", async () => {

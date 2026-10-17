@@ -292,7 +292,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           return this.current;
         },
         hasBaselineTools: () => true,
-        prepareForDispatch: () => undefined,
         refresh() {
           return this.current;
         },

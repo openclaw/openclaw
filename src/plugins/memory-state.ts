@@ -297,6 +297,7 @@ function cloneMemoryPromptSectionParams(
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    projectKey: params.projectKey,
   };
 }
 
@@ -309,6 +310,7 @@ function snapshotMemoryPromptContext(
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed === true,
+    projectKey: params.projectKey,
   });
 }
 
@@ -322,6 +324,7 @@ function preparedMemoryPromptContextMatches(
     prepared.context.agentId === params.agentId &&
     prepared.context.agentSessionKey === params.agentSessionKey &&
     prepared.context.sandboxed === (params.sandboxed === true) &&
+    prepared.context.projectKey === params.projectKey &&
     prepared.context.availableTools.length === params.availableTools.size &&
     prepared.context.availableTools.every((tool) => params.availableTools.has(tool))
   );

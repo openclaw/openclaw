@@ -117,14 +117,8 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const {
-    effectiveProviderOverride,
-    effectiveModelOverride,
-    effectiveThinking,
-    effectiveAllowModelOverride,
-    resolvedRuntime,
-    lifecycleStorePath,
-  } = resolveAgentRunAdmissionModel(params);
+  const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
+  const { lifecycleStorePath } = modelSelection;
   let timeoutSeconds: number | undefined;
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
   try {
@@ -319,7 +313,6 @@ export async function prepareAgentRunDispatch(
         if (restoreAdmittedRestartRecoveryInterrupted) {
           pendingRecovery = await repairMainSessionRecoveryMutation({
             mutation: restoreAdmittedRestartRecoveryInterrupted,
-            onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
             onError: (error) =>
               params.context.logGateway.warn(
                 `failed to restore unaccepted restart recovery: ${formatForLog(error)}`,
@@ -694,13 +687,10 @@ export async function prepareAgentRunDispatch(
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       timeoutSeconds,
-      effectiveProviderOverride,
-      effectiveModelOverride,
-      effectiveThinking,
-      effectiveAllowModelOverride,
+      ...modelSelection,
+      imageUnderstandingModel: params.needsImageUnderstanding ? resolvedRuntime : undefined,
       trustedInternalHandoff,
       restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
-      lifecycleStorePath,
       resolvedThreadId,
       reactivateSubagent,
       followupCompletion,

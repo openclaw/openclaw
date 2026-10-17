@@ -563,7 +563,7 @@ export function SelectInput(props: {
             const accepted =
               nextSelection === unset
                 ? params.isRequired && params.schema.default !== undefined
-                  ? params.onPatch(params.path, structuredClone(params.schema.default))
+                  ? params.onPatch(params.path, params.schema.default)
                   : params.onRemove
                     ? params.onRemove(params.path)
                     : params.onPatch(params.path, undefined)

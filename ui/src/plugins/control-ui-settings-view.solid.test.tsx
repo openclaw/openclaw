@@ -47,8 +47,10 @@ function fixture(
       async loadSettingsView(_placement: unknown, signal: AbortSignal) {
         const dispose = vi.fn();
         assetDisposers.push(dispose);
+        const lifetime = AbortSignal.any([signal, runtime.signal]);
+        lifetime.addEventListener("abort", dispose, { once: true });
         return {
-          signal: AbortSignal.any([signal, runtime.signal]),
+          signal: lifetime,
           dispose,
           view: {
             placement: { section: "memory", panel: "overview" },

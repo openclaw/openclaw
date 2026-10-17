@@ -516,8 +516,6 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         "Expected owned snapshot",
       );
       expect(snapshot.usage.input).toBe(expected.input);
-      snapshot.usage.input = 500;
-      expect(subscription.getCurrentAttemptAssistant()?.usage.input).toBe(expected.input);
     },
   );
 

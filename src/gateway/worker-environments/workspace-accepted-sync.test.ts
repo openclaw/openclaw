@@ -23,7 +23,6 @@ import {
   createAcceptedWorkspacePublisher,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
-import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -125,7 +124,7 @@ function settlement(outcome: "begun" | "rolled-back" | "applied" | "committed"):
 function createAcceptedWorkspacePublisherFactory(
   params: Omit<
     Parameters<typeof createAcceptedWorkspacePublisher>[0],
-    "hashMemo" | "metrics" | "remoteManifest" | "initialRemoteRef"
+    "hashMemo" | "remoteManifest" | "initialRemoteRef"
   >,
 ) {
   const runWorkspaceCommand = params.runWorkspaceCommand;
@@ -135,7 +134,6 @@ function createAcceptedWorkspacePublisherFactory(
       remoteManifest,
       initialRemoteRef,
       hashMemo: new Map(),
-      metrics: createWorkspaceReconcileMetrics(),
       runWorkspaceCommand: async (command) => {
         const response = await runWorkspaceCommand(command);
         const returnedRef = response.stdout.trim();

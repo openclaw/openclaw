@@ -4,13 +4,14 @@ import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { createInitialCronState } from "../../../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../../../lib/cron/jobs.ts";
+import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { formatCronSchedule } from "../../../lib/presenter.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import "../../../styles/chat/summary-automations.css";
 
@@ -24,6 +25,7 @@ type Props = {
 export function ChatSummaryAutomations(props: Props) {
   let host!: HTMLElement;
   const context = useOptionalApplication();
+  // Unrelated parent prop replacements must not reset inventory or presentation.
   const gateway = createMemo(() => props.gateway);
   const sessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
@@ -35,12 +37,10 @@ export function ChatSummaryAutomations(props: Props) {
   let dirty = true;
   let active = true;
   let presentationScope = 0;
-  let focusAfterCommit: typeof cron | undefined;
-  const visible = () =>
-    active &&
-    host.isConnected &&
-    untrack(presented) &&
-    host.ownerDocument.visibilityState !== "hidden";
+  // Imperative request admission samples live presentation without owning its dependency.
+  const readPresented = () => untrack(presented);
+  const visible = (isPresented = readPresented()) =>
+    active && host.isConnected && isPresented && host.ownerDocument.visibilityState !== "hidden";
   const state = () => {
     revision();
     return cron;
@@ -50,20 +50,18 @@ export function ChatSummaryAutomations(props: Props) {
     return showError;
   };
 
-  function reset(retain = false) {
-    const source = untrack(gateway);
+  function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
     const next = createInitialCronState<CronCompactJob>({
       client: source?.snapshot.client ?? null,
       connected: source?.snapshot.phase === "connected",
     });
-    const identity = resolveUiConversationIdentity(source?.snapshot ?? {}, untrack(sessionKey));
+    const identity = resolveUiConversationIdentity(source?.snapshot ?? {}, key);
     next.cronSessionFilter =
       identity.sessionKey && identity.agentId
         ? { sessionKey: identity.sessionKey, sessionAgentId: identity.agentId }
         : undefined;
     next.cronJobsSortBy = "name";
-    next.canRefresh = () =>
-      untrack(() => cron === next && visible() && Boolean(next.cronSessionFilter));
+    next.canRefresh = () => cron === next && visible() && Boolean(next.cronSessionFilter);
     const scope = source ? gatewayPresentationScope(source).key : 0;
     if (retain && scope !== 0 && scope === presentationScope) {
       next.cronJobs = cron.cronJobs;
@@ -79,10 +77,10 @@ export function ChatSummaryAutomations(props: Props) {
     publish();
   }
 
-  async function load(append = false, retry?: HTMLButtonElement) {
+  async function load(append = false, retry?: HTMLButtonElement, isPresented = readPresented()) {
     const current = cron;
     if (
-      !visible() ||
+      !visible(isPresented) ||
       !current.connected ||
       !current.cronSessionFilter ||
       current.cronLoading ||
@@ -99,34 +97,46 @@ export function ChatSummaryAutomations(props: Props) {
     }
     showError = current.cronJobsError !== null;
     const restoreFocus = retry && visible() && host.ownerDocument.activeElement === retry;
-    if (restoreFocus && !showError) {
-      focusAfterCommit = current;
-    }
     publish();
+    if (restoreFocus && !showError) {
+      onSettled(() => {
+        if (
+          current === cron &&
+          visible() &&
+          host.ownerDocument.activeElement === host.ownerDocument.body
+        ) {
+          // Retry targets the first current child row after keyed list reconciliation.
+          host
+            .querySelector<HTMLElement>(
+              ".chat-summary__automation, .chat-summary__automation-message",
+            )
+            ?.focus();
+        }
+      });
+    }
   }
 
+  // Rebind Gateway subscriptions and the request scope when the displayed session changes.
   createEffect(
     () => [gateway(), sessionKey()] as const,
     ([source, key]) => {
-      reset();
+      reset(source, key);
       if (!source) {
         return undefined;
       }
       const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
       let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
+      // Reject obsolete event delivery before queued binding cleanup runs.
+      const current = () => untrack(() => props.gateway === source && props.sessionKey === key);
+      // Connection publications retire request scopes before the next cron event is delivered.
       const unsubscribe = source.subscribe((snapshot) => {
-        if (untrack(() => props.gateway) !== source) {
+        if (!current()) {
           return;
         }
-        const nextIdentity = JSON.stringify(
-          resolveUiConversationIdentity(
-            snapshot,
-            untrack(() => props.sessionKey),
-          ),
-        );
+        const nextIdentity = JSON.stringify(resolveUiConversationIdentity(snapshot, key));
         const changed = lifecycle.transition(snapshot);
         if (changed || identity !== nextIdentity) {
-          reset(identity === nextIdentity && snapshot.phase !== "connected");
+          reset(source, key, identity === nextIdentity && snapshot.phase !== "connected");
           identity = nextIdentity;
         }
         if (dirty) {
@@ -134,7 +144,7 @@ export function ChatSummaryAutomations(props: Props) {
         }
       });
       const unsubscribeEvents = source.subscribeEvents((event) => {
-        if (untrack(() => props.gateway) === source && event.event === "cron") {
+        if (current() && event.event === "cron") {
           dirty = true;
           void load();
         }
@@ -147,23 +157,11 @@ export function ChatSummaryAutomations(props: Props) {
       };
     },
   );
+  // Presentation changes suspend or resume the Gateway inventory request.
   createEffect(presented, (value) => {
     dirty ||= !value;
     if (value) {
-      void load();
-    }
-  });
-  createEffect(revision, () => {
-    const current = focusAfterCommit;
-    focusAfterCommit = undefined;
-    if (
-      current === cron &&
-      visible() &&
-      host.ownerDocument.activeElement === host.ownerDocument.body
-    ) {
-      host
-        .querySelector<HTMLElement>(".chat-summary__automation, .chat-summary__automation-message")
-        ?.focus();
+      void load(false, undefined, value);
     }
   });
   onSettled(() => {
@@ -172,13 +170,13 @@ export function ChatSummaryAutomations(props: Props) {
         void load();
       }
     };
-    host.ownerDocument.addEventListener("visibilitychange", activate);
-    globalThis.addEventListener("focus", activate);
+    const stopVisibility = listen(host.ownerDocument, "visibilitychange", activate);
+    const stopFocus = listen(globalThis, "focus", activate);
     activate();
     return () => {
       active = false;
-      host.ownerDocument.removeEventListener("visibilitychange", activate);
-      globalThis.removeEventListener("focus", activate);
+      stopVisibility();
+      stopFocus();
     };
   });
 
@@ -269,11 +267,7 @@ export function ChatSummaryAutomations(props: Props) {
     </div>
   );
   return (
-    <openclaw-chat-summary-automations
-      ref={(element) => {
-        host = element;
-      }}
-    >
+    <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       <Show
         when={state().cronJobs.length > 0}
         fallback={<Show when={props.gateway && (!loaded() || error())}>{content()}</Show>}

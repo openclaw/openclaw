@@ -180,6 +180,8 @@ type HarnessContextEngineAssemblyParams = Omit<
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
   sandboxed?: boolean;
+  /** Current repository identity passed to memory prompt sections. */
+  memoryProjectKey?: string;
   modelId: string;
   prompt?: string;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -294,6 +296,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
             agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
             agentSessionKey: params.sessionKey,
             sandboxed: params.sandboxed,
+            projectKey: params.memoryProjectKey,
           },
           assemble,
         );

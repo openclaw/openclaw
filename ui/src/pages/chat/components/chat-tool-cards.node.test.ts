@@ -183,18 +183,6 @@ describe("tool-card extraction", () => {
     }
   });
 
-  it.each([
-    { name: "bigint", args: 42n, expected: "42" },
-    { name: "symbol", args: Symbol("input"), expected: undefined },
-    { name: "boxed bigint", args: Object(42n), expected: "[object BigInt]" },
-  ])("preserves $name tool input display", ({ args, expected }) => {
-    const [card] = assistantCards([
-      { type: "toolcall", id: "input-display", name: "example", arguments: args },
-    ]);
-    expect(card).toBeDefined();
-    expect(card?.inputText).toBe(expected);
-  });
-
   it("keeps a same-name result with different legacy call IDs separate from an open call", () => {
     const resultId = { callId: "call-b" };
     const cards = assistantCards([

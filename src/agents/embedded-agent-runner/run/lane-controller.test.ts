@@ -73,8 +73,12 @@ describe("embedded run session lane", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it("passes available run identity through session admission", async () => {
-    const enqueueMethod = "enqueueSession";
+  it.each([
+    ["enqueueSession", "synchronous"],
+    ["enqueueSession", "asynchronous"],
+    ["enqueueGlobal", "synchronous"],
+    ["enqueueGlobal", "asynchronous"],
+  ] as const)("passes run identity through %s with %s refusal", async (enqueueMethod, refusal) => {
     for (const trigger of ["user", "cron"] as const) {
       let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
       const refused = new Error("queue admission refused");
@@ -86,8 +90,11 @@ describe("embedded run session lane", () => {
           sessionKey: "agent:example:subagent:child",
           spawnedBy: "agent:example:main",
         },
-        enqueue: async (_task, options) => {
+        enqueue: (_task, options) => {
           observedOptions = options;
+          if (refusal === "asynchronous") {
+            return Promise.reject(refused);
+          }
           throw refused;
         },
       });

@@ -26,6 +26,7 @@ import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-disp
 const sessionKey = "agent:main:recovery-capacity";
 const sessionId = "recovery-session";
 const runId = "recovery-run";
+const identity = { agentId: "main", sessionKey, sessionId, runId } as const;
 const sessionLane = `session:${sessionKey}`;
 const globalLane = "recovery-capacity-global";
 const startTurn = vi.hoisted(() => vi.fn<(params: { io: AgentTurnIo }) => Promise<void>>());
@@ -85,10 +86,7 @@ describe("restart recovery startup ownership", () => {
     const timeoutMs = 60_000;
     const registration = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
-      runId,
-      agentId: "main",
-      sessionId,
-      sessionKey,
+      ...identity,
       lifecycleGeneration,
       kind: "agent",
       timeoutMs,
@@ -97,10 +95,7 @@ describe("restart recovery startup ownership", () => {
     registerAgentRunContext(runId, { sessionKey, sessionId, lifecycleGeneration });
     let params: RunEmbeddedAgentParams & { sessionFile: string } = {
       admittedRunContext: createTestAdmittedRunContext(runId),
-      agentId: "main",
-      runId,
-      sessionId,
-      sessionKey,
+      ...identity,
       sessionFile: sessionKey,
       lifecycleGeneration,
       abortSignal: registration.controller.signal,

@@ -136,7 +136,6 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
   const entryOnly = alternatives.every((alternative) => alternative.conversations.length === 0);
   let entryPredicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let predicateRevision = 0;
-  let matchesPreparedEntry: ((entry: SessionEntry | undefined) => boolean) | undefined;
   return withSessionEntryReadOnlyInWorker(
     scope,
     assertActive,
@@ -152,10 +151,9 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       ) {
         refuse();
       }
-      const matchesSelectedEntry = (current: SessionEntry | undefined) =>
+      const matchesSelectedEntry = (current: Partial<SessionEntryCurrentFacts> | undefined) =>
         (current === undefined) === (selected === undefined) &&
         fields.every((field, index) => isDeepStrictEqual(current?.[field], selectedValues[index]));
-      matchesPreparedEntry = matchesSelectedEntry;
       if (
         entryPredicate &&
         !entryPredicate.acknowledge(structuredClone(selected), predicateRevision)
@@ -173,6 +171,14 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
         env: scope.env,
       };
       const identity = incognito ? undefined : readDatabasePathIdentitySync(target.storePath);
+      const readSource = identity?.key.startsWith("file:")
+        ? {
+            agentId: owner.scope?.databaseAgentId ?? params.agentId,
+            path: identity.canonicalPath,
+            databaseIdentity: identity.key.slice("file:".length),
+            databaseBirthtime: identity.birthtime,
+          }
+        : undefined;
       const selectedStore = owner.selectedStore;
       let active = true;
       const release = () => {
@@ -239,6 +245,12 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
           refuse();
         }
       };
+      const assertScopeCurrent = () => {
+        assertActive();
+        if (!sourceIsCurrent()) {
+          refuse();
+        }
+      };
       // Pending publishers and memory actors have no persistent source row.
       const nativeSource =
         incognito ||
@@ -249,7 +261,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
           ),
         );
       const source: PreparedSessionSourceAssertion =
-        !identity || nativeSource
+        !readSource || nativeSource
           ? Object.assign(assertCurrent, {
               nativeSource: true,
               async prepareSessionSource() {
@@ -258,22 +270,12 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
             })
           : captureSessionEntrySourceAssertion({
               scope: target,
-              readSource: {
-                agentId: owner.scope?.databaseAgentId ?? params.agentId,
-                path: identity.canonicalPath,
-                databaseIdentity: identity.key.slice("file:".length),
-                databaseBirthtime: identity.birthtime,
-              },
+              readSource,
               expected: selected,
               fields,
               preparedEntry: entryPredicate,
               assertCurrent,
-              assertHostCurrent: () => {
-                assertActive();
-                if (!sourceIsCurrent()) {
-                  refuse();
-                }
-              },
+              assertHostCurrent: assertScopeCurrent,
               async prepareConversations(readConversations) {
                 const predicates = alternatives.map((alternative) =>
                   alternative.conversations.map(({ predicate }) => predicate),
@@ -326,31 +328,14 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
               },
               refuse,
             });
-      const assertScopeCurrent = () => {
-        assertActive();
-        if (!sourceIsCurrent()) {
-          refuse();
-        }
-      };
       const preparedSource = Object.assign(source, { assertScopeCurrent });
-      const matchesEntry = (current: Partial<SessionEntryCurrentFacts> | undefined) =>
-        (current === undefined) === (selected === undefined) &&
-        fields.every((field, index) => isDeepStrictEqual(current?.[field], selectedValues[index]));
       const entryCurrent: SessionEntryCurrentCheck | undefined =
-        !incognito &&
-        identity?.key.startsWith("file:") &&
-        alternatives.every((alternative) => alternative.conversations.length === 0)
+        readSource && entryOnly
           ? {
-              source: {
-                agentId: owner.scope?.databaseAgentId ?? params.agentId,
-                path: identity.canonicalPath,
-                databaseIdentity: identity.key.slice("file:".length),
-                databaseBirthtime: identity.birthtime,
-                sessionKey: target.sessionKey,
-              },
+              source: { ...readSource, sessionKey: target.sessionKey },
               assertCurrent(current) {
                 assertScopeCurrent();
-                if (!matchesEntry(current)) {
+                if (!matchesSelectedEntry(current)) {
                   refuse();
                 }
               },
@@ -362,18 +347,18 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
             return check();
           }
           const sameStore =
-            identity?.key.startsWith("file:") &&
+            readSource &&
             alternatives.every((alternative) =>
               alternative.conversations.every(
-                ({ locator }) => locator?.physicalPath === identity.canonicalPath,
+                ({ locator }) => locator?.physicalPath === readSource.path,
               ),
             );
           let matches: readonly number[];
-          if (sameStore && identity) {
+          if (sameStore && readSource) {
             const result = await withSessionHistoryWorkerDatabase(
               {
-                agentId: owner.scope?.databaseAgentId ?? params.agentId,
-                path: identity.canonicalPath,
+                agentId: readSource.agentId,
+                path: readSource.path,
                 env: scope.env,
               },
               (reader) =>
@@ -382,12 +367,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
                   env: scope.env ?? process.env,
                   sourceChecks: [
                     {
-                      source: {
-                        agentId: owner.scope?.databaseAgentId ?? params.agentId,
-                        path: identity.canonicalPath,
-                        databaseIdentity: identity.key.slice("file:".length),
-                        databaseBirthtime: identity.birthtime,
-                      },
+                      source: readSource,
                       sessionKey: target.sessionKey,
                       fields,
                       expected: selected,
@@ -413,7 +393,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
                 return currentRead.value;
               },
             );
-            if (!matchesEntry(current)) {
+            if (!matchesSelectedEntry(current)) {
               return false;
             }
             const matching = await Promise.all(
@@ -472,7 +452,10 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
         databaseIdentity: identity.key,
         sessionKey: resolveSqliteSessionKey(scope.sessionKey, captured.agentId ?? params.agentId),
         entry: undefined,
-        matches: (_before, current) => matchesPreparedEntry?.(current) ?? false,
+        acquiring: true,
+        matches: (before, current) =>
+          (before === undefined) === (current === undefined) &&
+          fields.every((field) => isDeepStrictEqual(before?.[field], current?.[field])),
       });
       predicateRevision = entryPredicate.captureRevision();
     },

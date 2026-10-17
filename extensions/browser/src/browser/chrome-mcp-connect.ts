@@ -1,4 +1,3 @@
-// Connects Chrome MCP transports and bounds handshake/readiness waits.
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

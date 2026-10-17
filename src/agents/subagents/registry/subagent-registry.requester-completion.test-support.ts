@@ -298,10 +298,15 @@ export function registerRequesterCompletionCustodyTests({
           }
           await activateSubagentRegistry(() => replacement);
           if (terminalRecovery) {
-            await expect(prepareRecovery()).resolves.toEqual({
-              status: "unrestorable",
-              reason: expect.stringMatching(/original operator/),
-            });
+            if (recovery === "missing source") {
+              // Registry binding already settled the unavailable continuation.
+              await expect(prepareRecovery()).resolves.toBeUndefined();
+            } else {
+              await expect(prepareRecovery()).resolves.toEqual({
+                status: "unrestorable",
+                reason: expect.stringMatching(/original operator/),
+              });
+            }
             const settled = loadSubagentRegistryFromSqlite();
             for (const runId of runIds) {
               expect(settled.get(runId)?.requesterSettleWake).toBeUndefined();

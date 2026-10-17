@@ -32,8 +32,8 @@ import type {
   SidebarToolActivity,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import type { SessionOrganizer } from "./session-organizer.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
 import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
@@ -57,7 +57,7 @@ export interface SessionListHost {
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
-    SessionDataController,
+    SessionDataOwner,
     | "childSessionErrorsByParent"
     | "dismissSessionMutationError"
     | "loadMoreSessionCatalog"
@@ -73,7 +73,7 @@ export interface SessionListHost {
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
-    SessionOrganizerController,
+    SessionOrganizer,
     | "draggingSidebarSection"
     | "draggingSessionKey"
     | "isDraggingChildSession"
@@ -99,6 +99,7 @@ export interface SessionListHost {
   readonly sidebarMenus: Pick<
     SidebarMenusController,
     | "catalogMenu"
+    | "catalogMenuView"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
@@ -140,6 +141,10 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
+  /** Unadmitted New session handoff; presentation only, never a saved selection. */
+  pendingSessionCreate():
+    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
+    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
@@ -209,7 +214,7 @@ export type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
-      SessionDataController,
+      SessionDataOwner,
       | "context"
       | "sessionsLoading"
       | "sessionsStartingUp"

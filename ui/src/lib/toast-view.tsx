@@ -8,6 +8,7 @@ export function ToastView(props: {
   toast: ToastOptions | null;
   active: boolean;
   host: HTMLElement;
+  bodyRef(element: HTMLElement): void;
   hover(value: boolean): void;
   focus(value: boolean): void;
   dismiss(reason: ToastDismissReason): void;
@@ -27,6 +28,7 @@ export function ToastView(props: {
     <>
       {props.toast ? (
         <div
+          ref={(element) => props.bodyRef(element)}
           class={[
             "app-toast",
             {

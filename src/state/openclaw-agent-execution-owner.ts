@@ -244,7 +244,16 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ?? fileIdentity,
+        expectedIdentity ??
+          fileIdentity ??
+          (identity.key.startsWith("file:")
+            ? {
+                kind: "file",
+                physicalIdentity: identity.key.slice("file:".length),
+                birthtime: identity.birthtime,
+                nativeLocation: identity.canonicalPath,
+              }
+            : undefined),
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
@@ -267,7 +276,7 @@ export function createAgentDatabaseExecution(
       );
       // A peer's intentional native close can finish while this admitted operation settles.
       if (generation === current && !nativeClosing && current.failure()) {
-        await owner.close().catch(reportCleanupFailure);
+        await closeNative(current).catch(reportCleanupFailure);
       }
       return result;
     } catch (error) {
@@ -277,6 +286,7 @@ export function createAgentDatabaseExecution(
         !entered &&
         !schemaReadmitted &&
         nativeFailure !== "native" &&
+        nativeFailure !== "lost" &&
         error instanceof AgentDatabaseSchemaAdmissionChangedError;
       if (generation === current && (nativeFailure || retireNativeOnFailure || schemaChanged)) {
         try {
@@ -284,7 +294,8 @@ export function createAgentDatabaseExecution(
             reportTerminal(error);
             await owner.close();
           } else {
-            // The rejected broker scope has settled; only its captured native owner is retired.
+            // A lost carrier invalidates native claims, not other chats' logical borrowers.
+            // The failed operation stays failed; only later work can open a fresh generation.
             await closeNative(current);
           }
         } catch (cleanupError) {

@@ -198,7 +198,7 @@ type McpServerMutationRequest =
       "server"
     >)
   | ({ kind: "unset" } & Parameters<typeof unsetConfiguredMcpServer>[0])
-  | ({ kind: "update" } & Parameters<typeof updateConfiguredMcpServerConfig>[0]);
+  | ({ kind: "update"; errorLabel: string } & Parameters<typeof updateConfiguredMcpServer>[0]);
 
 async function mutateConfiguredMcpServer(
   params: McpServerMutationRequest,
@@ -289,16 +289,6 @@ async function mutateConfiguredMcpServer(
   });
 }
 
-async function updateConfiguredMcpServerConfig(params: {
-  name: string;
-  update: (server: Record<string, unknown>) => Record<string, unknown>;
-  errorLabel: string;
-  skipLifecycleLease?: boolean;
-  onCommitted?: McpConfigMutationHook;
-}): Promise<ConfigMcpWriteResult> {
-  return mutateConfiguredMcpServer({ ...params, kind: "update" }, params.onCommitted);
-}
-
 async function updateConfiguredMcpServerTools(
   params: {
     name: string;
@@ -307,30 +297,32 @@ async function updateConfiguredMcpServerTools(
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
-  return updateConfiguredMcpServerConfig({
-    name: params.name,
-    skipLifecycleLease: params.skipLifecycleLease,
-    errorLabel: "tool selection update",
-    onCommitted,
-    update: (server) => {
-      if (params.tools === null) {
-        delete server.toolFilter;
-      } else {
-        const include = normalizeToolSelectionList(params.tools.include);
-        const exclude = normalizeToolSelectionList(params.tools.exclude);
-        if (include || exclude) {
-          server.toolFilter = {
-            ...(isRecord(server.toolFilter) ? server.toolFilter : {}),
-            ...(include ? { include } : {}),
-            ...(exclude ? { exclude } : {}),
-          };
-        } else {
+  return mutateConfiguredMcpServer(
+    {
+      kind: "update",
+      name: params.name,
+      errorLabel: "tool selection update",
+      update: (server) => {
+        if (params.tools === null) {
           delete server.toolFilter;
+        } else {
+          const include = normalizeToolSelectionList(params.tools.include);
+          const exclude = normalizeToolSelectionList(params.tools.exclude);
+          if (include || exclude) {
+            server.toolFilter = {
+              ...(isRecord(server.toolFilter) ? server.toolFilter : {}),
+              ...(include ? { include } : {}),
+              ...(exclude ? { exclude } : {}),
+            };
+          } else {
+            delete server.toolFilter;
+          }
         }
-      }
-      return server;
+        return server;
+      },
     },
-  });
+    onCommitted,
+  );
 }
 
 async function updateConfiguredMcpServer(
@@ -341,13 +333,15 @@ async function updateConfiguredMcpServer(
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
-  return updateConfiguredMcpServerConfig({
-    name: params.name,
-    skipLifecycleLease: params.skipLifecycleLease,
-    errorLabel: "configure",
+  return mutateConfiguredMcpServer(
+    {
+      kind: "update",
+      name: params.name,
+      errorLabel: "configure",
+      update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
+    },
     onCommitted,
-    update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
-  });
+  );
 }
 
 async function setConfiguredMcpServer(

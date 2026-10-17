@@ -605,7 +605,6 @@ export async function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "self-chat echo" };
   }
 
-  // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
     if (

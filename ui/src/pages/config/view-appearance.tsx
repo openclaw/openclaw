@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, onCleanup } from "solid-js";
+import { createEffect, createMemo, For, onSettled } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -105,10 +105,11 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
   let focusFrame = 0;
-  onCleanup(() => cancelAnimationFrame(focusFrame));
+  onSettled(() => () => cancelAnimationFrame(focusFrame));
   const showCustomThemeImport = createMemo(
     () => props.hasCustomTheme || props.customThemeImportExpanded === true,
   );
+  // Focus and scrolling synchronize the revealed import input with the DOM.
   createEffect(
     () => ({
       shown: showCustomThemeImport(),

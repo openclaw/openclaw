@@ -113,7 +113,10 @@ describe("native plugin browser builds", () => {
                 ...(authoredUi === "settings-only"
                   ? {
                       activation: "settings-only",
-                      settingsViews: [{ section: "memory", panel: "overview" }],
+                      settingsViews: [
+                        { section: "memory", panel: "overview" },
+                        { section: "memory", panel: "memories" },
+                      ],
                     }
                   : {}),
               },
@@ -139,7 +142,12 @@ describe("native plugin browser builds", () => {
         authoredUi === "settings-only" ? "settings-only" : undefined,
       );
       expect(generated.controlUi.settingsViews).toEqual(
-        authoredUi === "settings-only" ? [{ section: "memory", panel: "overview" }] : undefined,
+        authoredUi === "settings-only"
+          ? [
+              { section: "memory", panel: "overview" },
+              { section: "memory", panel: "memories" },
+            ]
+          : undefined,
       );
       expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
       generated.id = "previous-name";

@@ -5,6 +5,7 @@ import {
   createMemo,
   For,
   Match,
+  Repeat,
   Show,
   Switch,
   onCleanup,
@@ -22,7 +23,7 @@ import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
-import "../../../components/person-reference.ts";
+import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
@@ -80,8 +81,9 @@ export function GroupedMessage(props: GroupedMessageProps) {
     prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
   );
   let element: Element | undefined;
-  // Bind arrivals before the transcript commit consumes their pending identities.
+  // Snapshot the initial arrival callback so the DOM ref binds before transcript commit.
   let currentEntryRef = untrack(() => props.options.entryRef);
+  // Keep the entry-animation DOM owner bound as its callback changes.
   createEffect(
     () => props.options.entryRef,
     (next) => {
@@ -94,6 +96,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
       }
     },
   );
+  // Expiring pairing QR attachments schedule a timer at their resource owner.
   createEffect(
     () =>
       [props.messageKey, state().nextPairingQrExpiresAt, props.options.onRequestUpdate] as const,
@@ -229,11 +232,10 @@ function InlineToolCards(props: {
 }
 
 function PairingQrNotices(props: { count: number }) {
-  const count = createMemo(() => props.count);
   return (
-    <Show when={count() > 0}>
+    <Show when={props.count > 0}>
       <div class="chat-pairing-qr-notices">
-        <For each={Array.from({ length: count() }, (_, index) => index)}>
+        <Repeat count={props.count}>
           {() => (
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired">
               <span class="chat-pairing-qr-expired__icon" aria-hidden="true">
@@ -254,7 +256,7 @@ function PairingQrNotices(props: { count: number }) {
               </div>
             </div>
           )}
-        </For>
+        </Repeat>
       </div>
     </Show>
   );
@@ -367,6 +369,7 @@ function MessageAvatar(props: { render?: () => JSX.Element }) {
   const render = createMemo(() => props.render);
   const avatar = createMemo(() => {
     const factory = render();
+    // The factory owns nested reactive bindings; only replacement remounts the avatar.
     return factory ? untrack(factory) : undefined;
   });
   return <>{avatar()}</>;

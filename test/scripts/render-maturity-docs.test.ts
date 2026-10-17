@@ -638,12 +638,35 @@ describe("maturity docs renderer CLI", () => {
   });
 
   it("checks maturity inputs without requiring QA evidence artifacts", () => {
-    const result = runCli("--check");
+    const result = runCli(
+      "--check",
+      "--",
+      "--taxonomy",
+      "missing.yaml",
+      "--taxonomy",
+      "taxonomy.yaml",
+      "--check",
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("maturity docs inputs are valid in docs");
     expect(result.stdout).toContain("evidence-backed freshness check skipped");
+  });
+
+  it.each([
+    { args: ["--taxonomy", ""], message: "--taxonomy requires a value" },
+    {
+      args: ["--taxonomy=taxonomy.yaml"],
+      message: "Unknown maturity docs option: --taxonomy=taxonomy.yaml",
+    },
+    { args: ["taxonomy.yaml"], message: "Unknown maturity docs option: taxonomy.yaml" },
+  ])("preserves the split-option CLI grammar for $args", ({ args, message }) => {
+    const result = runCli(...args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe(message);
+    expect(result.stdout).toBe("");
   });
 
   it("rejects mismatched historical identity before mutating strict output", () => {

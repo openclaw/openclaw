@@ -433,7 +433,7 @@ suite.define(() => {
     "late follower without metadata",
     "late follower without metadata, metadata first",
     "late follower, catalog first",
-  ])("shares pending catalog reads across metadata invalidations (%s)", async (presentation) => {
+  ])("coalesces fresh catalog reads after pending work (%s)", async (presentation) => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const paneCount = presentation === "shared" ? 2 : 1;
       if (presentation === "shared") {
@@ -458,6 +458,12 @@ suite.define(() => {
       for (const method of methods) {
         await gateway.waitForRequest(method, { after: before[method] });
       }
+      const pendingCatalogCount = await gateway.deferNext("models.list");
+      const resolvePending = (method: (typeof methods)[number]) =>
+        gateway.resolveDeferred(
+          method,
+          method === "models.list" ? { models: [{ ...model, name: "Retired model" }] } : undefined,
+        );
       await gateway.setMethodResponse("models.list", { models: [freshModel] });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
@@ -484,7 +490,7 @@ suite.define(() => {
           ? "models.list"
           : undefined;
       if (first) {
-        await gateway.resolveDeferred(first);
+        await resolvePending(first);
         await page.evaluate(
           () =>
             new Promise<void>((resolve) => {
@@ -498,9 +504,15 @@ suite.define(() => {
       }
       for (const method of methods) {
         if (method !== first) {
-          await gateway.resolveDeferred(method);
+          await resolvePending(method);
         }
       }
+      await gateway.waitForRequest("models.list", { after: pendingCatalogCount });
+      expect(await gateway.getRequests("models.list")).toHaveLength(before["models.list"] + 2);
+      for (const pane of await panes.all()) {
+        await expectCatalog(pane, model.name);
+      }
+      await gateway.resolveDeferred("models.list");
       for (const pane of await panes.all()) {
         await expectCatalog(pane, freshModel.name);
       }
@@ -510,7 +522,7 @@ suite.define(() => {
           (presentation.startsWith("late follower") && !presentation.includes("without metadata")
             ? 1
             : 2),
-        "models.list": before["models.list"] + 1,
+        "models.list": before["models.list"] + 2,
       });
     });
   });

@@ -24,6 +24,7 @@ import type {
 } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
@@ -115,10 +116,6 @@ function extractSherpaOnnxText(raw: string): string | undefined {
   return undefined;
 }
 
-function commandBase(command: string): string {
-  return path.parse(command).name;
-}
-
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (const [index, arg] of args.entries()) {
     if (keys.includes(arg)) {
@@ -197,7 +194,7 @@ async function resolveCliOutput(params: {
   stdout: string;
   mediaPath: string;
 }): Promise<string> {
-  const commandId = commandBase(params.command);
+  const commandId = path.parse(params.command).name;
   const fileOutput =
     commandId === "whisper-cli"
       ? resolveWhisperCppOutputPath(params.args)
@@ -236,7 +233,7 @@ async function resolveCliMediaPath(params: {
   outputDir: string;
   execution?: MediaExecutionContext;
 }): Promise<string> {
-  const commandId = commandBase(params.command);
+  const commandId = path.parse(params.command).name;
   if (params.capability !== "audio" || commandId !== "whisper-cli") {
     return params.mediaPath;
   }
@@ -247,7 +244,6 @@ async function resolveCliMediaPath(params: {
   }
 
   const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
-  await fs.mkdir(params.outputDir, { recursive: true });
   await writeExternalFileWithinRoot({
     rootDir: params.outputDir,
     path: path.basename(wavPath),
@@ -516,6 +512,7 @@ export async function runProviderEntry(params: {
       provider: requestProviderId,
       prompt: params.request?.prompt ?? prompt,
       timeoutMs,
+      signal: params.execution?.signal,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentId: params.agentId,
@@ -524,8 +521,10 @@ export async function runProviderEntry(params: {
       cfg: params.cfg,
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
-    assertMediaExecutionCurrent(params.execution);
-    const result = await describeImage(imageInput);
+    const result = await withGuardedFetchRequestAuthority(
+      params.execution ? () => assertMediaExecutionCurrent(params.execution) : undefined,
+      () => describeImage(imageInput),
+    );
     return ok({
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
@@ -769,7 +768,7 @@ export async function runCliEntry(
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
       signal: params.execution?.signal,
-      cwd: ["agy", "antigravity"].includes(commandBase(command))
+      cwd: ["agy", "antigravity"].includes(path.parse(command).name)
         ? path.dirname(mediaPath)
         : undefined,
     });
@@ -802,7 +801,7 @@ export async function runCliEntry(
       kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
       attachmentIndex,
       text,
-      provider: capability === "audio" ? commandBase(command) : "cli",
+      provider: capability === "audio" ? path.parse(command).name : "cli",
       model: command,
       ...(requestedBackend ? { requestedBackend } : {}),
       ...(observedBackend ? { observedBackend } : {}),

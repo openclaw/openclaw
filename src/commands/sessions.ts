@@ -299,11 +299,7 @@ export async function sessionsCommand(
       storePath: target.storePath,
       projection: "list",
     })
-      .filter(
-        ({ entry }) =>
-          activeSince === undefined ||
-          (typeof entry.updatedAt === "number" && entry.updatedAt >= activeSince),
-      )
+      .filter(({ entry }) => activeSince === undefined || entry.updatedAt >= activeSince)
       .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
   const totalCount = allEntries.length;

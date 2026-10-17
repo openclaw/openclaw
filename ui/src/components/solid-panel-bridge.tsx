@@ -1,11 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createRenderEffect } from "solid-js";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import type { SolidPanelController } from "./solid-panel-controller.ts";
-
-type MethodKey<T> = {
-  [Key in keyof T]-?: T[Key] extends (...args: never[]) => unknown ? Key : never;
-}[keyof T];
+import type { SolidPanelOwner } from "./solid-panel-owner.ts";
 
 type BridgeSpec<Props extends object, Methods extends object> = Parameters<
   typeof defineSolidBridge<Props, Methods>
@@ -14,8 +10,8 @@ type BridgeSpec<Props extends object, Methods extends object> = Parameters<
 /** The bridge owns input properties; the controller reads that same synchronous state. */
 export function definePanelBridge<
   Props extends object,
-  Controller extends SolidPanelController,
-  Method extends MethodKey<Controller>,
+  Controller extends SolidPanelOwner & Record<Method, (...args: never[]) => unknown>,
+  Method extends PropertyKey,
 >(
   tag: string,
   create: (element: HTMLElement) => Controller,
@@ -52,22 +48,13 @@ export function definePanelBridge<
         get: () => controller[key],
       });
     }
-    let prototype = Object.getPrototypeOf(host);
-    let bridgeCompletion: PropertyDescriptor["get"];
-    while (prototype && !bridgeCompletion) {
-      const descriptor = Object.getOwnPropertyDescriptor(prototype, "updateComplete");
-      if (descriptor?.get) {
-        bridgeCompletion = descriptor.get.bind(host);
-      }
-      prototype = Object.getPrototypeOf(prototype);
-    }
-    if (!bridgeCompletion) {
-      throw new Error("Solid panel bridge requires the bridge commit fence");
-    }
-    const readBridgeCompletion = bridgeCompletion;
+    const bridgePrototype = Object.getPrototypeOf(host);
     Object.defineProperty(host, "updateComplete", {
       configurable: true,
-      get: () => Promise.resolve(readBridgeCompletion()).then(() => controller.updateComplete),
+      get: () =>
+        Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(
+          () => controller.updateComplete,
+        ),
     });
     controllers.set(host, controller);
     return controller;
@@ -78,9 +65,6 @@ export function definePanelBridge<
       (host: Host, ...args: unknown[]) => {
         const controller = controllerFor(host);
         const method = controller[key];
-        if (typeof method !== "function") {
-          throw new TypeError(`Panel method ${String(key)} is not callable`);
-        }
         return Reflect.apply(method, controller, args);
       },
     ]),

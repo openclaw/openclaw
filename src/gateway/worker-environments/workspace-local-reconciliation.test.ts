@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
@@ -55,7 +54,6 @@ async function prepareUnchangedWorkspace(options?: {
       assertCurrent: options?.assertCurrent,
     },
     hashMemo: new Map(),
-    metrics: createWorkspaceReconcileMetrics(),
   });
   const raw = serializeWorkerWorkspaceManifest(base.manifest);
   const reconciliation = await reconcile({
@@ -135,7 +133,6 @@ describe("unchanged local workspace reconciliation", () => {
           stagedResult: { ref: stagedRef, record: () => {} },
         },
         hashMemo: new Map(),
-        metrics: createWorkspaceReconcileMetrics(),
       });
       const reconciliation = await prepare({
         stagingRoot: worker,
@@ -270,7 +267,6 @@ describe("unchanged local workspace reconciliation", () => {
           stagedResult: { ref: workerWorkspaceResultRef("host-staged-result"), record: () => {} },
         },
         hashMemo: new Map(),
-        metrics: createWorkspaceReconcileMetrics(),
       });
       const reconciliation = await prepare({
         stagingRoot,

@@ -65,6 +65,7 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   onAgentEvent?: (event: EmbeddedAgentEvent) => void | Promise<void>;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
+  priority?: "interactive" | "background";
 };
 
 type ModelCallErrorFields = Pick<
@@ -266,6 +267,18 @@ export function createModelLifecycle(params: {
     sessionKey: params.ctx.sessionKey,
     runId: params.ctx.runId,
     requestId: callId,
+    priority: params.ctx.priority,
+    onRateLimitWait: (retryAt: number) => {
+      const delayMs = Math.max(0, retryAt - Date.now());
+      reportStatus({
+        phase: "retrying",
+        reason: "rate_limit",
+        message: `Waiting for rate limit. Retrying in ${Math.ceil(delayMs / 1000)}s.`,
+        delayMs,
+        retryAt,
+      });
+      return () => reportStatus({ phase: "starting_model" });
+    },
   };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
@@ -311,6 +324,19 @@ export function createModelLifecycle(params: {
   let firstEventObserved = false;
   const trackStatusDelivery = captureAsyncWorkTracker();
   const signal = params.options?.signal;
+  function reportStatus(data: Record<string, unknown>) {
+    const event = { stream: "run_status" as const, data };
+    emitAgentEvent({ runId: params.ctx.runId, sessionKey: params.ctx.sessionKey, ...event });
+    if (params.ctx.onAgentEvent) {
+      void trackStatusDelivery(async () => {
+        try {
+          await params.ctx.onAgentEvent?.(event);
+        } catch {
+          log.warn("Provider wait status delivery failed");
+        }
+      });
+    }
+  }
   const reportWait: NonNullable<NonNullable<ModelCallStreamOptions>["onProviderWait"]> = (
     reason,
   ) => {
@@ -322,24 +348,7 @@ export function createModelLifecycle(params: {
       return;
     }
     waitReason = reason;
-    const event = {
-      stream: "run_status" as const,
-      data: reason ? { phase: "waiting_for_model", reason } : { phase: "starting_model" },
-    };
-    emitAgentEvent({
-      runId: params.ctx.runId,
-      sessionKey: params.ctx.sessionKey,
-      ...event,
-    });
-    if (params.ctx.onAgentEvent) {
-      void trackStatusDelivery(async () => {
-        try {
-          await params.ctx.onAgentEvent?.(event);
-        } catch {
-          log.warn("Provider wait status delivery failed");
-        }
-      });
-    }
+    reportStatus(reason ? { phase: "waiting_for_model", reason } : { phase: "starting_model" });
     params.options?.onProviderWait?.(reason);
   };
   const clearWait = () => reportWait(null);

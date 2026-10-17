@@ -8,7 +8,7 @@ import {
 import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";

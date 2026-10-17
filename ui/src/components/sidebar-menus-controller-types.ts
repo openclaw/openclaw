@@ -14,13 +14,13 @@ import type {
   SidebarRecentSession,
   SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import type {
-  SessionOrganizerController,
-  SessionOrganizerControllerHost,
-} from "./session-organizer-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import type { SessionOrganizer, SessionOrganizerDependencies } from "./session-organizer.ts";
 
-export interface SidebarMenusControllerHost extends SessionOrganizerControllerHost {
+export interface SidebarMenusControllerHost extends SessionOrganizerDependencies {
+  addController(controller: { hostConnected(): void; hostDisconnected(): void }): void;
+  requestUpdate(): void;
+  readonly updateComplete: Promise<boolean>;
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly querySelector: HTMLElement["querySelector"];
   readonly querySelectorAll: HTMLElement["querySelectorAll"];
@@ -42,9 +42,9 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   navigationView: "pages" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
-  readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
+  readonly sessionData: SessionOrganizerDependencies["sessionData"] &
     Pick<
-      SessionDataController,
+      SessionDataOwner,
       | "context"
       | "activeSessionLineageRoot"
       | "activeSessionLineageSelectedRow"
@@ -57,7 +57,7 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
       | "sessionScopeGeneration"
     >;
   readonly sessionDataContext: ApplicationContext | undefined;
-  readonly sessionOrganizer: SessionOrganizerController;
+  readonly sessionOrganizer: SessionOrganizer;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   readonly sessionOwnerFilterActive: boolean;

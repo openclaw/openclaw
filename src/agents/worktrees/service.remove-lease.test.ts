@@ -134,13 +134,20 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
 
   it("rejects a concurrent second remover while the first holds the claim", async () => {
     const created = await createSessionWorktree();
-    const first = service.remove({ id: created.id, reason: "manual-delete" });
+    const outcomes = await Promise.allSettled([
+      service.remove({ id: created.id, reason: "manual-delete" }),
+      service.remove({ id: created.id, reason: "manual-delete" }),
+    ]);
 
-    await expect(service.remove({ id: created.id, reason: "manual-delete" })).rejects.toThrow(
-      /already in progress|unknown active worktree/,
-    );
-
-    expect((await first).removed).toBe(true);
+    expect(outcomes).toMatchObject([
+      { status: "fulfilled", value: { removed: true } },
+      {
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringMatching(/in progress|unknown active worktree/),
+        }),
+      },
+    ]);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

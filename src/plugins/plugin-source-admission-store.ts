@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
@@ -41,14 +41,13 @@ export function createPluginSourceAdmissionPublisher(
     if (isArtifactPreservingStateRead()) {
       return false;
     }
-    const prepared = structuredClone(publication);
     const { runOpenClawStateWorkerOperation } =
       await import("../state/openclaw-state-worker-store.js");
     return (
       (await runOpenClawStateWorkerOperation(
         context,
         (scope) =>
-          scope.execute({ type: "plugins.metadata.sourceAdmission.publish", input: prepared }),
+          scope.execute({ type: "plugins.metadata.sourceAdmission.publish", input: publication }),
         { existingOnly: true },
       )) ?? false
     );

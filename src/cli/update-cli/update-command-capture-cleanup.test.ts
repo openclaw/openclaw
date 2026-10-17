@@ -171,8 +171,26 @@ it.each(["current", "pre-migration"] as const)(
   "removes only %s candidate captures and keeps protected captures",
   async (location) => {
     await withCaptureHistory(async (captures, root) => {
+      using stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
+        if (!String(text).startsWith("Removing capture ")) {
+          return true;
+        }
+        const directory = Object.values(captures).find((item) => String(text).includes(item));
+        expect(directory).toBeDefined();
+        expect(fs.existsSync(directory!)).toBe(true);
+        return true;
+      });
       const result = await runCleanup({ yes: true });
       expect(result.status).toBe("complete");
+      const progress = stderr.mock.calls
+        .map(([text]) => String(text))
+        .filter((text) => text.startsWith("Removing capture "));
+      expect(progress).toHaveLength(3);
+      for (const [index, text] of progress.entries()) {
+        expect(text).toMatch(
+          new RegExp(`^Removing capture ${index + 1}/3: .+ \\(103[58] bytes\\)\\n$`),
+        );
+      }
       const preview = expectedPreview(captures);
       for (const [directory, item] of Object.entries(preview)) {
         expect(result.captures[directory]).toEqual(

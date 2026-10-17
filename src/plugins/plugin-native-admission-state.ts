@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type {
@@ -234,7 +234,7 @@ export function overlayPluginNativeAdmissions(
             ...record,
             sourceAdmissions: {
               ...record.sourceAdmissions,
-              ...structuredClone(Object.fromEntries(receipts)),
+              ...Object.fromEntries(receipts),
             },
           }
         : record;
@@ -284,7 +284,7 @@ export function preparePluginNativeAdmissions(
       }
     }
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
-      state.receipts.set(key, structuredClone(receipt));
+      state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
         state.namespaces.set(id, structuredClone(namespace));
       }

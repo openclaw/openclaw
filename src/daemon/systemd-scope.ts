@@ -503,14 +503,16 @@ async function findSystemdGatewayScope(
   for (const name of names) {
     const unitName = `${name}.service`;
     for (const dir of directories) {
-      let unitPath: string;
+      const unitPath =
+        dir === undefined
+          ? resolveSystemdUnitPathForName(env, name)
+          : path.posix.join(dir, unitName);
       try {
-        unitPath =
-          dir === undefined
-            ? resolveSystemdUnitPathForName(env, name)
-            : path.posix.join(dir, unitName);
         await fs.access(unitPath);
-      } catch {
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
         continue;
       }
       return {

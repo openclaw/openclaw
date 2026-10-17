@@ -8,6 +8,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexSteps,
 } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationSync } from "./sqlite-integrity.js";
+import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE records (
@@ -183,20 +184,12 @@ describe("repairCanonicalSqliteIndexes", () => {
     try {
       db.exec(`DROP INDEX idx_records_identity; ${driftedSql};`);
 
-      const traced = traceSqlExecutions(db);
       expect(
-        repairCanonicalSqliteIndexes(traced.database, "test database", expectedCatalog),
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
+          validateAfterRepair: () =>
+            assertSqliteSchemaContains(db, "test database", expectedCatalog),
+        }),
       ).toEqual(["idx_records_identity"]);
-      expect(
-        traced.statements.filter((sql) =>
-          /PRAGMA (?:integrity_check|foreign_key_check)/u.test(sql),
-        ),
-      ).toEqual([
-        "PRAGMA integrity_check;",
-        "PRAGMA foreign_key_check;",
-        "PRAGMA integrity_check;",
-        "PRAGMA foreign_key_check;",
-      ]);
 
       const row = db
         .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_identity'")
@@ -451,6 +444,13 @@ describe("repairCanonicalSqliteIndexes", () => {
           allowMissingColumns: true,
         }),
       ).toEqual([]);
+      expect(() =>
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
+          allowMissingColumns: true,
+          validateUnchanged: (readTable) =>
+            assertSqliteSchemaContains(db, "test database", expectedCatalog, {}, readTable),
+        }),
+      ).toThrow(/column definitions differ for records/iu);
       expect(
         db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_active_lookup'").get(),
       ).toEqual({ sql: "CREATE INDEX idx_records_active_lookup ON records(tenant_id)" });

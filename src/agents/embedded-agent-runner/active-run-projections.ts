@@ -20,11 +20,7 @@ import {
 } from "./run-state.js";
 
 export function isEmbeddedAgentRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
-  if (active) {
-    diag.debug(`run active check: sessionId=${sessionId} active=true`);
-  }
-  return active;
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
 }
 
 /** Counts active embedded runs while including auto-reply registry runs for shared sessions. */
@@ -83,8 +79,6 @@ export function waitForCurrentEmbeddedAgentRunEnd(
   if (!isHandleActive()) {
     return handle ? Promise.resolve(true) : waitForReplyRunEndBySessionId(sessionId, timeoutMs);
   }
-  const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
-  diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
   return new Promise((resolve) => {
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     let settled = false;
@@ -156,7 +150,6 @@ export function notifyEmbeddedRunEnded(
     return;
   }
   const sessionIdle = !ACTIVE_EMBEDDED_RUNS.has(sessionId);
-  diag.debug(`notifying waiters: sessionId=${sessionId} waiterCount=${waiters.size}`);
   for (const waiter of waiters) {
     if (aborted && !waiter.settleOnAbort) {
       continue;

@@ -8,6 +8,8 @@ import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 import { currentThemeBranding } from "./theme-branding.ts";
 
+let environmentStripe: HTMLElement | undefined;
+
 export function applyControlUiPresentation(params: {
   environment: ControlUiEnvironment | null;
   seamColor?: string;
@@ -28,7 +30,8 @@ export function applyControlUiPresentation(params: {
     root.removeAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE);
     root.style.removeProperty("--control-ui-environment-color");
     root.style.removeProperty("--control-ui-environment-ink");
-    document.querySelector(".control-ui-environment-stripe")?.remove();
+    environmentStripe?.remove();
+    environmentStripe = undefined;
     syncControlUiFavicon();
     return;
   }
@@ -41,11 +44,11 @@ export function applyControlUiPresentation(params: {
     "--control-ui-environment-ink",
     `var(--control-ui-environment-${environment.color}-ink)`,
   );
-  if (!document.querySelector(".control-ui-environment-stripe")) {
-    const stripe = document.createElement("div");
-    stripe.className = "control-ui-environment-stripe";
-    stripe.setAttribute("aria-hidden", "true");
-    document.body.prepend(stripe);
+  if (!environmentStripe?.isConnected) {
+    environmentStripe = document.createElement("div");
+    environmentStripe.className = "control-ui-environment-stripe";
+    environmentStripe.setAttribute("aria-hidden", "true");
+    document.body.prepend(environmentStripe);
   }
   if (!document.title.endsWith(` · ${environment.label}`)) {
     document.title = `${document.title} · ${environment.label}`;
@@ -147,6 +150,7 @@ export function syncControlUiFavicon(): void {
   if (!color) {
     faviconSources.clear();
   }
+  // Icon candidates belong to the static document head, outside the rendered app.
   for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
     if (!faviconImage && !baseSvg && !color) {
       faviconRequests.delete(icon);
@@ -212,6 +216,7 @@ async function loadSource(href: string, type: string | null): Promise<FaviconSou
     if (!response.ok) {
       throw new Error(`Favicon loading failed (${response.status})`);
     }
+    // Validate the fetched SVG's parser document, which is separate from the application's DOM.
     const parsed = new DOMParser().parseFromString(await response.text(), "image/svg+xml");
     const svg = parsed.documentElement;
     if (

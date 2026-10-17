@@ -1,4 +1,3 @@
-// Voice Call API module exposes the plugin public contract.
 import { existsSync } from "node:fs";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.

@@ -14,7 +14,7 @@ import {
 } from "./call-events.js";
 import type { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
-import { projectFaceTimeNativeAction } from "./helper-results.js";
+import { assertFaceTimeNativeAction } from "./helper-results.js";
 import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import {
   doesFaceTimeCallMatchPendingDial,
@@ -164,7 +164,7 @@ export function createFaceTimeCallEventHandler(params: {
         generation,
         action: async () => await params.helper.answerCall(callUUID),
       });
-      projectFaceTimeNativeAction("answer", answerResult);
+      assertFaceTimeNativeAction("answer", answerResult);
       retainHelperResultPeers(call, answerResult);
       await params.callControl.activateCallTalk(call);
       params.logger.info("[facetime] answered authorized FaceTime call");
@@ -306,7 +306,7 @@ export function createFaceTimeCallEventHandler(params: {
             });
             ringingCall.lastHelperAction = muteResult;
             retainHelperResultPeers(ringingCall, muteResult);
-            projectFaceTimeNativeAction("safe-mute", muteResult);
+            assertFaceTimeNativeAction("safe-mute", muteResult);
           } catch (error) {
             params.logger.warn(
               `[facetime] outbound ringing safety mute failed: ${formatErrorMessage(error)}`,

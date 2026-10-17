@@ -291,6 +291,9 @@
         "liteLLM": {
           "provider": "anthropic"
         }
+      },
+      "claude-cli": {
+        "priceAs": "anthropic"
       }
     }
   },

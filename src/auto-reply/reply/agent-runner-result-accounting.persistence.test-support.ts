@@ -164,7 +164,6 @@ export async function createAgentAccountingPersistenceFixture({
       },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId,
     runStartedAt: Date.now(),

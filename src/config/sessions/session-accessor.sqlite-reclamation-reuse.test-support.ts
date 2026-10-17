@@ -72,23 +72,27 @@ export function createNativeReclamationSource(
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = () => context.admission.assertCurrent();
   let revokedDuringOpen = false;
+  if (revokeDuringOpen) {
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        !revokedDuringOpen &&
+        request.stage === "prepare" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.identity) &&
+        request.facts.identity.nativeLocation === database.path
+      ) {
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        revokedDuringOpen = true;
+      }
+      admit(request, grant);
+    });
+  }
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent,
     createAdmission(binding) {
       return () => ({
         nativeLocations: binding.nativeLocations,
         admission: workerAdmission.createSqliteWorkerOperationAdmission((request, grant) => {
-          if (
-            revokeDuringOpen &&
-            !revokedDuringOpen &&
-            request.stage === "prepare" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.identity) &&
-            request.facts.identity.kind === "file"
-          ) {
-            invalidateOpenClawAgentDatabaseValidation(database.path);
-            revokedDuringOpen = true;
-          }
           binding.authorize(request);
           assertCurrent();
           if (!grant()) {
