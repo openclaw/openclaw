@@ -6,12 +6,44 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import * as providerChoices from "../plugins/provider-auth-choices.js";
+import type {
+  PluginMetadataRegistryView,
+  PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.types.js";
 import { detectAvailableSetupProviderIds } from "../plugins/provider-setup-availability.js";
-import * as providerRuntime from "../plugins/providers.runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
+
+const inventories = vi.hoisted(
+  (): { choices?: PluginMetadataSnapshot; providers?: PluginMetadataRegistryView } => ({}),
+);
+
+vi.mock("../plugins/provider-auth-choices.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-auth-choices.js")>();
+  return {
+    ...actual,
+    resolveManifestProviderAuthChoices: (
+      params: Parameters<typeof actual.resolveManifestProviderAuthChoices>[0],
+    ) => {
+      inventories.choices = params?.metadataSnapshot;
+      return actual.resolveManifestProviderAuthChoices(params);
+    },
+  };
+});
+
+vi.mock("../plugins/providers.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/providers.runtime.js")>();
+  return {
+    ...actual,
+    resolvePluginProvidersCore: (
+      params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
+    ) => {
+      inventories.providers = params.pluginMetadataSnapshot;
+      return actual.resolvePluginProvidersCore(params);
+    },
+  };
+});
 
 afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
@@ -94,8 +126,6 @@ it.each([false, true])(
       };
       await state.writeConfig(config);
       const backend = vi.spyOn(onboardInference, "detectInferenceBackends").mockResolvedValue([]);
-      const resolveChoices = providerChoices.resolveManifestProviderAuthChoices;
-      const resolveProviders = providerRuntime.resolvePluginProvidersCore;
       try {
         for (let iteration = 0; iteration < 2; iteration++) {
           const started = createDeferredCore();
@@ -107,19 +137,8 @@ it.each([false, true])(
             }
           };
           process.on(observationEvent, observe);
-          const inventories: { choices?: object; providers?: object } = {};
-          const choices = vi
-            .spyOn(providerChoices, "resolveManifestProviderAuthChoices")
-            .mockImplementation((params) => {
-              inventories.choices = params?.metadataSnapshot;
-              return resolveChoices(params);
-            });
-          const providers = vi
-            .spyOn(providerRuntime, "resolvePluginProvidersCore")
-            .mockImplementation((params) => {
-              inventories.providers = params.pluginMetadataSnapshot;
-              return resolveProviders(params);
-            });
+          inventories.choices = undefined;
+          inventories.providers = undefined;
           const work = detectSetupInference("main");
           try {
             await Promise.race([started.promise, work]);
@@ -155,8 +174,6 @@ it.each([false, true])(
               await work;
             } finally {
               process.off(observationEvent, observe);
-              providers.mockRestore();
-              choices.mockRestore();
             }
           }
         }
