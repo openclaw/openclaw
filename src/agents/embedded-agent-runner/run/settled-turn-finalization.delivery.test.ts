@@ -12,6 +12,35 @@ import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 import { createPendingToolMediaCarry } from "./tool-media-payloads.js";
 
+function withAssistant(assistant: EmbeddedRunAttemptWithReceiptEvidence["lastAssistant"]) {
+  return {
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
+    sourceReplyDeliveryState: "missing" as const,
+  };
+}
+
+async function resolveCompletion(
+  input: ReturnType<typeof createSettledFinalizationTestInput>,
+  settled: Awaited<ReturnType<typeof prepareTerminalWithSettledTurnFinalization>>,
+) {
+  const resolved = await resolveEmbeddedRunTerminal(
+    makeTerminalInput({
+      runParams: input.terminalBase.runParams,
+      attempt: input.initial.attempt,
+      prepared: settled.prepared,
+      terminalState: settled.terminalState,
+      settledTurnFinalizationOutcome: settled.finalizationOutcome,
+    }),
+  );
+  expect(resolved.action).toBe("complete");
+  if (resolved.action !== "complete") {
+    throw new Error("expected terminal completion");
+  }
+  return resolved.result;
+}
+
 describe("terminal preparation delivery custody", () => {
   it.each(
     (["response", "failed-response", "failure-only"] as const).flatMap((output) =>
@@ -25,10 +54,7 @@ describe("terminal preparation delivery custody", () => {
     async ({ output, observation }) => {
       const assistant = buildEmbeddedRunnerAssistant({ content: [] });
       const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
-        sourceReplyDeliveryState: "missing",
+        ...withAssistant(assistant),
         ...(output !== "failure-only"
           ? {
               heartbeatToolResponse: {
@@ -69,20 +95,8 @@ describe("terminal preparation delivery custody", () => {
         return observation;
       };
       const settled = await prepareTerminalWithSettledTurnFinalization(input);
-      const resolved = await resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          runParams: input.terminalBase.runParams,
-          attempt,
-          prepared: settled.prepared,
-          terminalState: settled.terminalState,
-          settledTurnFinalizationOutcome: settled.finalizationOutcome,
-        }),
-      );
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected heartbeat terminal completion");
-      }
-      const payloads = resolved.result.payloads ?? [];
+      const result = await resolveCompletion(input, settled);
+      const payloads = result.payloads ?? [];
       if (observation === "missing") {
         expect(
           payloads.some((payload) =>
@@ -97,7 +111,7 @@ describe("terminal preparation delivery custody", () => {
             ? []
             : [expect.objectContaining({ text: "Earlier committed reply." })],
         );
-        expect(resolved.result.sourceReplyDeliveryState).toBe("pending");
+        expect(result.sourceReplyDeliveryState).toBe("pending");
       }
     },
   );
@@ -124,10 +138,7 @@ describe("terminal preparation delivery custody", () => {
             ? { kind: "timeout", phase: "prompt", source: "runtime" }
             : { kind: "ok" },
         assistantTexts: output === "text" || output === "timeout" ? [text] : [],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
-        sourceReplyDeliveryState: "missing",
+        ...withAssistant(assistant),
         messagingToolSourceReplyPayloads: [
           { text: "Earlier committed reply.", sourceReplyFinal: true },
         ],
@@ -168,27 +179,15 @@ describe("terminal preparation delivery custody", () => {
       expect(settled.prepared.replyDeliveryState).toBe(
         observation === "missing" ? "missing" : "pending",
       );
-      const resolved = await resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          runParams: input.terminalBase.runParams,
-          attempt,
-          prepared: settled.prepared,
-          terminalState: settled.terminalState,
-          settledTurnFinalizationOutcome: settled.finalizationOutcome,
-        }),
-      );
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected terminal completion");
-      }
-      const payloads = resolved.result.payloads ?? [];
+      const result = await resolveCompletion(input, settled);
+      const payloads = result.payloads ?? [];
       expect(payloads[0]?.text).toBe("Earlier committed reply.");
       expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
       if (observation !== "missing") {
         expect(settled.prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
         expect(payloads).toEqual([expect.objectContaining({ text: "Earlier committed reply." })]);
         expect(payloads[0]?.mediaUrls).toBeUndefined();
-        expect(resolved.result.sourceReplyDeliveryState).toBe("pending");
+        expect(result.sourceReplyDeliveryState).toBe("pending");
         if (output === "media") {
           input.terminalBase.runParams.resolveReplyDelivery = async () => "missing";
           const released = await prepareTerminalWithSettledTurnFinalization(input);
@@ -219,9 +218,7 @@ describe("terminal preparation delivery custody", () => {
       });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: ["Do not repeat."],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
+        ...withAssistant(assistant),
         sourceReplyDeliveryState: attemptDelivery,
         messagingToolSourceReplyPayloads: [{ text: "Committed reply.", sourceReplyFinal: true }],
       });
@@ -246,10 +243,7 @@ describe("terminal preparation delivery custody", () => {
       content: [{ type: "toolCall", id: "reply-tool", name: "report", arguments: {} }],
     });
     const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptCompletedAssistant: assistant,
-      sourceReplyDeliveryState: "missing",
+      ...withAssistant(assistant),
       toolMediaUrls: ["/tmp/unselected.pdf"],
       messagingToolSourceReplyPayloads: [
         {
@@ -287,10 +281,7 @@ describe("terminal preparation delivery custody", () => {
       });
       const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
         assistantTexts: ["Earlier answer.", "Current answer."],
-        lastAssistant: current,
-        currentAttemptAssistant: current,
-        currentAttemptCompletedAssistant: current,
-        sourceReplyDeliveryState: "missing",
+        ...withAssistant(current),
         ...(heartbeat
           ? {
               heartbeatToolResponse: {

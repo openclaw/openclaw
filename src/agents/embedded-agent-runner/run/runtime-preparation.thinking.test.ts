@@ -190,10 +190,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     const capabilityApi =
       capability === "platform" ? "openai-responses" : "openai-chatgpt-responses";
     expect(capabilityModel.api).toBe(capabilityApi);
-    const capabilityEntry = {
-      ...capabilityModel,
-      api: capabilityApi,
-    } satisfies ModelCatalogEntry;
+    const capabilityEntry = { ...capabilityModel, api: capabilityApi } satisfies ModelCatalogEntry;
     const modelThinkingCapability =
       capability === "absent"
         ? undefined

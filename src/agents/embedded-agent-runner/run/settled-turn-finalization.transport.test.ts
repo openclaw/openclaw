@@ -153,10 +153,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
         response.writeHead(503, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
-            error: {
-              message: "upstream connect error: connection refused",
-              type: "server_error",
-            },
+            error: { message: "upstream connect error: connection refused", type: "server_error" },
           }),
         );
         return;
@@ -231,11 +228,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
     const messages = await runAgentLoop(
       [{ role: "user", content: "Save the note, then summarize.", timestamp: 1 }],
       { systemPrompt: "Save once.", messages: [], tools: [tool] },
-      {
-        model,
-        apiKey,
-        convertToLlm: toLlmMessages,
-      },
+      { model, apiKey, convertToLlm: toLlmMessages },
       async (event) => {
         if (event.type === "tool_execution_start") {
           itemLifecycle.startedCount++;

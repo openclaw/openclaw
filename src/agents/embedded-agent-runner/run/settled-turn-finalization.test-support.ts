@@ -230,10 +230,7 @@ export function projectSettledProviderFailureAttempt(
         transport: { streamStrategy: "default" },
       },
     },
-    preparedStreamRuntime: {
-      stream: { subscription },
-      cache: { observabilityEnabled: false },
-    },
+    preparedStreamRuntime: { stream: { subscription }, cache: { observabilityEnabled: false } },
   };
   return completeEmbeddedAttemptResult(input as never, settled, prompt);
 }
