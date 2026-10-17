@@ -1,8 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
+
+type Fixture = ReturnType<typeof createDraftFixture>;
+type Context = Fixture["context"];
+const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
+const pathname = "/chat/main/0f403cb839204cf18eb779f2f00ce488";
+const readyChat = async () => {
+  queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+};
+function created(context: Context, key = sessionKey) {
+  vi.mocked(context.sessions.createResult).mockResolvedValue({
+    key,
+    initialRun: { status: "idle" },
+  });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -61,25 +76,12 @@ describe("confirmed session navigation", () => {
 
   it("hands off the confirmed session without waiting for speculative preloading", async () => {
     const { context, flow } = createDraftFixture();
-    const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key: sessionKey,
-      initialRun: { status: "idle" },
-    });
-    let releasePreload!: () => void;
-    vi.mocked(context.preload).mockReturnValue(
-      new Promise<void>((resolve) => {
-        releasePreload = resolve;
-      }),
-    );
+    created(context);
+    const preload = createDeferred();
+    vi.mocked(context.preload).mockReturnValue(preload.promise);
     vi.mocked(context.navigateAndWait).mockImplementation(async (_routeId, options) => {
-      expect(options?.pathname).toBe("/chat/main/0f403cb839204cf18eb779f2f00ce488");
-      expect(
-        consumeSessionNavigationHandoff(
-          context.gateway,
-          "/chat/main/0f403cb839204cf18eb779f2f00ce488",
-        ),
-      ).toBe(sessionKey);
+      expect(options?.pathname).toBe(pathname);
+      expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBe(sessionKey);
       queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
     });
     flow.setMessage("start this task");
@@ -90,22 +92,17 @@ describe("confirmed session navigation", () => {
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
       expect(flow.error).toBeNull();
     } finally {
-      releasePreload();
+      preload.resolve();
       await submission;
     }
   });
 
   it("surfaces navigation failure after a session has already been created", async () => {
     const { context, flow } = createDraftFixture();
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:created",
-      initialRun: { status: "idle" },
-    });
+    created(context, "agent:main:dashboard:created");
     vi.mocked(context.navigateAndWait)
       .mockRejectedValueOnce(new Error("Chat route failed to load"))
-      .mockImplementationOnce(async () => {
-        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-      });
+      .mockImplementationOnce(readyChat);
     flow.setMessage("start this task");
 
     await flow.submit();
@@ -134,61 +131,52 @@ describe("confirmed session navigation", () => {
     expect(flow.error).toBeNull();
   });
 
-  it.each(["scope-pending"])(
-    "keeps a background prompt readable and opens it without another create (%s)",
-    async (scopeState) => {
-      const { context, flow } = createDraftFixture({
-        request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
-      });
-      const key = "agent:main:dashboard:background-visible";
-      if (scopeState !== "ready") {
-        Object.assign(context.gateway.snapshot.client!, {
-          recoveryScope: "",
-          recoveryScopeReady: false,
-        });
-        if (scopeState === "scope-pending") {
-          delete context.gateway.snapshot.hello!.auth!.recoveryScope;
-        }
-      }
-      vi.mocked(context.sessions.createResult).mockResolvedValue({
-        key,
-        initialRun: { status: "started", runId: "background-run" },
-      });
-      flow.setMessage("keep this background prompt visible");
-      await flow.submit(undefined, true);
-      expect(flow.message).toBe("");
-      expect(flow.pendingMessage?.content).toContainEqual({
-        type: "text",
-        text: "keep this background prompt visible",
-      });
-      expect(flow.submitting).toBe(false);
-      expect(context.navigateAndWait).not.toHaveBeenCalled();
-      Object.assign(context.gateway.snapshot.client!, {
-        recoveryScope: "principal-a",
-        recoveryScopeReady: true,
-      });
-      expect(flow.pendingMessage?.content).toContainEqual({
-        type: "text",
-        text: "keep this background prompt visible",
-      });
-      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-      });
-      await flow.openSubmittedSession();
-      expect(context.navigateAndWait).toHaveBeenCalledOnce();
-      expect(context.sessions.createResult).toHaveBeenCalledOnce();
-      const auth = context.gateway.snapshot.hello!.auth!;
-      auth.recoveryScope = "another-account";
-      expect(flow.pendingMessage).toBeNull();
-      await flow.openSubmittedSession();
-      expect(context.navigateAndWait).toHaveBeenCalledOnce();
-    },
-  );
+  it("keeps a background prompt readable while scope is pending and opens without another create", async () => {
+    const { context, flow } = createDraftFixture({
+      request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
+    });
+    const key = "agent:main:dashboard:background-visible";
+    Object.assign(context.gateway.snapshot.client!, {
+      recoveryScope: "",
+      recoveryScopeReady: false,
+    });
+    delete context.gateway.snapshot.hello!.auth!.recoveryScope;
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key,
+      initialRun: { status: "started", runId: "background-run" },
+    });
+    flow.setMessage("keep this background prompt visible");
+    await flow.submit(undefined, true);
+    expect(flow.message).toBe("");
+    expect(flow.pendingMessage?.content).toContainEqual({
+      type: "text",
+      text: "keep this background prompt visible",
+    });
+    expect(flow.submitting).toBe(false);
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    Object.assign(context.gateway.snapshot.client!, {
+      recoveryScope: "principal-a",
+      recoveryScopeReady: true,
+    });
+    expect(flow.pendingMessage?.content).toContainEqual({
+      type: "text",
+      text: "keep this background prompt visible",
+    });
+    vi.mocked(context.navigateAndWait).mockImplementation(readyChat);
+    await flow.openSubmittedSession();
+    expect(context.navigateAndWait).toHaveBeenCalledOnce();
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    const auth = context.gateway.snapshot.hello!.auth!;
+    auth.recoveryScope = "another-account";
+    expect(flow.pendingMessage).toBeNull();
+    await flow.openSubmittedSession();
+    expect(context.navigateAndWait).toHaveBeenCalledOnce();
+  });
 
   it.each([
     {
       scenario: "the Gateway handshake is replaced",
-      retire: ({ context }: ReturnType<typeof createDraftFixture>) => {
+      retire: ({ context }: Fixture) => {
         const hello = context.gateway.snapshot.hello;
         if (hello) {
           context.gateway.snapshot.hello = { ...hello };
@@ -197,7 +185,7 @@ describe("confirmed session navigation", () => {
     },
     {
       scenario: "the Gateway client is replaced",
-      retire: ({ context }: ReturnType<typeof createDraftFixture>) => {
+      retire: ({ context }: Fixture) => {
         const client = context.gateway.snapshot.client;
         if (client) {
           context.gateway.snapshot.client = new Proxy(client, {});
@@ -206,18 +194,14 @@ describe("confirmed session navigation", () => {
     },
     {
       scenario: "the pending navigation is retired",
-      retire: ({ flow }: ReturnType<typeof createDraftFixture>) => flow.invalidate(),
+      retire: ({ flow }: Fixture) => flow.invalidate(),
     },
   ])(
     "retires a confirmed session handoff when $scenario during session selection",
     async ({ retire }) => {
       const fixture = createDraftFixture();
       const { context, flow } = fixture;
-      const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
-      vi.mocked(context.sessions.createResult).mockResolvedValue({
-        key: sessionKey,
-        initialRun: { status: "idle" },
-      });
+      created(context);
       // Selection publishes synchronously; a subscriber may retire the flow
       // before navigation has claimed the confirmed key.
       vi.mocked(context.gateway.setSessionKey).mockImplementation((key) => {
@@ -228,12 +212,7 @@ describe("confirmed session navigation", () => {
 
       await flow.submit();
 
-      expect(
-        consumeSessionNavigationHandoff(
-          context.gateway,
-          "/chat/main/0f403cb839204cf18eb779f2f00ce488",
-        ),
-      ).toBeUndefined();
+      expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBeUndefined();
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
     },
@@ -242,16 +221,16 @@ describe("confirmed session navigation", () => {
   it.each([
     {
       scenario: "the requested session visibility changes",
-      retire: ({ flow }: ReturnType<typeof createDraftFixture>) => flow.setVisibility("draft"),
+      retire: ({ flow }: Fixture) => flow.setVisibility("draft"),
     },
     {
       scenario: "the requested session capabilities change",
-      retire: ({ capabilities }: ReturnType<typeof createDraftFixture>) =>
+      retire: ({ capabilities }: Fixture) =>
         capabilities.setToolOverrides({ skills: { release: false } }),
     },
     {
       scenario: "the selected agent changes",
-      retire: ({ place }: ReturnType<typeof createDraftFixture>) => place.selectAgentId("other"),
+      retire: ({ place }: Fixture) => place.selectAgentId("other"),
     },
   ])("never retries a committed session after $scenario", async ({ retire }) => {
     const fixture = createDraftFixture({
@@ -270,9 +249,7 @@ describe("confirmed session navigation", () => {
       }));
     vi.mocked(context.navigateAndWait)
       .mockRejectedValueOnce(new Error("old navigation failed"))
-      .mockImplementationOnce(async () => {
-        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-      });
+      .mockImplementationOnce(readyChat);
     flow.setMessage("the committed task");
     await flow.submit();
 

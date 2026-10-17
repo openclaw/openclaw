@@ -14,6 +14,17 @@ import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { PALETTE_PREFERENCE_KEY, PREFS_MIGRATION_KEY } from "./preferences.ts";
 
+function required<T extends HTMLElement = HTMLElement>(host: ParentNode, selector: string) {
+  return expectDefined(host.querySelector<T>(selector), selector);
+}
+function setting<T extends HTMLElement = HTMLElement>(host: ParentNode, suffix: string) {
+  return host.querySelector<T>(`.palette-session-settings${suffix}`);
+}
+function reopen(host: PaletteDraftHost) {
+  host.draft.close();
+  host.draft.open();
+}
+
 afterEach(() => {
   cleanupSolid();
   document.body.replaceChildren();
@@ -79,9 +90,7 @@ describe("PaletteSessionDraft", () => {
 
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
-    await vi.waitFor(() =>
-      expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(setting(host, "__workspace")).not.toBeNull());
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 
@@ -92,26 +101,18 @@ describe("PaletteSessionDraft", () => {
         { id: "other", workspace: "/other" },
       ],
     });
-    const picker = expectDefined(
-      host.querySelector<AgentSelectElement>("openclaw-agent-select"),
-      "palette agent picker",
-    );
+    const picker = required<AgentSelectElement>(host, "openclaw-agent-select");
     await picker.updateComplete;
     for (const item of picker.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
       item.scrollIntoView = vi.fn();
     }
-    const trigger = expectDefined(
-      picker.querySelector<HTMLButtonElement>(".agent-select__trigger"),
-      "agent picker trigger",
-    );
+    const trigger = required<HTMLButtonElement>(picker, ".agent-select__trigger");
     const menu = expectDefined(picker.querySelector(".agent-select__menu"), "agent menu");
     const ensure = vi.mocked(context.agentIdentity.ensure);
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
-    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-    await waitForSolid(() =>
-      expect(host.querySelector(".palette-session-settings")?.matches(":popover-open")).toBe(true),
-    );
+    setting<HTMLButtonElement>(host, "__trigger")!.click();
+    await waitForSolid(() => expect(setting(host, "")?.matches(":popover-open")).toBe(true));
     ensure.mockClear();
     trigger.click();
     await waitForSolid(() => {
@@ -159,13 +160,8 @@ describe("PaletteSessionDraft", () => {
           : {},
     });
     const select = async (machine: string, project = "") => {
-      await vi.waitFor(() =>
-        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-      );
-      expectDefined(
-        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-        "workspace picker",
-      ).click();
+      await vi.waitFor(() => expect(setting(host, "__workspace")).not.toBeNull());
+      required<HTMLButtonElement>(host, ".palette-session-settings__workspace").click();
       await host.updateComplete;
       await vi.waitFor(() =>
         expect(
@@ -181,20 +177,12 @@ describe("PaletteSessionDraft", () => {
 
     await select("local", "registered");
     await select("runtime:agentsapi");
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "Hosted workspace",
-    );
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "OpenAI (Agents API)",
-    );
-    expect(host.querySelector(".palette-session-settings__worktree")).toBeNull();
+    expect(setting(host, "__workspace")?.textContent).toContain("Hosted workspace");
+    expect(setting(host, "__workspace")?.textContent).toContain("OpenAI (Agents API)");
+    expect(setting(host, "__worktree")).toBeNull();
     await select("local", "registered");
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "Local project",
-    );
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).not.toContain(
-      "Agents API",
-    );
+    expect(setting(host, "__workspace")?.textContent).toContain("Local project");
+    expect(setting(host, "__workspace")?.textContent).not.toContain("Agents API");
     await select("runtime:agentsapi");
     vi.mocked(context.sessions.createResult).mockResolvedValue({
       key: "agent:main:hosted-palette",
@@ -314,8 +302,7 @@ describe("PaletteSessionDraft", () => {
         expect(host.draft.canSubmit).toBe(false);
         await host.draft.submit();
         expect(context.sessions.createResult).toHaveBeenCalledOnce();
-        host.draft.close();
-        host.draft.open();
+        reopen(host);
         expect(host.draft.message).toBe("Create with this explicit agent");
       } else {
         expect(host.started).toHaveBeenCalledOnce();
@@ -404,7 +391,7 @@ describe("PaletteSessionDraft", () => {
     expect(route).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(1);
     expect(host.querySelector(".new-session-page__where-popover")).toBeNull();
-    const settingsTrigger = host.querySelector(".palette-session-settings__trigger");
+    const settingsTrigger = setting(host, "__trigger");
     expect(settingsTrigger?.id).toMatch(/^palette-session-\d+-settings-trigger$/);
     expect(settingsTrigger?.getAttribute("aria-controls")).toBe(
       host.querySelector(".oc-popover.palette-session-settings")?.id,
@@ -495,15 +482,8 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
     },
   });
   const remember = () =>
-    expectDefined(
-      fixture.host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
-      "palette remember checkbox",
-    );
-  const select = () =>
-    expectDefined(
-      fixture.host.querySelector<AgentSelectElement>("openclaw-agent-select"),
-      "palette agent select",
-    );
+    required<HTMLInputElement>(fixture.host, ".palette-session-settings__remember input");
+  const select = () => required<AgentSelectElement>(fixture.host, "openclaw-agent-select");
   const worktree = () =>
     expectDefined(
       fixture.host.querySelector<HTMLButtonElement>('[role="switch"]'),
@@ -591,12 +571,11 @@ describe("palette-only remembered settings", () => {
           folder: "/confirmed-after-disposal",
         }),
       );
-      fixture.host.draft.close();
-      fixture.host.draft.open();
+      reopen(fixture.host);
       await fixture.host.updateComplete;
-      expect(
-        fixture.host.querySelector(".palette-session-settings__workspace")?.textContent,
-      ).toContain("confirmed-after-disposal");
+      expect(setting(fixture.host, "__workspace")?.textContent).toContain(
+        "confirmed-after-disposal",
+      );
     } finally {
       held.resolve();
     }
@@ -620,16 +599,10 @@ describe("palette-only remembered settings", () => {
         replacement.draft.open();
         const current = replacement;
         await vi.waitFor(() =>
-          expect(
-            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
-              ?.disabled,
-          ).toBe(false),
+          expect(setting<HTMLInputElement>(current, "__remember input")?.disabled).toBe(false),
         );
         if (edited) {
-          const select = expectDefined(
-            current.querySelector<AgentSelectElement>("openclaw-agent-select"),
-            "replacement agent",
-          );
+          const select = required<AgentSelectElement>(current, "openclaw-agent-select");
           select.onSelect("other");
           await current.updateComplete;
           select.onSelect("main");
@@ -641,10 +614,7 @@ describe("palette-only remembered settings", () => {
         );
         expect(fixture.writes).toHaveLength(2);
         await vi.waitFor(() =>
-          expect(
-            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
-              ?.checked,
-          ).toBe(!edited),
+          expect(setting<HTMLInputElement>(current, "__remember input")?.checked).toBe(!edited),
         );
         expect(current.querySelector<AgentSelectElement>("openclaw-agent-select")?.value).toBe(
           edited ? "main" : "other",
@@ -698,9 +668,9 @@ describe("palette-only remembered settings", () => {
         await vi.waitFor(() =>
           expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
         );
-        expectDefined(
-          fixture.host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
-          "retry remembered settings",
+        required<HTMLButtonElement>(
+          fixture.host,
+          ".palette-session-settings__error button",
         ).click();
         await vi.waitFor(() => {
           if (intent === "selection") {
@@ -728,8 +698,7 @@ describe("palette-only remembered settings", () => {
     await host.updateComplete;
     expect(select().value).toBe("other");
     expect(writes).toEqual([]);
-    host.draft.close();
-    host.draft.open();
+    reopen(host);
     await vi.waitFor(() => expect(select().value).toBe("main"));
     expect(entries["new-session.v1:main"]).toEqual({ folder: "/workspace", worktree: true });
     expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
@@ -747,8 +716,7 @@ describe("palette-only remembered settings", () => {
       }),
     );
     expect(Object.keys(writes[0] ?? {})).toEqual([PALETTE_PREFERENCE_KEY]);
-    host.draft.close();
-    host.draft.open();
+    reopen(host);
     await vi.waitFor(() => expect(select().value).toBe("other"));
     expect(remember().checked).toBe(true);
     // The concurrently mounted full-page owner keeps writing only its ordinary key.
@@ -763,9 +731,7 @@ describe("palette-only remembered settings", () => {
     remember().click();
     await host.updateComplete;
     expect(select().value).toBe("main");
-    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
-      "updated-default",
-    );
+    expect(setting(host, "__workspace")?.textContent).toContain("updated-default");
     expect(host.draft.message).toBe("Keep this exact prompt");
     expect(host.querySelector("textarea")).toBe(prompt);
     expect([prompt.selectionStart, prompt.selectionEnd]).toEqual([5, 9]);
@@ -803,16 +769,12 @@ describe("palette-only remembered settings", () => {
     expect(remember().checked).toBe(false);
     expect(select().value).toBe(deleting ? "main" : "other");
     if (!deleting) {
-      host.draft.close();
-      host.draft.open();
+      reopen(host);
       await host.updateComplete;
       expect(host.querySelector('.palette-session-settings__error[role="alert"]')).not.toBeNull();
     }
     setReject(false);
-    expectDefined(
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
-      "retry settings save",
-    ).click();
+    required<HTMLButtonElement>(host, ".palette-session-settings__error button").click();
     await vi.waitFor(() => {
       if (deleting) {
         expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
@@ -868,16 +830,10 @@ describe("palette-only remembered settings", () => {
     "leaves workspace-search composition keys untouched: %j",
     async (composition) => {
       const { host } = await mountPreferences();
-      host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
-      expectDefined(
-        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
-        "workspace picker",
-      ).click();
+      setting<HTMLButtonElement>(host, "__trigger")!.click();
+      required<HTMLButtonElement>(host, ".palette-session-settings__workspace").click();
       await host.updateComplete;
-      const search = expectDefined(
-        host.querySelector<HTMLInputElement>(".palette-session-settings__search"),
-        "workspace search",
-      );
+      const search = required<HTMLInputElement>(host, ".palette-session-settings__search");
       search.focus();
       for (const key of ["Escape", "ArrowDown", "ArrowUp"]) {
         const event = new KeyboardEvent("keydown", {
@@ -889,7 +845,7 @@ describe("palette-only remembered settings", () => {
         search.dispatchEvent(event);
         await host.updateComplete;
         expect(event.defaultPrevented).toBe(false);
-        expect(host.querySelector(".palette-session-settings__search")).toBe(search);
+        expect(setting(host, "__search")).toBe(search);
         expect(document.activeElement).toBe(search);
       }
     },

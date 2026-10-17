@@ -13,6 +13,26 @@ import { replaceBrowserPreference } from "./preferences.ts";
 // Start button and an empty draft explain themselves. Growing it is a product
 // decision — edit this list and the matching one in submit-gates.ts together.
 const SILENT_SUBMIT_GATES = ["submitting", "empty-draft"];
+const projectMethods = [
+  "sessions.create",
+  "projects.list",
+  "projects.checkoutOptions",
+  "worktrees.branches",
+];
+const adminScopes = ["operator.admin", "operator.read", "operator.write"];
+type Fixture = ReturnType<typeof createDraftFixture>;
+function withMessage(
+  options: Parameters<typeof createDraftFixture>[0] = {},
+  setup?: (fixture: Fixture) => void,
+) {
+  const fixture = createDraftFixture(options);
+  fixture.flow.setMessage("hello");
+  setup?.(fixture);
+  return fixture;
+}
+function unavailableModel(reason: "missing-auth" | "auth-failed" | "cooldown") {
+  return { id: "gpt-5.6-luna", provider: "openai", available: false, unavailableReason: reason };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -28,12 +48,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const availability = createDeferred<ProjectsCheckoutOptionsResult>();
       const fixture = createDraftFixture({
         scopes: ["operator.sessions.read", "operator.sessions.write"],
-        methods: [
-          "sessions.create",
-          "projects.list",
-          "projects.checkoutOptions",
-          "worktrees.branches",
-        ],
+        methods: projectMethods,
         selfUser: { id: "guest" },
         request: (method) => {
           if (method === "projects.list") {
@@ -81,7 +96,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     let freeSlots = 1;
     const { place, flow, gateway } = createDraftFixture({
       methods: ["environments.list", "sessions.create", "sessions.dispatch"],
-      scopes: ["operator.admin", "operator.read", "operator.write"],
+      scopes: adminScopes,
       request: async (method) =>
         method === "environments.list"
           ? {
@@ -146,12 +161,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const availability = createDeferred<ProjectsCheckoutOptionsResult>();
       let projects = discovery.promise;
       const { place, flow, context } = createDraftFixture({
-        methods: [
-          "sessions.create",
-          "projects.list",
-          "projects.checkoutOptions",
-          "worktrees.branches",
-        ],
+        methods: projectMethods,
         request: (method) =>
           method === "projects.list"
             ? projects
@@ -177,10 +187,7 @@ describe("DraftSubmissionFlow submit gates", () => {
         place.applyFolder("/workspace");
       } else {
         projects = Promise.resolve({
-          projects:
-            recovery === "retry"
-              ? [{ id: "registered", displayName: "Registered", source: "registered" }]
-              : [],
+          projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
         });
         await place.browser.refreshProjects();
         place.restorePreferenceSelections();
@@ -245,15 +252,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     async ({ reason, message }) => {
       const { context, flow, place } = createDraftFixture({
         modelCatalog: async () => ({
-          models: [
-            {
-              id: "gpt-5.6-luna",
-              name: "GPT-5.6 Luna",
-              provider: "openai",
-              available: false,
-              unavailableReason: reason,
-            },
-          ],
+          models: [{ ...unavailableModel(reason), name: "GPT-5.6 Luna" }],
         }),
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
@@ -280,16 +279,9 @@ describe("DraftSubmissionFlow submit gates", () => {
     async (phase) => {
       const { context, flow, place } = createDraftFixture({
         methods: ["sessions.create", "sessions.dispatch"],
-        scopes: ["operator.admin", "operator.read", "operator.write"],
+        scopes: adminScopes,
         modelCatalog: async () => ({
-          models: [
-            {
-              id: "gpt-5.6-luna",
-              provider: "openai",
-              available: false,
-              unavailableReason: "missing-auth",
-            },
-          ],
+          models: [unavailableModel("missing-auth")],
         }),
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
@@ -325,7 +317,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const hello = context.gateway.snapshot.hello!;
       hello.auth!.scopes = ["operator.read"];
       expect(flow.submitBlock()?.gate).toBe("access");
-      hello.auth!.scopes = ["operator.admin", "operator.read", "operator.write"];
+      hello.auth!.scopes = adminScopes;
 
       context.placementStartup.start = vi.fn();
       vi.mocked(context.sessions.createResult).mockResolvedValue({
@@ -359,52 +351,31 @@ describe("DraftSubmissionFlow submit gates", () => {
   );
 
   it("keeps every blocking gate visible: canSubmit and the reason derive from one table", () => {
-    const scenarios: Array<{ name: string; build: () => ReturnType<typeof createDraftFixture> }> = [
+    const scenarios: Array<{ name: string; build: () => Fixture }> = [
       { name: "empty draft", build: () => createDraftFixture() },
       {
         name: "gateway disconnected",
-        build: () => {
-          const fixture = createDraftFixture({ phase: "connecting" });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
+        build: () => withMessage({ phase: "connecting" }),
       },
       {
         name: "attachment reads pending",
-        build: () => {
-          const fixture = createDraftFixture();
-          fixture.flow.setMessage("hello");
-          fixture.flow.attachmentDraft.reads.updatePending(
-            fixture.flow.attachmentDraft.reads.readSignal,
-            1,
-          );
-          return fixture;
-        },
+        build: () =>
+          withMessage({}, ({ flow }) =>
+            flow.attachmentDraft.reads.updatePending(flow.attachmentDraft.reads.readSignal, 1),
+          ),
       },
       {
         name: "no agents on the gateway",
-        build: () => {
-          const fixture = createDraftFixture({ agents: [] });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
+        build: () => withMessage({ agents: [] }),
       },
       {
         name: "sessions.create not advertised",
-        build: () => {
-          const fixture = createDraftFixture({ methods: [] });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
+        build: () => withMessage({ methods: [] }),
       },
       {
         name: "submission outcome unknown",
-        build: () => {
-          const fixture = createDraftFixture();
-          fixture.flow.setMessage("hello");
-          fixture.flow.markPendingPlacementUnavailable("gateway-changed");
-          return fixture;
-        },
+        build: () =>
+          withMessage({}, ({ flow }) => flow.markPendingPlacementUnavailable("gateway-changed")),
       },
     ];
     for (const scenario of scenarios) {
@@ -420,8 +391,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       }
     }
 
-    const ready = createDraftFixture();
-    ready.flow.setMessage("hello");
+    const ready = withMessage();
     expect(ready.flow.submitBlock()).toBeUndefined();
     expect(ready.flow.canSubmit()).toBe(true);
     expect(ready.flow.submitDisabledReason()).toBeUndefined();
@@ -437,7 +407,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const discovery = createDeferred<unknown>();
       let branches = discovery.promise;
       const fixture = createDraftFixture({
-        scopes: ["operator.admin", "operator.read", "operator.write"],
+        scopes: adminScopes,
         agents: [
           {
             id: "main",
@@ -507,7 +477,7 @@ describe("DraftSubmissionFlow submit gates", () => {
   it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
     const fixture = createDraftFixture({
       methods: ["environments.list", "sessions.create", "sessions.dispatch"],
-      scopes: ["operator.admin", "operator.read", "operator.write"],
+      scopes: adminScopes,
       agents: [
         {
           id: "main",

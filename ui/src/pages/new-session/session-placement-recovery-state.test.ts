@@ -10,6 +10,26 @@ import {
   resolveSubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
 
+const gatewayUrl = "ws://gateway.example";
+const recoveryScope = "principal-a";
+const canonicalSessionKey = "agent:cloud:dashboard:server-key";
+const exactKey = (key: string) =>
+  sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, key);
+const readRecovery = (key: string) => readSessionPlacementRecovery(gatewayUrl, recoveryScope, key);
+
+function interceptWrites(setItem: (key: string, value: string) => void) {
+  const storage = sessionStorage;
+  vi.stubGlobal("sessionStorage", {
+    get length() {
+      return storage.length;
+    },
+    getItem: storage.getItem.bind(storage),
+    key: storage.key.bind(storage),
+    removeItem: storage.removeItem.bind(storage),
+    setItem,
+  });
+}
+
 function stageCreate(
   pending: PendingSessionPlacementRecoveryState,
   overrides: Partial<Parameters<PendingSessionPlacementRecoveryState["stageCreate"]>[0]> = {},
@@ -18,8 +38,8 @@ function stageCreate(
     agentId: "cloud",
     target: { kind: "profile", profileId: "aws" },
     message: "run remotely",
-    gatewayUrl: "ws://gateway.example",
-    recoveryScope: "principal-a",
+    gatewayUrl,
+    recoveryScope,
     createParams: { agentId: "cloud", message: "", worktree: true },
     ...overrides,
   });
@@ -40,39 +60,27 @@ describe("pending session placement recovery state", () => {
       agentId: "main",
       target: { kind: "device", deviceId: "runner" },
       message: "palette task",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
+      gatewayUrl,
+      recoveryScope,
       createParams: { agentId: "main", message: "", worktree: true, worktreeSource: "empty" },
     });
     expect(request).not.toBeNull();
-    expect(page.restore("ws://gateway.example", "principal-a")).toBeNull();
-    expect(palette.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    expect(page.restore(gatewayUrl, recoveryScope)).toBeNull();
+    expect(palette.restore(gatewayUrl, recoveryScope)?.message).toBe("palette task");
     palette.releaseClaim();
-    expect(page.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
-    expect(
-      palette.hasOtherLiveOwner("ws://gateway.example", "principal-a", palette.sessionKey),
-    ).toBe(true);
-    expect(palette.owns("ws://gateway.example", "principal-a", palette.sessionKey)).toBe(false);
+    expect(page.restore(gatewayUrl, recoveryScope)?.message).toBe("palette task");
+    expect(palette.hasOtherLiveOwner(gatewayUrl, recoveryScope, palette.sessionKey)).toBe(true);
+    expect(palette.owns(gatewayUrl, recoveryScope, palette.sessionKey)).toBe(false);
     page.clear();
   });
 
   it.each([
-    {
-      name: "a normal local submission",
-      gatewayIdentityChanged: false,
-      placementDraftOwned: false,
-      expected: "gateway-changed",
-    },
-    {
-      name: "an interrupted placement draft",
-      gatewayIdentityChanged: false,
-      placementDraftOwned: true,
-      expected: "placement-interrupted",
-    },
-  ])("classifies $name accurately", ({ expected, gatewayIdentityChanged, placementDraftOwned }) => {
-    expect(resolveSubmissionOutcomeReason({ gatewayIdentityChanged, placementDraftOwned })).toBe(
-      expected,
-    );
+    [false, "gateway-changed"],
+    [true, "placement-interrupted"],
+  ] as const)("classifies placement ownership %s as %s", (placementDraftOwned, expected) => {
+    expect(
+      resolveSubmissionOutcomeReason({ gatewayIdentityChanged: false, placementDraftOwned }),
+    ).toBe(expected);
   });
 
   it("preserves the requested permission mode in placement recovery", () => {
@@ -88,9 +96,9 @@ describe("pending session placement recovery state", () => {
     });
 
     expect(createParams).toMatchObject({ permissionMode: "guarded" });
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
-    ).toMatchObject({ createParams: { permissionMode: "guarded" } });
+    expect(readRecovery(pending.sessionKey)).toMatchObject({
+      createParams: { permissionMode: "guarded" },
+    });
   });
 
   it.each(["codex"])("preserves draft model and runtime %s through recovery", (agentRuntime) => {
@@ -110,9 +118,11 @@ describe("pending session placement recovery state", () => {
     expect(createParams).not.toBeNull();
     expect(createParams?.model).toBe("openai/gpt-5.6-sol");
     expect(createParams?.agentRuntime).toBe(agentRuntime);
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
-    ).toMatchObject({ phase: "creating", createParams, message: "run remotely" });
+    expect(readRecovery(pending.sessionKey)).toMatchObject({
+      phase: "creating",
+      createParams,
+      message: "run remotely",
+    });
   });
 
   it.each([false, true])(
@@ -146,8 +156,8 @@ describe("pending session placement recovery state", () => {
         message: "run remotely",
         target: { kind: "profile", profileId: "aws", ...options },
         agentId: "cloud",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
+        gatewayUrl,
+        recoveryScope,
         phase: "dispatching",
       }),
     ).toBe(false);
@@ -159,42 +169,18 @@ describe("pending session placement recovery state", () => {
     expect(stageCreate(pending)).not.toBeNull();
     const provisionalSessionKey = pending.sessionKey;
     const storage = sessionStorage;
-    const provisionalKey = sessionPlacementRecoveryExactStorageKey(
-      "ws://gateway.example",
-      "principal-a",
-      provisionalSessionKey,
-    );
-    const canonicalKey = sessionPlacementRecoveryExactStorageKey(
-      "ws://gateway.example",
-      "principal-a",
-      "agent:cloud:dashboard:server-key",
-    );
-    vi.stubGlobal("sessionStorage", {
-      get length() {
-        return storage.length;
-      },
-      getItem: storage.getItem.bind(storage),
-      key: storage.key.bind(storage),
-      removeItem: storage.removeItem.bind(storage),
-      setItem(key: string, value: string) {
-        if (key === canonicalKey && storage.getItem(provisionalKey) !== null) {
-          throw new DOMException("quota exceeded", "QuotaExceededError");
-        }
-        storage.setItem(key, value);
-      },
+    const provisionalKey = exactKey(provisionalSessionKey);
+    const canonicalKey = exactKey(canonicalSessionKey);
+    interceptWrites((key, value) => {
+      if (key === canonicalKey && storage.getItem(provisionalKey) !== null) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      storage.setItem(key, value);
     });
 
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", provisionalSessionKey),
-    ).toBeNull();
-    expect(
-      readSessionPlacementRecovery(
-        "ws://gateway.example",
-        "principal-a",
-        "agent:cloud:dashboard:server-key",
-      ),
-    ).toMatchObject({
+    expect(readRecovery(provisionalSessionKey)).toBeNull();
+    expect(readRecovery(canonicalSessionKey)).toMatchObject({
       phase: "dispatching",
       sessionKey: "agent:cloud:dashboard:server-key",
     });
@@ -208,34 +194,17 @@ describe("pending session placement recovery state", () => {
       expect(stageCreate(pending)).not.toBeNull();
       const storage = sessionStorage;
       const provisionalSessionKey = pending.sessionKey;
-      const provisionalKey = sessionPlacementRecoveryExactStorageKey(
-        "ws://gateway.example",
-        "principal-a",
-        provisionalSessionKey,
-      );
-      const canonicalSessionKey = "agent:cloud:dashboard:server-key";
-      const canonicalKey = sessionPlacementRecoveryExactStorageKey(
-        "ws://gateway.example",
-        "principal-a",
-        canonicalSessionKey,
-      );
+      const provisionalKey = exactKey(provisionalSessionKey);
+      const canonicalKey = exactKey(canonicalSessionKey);
       const raw = storage.getItem(provisionalKey);
-      vi.stubGlobal("sessionStorage", {
-        get length() {
-          return storage.length;
-        },
-        getItem: storage.getItem.bind(storage),
-        key: storage.key.bind(storage),
-        removeItem: storage.removeItem.bind(storage),
-        setItem(key: string, value: string) {
-          if (key === canonicalKey) {
-            if (committed) {
-              storage.setItem(key, value);
-            }
-            throw new DOMException("quota exceeded", "QuotaExceededError");
+      interceptWrites((key, value) => {
+        if (key === canonicalKey) {
+          if (committed) {
+            storage.setItem(key, value);
           }
-          storage.setItem(key, value);
-        },
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        }
+        storage.setItem(key, value);
       });
 
       expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(false);
@@ -267,18 +236,10 @@ describe("pending session placement recovery state", () => {
     });
     expect(createParams).not.toHaveProperty("key");
     expect(pending.persistent).toBe(false);
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
-    ).toBeNull();
+    expect(readRecovery(pending.sessionKey)).toBeNull();
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
     expect(pending.sessionKey).toBe("agent:cloud:dashboard:server-key");
-    expect(
-      readSessionPlacementRecovery(
-        "ws://gateway.example",
-        "principal-a",
-        "agent:cloud:dashboard:server-key",
-      ),
-    ).toBeNull();
+    expect(readRecovery(canonicalSessionKey)).toBeNull();
   });
 
   it("captures named creating recovery with its submitted payload", () => {

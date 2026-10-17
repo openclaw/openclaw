@@ -29,6 +29,52 @@ const readRecovery = (
   record: Pick<typeof recovery, "gatewayUrl" | "recoveryScope" | "sessionKey"> = recovery,
 ) => readSessionPlacementRecovery(record.gatewayUrl, record.recoveryScope, record.sessionKey);
 
+function failWrites() {
+  const storage = sessionStorage;
+  vi.stubGlobal("sessionStorage", {
+    getItem: storage.getItem.bind(storage),
+    removeItem: storage.removeItem.bind(storage),
+    setItem: () => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    },
+  });
+}
+const listRecoveries = (scope = recovery.recoveryScope) =>
+  listSessionPlacementRecoveries(recovery.gatewayUrl, scope);
+const migrate = (scope: string) =>
+  migrateSessionPlacementRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, scope);
+function writeRaw(sessionKey: string, record: unknown) {
+  sessionStorage.setItem(exactKey(sessionKey), JSON.stringify(record));
+}
+function makeCreating<T extends object>(createParams: T) {
+  return {
+    ...recovery,
+    phase: "creating" as const,
+    createParams: {
+      key: recovery.sessionKey,
+      agentId: "cloud",
+      message: "" as const,
+      ...createParams,
+    },
+  };
+}
+
+function interceptStorage(
+  storage: Storage,
+  overrides: Partial<Pick<Storage, "setItem" | "removeItem">>,
+) {
+  vi.stubGlobal("sessionStorage", {
+    get length() {
+      return storage.length;
+    },
+    getItem: storage.getItem.bind(storage),
+    key: storage.key.bind(storage),
+    removeItem: storage.removeItem.bind(storage),
+    setItem: storage.setItem.bind(storage),
+    ...overrides,
+  });
+}
+
 describe("session placement recovery", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => {
@@ -75,10 +121,7 @@ describe("session placement recovery", () => {
     expect(storedKeys.filter((key) => key.startsWith(releasedPrefix))).toEqual([
       exactKey(optional.sessionKey),
     ]);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
-      required,
-      optional,
-    ]);
+    expect(listRecoveries()).toEqual([required, optional]);
 
     const promoted = { ...required, sessionKey: "agent:cloud:canonical" };
     expect(promoteSessionPlacementRecovery(required.sessionKey, promoted)).toBe(true);
@@ -86,13 +129,9 @@ describe("session placement recovery", () => {
     expect(readRecovery(promoted)).toEqual(promoted);
     const paused = pauseSessionPlacementRecovery(promoted, "placement unavailable", true).recovery;
     const destinationScope = "principal-migrated";
-    migrateSessionPlacementRecoveryScope(
-      recovery.gatewayUrl,
-      recovery.recoveryScope,
-      destinationScope,
-    );
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, destinationScope)).toEqual([
+    migrate(destinationScope);
+    expect(listRecoveries()).toEqual([]);
+    expect(listRecoveries(destinationScope)).toEqual([
       { ...paused, recoveryScope: destinationScope },
       { ...optional, recoveryScope: destinationScope },
     ]);
@@ -115,15 +154,13 @@ describe("session placement recovery", () => {
       ...recovery,
       target: { kind: "profile" as const, profileId: "aws", required: true as const },
     };
-    sessionStorage.setItem(exactKey(required.sessionKey), JSON.stringify(required));
+    writeRaw(required.sessionKey, required);
     expect(readRecovery()).toEqual(required);
     expect(sessionStorage.getItem(exactKey(required.sessionKey))).toBeNull();
     const older = { ...required, messageId: "older-turn", message: "older input" };
     const olderRaw = JSON.stringify(older);
     sessionStorage.setItem(exactKey(required.sessionKey), olderRaw);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
-      required,
-    ]);
+    expect(listRecoveries()).toEqual([required]);
     expect(sessionStorage.getItem(exactKey(required.sessionKey))).toBe(olderRaw);
     expect(writeSessionPlacementRecoveryIfAvailable({ ...older, message: "do not replace" })).toBe(
       false,
@@ -132,64 +169,42 @@ describe("session placement recovery", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it.each([true])(
-    "keeps input in memory on a failed pause write (already paused=%s)",
-    (alreadyPaused) => {
-      const retained = alreadyPaused
-        ? {
-            ...recovery,
-            phase: "paused" as const,
-            reason: "not-sent" as const,
-            error: "first failure",
-          }
-        : recovery;
-      expect(writeSessionPlacementRecovery(retained)).toBe(true);
-      const storage = sessionStorage;
-      vi.stubGlobal("sessionStorage", {
-        getItem: storage.getItem.bind(storage),
-        removeItem: storage.removeItem.bind(storage),
-        setItem: () => {
-          throw new DOMException("quota exceeded", "QuotaExceededError");
-        },
-      });
-      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        persisted: false,
-        recovery: {
-          message: retained.message,
-          messageId: retained.messageId,
-          phase: "paused",
-          reason: "not-sent",
-          error: expect.stringContaining("Keep this page open"),
-        },
-      });
-      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
-    },
-  );
+  it("keeps already-paused input in memory on a failed pause write", () => {
+    const retained = {
+      ...recovery,
+      phase: "paused" as const,
+      reason: "not-sent" as const,
+      error: "first failure",
+    };
+    expect(writeSessionPlacementRecovery(retained)).toBe(true);
+    failWrites();
+    expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+      persisted: false,
+      recovery: {
+        message: retained.message,
+        messageId: retained.messageId,
+        phase: "paused",
+        reason: "not-sent",
+        error: expect.stringContaining("Keep this page open"),
+      },
+    });
+    expect(readRecovery()).toEqual(retained);
+  });
 
-  it.each([false])(
-    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
-    (persistent) => {
-      const error = `${"x".repeat(4095)}🤖`;
-      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+  it("keeps volatile pause errors bounded on UTF-16 boundaries", () => {
+    const error = `${"x".repeat(4095)}🤖`;
+    const paused = pauseSessionPlacementRecovery(recovery, error, false);
 
-      expect(paused.recovery.error).toBe("x".repeat(4095));
-      expect(paused.persisted).toBe(persistent);
-      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
-    },
-  );
+    expect(paused.recovery.error).toBe("x".repeat(4095));
+    expect(paused.persisted).toBe(false);
+    expect(readRecovery()).toBeNull();
+  });
 
   it("keeps storage-failure guidance on UTF-16 boundaries", () => {
     const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
     const error = `${"x".repeat(4095 - prefix.length)}🤖`;
     expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-    const storage = sessionStorage;
-    vi.stubGlobal("sessionStorage", {
-      getItem: storage.getItem.bind(storage),
-      removeItem: storage.removeItem.bind(storage),
-      setItem: () => {
-        throw new DOMException("quota exceeded", "QuotaExceededError");
-      },
-    });
+    failWrites();
 
     const paused = pauseSessionPlacementRecovery(recovery, error, true);
 
@@ -213,13 +228,13 @@ describe("session placement recovery", () => {
     expect(writeSessionPlacementRecovery(unrelatedScope)).toBe(true);
     expect(writeSessionPlacementRecovery(unrelatedGateway)).toBe(true);
 
-    migrateSessionPlacementRecoveryScope(recovery.gatewayUrl, sourceScope, newScope);
+    migrate(newScope);
 
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, newScope)).toEqual([
+    expect(listRecoveries(newScope)).toEqual([
       { ...recovery, recoveryScope: newScope },
       { ...second, recoveryScope: newScope },
     ]);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, sourceScope)).toEqual([]);
+    expect(listRecoveries(sourceScope)).toEqual([]);
     expect(
       listSessionPlacementRecoveries(unrelatedScope.gatewayUrl, unrelatedScope.recoveryScope),
     ).toEqual([unrelatedScope]);
@@ -246,7 +261,7 @@ describe("session placement recovery", () => {
     sessionStorage.setItem(sourceKey, sourceRaw);
     expect(writeSessionPlacementRecovery(destination)).toBe(true);
 
-    migrateSessionPlacementRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, newScope);
+    migrate(newScope);
     expect(sessionStorage.getItem(sourceKey)).toBe(sourceRaw);
     expect(
       readSessionPlacementRecovery(recovery.gatewayUrl, newScope, recovery.sessionKey),
@@ -254,13 +269,7 @@ describe("session placement recovery", () => {
 
     sessionStorage.removeItem(destinationKey);
     const storage = sessionStorage;
-    vi.stubGlobal("sessionStorage", {
-      get length() {
-        return storage.length;
-      },
-      getItem: storage.getItem.bind(storage),
-      key: storage.key.bind(storage),
-      removeItem: storage.removeItem.bind(storage),
+    interceptStorage(storage, {
       setItem: vi.fn((key: string, value: string) => {
         if (key === destinationKey) {
           throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -268,25 +277,19 @@ describe("session placement recovery", () => {
         storage.setItem(key, value);
       }),
     });
-    migrateSessionPlacementRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, newScope);
+    migrate(newScope);
     expect(storage.getItem(sourceKey)).toBe(sourceRaw);
     expect(storage.getItem(destinationKey)).toBeNull();
 
-    vi.stubGlobal("sessionStorage", {
-      get length() {
-        return storage.length;
-      },
-      getItem: storage.getItem.bind(storage),
-      key: storage.key.bind(storage),
+    interceptStorage(storage, {
       removeItem: vi.fn((key: string) => {
         if (key === sourceKey) {
           throw new DOMException("storage disabled", "SecurityError");
         }
         storage.removeItem(key);
       }),
-      setItem: storage.setItem.bind(storage),
     });
-    migrateSessionPlacementRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, newScope);
+    migrate(newScope);
     expect(storage.getItem(sourceKey)).toBe(sourceRaw);
     expect(
       readSessionPlacementRecovery(recovery.gatewayUrl, newScope, recovery.sessionKey),
@@ -304,24 +307,18 @@ describe("session placement recovery", () => {
     };
     expect(writeSessionPlacementRecovery(recovery)).toBe(true);
     expect(writeSessionPlacementRecovery(surrogateRecovery)).toBe(true);
-    sessionStorage.setItem(
-      exactKey("agent:cloud:incognito"),
-      JSON.stringify({ ...recovery, createParams: { incognito: true } }),
-    );
-    sessionStorage.setItem(
-      exactKey("agent:cloud:wrong-key"),
-      JSON.stringify({ ...recovery, messageId: "message-valid" }),
-    );
+    writeRaw("agent:cloud:incognito", { ...recovery, createParams: { incognito: true } });
+    writeRaw("agent:cloud:wrong-key", { ...recovery, messageId: "message-valid" });
     const invalidPayload = {
       ...recovery,
       sessionKey: "agent:cloud:invalid-payload",
       messageId: "",
     };
-    sessionStorage.setItem(exactKey(invalidPayload.sessionKey), JSON.stringify(invalidPayload));
+    writeRaw(invalidPayload.sessionKey, invalidPayload);
     const malformedKey = exactKey("\ud801");
     sessionStorage.setItem(malformedKey, "{not-json");
 
-    const listed = listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope);
+    const listed = listRecoveries();
     expect(listed).toHaveLength(2);
     expect(listed).toEqual(expect.arrayContaining([recovery, surrogateRecovery]));
     expect(sessionStorage.getItem(exactKey(recovery.sessionKey))).not.toBeNull();
@@ -334,15 +331,8 @@ describe("session placement recovery", () => {
 
   it("round-trips a device folder only with its exact dispatch target", () => {
     const creating = {
-      ...recovery,
-      phase: "creating" as const,
+      ...makeCreating({ deviceFolder: { deviceId: "runner", path: "/srv/project" } }),
       target: { kind: "device" as const, deviceId: "runner" },
-      createParams: {
-        key: recovery.sessionKey,
-        agentId: "cloud",
-        message: "" as const,
-        deviceFolder: { deviceId: "runner", path: "/srv/project" },
-      },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
     expect(readRecovery()).toEqual(creating);
@@ -355,20 +345,10 @@ describe("session placement recovery", () => {
   });
 
   it("rejects a malformed persisted device-folder binding", () => {
-    sessionStorage.setItem(
-      exactKey(recovery.sessionKey),
-      JSON.stringify({
-        ...recovery,
-        phase: "creating",
-        target: { kind: "device", deviceId: "runner" },
-        createParams: {
-          key: recovery.sessionKey,
-          agentId: "cloud",
-          message: "",
-          deviceFolder: null,
-        },
-      }),
-    );
+    writeRaw(recovery.sessionKey, {
+      ...makeCreating({ deviceFolder: null }),
+      target: { kind: "device", deviceId: "runner" },
+    });
     expect(readRecovery()).toBeNull();
   });
 
@@ -386,33 +366,23 @@ describe("session placement recovery", () => {
     { projectId: "openclaw", worktree: true as const },
     { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
   ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
-    const creating = {
-      ...recovery,
-      phase: "creating" as const,
-      createParams: {
-        key: recovery.sessionKey,
-        agentId: "cloud",
-        message: "" as const,
-        category: "Client work",
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-        thinkingLevel: "high",
-        toolOverrides: {
-          mcpServers: { github: false },
-          skills: { release: false },
-          webSearch: false,
-        },
-        visibility: "draft" as const,
-        ...workspace,
+    const creating = makeCreating({
+      category: "Client work",
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+      thinkingLevel: "high",
+      toolOverrides: {
+        mcpServers: { github: false },
+        skills: { release: false },
+        webSearch: false,
       },
-    };
+      visibility: "draft" as const,
+      ...workspace,
+    });
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
     expect(readRecovery()).toEqual(creating);
 
-    sessionStorage.setItem(
-      exactKey(recovery.sessionKey),
-      JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
-    );
+    writeRaw(recovery.sessionKey, { ...creating, createParams: { key: "agent:cloud:other" } });
     expect(readRecovery()).toBeNull();
   });
 });
