@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net, { type NetConnectOpts, type Server, type Socket } from "node:net";
 import os from "node:os";
@@ -131,55 +131,22 @@ function runUpgradeProxy(socket: Socket, target: string) {
 }
 
 async function readSocket(socket: Socket, marker?: string, timeoutMs = 2_000): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    let body = "";
-    const waitingFor = marker ?? "socket end";
-    const timer = setTimeout(
-      () => finish(new Error(`timed out waiting for ${waitingFor}`)),
-      timeoutMs,
-    );
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      socket.off("data", onData);
-      socket.off("end", onEnd);
-      socket.off("error", onError);
-      socket.off("close", onClose);
-      if (error) {
-        reject(error);
-      } else {
-        resolve(body);
-      }
-    };
-    const onData = (chunk: Buffer) => {
-      body += chunk.toString("utf8");
-      if (marker && body.includes(marker)) {
-        finish();
-      }
-    };
-    const onError = (error: Error) => finish(error);
-    const onEnd = () => {
-      if (!marker) {
-        finish();
-      }
-    };
-    const onClose = () => finish(new Error(`socket closed before ${marker ?? "a clean end"}`));
-    socket.on("data", onData);
-    socket.once("end", onEnd);
-    socket.once("error", onError);
-    socket.once("close", onClose);
-  });
-}
-
-function collectUpgradeRequest(socket: Socket, resolve: (request: string) => void) {
-  let request = "";
-  socket.on("data", (chunk) => {
-    request += chunk.toString("utf8");
-    if (!request.includes("\r\n\r\n")) {
-      return;
+  let body = "";
+  // The event iterator owns listener cleanup without destroying an upgraded socket.
+  for await (const event of on(socket, "data", {
+    signal: AbortSignal.timeout(timeoutMs),
+    close: ["end", "close"],
+  })) {
+    const chunk: Buffer = event[0];
+    body += chunk.toString("utf8");
+    if (marker && body.includes(marker)) {
+      return body;
     }
-    resolve(request);
-    socket.write(UPGRADE_RESPONSE);
-  });
+  }
+  if (marker || !socket.readableEnded) {
+    throw new Error(`socket closed before ${marker ?? "a clean end"}`);
+  }
+  return body;
 }
 
 async function expectOpeningFailure(kind: "tls" | "reset") {
@@ -224,9 +191,12 @@ describe("proxyUpgradeRequest loopback transport", () => {
 
     const request = Promise.withResolvers<string>();
     const upstreamServer = trackServer(
-      tls.createServer(TEST_TLS_OPTIONS, (socket) =>
-        collectUpgradeRequest(socket, request.resolve),
-      ),
+      tls.createServer(TEST_TLS_OPTIONS, (socket) => {
+        void readSocket(socket, "\r\n\r\n").then((data) => {
+          request.resolve(data);
+          socket.write(UPGRADE_RESPONSE);
+        }, request.reject);
+      }),
     );
     const upstreamPort = await listenLoopback(upstreamServer, "localhost");
     const { browser, proxySocket } = await openBrowserPair();

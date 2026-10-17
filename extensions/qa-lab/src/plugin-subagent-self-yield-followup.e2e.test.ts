@@ -10,7 +10,6 @@ import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 
 const PLUGIN_ID = "qa-self-yield-followup-subagent";
-const TRIGGER = "qa self yield follow-up";
 const REQUESTER_CONVERSATION = { id: "requester-user", kind: "direct" as const };
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const PLUGIN_DIR = path.join(
@@ -23,22 +22,13 @@ const VERDICT_PATH = path.join(
 );
 
 function withFixturePlugin(config: OpenClawConfig): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), PLUGIN_DIR])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
+  const plugins = (config.plugins ??= {});
+  plugins.enabled = true;
+  plugins.allow = [...new Set([...(plugins.allow ?? []), PLUGIN_ID])];
+  const load = (plugins.load ??= {});
+  load.paths = [...new Set([...(load.paths ?? []), PLUGIN_DIR])];
+  plugins.entries = { ...plugins.entries, [PLUGIN_ID]: { enabled: true } };
+  return config;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -108,17 +98,14 @@ it("announces to the original requester only after the follow-up run ends", asyn
     accountId: "default",
     conversation: REQUESTER_CONVERSATION,
     senderId: REQUESTER_CONVERSATION.id,
-    text: TRIGGER,
+    text: "qa self yield follow-up",
   });
 
   let distinctFollowupRun: boolean;
 
   try {
-    // The kickoff reply only acknowledges the spawn; it carries no child result.
     await waitForReply("QA-SELF-YIELD-SPAWNED", 30_000);
-    const followUp = (await post("follow-up", 202)) as {
-      runId: string;
-    };
+    const followUp = (await post("follow-up", 202)) as { runId: string };
     expect(followUp.runId).toBeTruthy();
     const release = (await post("release", 200)) as {
       finalReply?: string;
@@ -132,7 +119,6 @@ it("announces to the original requester only after the follow-up run ends", asyn
       runId: followUp.runId,
     });
     expect(release.kickoffRunId).toBeTruthy();
-    expect(release.runId).not.toBe(release.kickoffRunId);
     distinctFollowupRun = release.runId !== release.kickoffRunId;
 
     await expect(waitForReply(QA_SUBAGENT_SELF_YIELD_MARKER, 90_000)).resolves.toMatchObject({
@@ -150,10 +136,8 @@ it("announces to the original requester only after the follow-up run ends", asyn
   }
 
   const outbound = outboundMessages();
-  // Superseding the pause must publish only the acknowledgement and completion.
   expect(outbound).toHaveLength(outboundStartIndex + 2);
   const visibleRepliesBeforeQuiet = completionCount();
-  expect(visibleRepliesBeforeQuiet).toBe(1);
   const waitForQuiet = () =>
     transport.waitForNoOutbound({ sinceIndex: outbound.length, quietMs: 1_000 });
   await waitForQuiet();
@@ -168,39 +152,34 @@ it("announces to the original requester only after the follow-up run ends", asyn
   const count = (matches: (request: (typeof requests)[number]) => boolean | undefined) =>
     requests.filter(matches).length;
   expect(requests).toHaveLength(3);
-  const checks = [
-    ["sessionsYieldCalls", count((request) => request.plannedToolName === "sessions_yield"), 1],
-    [
-      "childModelRequests",
-      count(
-        (request) =>
-          request.prompt?.includes("Subagent self yield qa worker") ||
-          request.prompt?.includes("Subagent self yield qa remote job finished"),
-      ),
-      2,
-    ],
-    [
-      "requesterCompletionTurns",
-      count((request) => request.allInputText?.includes("A background task completed.")),
-      1,
-    ],
-    [
-      "pauseNoticeRequests",
-      count((request) => request.prompt?.includes("A child is paused awaiting a continuation")),
-      0,
-    ],
-    ["visibleReplies", visibleRepliesBeforeQuiet, 1],
-    ["duplicateRepliesAfterQuietWindow", visibleRepliesAfterQuiet - visibleRepliesBeforeQuiet, 0],
-    [
-      "duplicateRepliesAfterGatewayRestart",
-      visibleRepliesAfterRestart - visibleRepliesAfterQuiet,
-      0,
-    ],
-    ["distinctFollowupRun", distinctFollowupRun, true],
-  ] as const;
-  for (const [name, actual, expected] of checks) {
-    expect(actual, name).toBe(expected);
-  }
+  const facts = {
+    sessionsYieldCalls: count((request) => request.plannedToolName === "sessions_yield"),
+    childModelRequests: count(
+      (request) =>
+        request.prompt?.includes("Subagent self yield qa worker") ||
+        request.prompt?.includes("Subagent self yield qa remote job finished"),
+    ),
+    requesterCompletionTurns: count((request) =>
+      request.allInputText?.includes("A background task completed."),
+    ),
+    pauseNoticeRequests: count((request) =>
+      request.prompt?.includes("A child is paused awaiting a continuation"),
+    ),
+    visibleReplies: visibleRepliesBeforeQuiet,
+    duplicateRepliesAfterQuietWindow: visibleRepliesAfterQuiet - visibleRepliesBeforeQuiet,
+    duplicateRepliesAfterGatewayRestart: visibleRepliesAfterRestart - visibleRepliesAfterQuiet,
+    distinctFollowupRun,
+  };
+  expect(facts).toEqual({
+    sessionsYieldCalls: 1,
+    childModelRequests: 2,
+    requesterCompletionTurns: 1,
+    pauseNoticeRequests: 0,
+    visibleReplies: 1,
+    duplicateRepliesAfterQuietWindow: 0,
+    duplicateRepliesAfterGatewayRestart: 0,
+    distinctFollowupRun: true,
+  });
   const verdict = {
     schemaVersion: 1,
     scenario: "channel-handoff-adoption",
@@ -208,7 +187,7 @@ it("announces to the original requester only after the follow-up run ends", asyn
     channel: "qa-channel",
     provider: "mock-openai",
     gateway: "ephemeral",
-    facts: Object.fromEntries(checks.map(([name, actual]) => [name, actual])),
+    facts,
   };
   await mkdir(path.dirname(VERDICT_PATH), { recursive: true });
   await writeFile(VERDICT_PATH, `${JSON.stringify(verdict, null, 2)}\n`, "utf8");

@@ -42,8 +42,8 @@ function tempRoot() {
   return dir;
 }
 
-async function renderPersistedGuestScript(params: GuestScriptParams) {
-  return (await guestScripts(params)).persistedScript;
+function run(params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot">) {
+  return runQaMultipass({ repoRoot: process.cwd(), ...params });
 }
 
 async function guestScripts(params: GuestScriptParams, captureTransfer = false) {
@@ -65,13 +65,7 @@ async function guestScripts(params: GuestScriptParams, captureTransfer = false) 
     });
   }
 
-  await expect(
-    runQaMultipass({
-      repoRoot: process.cwd(),
-      outputDir,
-      ...runParams,
-    }),
-  ).rejects.toThrow(
+  await expect(run({ outputDir, ...runParams })).rejects.toThrow(
     captureTransfer
       ? "stop after guest script transfer"
       : "Multipass is not installed on this host.",
@@ -141,11 +135,9 @@ describe("qa multipass runtime", () => {
       return { stdout: "", stderr: "" };
     });
 
-    const result = await runQaMultipass({
-      repoRoot: process.cwd(),
-      outputDir,
-      providerMode: "live-frontier",
-    }).catch((error: unknown) => error);
+    const result = await run({ outputDir, providerMode: "live-frontier" }).catch(
+      (error: unknown) => error,
+    );
     if (failures === 5) {
       expect(result).toBeInstanceOf(Error);
       expect(((result as Error).cause as Error).cause).toBe(attempts.at(-1));
@@ -173,12 +165,10 @@ describe("qa multipass runtime", () => {
     for (let attempt = 1; attempt <= failures; attempt += 1) {
       expect(log).toContain(`${label} retry ${attempt}/5: mount failure ${attempt}\n\n`);
     }
-    const repoMountIndex = commands.findIndex(
-      (args) => args[0] === "mount" && args[2]?.endsWith(":/workspace/openclaw-host"),
-    );
-    const homeMountIndex = commands.findIndex(
-      (args) => args[0] === "mount" && args[2]?.endsWith(":/workspace/openclaw-codex-home"),
-    );
+    const mountIndex = (suffix: string) =>
+      commands.findIndex((args) => args[0] === "mount" && args[2]?.endsWith(suffix));
+    const repoMountIndex = mountIndex(":/workspace/openclaw-host");
+    const homeMountIndex = mountIndex(":/workspace/openclaw-codex-home");
     const configTransferIndex = commands.findIndex(
       (args) => args[0] === "transfer" && args[1] === configPath,
     );
@@ -192,8 +182,7 @@ describe("qa multipass runtime", () => {
       expect(homeMountIndex).toBeGreaterThan(repoMountIndex);
     }
     if (failures === 5) {
-      expect(configTransferIndex).toBe(-1);
-      expect(scriptTransferIndex).toBe(-1);
+      expect([configTransferIndex, scriptTransferIndex]).toEqual([-1, -1]);
     } else {
       expect(configTransferIndex).toBeGreaterThan(homeMountIndex);
       expect(scriptTransferIndex).toBeGreaterThan(configTransferIndex);
@@ -208,12 +197,7 @@ describe("qa multipass runtime", () => {
   });
 
   it("rejects output directories outside the mounted repo root", async () => {
-    await expect(
-      runQaMultipass({
-        repoRoot: process.cwd(),
-        outputDir: "/tmp/qa-out",
-      }),
-    ).rejects.toThrow(
+    await expect(run({ outputDir: "/tmp/qa-out" })).rejects.toThrow(
       "qa suite --runner multipass requires --output-dir to stay under the repo root",
     );
   });
@@ -225,11 +209,6 @@ describe("qa multipass runtime", () => {
     const symlinkPath = path.join(repoRoot, "artifacts-link");
     fs.mkdirSync(repoRoot, { recursive: true });
     fs.mkdirSync(outsideRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ packageManager: "pnpm@10.32.1" }),
-      "utf8",
-    );
     fs.symlinkSync(outsideRoot, symlinkPath);
 
     await expect(
@@ -243,7 +222,7 @@ describe("qa multipass runtime", () => {
   });
 
   it("forwards fail-fast to the real guest QA suite command", async () => {
-    const script = await renderPersistedGuestScript({
+    const { persistedScript: script } = await guestScripts({
       outputDirName: "multipass-fail-fast-test",
       failFast: true,
       scenarioIds: ["channel-chat-baseline"],
@@ -408,7 +387,7 @@ describe("qa multipass runtime", () => {
   });
 
   it("persists runtime, channel-driver, and plugin selections", async () => {
-    const script = await renderPersistedGuestScript({
+    const { persistedScript: script } = await guestScripts({
       outputDirName: "multipass-selection-test",
       runtimePair: ["openclaw", "codex"],
       channelDriver: "crabline",
@@ -428,7 +407,7 @@ describe("qa multipass runtime", () => {
     vi.stubEnv("CODEX_HOME", "");
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
 
-    const script = await renderPersistedGuestScript({
+    const { persistedScript: script } = await guestScripts({
       outputDirName: "multipass-home-test",
       providerMode: "live-frontier",
     });
@@ -446,12 +425,8 @@ describe("qa multipass runtime", () => {
     );
     const outputDir = outputPath("multipass-probe-error-test");
 
-    await expect(
-      runQaMultipass({
-        repoRoot: process.cwd(),
-        outputDir,
-        scenarioIds: ["channel-chat-baseline"],
-      }),
-    ).rejects.toThrow("Unable to verify Multipass availability: multipassd is not running.");
+    await expect(run({ outputDir, scenarioIds: ["channel-chat-baseline"] })).rejects.toThrow(
+      "Unable to verify Multipass availability: multipassd is not running.",
+    );
   });
 });

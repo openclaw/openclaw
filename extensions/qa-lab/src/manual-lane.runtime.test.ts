@@ -52,11 +52,12 @@ describe("runQaManualLane", () => {
   const labStop = vi.fn();
   let outboundReply: string | null;
 
-  function expectCleanup(afterStop = true) {
-    for (const stop of [gatewayStop, cleanupTransportBeforeGatewayStop, mockStop, labStop]) {
+  function expectCleanup(afterStop = true, providerStarted = true) {
+    for (const stop of [gatewayStop, cleanupTransportBeforeGatewayStop, labStop]) {
       expect(stop).toHaveBeenCalledOnce();
     }
     expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(afterStop ? 1 : 0);
+    expect(mockStop).toHaveBeenCalledTimes(providerStarted ? 1 : 0);
   }
 
   beforeEach(() => {
@@ -137,11 +138,7 @@ describe("runQaManualLane", () => {
         embeddedGateway: "disabled",
       });
       expect(result.reply).toBe("Protocol note: mock reply.");
-      expect(gatewayStop).toHaveBeenCalledOnce();
-      expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledOnce();
-      expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledOnce();
-      expect(labStop).toHaveBeenCalledOnce();
-      expect(mockStop).toHaveBeenCalledTimes(providerMode === "mock-openai" ? 1 : 0);
+      expectCleanup(true, providerMode === "mock-openai");
       expect(cleanupTransportBeforeGatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
         gatewayStop.mock.invocationCallOrder[0] ?? 0,
       );

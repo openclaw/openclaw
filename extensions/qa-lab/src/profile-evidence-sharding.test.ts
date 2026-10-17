@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { vitestArtifactEvidence, writeJson } from "./evidence-gallery.test-support.js";
 import {
   buildQaOccurrenceEvidenceSummary,
@@ -64,17 +64,6 @@ const aggregateEvidence = (outputDir: string, evidencePaths: string[]) =>
     profile: "all",
   });
 
-function scenarioLiveChannels(
-  scenario: ReturnType<typeof readQaScenarioPack>["scenarios"][number],
-) {
-  if (scenario.execution.channel) {
-    return [scenario.execution.channel];
-  }
-  return scenario.execution.kind === "flow"
-    ? (scenario.execution.channels?.filter((channel) => channel !== "qa-channel") ?? [])
-    : [];
-}
-
 function shardIdForScenario(plan: ShardPlan, scenarioId: string) {
   return plan.shards.find((shard) => shard.scenarioIds.includes(scenarioId))?.id;
 }
@@ -83,21 +72,13 @@ async function writeShardEvidenceSet(params: { incompleteFirstShard?: boolean } 
   const outputDir = tempDirs.make("qa-profile-shards-");
   const artifactContent = "shard artifact content\n";
   const artifactRelativePath = path.join("playwright", "scenario.log");
-  const unreferencedPayloadContent = "unreferenced shard diagnostics\n";
-  const unreferencedPayloadRelativePath = path.join("diagnostics", "raw.log");
   const shardPlan = createQaProfileEvidenceShardPlan("all");
   const scenarioById = new Map(
     readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
   );
   const evidencePaths: string[] = [];
   for (const [index, shard] of shardPlan.shards.entries()) {
-    const scenarios = shard.scenarioIds.map((scenarioId) => {
-      const scenario = scenarioById.get(scenarioId);
-      if (!scenario) {
-        throw new Error(`missing scenario ${scenarioId}`);
-      }
-      return scenario;
-    });
+    const scenarios = shard.scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)!);
     const expectedCells: QaScenarioExecutionCell[] = scenarios.map((scenario) => ({
       scenarioId: scenario.id,
       executionKind: scenario.execution.kind,
@@ -131,7 +112,7 @@ async function writeShardEvidenceSet(params: { incompleteFirstShard?: boolean } 
     if (index === 0) {
       for (const [relative, content] of [
         [artifactRelativePath, artifactContent],
-        [unreferencedPayloadRelativePath, unreferencedPayloadContent],
+        [path.join("diagnostics", "raw.log"), "unreferenced shard diagnostics\n"],
       ] as const) {
         const file = path.join(path.dirname(evidencePath), relative);
         await fs.mkdir(path.dirname(file), { recursive: true });
@@ -151,196 +132,176 @@ async function writeShardEvidenceSet(params: { incompleteFirstShard?: boolean } 
     outputDir,
     artifactContent,
     evidencePaths,
+    firstPath: evidencePaths[0]!,
     shardPlan,
   };
 }
 
-describe("QA profile evidence sharding", () => {
-  it.each(["full", "slim"] as const)(
-    "rebases occurrence receipts with entry artifacts in %s evidence",
-    async (evidenceMode) => {
-      const { outputDir, evidencePaths, artifactContent, shardPlan } =
-        await writeShardEvidenceSet();
-      const digest = createHash("sha256").update(artifactContent).digest("hex");
-      for (const [index, file] of evidencePaths.entries()) {
-        const summary = await readEvidence(file);
-        const occurrence: QaEvidenceOccurrence = {
-          id: `shard-${index}-observation`,
-          parentCell: null,
-          scenario: null,
-          retryOf: null,
-          terminalStatus: "pass",
-          assertions: null,
-          launch: {
-            source: { ref: null, integrity: null },
-            runtime: { id: null, version: null },
-            package: null,
-            protocol: null,
-            accountRef: null,
-            proofClass: null,
-          },
-          receipts: [],
-        };
-        const artifact = summary.entries[0]?.execution?.artifacts[0];
-        if (artifact) {
-          occurrence.receipts.push({
-            id: "runtime-receipt",
-            phase: "runtime",
-            identity: structuredClone(occurrence.launch),
-            artifact: { ...artifact, sha256: digest },
-          });
-        }
-        const v3 = buildQaOccurrenceEvidenceSummary({
-          ...summary,
-          evidenceMode,
-          occurrences: [occurrence],
-          entries: summary.entries.map((entry) =>
-            Object.assign({}, entry, {
-              effective: true,
-              binding: {
-                occurrenceId: occurrence.id,
-                assertionId: null,
-                receiptId: artifact ? "runtime-receipt" : null,
-              },
-            }),
-          ),
+it.each(["full", "slim"] as const)(
+  "rebases occurrence receipts with entry artifacts in %s evidence",
+  async (evidenceMode) => {
+    const { outputDir, evidencePaths, artifactContent, shardPlan } = await writeShardEvidenceSet();
+    const digest = createHash("sha256").update(artifactContent).digest("hex");
+    for (const [index, file] of evidencePaths.entries()) {
+      const summary = await readEvidence(file);
+      const occurrence: QaEvidenceOccurrence = {
+        id: `shard-${index}-observation`,
+        parentCell: null,
+        scenario: null,
+        retryOf: null,
+        terminalStatus: "pass",
+        assertions: null,
+        launch: {
+          source: { ref: null, integrity: null },
+          runtime: { id: null, version: null },
+          package: null,
+          protocol: null,
+          accountRef: null,
+          proofClass: null,
+        },
+        receipts: [],
+      };
+      const artifact = summary.entries[0]?.execution?.artifacts[0];
+      if (artifact) {
+        occurrence.receipts.push({
+          id: "runtime-receipt",
+          phase: "runtime",
+          identity: structuredClone(occurrence.launch),
+          artifact: { ...artifact, sha256: digest },
         });
-        await writeJson(file, v3);
       }
-      const outputPath = aggregatePath(outputDir);
-      const aggregate = await aggregateEvidence(outputDir, evidencePaths);
-      expect(aggregate.schemaVersion).toBe(3);
-      if (aggregate.schemaVersion !== 3) {
-        throw new Error("expected occurrence evidence");
-      }
-      const receipt = aggregate.occurrences[0]?.receipts[0];
-      expect(receipt?.artifact).toMatchObject({
-        path: `shards/${shardPlan.shards[0]!.id}/playwright/scenario.log`,
-        sha256: digest,
+      const v3 = buildQaOccurrenceEvidenceSummary({
+        ...summary,
+        evidenceMode,
+        occurrences: [occurrence],
+        entries: summary.entries.map((entry) =>
+          Object.assign({}, entry, {
+            effective: true,
+            binding: {
+              occurrenceId: occurrence.id,
+              assertionId: null,
+              receiptId: artifact ? "runtime-receipt" : null,
+            },
+          }),
+        ),
       });
-      expect(
-        await fs.readFile(path.resolve(path.dirname(outputPath), receipt!.artifact.path), "utf8"),
-      ).toBe(artifactContent);
-      if (evidenceMode === "full") {
-        expect(aggregate.entries[0]?.execution?.artifacts[0]?.path).toBe(receipt?.artifact.path);
-      } else {
-        expect(aggregate.entries[0]?.execution).toBeUndefined();
-      }
-    },
-  );
-
-  it("partitions the real all profile while keeping exclusive live channels shard-affine", () => {
-    const serialPlan = createQaProfileEvidenceShardPlan("all", 1);
-    const plan = createQaProfileEvidenceShardPlan("all");
-    const scenarioIds = plan.shards.flatMap((shard) => shard.scenarioIds);
-    const scenarioById = new Map(
-      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
-    );
-
-    expect(serialPlan.shards).toHaveLength(1);
-    expect(new Set(scenarioIds)).toEqual(new Set(serialPlan.shards[0]?.scenarioIds));
-    expect(plan.shards).toHaveLength(8);
-    expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
-    expect(plan.shards.every((shard) => shard.scenarioIds.length > 0)).toBe(true);
-    expect(Math.max(...plan.shards.map((shard) => shard.estimatedCost))).toBeLessThan(
-      plan.shards.reduce((total, shard) => total + shard.estimatedCost, 0),
-    );
-
-    for (const channelId of exclusiveLiveChannels) {
-      const matchingScenarioIds = scenarioIds.filter((scenarioId) => {
-        const scenario = scenarioById.get(scenarioId);
-        return scenario ? scenarioLiveChannels(scenario).includes(channelId) : false;
-      });
-      expect(matchingScenarioIds.length, `${channelId} selected scenarios`).toBeGreaterThan(0);
-      expect(
-        new Set(matchingScenarioIds.map((scenarioId) => shardIdForScenario(plan, scenarioId))).size,
-        `${channelId} shard affinity`,
-      ).toBe(1);
+      await writeJson(file, v3);
     }
-    expect(shardIdForScenario(plan, "channel-canary")).toBe(
-      shardIdForScenario(plan, "thread-follow-up"),
-    );
-  });
-
-  it("rejects mixed taxonomy identity before any aggregate writes", async () => {
-    const { outputDir, evidencePaths } = await writeShardEvidenceSet();
-    const file = evidencePaths.at(-1)!;
-    const summary = await readEvidence(file);
-    summary.profilePlan!.taxonomyIdentity = { version: 1, sha256: "0".repeat(64) };
-    await writeJson(file, summary);
-    await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
-      "semantic taxonomy identity",
-    );
-    await expect(fs.stat(path.dirname(aggregatePath(outputDir)))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("preserves an incomplete child as incomplete aggregate evidence", async () => {
-    const { outputDir, evidencePaths } = await writeShardEvidenceSet({
-      incompleteFirstShard: true,
-    });
+    const outputPath = aggregatePath(outputDir);
     const aggregate = await aggregateEvidence(outputDir, evidencePaths);
-
-    expect(aggregate.profilePlan?.missingCells).toHaveLength(1);
-    expect(() => qaProfileEvidencePlan.attest(aggregate.profilePlan, true)).toThrow(
-      "successful QA profile evidence is missing 1 expected execution cell",
-    );
-  });
-
-  it("rejects a repo-relative artifact path that cannot be mapped to its shard payload", async () => {
-    const { outputDir, evidencePaths } = await writeShardEvidenceSet();
-    const evidencePath = evidencePaths[0];
-    if (!evidencePath) {
-      throw new Error("expected shard evidence");
+    if (aggregate.schemaVersion !== 3) {
+      throw new Error("expected occurrence evidence");
     }
-    const summary = await readEvidence(evidencePath);
-    const artifact = summary.entries[0]?.execution?.artifacts[0];
-    if (!artifact) {
-      throw new Error("expected declared shard artifact");
+    const receipt = aggregate.occurrences[0]?.receipts[0];
+    expect(receipt?.artifact).toMatchObject({
+      path: `shards/${shardPlan.shards[0]!.id}/playwright/scenario.log`,
+      sha256: digest,
+    });
+    expect(
+      await fs.readFile(path.resolve(path.dirname(outputPath), receipt!.artifact.path), "utf8"),
+    ).toBe(artifactContent);
+    if (evidenceMode === "full") {
+      expect(aggregate.entries[0]?.execution?.artifacts[0]?.path).toBe(receipt?.artifact.path);
+    } else {
+      expect(aggregate.entries[0]?.execution).toBeUndefined();
     }
-    artifact.path = ".artifacts/nonexistent/qa-evidence.json";
-    await writeJson(evidencePath, summary);
+  },
+);
 
-    await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
-      "was not found within downloaded payload",
-    );
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "rejects a declared artifact symlink that would retain its source-payload target",
-    async () => {
-      const { outputDir, evidencePaths } = await writeShardEvidenceSet();
-      const evidencePath = evidencePaths[0];
-      if (!evidencePath) {
-        throw new Error("expected shard evidence");
-      }
-      const artifactPath = path.join(path.dirname(evidencePath), "playwright", "scenario.log");
-      await fs.rm(artifactPath);
-      await fs.symlink(
-        path.join(path.dirname(evidencePath), "diagnostics", "raw.log"),
-        artifactPath,
-      );
-
-      await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
-        "traverses a symbolic link",
-      );
-    },
+it("partitions the real all profile while keeping exclusive live channels shard-affine", () => {
+  const serialPlan = createQaProfileEvidenceShardPlan("all", 1);
+  const plan = createQaProfileEvidenceShardPlan("all");
+  const scenarioIds = plan.shards.flatMap((shard) => shard.scenarioIds);
+  const scenarioById = new Map(
+    readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
   );
 
-  it("rejects duplicate or missing shards instead of treating them as partial evidence", async () => {
-    const { outputDir, evidencePaths, shardPlan } = await writeShardEvidenceSet();
-    const aggregate = (paths: string[]) => aggregateEvidence(outputDir, paths);
+  expect(serialPlan.shards).toHaveLength(1);
+  expect(new Set(scenarioIds)).toEqual(new Set(serialPlan.shards[0]?.scenarioIds));
+  expect(plan.shards).toHaveLength(8);
+  expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
+  expect(plan.shards.every((shard) => shard.scenarioIds.length > 0)).toBe(true);
+  expect(Math.max(...plan.shards.map((shard) => shard.estimatedCost))).toBeLessThan(
+    plan.shards.reduce((total, shard) => total + shard.estimatedCost, 0),
+  );
 
-    await expect(aggregate(evidencePaths.slice(1))).rejects.toThrow(
-      `requires ${shardPlan.shards.length} shard evidence files`,
-    );
-    const duplicatePath = evidencePaths[1];
-    if (!duplicatePath) {
-      throw new Error("expected at least two QA profile shard fixtures");
-    }
-    await expect(aggregate([...evidencePaths.slice(1), duplicatePath])).rejects.toThrow(
-      "does not match one unique planned shard",
-    );
+  for (const channelId of exclusiveLiveChannels) {
+    const matchingScenarioIds = scenarioIds.filter((scenarioId) => {
+      const { execution } = scenarioById.get(scenarioId)!;
+      return execution.channel
+        ? execution.channel === channelId
+        : execution.kind === "flow" && execution.channels?.includes(channelId);
+    });
+    expect(matchingScenarioIds.length, `${channelId} selected scenarios`).toBeGreaterThan(0);
+    expect(
+      new Set(matchingScenarioIds.map((scenarioId) => shardIdForScenario(plan, scenarioId))).size,
+      `${channelId} shard affinity`,
+    ).toBe(1);
+  }
+  expect(shardIdForScenario(plan, "channel-canary")).toBe(
+    shardIdForScenario(plan, "thread-follow-up"),
+  );
+});
+
+it("rejects mixed taxonomy identity before any aggregate writes", async () => {
+  const { outputDir, evidencePaths } = await writeShardEvidenceSet();
+  const file = evidencePaths.at(-1)!;
+  const summary = await readEvidence(file);
+  summary.profilePlan!.taxonomyIdentity = { version: 1, sha256: "0".repeat(64) };
+  await writeJson(file, summary);
+  await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
+    "semantic taxonomy identity",
+  );
+  await expect(fs.stat(path.dirname(aggregatePath(outputDir)))).rejects.toMatchObject({
+    code: "ENOENT",
   });
+});
+
+it("preserves an incomplete child as incomplete aggregate evidence", async () => {
+  const { outputDir, evidencePaths } = await writeShardEvidenceSet({
+    incompleteFirstShard: true,
+  });
+  const aggregate = await aggregateEvidence(outputDir, evidencePaths);
+
+  expect(aggregate.profilePlan?.missingCells).toHaveLength(1);
+  expect(() => qaProfileEvidencePlan.attest(aggregate.profilePlan, true)).toThrow(
+    "successful QA profile evidence is missing 1 expected execution cell",
+  );
+});
+
+it("rejects a repo-relative artifact path that cannot be mapped to its shard payload", async () => {
+  const { outputDir, evidencePaths, firstPath } = await writeShardEvidenceSet();
+  const summary = await readEvidence(firstPath);
+  summary.entries[0]!.execution!.artifacts[0]!.path = ".artifacts/nonexistent/qa-evidence.json";
+  await writeJson(firstPath, summary);
+
+  await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
+    "was not found within downloaded payload",
+  );
+});
+
+it.skipIf(process.platform === "win32")(
+  "rejects a declared artifact symlink that would retain its source-payload target",
+  async () => {
+    const { outputDir, evidencePaths, firstPath } = await writeShardEvidenceSet();
+    const artifactPath = path.join(path.dirname(firstPath), "playwright", "scenario.log");
+    await fs.rm(artifactPath);
+    await fs.symlink(path.join(path.dirname(firstPath), "diagnostics", "raw.log"), artifactPath);
+
+    await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
+      "traverses a symbolic link",
+    );
+  },
+);
+
+it("rejects duplicate or missing shards instead of treating them as partial evidence", async () => {
+  const { outputDir, evidencePaths, shardPlan } = await writeShardEvidenceSet();
+  const aggregate = (paths: string[]) => aggregateEvidence(outputDir, paths);
+
+  await expect(aggregate(evidencePaths.slice(1))).rejects.toThrow(
+    `requires ${shardPlan.shards.length} shard evidence files`,
+  );
+  await expect(aggregate([...evidencePaths.slice(1), evidencePaths[1]!])).rejects.toThrow(
+    "does not match one unique planned shard",
+  );
 });
