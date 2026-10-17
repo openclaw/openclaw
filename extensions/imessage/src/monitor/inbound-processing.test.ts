@@ -64,7 +64,7 @@ function resolveDecision(overrides: Parameters<typeof createInboundDecisionParam
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   it("drops inbound messages when outbound message id matches echo cache", async () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
     });
     const logVerbose = vi.fn();
@@ -91,7 +91,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("matches attachment-only echoes by structured media fact", async () => {
     const echoHas = vi.fn(
-      (
+      async (
         _scope: string,
         lookup: { text?: string; media?: { kind?: string | null }; messageId?: string },
       ) => {
@@ -173,7 +173,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("does not drop a group inbound when echo cache holds an unrelated chat_guid", async () => {
     const echoHas = vi.fn(
-      (scope: string, lookup: { text?: string; messageId?: string }) =>
+      async (scope: string, lookup: { text?: string; messageId?: string }) =>
         scope === "default:chat_guid:iMessage;+;OTHER" && lookup.messageId === "9001",
     );
 
@@ -237,7 +237,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("returns a reaction decision for tapbacks on bot-authored messages by default", async () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "target-guid";
     });
 
@@ -296,7 +296,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Loved “tapback target”",
       bodyText: "Loved “tapback target”",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
       isKnownFromMeMessageId: undefined,
     });
 
@@ -319,7 +319,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "",
       bodyText: "",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });

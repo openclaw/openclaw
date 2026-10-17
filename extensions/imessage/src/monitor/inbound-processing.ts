@@ -50,7 +50,11 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
-import type { SentMessageCache } from "./echo-cache.js";
+import {
+  hasIMessageEchoMatch,
+  hasReflectedReplyEcho,
+  type IMessageEchoCache,
+} from "./echo-scope.js";
 import { resolveIMessageInboundMentionPolicy } from "./mention-policy.js";
 import {
   type IMessageReactionContext,
@@ -68,10 +72,6 @@ type IMessageReplyContext = {
   id?: string;
   body: string;
   sender?: string;
-};
-
-type IMessageEchoCache = {
-  has: (...args: Parameters<SentMessageCache["has"]>) => boolean | Promise<boolean>;
 };
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
@@ -216,49 +216,6 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
   }
 }
 
-async function hasIMessageEchoMatch(params: {
-  echoCache: IMessageEchoCache;
-  scope: readonly string[];
-  text?: string;
-  media?: MediaPlaceholderTextFact;
-  messageIds: string[];
-  skipIdShortCircuit?: boolean;
-  includePendingText?: boolean;
-}): Promise<boolean> {
-  // Outbound sends persist echo scopes keyed by whichever target shape was
-  // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
-  // messages from chat.db typically carry chat_id + chat_guid + chat_identifier
-  // for groups and just sender for DMs, so the same conversation can be
-  // echo-cached under one shape and re-encountered under another. Probe every
-  // candidate scope so a chat_guid-keyed send isn't surfaced back to the agent
-  // as a fresh inbound when chat.db only annotates it with chat_id (or
-  // vice-versa).
-  for (const scope of params.scope) {
-    for (const messageId of params.messageIds) {
-      if (await params.echoCache.has(scope, { messageId })) {
-        return true;
-      }
-    }
-    const fallbackMessageId = params.messageIds[0];
-    if (!params.text && !params.media && !fallbackMessageId) {
-      continue;
-    }
-    if (
-      await params.echoCache.has(
-        scope,
-        { text: params.text, media: params.media, messageId: fallbackMessageId },
-        {
-          skipIdShortCircuit: params.skipIdShortCircuit,
-          includePendingText: params.includePendingText,
-        },
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 type IMessageInboundDispatchDecision = {
   kind: "dispatch";
   resolveChannelIngress: (
@@ -395,6 +352,7 @@ export async function resolveIMessageInboundDecision(params: {
     ].filter((value): value is string => Boolean(value)),
   );
   const inboundMessageId = inboundMessageIds[0];
+  const replyToGuid = normalizeReplyField(params.message.reply_to_guid);
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
   // Outbound sends persist one target shape; inbound rows must probe every
   // equivalent shape so a GUID-keyed send also matches a chat_id-bearing echo.
@@ -607,20 +565,37 @@ export async function resolveIMessageInboundDecision(params: {
 
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
+    const echoCache = params.echoCache;
+    // Reuse the existing conversation scopes; direct replies may have been persisted
+    // with the exact provider chat-id target instead of the sender handle.
+    const directChatIdScope = formatIMessageChatTarget(chatId);
+    const replyEchoScope = directChatIdScope
+      ? [...echoScope, `${params.accountId}:${directChatIdScope}`]
+      : echoScope;
+    const hasReplyToEcho =
+      params.message.is_from_me === false && isSelfChat && replyToGuid && bodyText
+        ? await hasReflectedReplyEcho({
+            echoCache,
+            scopes: replyEchoScope,
+            text: bodyText,
+            messageId: replyToGuid,
+          })
+        : false;
     if (
-      await hasIMessageEchoMatch({
+      hasReplyToEcho ||
+      (await hasIMessageEchoMatch({
         echoCache: params.echoCache,
         scope: echoScope,
         text: bodyText || undefined,
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
-      })
+      }))
     ) {
       params.logVerbose?.(
         `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}`,
       );
-      return { kind: "drop", reason: "echo" };
+      return { kind: "drop", reason: hasReplyToEcho ? "self-chat echo" : "echo" };
     }
   }
 

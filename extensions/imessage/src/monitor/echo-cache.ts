@@ -14,6 +14,7 @@ type SentMessageLookupOptions = {
   // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  requireMessageIdTextMatch?: boolean;
 };
 
 export type SentMessageCache = ReturnType<typeof createSentMessageCache>;
@@ -66,9 +67,17 @@ export function createSentMessageCache() {
         messageId: lookup.messageId,
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
+        requireMessageIdTextMatch: resolvedOptions.requireMessageIdTextMatch,
+        messageIdMaxAgeMs: resolvedOptions.requireMessageIdTextMatch
+          ? SENT_MESSAGE_TEXT_TTL_MS
+          : undefined,
       })
     ) {
       return true;
+    }
+    if (resolvedOptions.requireMessageIdTextMatch) {
+      // The ID-only memory cache cannot prove that this GUID and body were sent together.
+      return false;
     }
     cleanup();
     const textKey = normalizeIMessageEchoText(lookup.text);
