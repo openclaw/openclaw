@@ -14,7 +14,8 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandWithTimeout: mocks.command,
 }));
 // Acquisition and the independent generation use real Git; the build is another owner's boundary.
-vi.mock("./update-runner-git-preflight.js", () => ({
+vi.mock("./update-runner-git-preflight.js", async (original) => ({
+  ...(await original<typeof import("./update-runner-git-preflight.js")>()),
   runGitCandidatePreflight: mocks.preflight,
 }));
 
