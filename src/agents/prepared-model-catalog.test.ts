@@ -117,25 +117,6 @@ function bindFullCatalog(modelCatalog: ReturnType<typeof catalog>) {
   });
 }
 
-async function expectHeldFailure(
-  release: typeof mocks.releaseSnapshot,
-  run: (pause: () => Promise<void>, failure: Error) => Promise<unknown>,
-) {
-  const entered = createDeferred();
-  const resume = createDeferred();
-  const failure = new Error("catalog operation failed");
-  const result = run(async () => {
-    entered.resolve();
-    await resume.promise;
-  }, failure);
-  const outcome = expect(result).rejects.toBe(failure);
-  await entered.promise;
-  expect(release).not.toHaveBeenCalled();
-  resume.resolve();
-  await outcome;
-  expect(release).toHaveBeenCalledOnce();
-}
-
 describe("prepared model catalog access", () => {
   beforeEach(() => {
     mocks.agentIds = ["main"];
@@ -147,56 +128,58 @@ describe("prepared model catalog access", () => {
     }
   });
 
-  it("retains a published owner while an explicitly requested catalog refresh fails", async () => {
-    const snapshot = { ...fullSnapshot, loadFullModelCatalog: vi.fn() };
-    mocks.prepareSnapshot.mockResolvedValue(snapshot);
-    const project = vi.fn();
-    await expectHeldFailure(mocks.releasePublishedSnapshot, (pause, failure) => {
-      mocks.refreshStaleCatalog.mockImplementation(async () => {
-        await pause();
-        expect(mocks.releasePublishedSnapshot).not.toHaveBeenCalled();
-        throw failure;
-      });
-      return withOwner({ refreshFullCatalog: true }, project);
-    });
-    expect(project).not.toHaveBeenCalled();
-  });
-
-  it("releases a published claim rejected by the exact config policy", async () => {
-    mocks.prepareSnapshot.mockResolvedValue({
-      ...fullSnapshot,
-      config: { agents: { defaults: { model: "openai/old" } } },
-    });
-    const project = vi.fn();
-    await expect(withOwner({}, project)).rejects.toBeInstanceOf(
-      PreparedModelCatalogConfigReplacedError,
-    );
-    expect(project).not.toHaveBeenCalled();
-    expect(mocks.releasePublishedSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.activateSnapshot).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])(
-    "retains the temporary owner through a rejected projection (readOnly=%s)",
-    async (readOnly) => {
+  it.each(["refresh", "readOnly", "writable"])(
+    "retains the %s owner until its operation rejects",
+    async (mode) => {
+      const refresh = mode === "refresh";
+      const release = refresh ? mocks.releasePublishedSnapshot : mocks.releaseSnapshot;
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const failure = new Error("catalog operation failed");
       let current = true;
-      const snapshot = { ...readOnlySnapshot, isCurrent: () => current };
-      unpublished();
-      mocks.loadSnapshot.mockResolvedValue(snapshot);
-      mocks.acquireSnapshot.mockResolvedValue(snapshot);
-      mocks.releaseSnapshot.mockImplementation(async () => {
-        current = false;
-      });
-
-      await expectHeldFailure(mocks.releaseSnapshot, (pause, failure) =>
-        withOwner({ readOnly }, async (owner) => {
-          expect(owner.isCurrent()).toBe(true);
-          await pause();
-          expect(owner.isCurrent()).toBe(true);
-          throw failure;
-        }),
+      const snapshot = refresh
+        ? { ...fullSnapshot, loadFullModelCatalog: vi.fn() }
+        : { ...readOnlySnapshot, isCurrent: () => current };
+      if (refresh) {
+        mocks.prepareSnapshot.mockResolvedValue(snapshot);
+      } else {
+        unpublished();
+        mocks.loadSnapshot.mockResolvedValue(snapshot);
+        mocks.acquireSnapshot.mockResolvedValue(snapshot);
+        release.mockImplementation(async () => {
+          current = false;
+        });
+      }
+      const fail = async (assertActive: () => void) => {
+        assertActive();
+        entered.resolve();
+        await resume.promise;
+        assertActive();
+        throw failure;
+      };
+      if (refresh) {
+        mocks.refreshStaleCatalog.mockImplementation(() =>
+          fail(() => expect(release).not.toHaveBeenCalled()),
+        );
+      }
+      const project = vi.fn((owner: { isCurrent: () => boolean }) =>
+        fail(() => expect(owner.isCurrent()).toBe(true)),
       );
-      expect(current).toBe(false);
+      const result = withOwner(
+        refresh ? { refreshFullCatalog: true } : { readOnly: mode === "readOnly" },
+        project,
+      );
+      const outcome = expect(result).rejects.toBe(failure);
+      await entered.promise;
+      expect(release).not.toHaveBeenCalled();
+      resume.resolve();
+      await outcome;
+      expect(release).toHaveBeenCalledOnce();
+      if (refresh) {
+        expect(project).not.toHaveBeenCalled();
+      } else {
+        expect(current).toBe(false);
+      }
     },
   );
 
@@ -262,8 +245,7 @@ describe("prepared model catalog access", () => {
         expect(mocks.prepareScopedCatalog).not.toHaveBeenCalled();
       } else {
         expect(mocks.prepareSnapshot).toHaveBeenCalledTimes(2);
-        expect(mocks.prepareScopedCatalog).toHaveBeenCalledOnce();
-        expect(mocks.prepareScopedCatalog).toHaveBeenCalledWith(
+        expect(mocks.prepareScopedCatalog).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             readOnly: true,
             workspaceDir,
@@ -362,17 +344,29 @@ describe("prepared model catalog access", () => {
     expect(mocks.refreshStaleCatalog).not.toHaveBeenCalled();
   });
 
-  it.each(["activateSnapshot", "acquireSnapshot"] as const)(
+  it.each(["prepareSnapshot", "activateSnapshot", "acquireSnapshot"] as const)(
     "rejects a catalog owner built from another config by %s",
     async (source) => {
-      unpublished();
+      if (source !== "prepareSnapshot") {
+        unpublished();
+      }
       mocks[source].mockResolvedValue({
         ...fullSnapshot,
         config: { agents: { defaults: { model: "openai/old" } } },
       });
-      await expect(loadCatalog({ readOnly: false })).rejects.toThrow("requested config");
-      if (source === "acquireSnapshot") {
-        expect(mocks.releaseSnapshot).toHaveBeenCalledOnce();
+      const project = vi.fn();
+      if (source === "prepareSnapshot") {
+        await expect(withOwner({}, project)).rejects.toBeInstanceOf(
+          PreparedModelCatalogConfigReplacedError,
+        );
+        expect(project).not.toHaveBeenCalled();
+        expect(mocks.releasePublishedSnapshot).toHaveBeenCalledOnce();
+        expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+      } else {
+        await expect(loadCatalog({ readOnly: false })).rejects.toThrow("requested config");
+        if (source === "acquireSnapshot") {
+          expect(mocks.releaseSnapshot).toHaveBeenCalledOnce();
+        }
       }
     },
   );

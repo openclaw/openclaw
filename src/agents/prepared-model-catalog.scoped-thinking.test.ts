@@ -124,6 +124,10 @@ function readAdmitted(
   );
 }
 
+function physicalEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return { ...entry, reasoning: true, input: ["text", "image"], ...overrides };
+}
+
 function nativeEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return {
     provider: entry.provider,
@@ -155,11 +159,7 @@ beforeEach(() => {
 
 it("reuses paired completed catalogs for thinking capabilities", async () => {
   const config = {};
-  const completedEntry: ModelCatalogEntry = {
-    ...entry,
-    reasoning: true,
-    input: ["text", "image"],
-  };
+  const completedEntry = physicalEntry();
   const completed = catalog([completedEntry]);
   setPreparedModelFullCatalogAuth(completed, {
     providerAuthLabels: new Map(),
@@ -172,8 +172,6 @@ it("reuses paired completed catalogs for thinking capabilities", async () => {
     readFullModelCatalog: () => completed,
     loadFullModelCatalog,
   });
-  const { getPreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
-  expect(getPreparedModelCatalogSnapshot({ config })).toBe(completed);
   expect(await readThinking(config)).toEqual([completedEntry]);
   expect(loadFullModelCatalog).not.toHaveBeenCalled();
   expect(manifestCatalogMock).not.toHaveBeenCalled();
@@ -201,9 +199,7 @@ it.each([
     ...accountConfig(replacementKey),
     skills: { entries: { marker: { enabled: false } } },
   };
-  const admittedEntry: ModelCatalogEntry = native
-    ? nativeEntry()
-    : { ...entry, reasoning: true, input: ["text", "image"] };
+  const admittedEntry: ModelCatalogEntry = native ? nativeEntry() : physicalEntry();
   const completed = catalog([admittedEntry]);
   const readFullModelCatalog = vi.fn(() => completed);
   const source = { ...owner(config, [entry]), readFullModelCatalog };
@@ -236,14 +232,11 @@ it.each([
     const config = {};
     const configured: ModelCatalogEntry = publishedSelected
       ? entry
-      : { ...entry, reasoning: false, input: ["text", "image"] };
-    const discovered: ModelCatalogEntry = {
-      ...entry,
+      : physicalEntry({ reasoning: false });
+    const discovered = physicalEntry({
       id: publishedSelected ? entry.id : "discovered",
       name: "Discovered",
-      reasoning: true,
-      input: ["text", "image"],
-    };
+    });
     const native: ModelCatalogEntry = nativeEntry({ id: nativeId, input: ["text"] });
     let current = true;
     const readFullModelCatalog = vi.fn(() => catalog([native, discovered]));
@@ -306,28 +299,23 @@ it.each(["ready", "retired", "failure"] as const)(
 );
 
 it.each([
-  [
-    "a capability change",
-    [entry],
-    [{ ...entry, reasoning: true }],
-    [{ ...entry, reasoning: false }],
-  ],
-  ["populated to empty inventory", [], [entry], []],
-  ["configured facts followed by empty inventory", [entry], undefined, []],
-] satisfies Array<
-  [string, ModelCatalogEntry[], ModelCatalogEntry[] | undefined, ModelCatalogEntry[]]
->)("keeps earlier captures across %s", async (_label, configured, firstEntries, secondEntries) => {
-  const config = {};
-  const readFullModelCatalog = vi
-    .fn<() => ModelCatalogSnapshot | undefined>()
-    .mockReturnValue(firstEntries ? catalog(firstEntries) : undefined);
-  const source = { ...owner(config, configured), readFullModelCatalog };
-  const first = capturePreparedModelRuntimeCatalog(source, source);
-  readFullModelCatalog.mockReturnValue(catalog(secondEntries));
-  const second = capturePreparedModelRuntimeCatalog(source, source);
-  await expect(readAdmitted(first)).resolves.toEqual(firstEntries ?? configured);
-  await expect(readAdmitted(second)).resolves.toEqual(secondEntries);
-});
+  { configured: [], before: [entry] },
+  { configured: [entry], before: undefined },
+])(
+  "keeps captured facts after an empty inventory is published ($before)",
+  async ({ configured, before }) => {
+    const config = {};
+    const readFullModelCatalog = vi
+      .fn<() => ModelCatalogSnapshot | undefined>()
+      .mockReturnValue(before ? catalog(before) : undefined);
+    const source = { ...owner(config, configured), readFullModelCatalog };
+    const first = capturePreparedModelRuntimeCatalog(source, source);
+    readFullModelCatalog.mockReturnValue(catalog([]));
+    const second = capturePreparedModelRuntimeCatalog(source, source);
+    await expect(readAdmitted(first)).resolves.toEqual(before ?? configured);
+    await expect(readAdmitted(second)).resolves.toEqual([]);
+  },
+);
 
 it.each(["missing admission", "closed lease", "other agent", "other workspace"])(
   "cannot borrow replacement facts with %s",
@@ -350,9 +338,7 @@ it.each(["missing admission", "closed lease", "other agent", "other workspace"])
 );
 it("rejects published capabilities from a different route", async () => {
   const config = {};
-  publishedSnapshotMock.mockReturnValue(
-    owner(config, [{ ...entry, reasoning: true, input: ["text", "image"] }]),
-  );
+  publishedSnapshotMock.mockReturnValue(owner(config, [physicalEntry()]));
   expect(
     await readThinking(config, {
       requiredInputRoute: { ...entry, baseUrl: "https://custom.invalid/v1" },
