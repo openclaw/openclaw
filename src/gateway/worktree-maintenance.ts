@@ -31,8 +31,6 @@ type MaintenanceOwner = {
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
-// Maintenance phases can run 10s early; leave the first two minutes for reconnects.
-const WORKTREE_CLEANUP_STARTUP_DELAY_MS = 130_000;
 
 function captureCleanupInputs(config: OpenClawConfig) {
   const defaults = config.agents?.defaults;
@@ -68,7 +66,6 @@ export function startWorktreeMaintenance(params: {
 }): MaintenanceOwner {
   const previousDrain = owners.get(params.getRuntimeConfig)?.stop();
   const scheduler = params.scheduler.scope();
-  const automaticCleanupAtMs = scheduler.now() + WORKTREE_CLEANUP_STARTUP_DELAY_MS;
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let inFlight: Promise<void> | undefined;
@@ -193,7 +190,7 @@ export function startWorktreeMaintenance(params: {
                 inFlight = undefined;
                 if (archivePending && isActive()) {
                   archivePending = false;
-                  owner.notifyArchive();
+                  owner.request();
                 }
               });
             return inFlight;
@@ -203,24 +200,12 @@ export function startWorktreeMaintenance(params: {
       return structuredClone(current);
     },
     notifyArchive: () => {
-      if (!isActive() || receipt?.state === "queued") {
+      if (!isActive()) {
         return;
       }
       if (receipt?.state === "running") {
         // The current sweep may already have passed this newly archived session.
         archivePending = true;
-      } else if (scheduler.now() < automaticCleanupAtMs) {
-        inOwnerContext(() =>
-          scheduler.schedule({
-            // An explicit request replaces this pending automatic wake.
-            id: "maintenance:worktrees:run",
-            atMs: automaticCleanupAtMs,
-            phase: "maintenance",
-            run: () => {
-              owner.request();
-            },
-          }),
-        );
       } else {
         owner.request();
       }

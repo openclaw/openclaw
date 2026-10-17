@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe("worktree maintenance owner", () => {
-  it("coalesces archive cleanup after the reconnect window under the maintenance context", async () => {
+  it("coalesces archive notifications into cleanup under the maintenance context", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const context = new AsyncLocalStorage<string>();
@@ -57,37 +57,8 @@ describe("worktree maintenance owner", () => {
         notifyGatewayWorktreeArchive(getRuntimeConfig);
       });
       expect(gc).not.toHaveBeenCalled();
-      await context.run("host-wake", () => clock.advanceBy(120_000));
-      expect(gc).not.toHaveBeenCalled();
-      await context.run("host-wake", () => clock.advanceBy(10_000));
-      await clock.advanceBy(0);
+      await context.run("host-wake", () => clock.advanceBy(0));
       expect(observed).toEqual(["maintenance"]);
-    } finally {
-      await owner.stop();
-      await scheduler.stop();
-    }
-  });
-
-  it("runs explicit cleanup immediately and consumes the pending archive wake", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const owner = startWorktreeMaintenance({
-      scheduler,
-      getRuntimeConfig,
-      onComplete: vi.fn(),
-      onError: vi.fn(),
-    });
-    try {
-      notifyGatewayWorktreeArchive(getRuntimeConfig);
-      const receipt = requestGatewayWorktreeMaintenance(getRuntimeConfig);
-      await clock.advanceBy(0);
-      expect(owner.request({ jobId: receipt.jobId }).state).toBe("completed");
-      expect(gc).toHaveBeenCalledOnce();
-      await clock.advanceBy(130_000);
-      expect(gc).toHaveBeenCalledOnce();
     } finally {
       await owner.stop();
       await scheduler.stop();
@@ -114,7 +85,6 @@ describe("worktree maintenance owner", () => {
       onComplete: vi.fn(),
       onError: vi.fn(),
     });
-    await clock.advanceBy(130_000);
     notifyGatewayWorktreeArchive(getRuntimeConfig);
     const running = clock.advanceBy(0);
     try {
