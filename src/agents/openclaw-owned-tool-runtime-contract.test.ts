@@ -197,6 +197,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
     expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/openclaw-reply.png"]);
     expect(ctx.state.messagingToolSentTargets).toEqual([
       expect.objectContaining({
+        tool: "message",
         provider: "telegram",
         to: "chat-1",
         text: "hello from embedded agent",
