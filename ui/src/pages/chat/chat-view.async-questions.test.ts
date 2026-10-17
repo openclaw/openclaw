@@ -13,6 +13,7 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
+import { createChatViewFrame } from "./chat-view-frame.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
@@ -163,6 +164,37 @@ it("selects a reopened historical question ahead of another pending request", as
     ),
   );
   expect(container.querySelector<HTMLInputElement>(".chat-question-panel__other")?.value).toBe("");
+});
+
+it("reads confirmed discard from the outbox before the next queue frame arrives", () => {
+  const row: ChatQueueItem = {
+    id: "discarded-answer",
+    asyncQuestionItemId: "audience",
+    text: "> Which audience?\n\nEngineers",
+    createdAt: 1,
+    sendState: "failed",
+  };
+  let queue = [row];
+  const props = {
+    ...createChatProps({
+      messages: [
+        { ...audience, runId: "question-run" },
+        terminal("question-run"),
+        terminal("later-run"),
+      ],
+      queue,
+      onAsyncQuestionSubmit: vi.fn(async () => true),
+    }),
+    getQueue: () => queue,
+  };
+  const before = createChatViewFrame(props);
+  expect(before.asyncQuestions.pending).toEqual([]);
+  queue = [];
+  before.asyncQuestions.discard(row);
+  const after = createChatViewFrame(props);
+  expect(after.asyncQuestions.pending.map((question) => question.itemId)).toEqual(["audience"]);
+  expect(after.asyncQuestions.delivery.size).toBe(0);
+  expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
 });
 
 it("refreshes a mounted question summary when a canonical answer appears or is replaced", async () => {
