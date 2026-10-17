@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
@@ -367,6 +366,7 @@ export function isRedirectStatus(status: number): boolean {
 export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
+  resolveFn: (hostname: string) => Promise<{ address: string }>;
   requestInit?: RequestInit;
   timeoutMs?: number;
 }): Promise<Response> {
@@ -385,7 +385,7 @@ export async function safeFetchWithPolicy(params: {
   }
 
   const lookupFn: LookupFn = async (hostname) => {
-    const resolved = await lookup(hostname);
+    const resolved = await params.resolveFn(hostname);
     return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
   };
   const guarded = await fetchWithSsrFGuard({

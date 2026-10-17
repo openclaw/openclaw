@@ -542,7 +542,6 @@ extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
 extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
-extensions/msteams/src/attachments/shared.ts	1
 extensions/msteams/src/channel.ts	4
 extensions/msteams/src/delegated-state.ts	1
 extensions/msteams/src/errors.ts	2

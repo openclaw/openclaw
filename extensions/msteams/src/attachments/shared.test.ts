@@ -4,6 +4,7 @@ import {
   type AttachmentTestTransport,
 } from "./transport.test-support.js";
 const installAttachmentTestTransport = useAttachmentTestTransport();
+import { lookup } from "node:dns/promises";
 import {
   encodeGraphShareId,
   isDownloadableAttachment,
@@ -22,7 +23,7 @@ const failingResolve = async () => {
 const isGraphSharedLinkUrl = (url: string) =>
   tryBuildGraphSharesUrlForSharedLink(url) !== undefined;
 
-type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy"> &
+type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy" | "resolveFn"> &
   AttachmentTestTransport & {
     allowHosts: string[];
     authorizationAllowHosts?: string[];
@@ -33,6 +34,7 @@ async function safeFetch(params: SafeFetchParams) {
   installAttachmentTestTransport({ fetchFn, resolveFn: resolveFn ?? publicResolve });
   return await safeFetchWithPolicy({
     ...request,
+    resolveFn: lookup,
     policy: {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
