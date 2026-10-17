@@ -321,7 +321,7 @@ export async function processResponsesStream<TApi extends Api>(
           event.item.type === "message" ||
           event.item.type === "function_call")
       ) {
-        const previous = outputs.get(event.item, readResponsesOutputIndex(event));
+        const previous = outputs.peek(event.item, readResponsesOutputIndex(event));
         hasOutputProgress =
           event.type === "response.output_item.added"
             ? previous === undefined && !outputSlots.resolveOutputItem(event, event.item)
