@@ -966,8 +966,12 @@ describe("post-activation failure settlement without inference", () => {
         ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
       }
       if (localVersionOnly && !recovered) {
-        expect(rendered).toContain("expected schema 1, found 2");
-        expect(rendered).toContain(
+        const refusal = report?.steps.findLast(
+          (step) => step.step === "gateway migration recovery",
+        );
+        expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
+        expect(refusal?.stderrTail).toContain("expected schema 1, found 2");
+        expect(refusal?.stderrTail).toContain(
           receipt === "migration-local-client-newer"
             ? path.join("client", "credentials.sqlite")
             : path.join("control", "services.sqlite"),

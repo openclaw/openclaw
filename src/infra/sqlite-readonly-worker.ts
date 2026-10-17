@@ -233,9 +233,7 @@ export function runScopedSqliteInspection<T>(
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
     resolveRuntimeProcessEntrypointUrl(
-      options.mode === "content-version" ||
-        options.mode === "file-generation" ||
-        options.mode === "update-generation"
+      options.mode === "content-version" || options.mode === "file-generation"
         ? "sqliteSourceRevision"
         : "sqliteReadOnly",
     ),

@@ -168,6 +168,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
   };
 });
 
+// mock-isolation: CLI fixtures use synthetic socket data without admitting the real credential owner.
 vi.mock("../infra/exec-approvals-socket.js", () => ({
   readExecApprovalsSocket: async () => structuredClone(localSocket),
 }));

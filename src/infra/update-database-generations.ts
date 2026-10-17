@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { sha256Hex } from "./crypto-digest.js";
-import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -151,28 +150,4 @@ function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateDatabase
       ];
     }),
   );
-}
-
-export async function readUpdatePhysicalDatabaseGenerations(
-  paths: readonly string[],
-  pluginOwners?: DatabasePortPluginOwners,
-) {
-  const result = readUpdateDatabaseGenerations(paths);
-  const { readBackupEngine, fingerprintPostgresBackup } =
-    await import("../snapshot/database-backup.js");
-  const postgres = paths.filter(
-    (pathname) => result[pathname] !== null && readBackupEngine(pathname).engine === "postgres",
-  );
-  if (postgres.length) {
-    const { createConfigIO } = await import("../config/io.js");
-    const { config } = await createConfigIO({
-      observe: false,
-      pluginValidation: "core-only",
-      shellEnvFallback: "defer",
-    }).readConfigFileSnapshot();
-    for (const pathname of postgres) {
-      result[pathname] = await fingerprintPostgresBackup(pathname, config, pluginOwners);
-    }
-  }
-  return result;
 }

@@ -12,7 +12,10 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../process/gateway-work-admission.js";
 import {
   collectActiveSessionWorkAdmissions,
   getSessionWorkAdmissionRelease,
@@ -47,9 +50,14 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
 export async function settleGatewaySessionStoreFixture(dir: string) {
   // Transcript observers outlive session admission; join before config changes can
   // reopen the store. This also runs in suite teardown, outside expect.poll's test context.
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0), {
-    timeout: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  });
+  await vi.waitFor(
+    () =>
+      expect(
+        getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+        JSON.stringify(getActiveGatewayRootWorkHolders({ excludeCurrent: true })),
+      ).toBe(0),
+    { timeout: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS },
+  );
   const root = existsSync(dir) ? realpathSync(dir) : path.resolve(dir);
   const ownsPath = (candidate: string) =>
     isPathInside(root, candidate) || isPathInside(path.resolve(dir), candidate);

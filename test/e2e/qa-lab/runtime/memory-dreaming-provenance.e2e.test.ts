@@ -90,7 +90,7 @@ async function sendAndWait(params: {
     { runId: started.runId, timeoutMs: WAIT_TIMEOUT_MS },
     { timeoutMs: WAIT_TIMEOUT_MS + 5_000 },
   )) as { status?: unknown };
-  expect(terminal.status).toBe("ok");
+  expect(terminal.status, `${JSON.stringify(terminal)}\n${gateway?.logs() ?? ""}`).toBe("ok");
 }
 
 function configureMemoryProof(
