@@ -75,6 +75,41 @@ describe("session tool outcomes", () => {
         isError: outcome.isError,
       }));
       const agentDir = tempDirs.make("openclaw-sdk-tool-outcome-");
+      const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
+      if (withRecovery) {
+        handlers.set("tool_result", [
+          async (event) => {
+            const { toolName } = event as ToolResultEvent;
+            if (toolName === "recovered_tool") {
+              return { isError: false };
+            }
+            if (toolName === "middleware_error") {
+              return {
+                content: [{ type: "text", text: `middleware failed ${secret}` }],
+                details: { status: "error", error: "middleware failed" },
+              };
+            }
+          },
+        ]);
+        handlers.set("message_end", [
+          async (event) => {
+            const { message } = event as MessageEndEvent;
+            if (message.role !== "toolResult" || message.toolName !== "successful_tool") {
+              return;
+            }
+            return {
+              message: {
+                ...message,
+                content: message.content.map((block) =>
+                  block.type === "text"
+                    ? Object.assign({}, block, { text: `message-end rewrite ${secret}` })
+                    : block,
+                ),
+              },
+            };
+          },
+        ]);
+      }
       const target = {
         agentId: "main",
         sessionId: "tool-outcomes",
@@ -115,54 +150,7 @@ describe("session tool outcomes", () => {
               : tool;
           }),
         ),
-        resourceLoader: createResourceLoader(
-          new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>(
-            withRecovery
-              ? [
-                  [
-                    "tool_result",
-                    [
-                      async (event: unknown) => {
-                        const { toolName } = event as ToolResultEvent;
-                        if (toolName === "recovered_tool") {
-                          return { isError: false };
-                        }
-                        return toolName === "middleware_error"
-                          ? {
-                              content: [{ type: "text", text: `middleware failed ${secret}` }],
-                              details: { status: "error", error: "middleware failed" },
-                            }
-                          : undefined;
-                      },
-                    ],
-                  ],
-                  [
-                    "message_end",
-                    [
-                      async (event: unknown) => {
-                        const { message } = event as MessageEndEvent;
-                        return message.role === "toolResult" &&
-                          message.toolName === "successful_tool"
-                          ? {
-                              message: {
-                                ...message,
-                                content: message.content.map((block) =>
-                                  block.type === "text"
-                                    ? Object.assign({}, block, {
-                                        text: `message-end rewrite ${secret}`,
-                                      })
-                                    : block,
-                                ),
-                              },
-                            }
-                          : undefined;
-                      },
-                    ],
-                  ],
-                ]
-              : [],
-          ),
-        ),
+        resourceLoader: createResourceLoader(handlers),
         settingsManager: SettingsManager.inMemory({ retry: { enabled: false } }),
         modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       });
