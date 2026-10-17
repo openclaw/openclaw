@@ -39,7 +39,7 @@ import "./menu-surface.ts";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
-export { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
+export { ScopeUpgradeOwner } from "../app/device-scope-upgrade-owner.runtime.ts";
 export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "top"; top: number }
   | { anchor: "bottom"; bottom: number }

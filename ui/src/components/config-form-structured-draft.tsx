@@ -16,7 +16,7 @@ export function ConfigStructuredDraft(
   const [draft, setDraft] = createSignal(() => {
     scope();
     // The initial value is a snapshot for this identity; edits own it until the scope changes.
-    return { value: untrack(() => structuredClone(props.initialValue)), error: "" };
+    return { value: untrack(() => props.initialValue), error: "" };
   });
   const patchDraft = (path: Array<string | number>, value: unknown): boolean => {
     const current = draft().value;

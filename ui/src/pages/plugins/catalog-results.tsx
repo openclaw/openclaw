@@ -296,7 +296,12 @@ function CatalogCard(props: {
 function renderError(error: string, onRetry: () => void, warning = false): JSX.Element {
   return (
     <div
-      class={warning ? "callout warning oc-banner" : "callout danger oc-banner oc-banner-error"}
+      class={[
+        "callout",
+        warning ? "warning" : "danger",
+        "oc-banner",
+        { "oc-banner-error": !warning },
+      ]}
       role={warning ? "status" : "alert"}
     >
       <span>{formatUiExternalText(error)}</span>

@@ -21,7 +21,6 @@ import {
   isTerminalSqliteIntegrityError,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
-  type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
@@ -152,23 +151,6 @@ export {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-
-/** Drain the live owner before reconfirming an advisory failure in a native child. */
-export async function confirmOpenClawAgentDatabaseIntegrity(
-  pathname: string,
-  lifetime?: import("./openclaw-database-verify.impl.js").DatabaseVerifyWorkerLifetime,
-): Promise<SqliteIntegrityConfirmation> {
-  const resolvedPath = path.resolve(pathname);
-  await closeOpenClawAgentDatabaseByPathAsync(resolvedPath);
-  // Closing breaks process ownership of the pathname. A replacement must
-  // revalidate and claim its schema before the path can become trusted again.
-  invalidateOpenClawAgentDatabaseValidation(resolvedPath);
-  const { confirmDatabaseVerifyWorker } = await import("./openclaw-database-verify.impl.js");
-  return confirmDatabaseVerifyWorker(
-    { path: resolvedPath, kind: "agent", label: resolvedPath },
-    lifetime,
-  );
-}
 
 /**
  * Clear a terminal open failure after doctor rewrites the database file.
@@ -720,6 +702,5 @@ export {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   inspectOpenClawAgentDatabaseOwner,
-  recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
 } from "./openclaw-agent-db-lifecycle.js";

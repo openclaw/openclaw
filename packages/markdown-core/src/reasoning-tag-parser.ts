@@ -9,7 +9,7 @@ export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string };
 
-const REASONING_TAG_NAMES = [
+export const REASONING_TAG_NAMES = [
   "think",
   "thinking",
   "thought",

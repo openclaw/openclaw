@@ -6,8 +6,8 @@ import {
   renderSelectFixture,
   renderAnalyzedFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);

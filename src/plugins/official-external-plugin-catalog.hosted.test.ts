@@ -270,6 +270,32 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("replaces unsigned snapshots without losing a neighboring feed", async () => {
+    const snapshotStore = sqliteSnapshotStore();
+    const snapshotFor = (pluginName: string, url = FEED_URL) => {
+      const body = JSON.stringify(hostedCatalogFeed({ sequence: 1, pluginName }));
+      return {
+        body,
+        metadata: {
+          url,
+          status: 200,
+          checksum: `sha256:${crypto.createHash("sha256").update(body).digest("hex")}`,
+        },
+        savedAt: "2026-06-22T00:00:10.000Z",
+      };
+    };
+    const first = snapshotFor("@fixture/first");
+    const neighbor = snapshotFor("@fixture/neighbor", `${FEED_URL}/neighbor`);
+    const replacement = snapshotFor("@fixture/replacement");
+
+    await snapshotStore.write(first);
+    await snapshotStore.write(neighbor);
+    await snapshotStore.write(replacement);
+
+    await expect(snapshotStore.read(FEED_URL)).resolves.toEqual(replacement);
+    await expect(snapshotStore.read(neighbor.metadata.url)).resolves.toEqual(neighbor);
+  });
+
   it("keeps signed SQLite snapshot writes monotonic when writes compete", async () => {
     const newer = signedFeed(10, "@openclaw/signed-v10");
     const older = signedFeed(9, "@openclaw/signed-v9", { privateKeyPem: newer.privateKeyPem });

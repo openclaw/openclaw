@@ -16,6 +16,8 @@ export const STATE_SECRET_TABLE_NAMES = [
   "mcp_oauth_stores",
   "native_hook_relay_bridges",
   "secret_store_entries",
+  // Delivery receipts cannot survive omission of their subscription parent.
+  "web_push_approval_deliveries",
   "web_push_subscriptions",
   "worker_environment_credentials",
 ] as const;

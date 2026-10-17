@@ -10,7 +10,7 @@ import { openSlot } from "../sidebar-layout.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import { ChatToolOutput } from "./chat-tool-output.ts";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 export function ChatDetailSlot(props: ChatDetailSlotProps) {
   const panelLoad = createMemo(() =>

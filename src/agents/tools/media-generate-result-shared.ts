@@ -211,7 +211,7 @@ export function buildMediaGenerationDurationDetails(
     asFiniteNumber(result.metadata?.normalizedDurationSeconds) ??
     (kind === "video"
       ? requested
-      : !ignoredOverrides.has("durationSeconds") && typeof requestedDuration === "number"
+      : !ignoredOverrides.has("durationSeconds")
         ? requestedDuration
         : undefined);
   const changed =

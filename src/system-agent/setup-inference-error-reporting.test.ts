@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import { runSystemAgentWithInference } from "../commands/system-agent-with-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as loggingConfig from "../logging/config.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -19,6 +21,9 @@ import {
   createSystemAgentVerifiedInferenceTestFixture,
 } from "./system-agent.test-helpers.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+
+// mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const inferenceMocks = vi.hoisted(() => ({
   verifySetupInference: vi.fn(),
@@ -39,6 +44,8 @@ const runtimeLoader = vi.hoisted(() => vi.fn());
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: runtimeLoader,
 }));
+
+afterEach(() => vi.restoreAllMocks());
 
 type FailurePhase = "capture" | "revalidate" | "callback";
 type Scenario = FailurePhase | "success" | "drift";
@@ -111,18 +118,28 @@ async function observeScenario(scenario: Scenario, json: boolean) {
             }
             return createEmptyPluginRegistry();
           });
+          vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(
+            async (params) => metadata.bind(params),
+          );
+          vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+            tempDirs.push(params.workspaceDir);
+            phases.push("probe");
+            expect(params.agentHarnessRuntimeOverride).toBe("openclaw");
+            expect(params.authProfileId).toBe("openai:proof");
+            params.onSuccessfulAuthBinding?.(fixture.binding.auth);
+            if (scenario === "drift") {
+              changedArtifact = true;
+            }
+            return {
+              meta: {
+                durationMs: 0,
+                finalAssistantVisibleText: "OK",
+                executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.5" },
+              },
+            };
+          });
           const deps: ActivateSetupInferenceDeps = {
             ...fixture.deps,
-            resolvePluginMetadataSnapshot: metadata.bind,
-            readCodexCliActiveApiKey: () => null,
-            createTempDir: async () => {
-              const dir = await fs.mkdtemp(path.join(root, "operation-"));
-              tempDirs.push(dir);
-              return dir;
-            },
-            removeTempDir: async (dir) => {
-              await fs.rm(dir, { recursive: true, force: true });
-            },
             fingerprintPluginRuntimeArtifact: (input) =>
               `${originalFingerprint(input)}${changedArtifact ? "-changed" : ""}`,
             captureSystemAgentOwnerPluginArtifacts: (input) => {
@@ -133,22 +150,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
                 throw fault;
               }
               return captureSystemAgentOwnerPluginArtifacts(input);
-            },
-            runEmbeddedAgent: async (params) => {
-              phases.push("probe");
-              expect(params.agentHarnessRuntimeOverride).toBe("openclaw");
-              expect(params.authProfileId).toBe("openai:proof");
-              params.onSuccessfulAuthBinding?.(fixture.binding.auth);
-              if (scenario === "drift") {
-                changedArtifact = true;
-              }
-              return {
-                meta: {
-                  durationMs: 0,
-                  finalAssistantVisibleText: "OK",
-                  executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.5" },
-                },
-              };
             },
           };
           inferenceMocks.verifySetupInference.mockImplementation(

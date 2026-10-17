@@ -288,7 +288,6 @@ vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => m.clearRuntimeConfigSnapshot(),
   getRuntimeConfigSnapshot: () => null,
   getRuntimeConfigSourceSnapshot: () => null,
-  captureManagedConfigSnapshotPreparation: () => undefined,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
 }));
 // mock-isolation: Shutdown assertions must not abort unrelated process-global agent runs.

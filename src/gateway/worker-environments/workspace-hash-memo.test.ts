@@ -6,11 +6,9 @@ import { importToolingTypeScript } from "../../../scripts/lib/import-tooling-typ
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
-  createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
   MAX_WORKSPACE_HASH_MEMO_ENTRIES,
   pruneWorkspaceHashMemo,
-  recordRemoteWorkspaceHashMetrics,
   serializeRemoteWorkspaceHashMemo,
   withWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
@@ -148,30 +146,7 @@ describe("workspace hash memo", () => {
     expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
   });
 
-  it("aggregates remote metrics and bounds a maximum-entry memo envelope", () => {
-    const aggregate = createWorkspaceReconcileMetrics();
-    recordRemoteWorkspaceHashMetrics(aggregate, {
-      contentHashCount: 7,
-      contentHashDurationMs: 11,
-      memoHitCount: 13,
-      memoTruncatedCount: 17,
-      totalDurationMs: 17,
-    });
-    recordRemoteWorkspaceHashMetrics(aggregate, {
-      contentHashCount: 19,
-      contentHashDurationMs: 23,
-      memoHitCount: 29,
-      memoTruncatedCount: 31,
-      totalDurationMs: 31,
-    });
-    expect(aggregate).toMatchObject({
-      remoteContentHashCount: 26,
-      remoteMemoHitCount: 42,
-      remoteMemoTruncatedCount: 48,
-      remoteHashDurationMs: 34,
-      remoteManifestDurationMs: 48,
-    });
-
+  it("bounds a maximum-entry memo envelope", () => {
     const uint64 = "18446744073709551615";
     const memo = new Map<string, string>();
     for (let index = 0; index < MAX_WORKSPACE_HASH_MEMO_ENTRIES; index += 1) {

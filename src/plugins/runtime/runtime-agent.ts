@@ -82,6 +82,11 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 }
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "runtime.agent.session.getSessionEntry",
+    replacement: "runtime.agent.session.getSessionEntryAsync",
+  });
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 

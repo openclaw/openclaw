@@ -17,10 +17,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "./openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -149,11 +147,13 @@ it("keeps fresh synchronous read callbacks from returning asynchronous work", as
   });
 });
 
-it("preserves read admission denial and recovers the cached reader", async () => {
+it("preserves query authorization denial and recovers the cached reader", async () => {
   await withOpenClawTestState({ label: "state-readonly-authorizer" }, async ({ env }) => {
     const options = { env };
     const opened = openOpenClawStateDatabase(options);
-    const operation = vi.fn(() => "unexpected");
+    const operation = vi.fn(({ db }: { db: typeof opened.db }) =>
+      db.prepare("SELECT role FROM schema_meta").get(),
+    );
     let denied = false;
     requireNativeSqliteDatabase(opened.db).setAuthorizer((action) => {
       if (action === constants.SQLITE_SELECT && !denied) {
@@ -170,7 +170,7 @@ it("preserves read admission denial and recovers the cached reader", async () =>
       requireNativeSqliteDatabase(opened.db).setAuthorizer(null);
     }
     expect(denied).toBe(true);
-    expect(operation).not.toHaveBeenCalled();
+    expect(operation).toHaveBeenCalledTimes(1);
     expect(
       withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
         expect(db).toBe(opened.db);
@@ -365,12 +365,13 @@ it.each([
           const prepared = await prepare(...args);
           preparedLocation = prepared.location;
           if (failure === "quarantine") {
-            failurePublished = recordOpenClawDatabaseQuarantine({
+            seedOpenClawDatabaseQuarantine({
               env: options.env,
               kind: "state",
               path: options.path,
               reason: "synthetic readonly quarantine",
             });
+            failurePublished = true;
           }
           return prepared;
         },

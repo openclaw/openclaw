@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import type { GitHubPublicationController } from "./github-publication-controller.ts";
+import type { GitHubPublicationOwner } from "./github-publication-owner.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -38,9 +38,9 @@ function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
     sharingRole: row.sharingRole,
     visibility: row.visibility,
     archived: row.archived,
-    worktree: row.worktree ? { ...row.worktree } : undefined,
+    worktree: row.worktree,
     repositoryWorkspaceId: row.repositoryWorkspaceId,
-    repository: row.repository ? { ...row.repository } : undefined,
+    repository: row.repository,
   };
 }
 
@@ -71,23 +71,19 @@ export function createSessionGitHubPublication(host: Host) {
   type Entry = {
     row: GatewaySessionRow;
     retained: boolean;
-    controller: GitHubPublicationController;
+    publication: GitHubPublicationOwner;
     current: () => boolean;
   };
   const keyFor = (row: Pick<GatewaySessionRow, "key" | "agentId">, agentId?: string | null) => {
-    const owner = resolveUiConversationIdentity(
-      host.snapshot(),
-      row.key,
-      row.agentId ?? agentId ?? undefined,
-    );
+    const owner = resolveUiConversationIdentity(host.snapshot(), row.key, row.agentId ?? agentId);
     return `${owner.agentId ?? ""}\0${owner.sessionKey}`;
   };
   const retire = (key: string, entry: Entry) => {
     entries.delete(key);
-    entry.controller.reset();
+    entry.publication.reset();
   };
   const releaseIdle = (key: string, entry: Entry) => {
-    if (!entry.retained && !entry.controller.hasBindings && entries.get(key) === entry) {
+    if (!entry.retained && !entry.publication.hasBindings && entries.get(key) === entry) {
       entries.delete(key);
     }
   };
@@ -114,7 +110,7 @@ export function createSessionGitHubPublication(host: Host) {
     attach(
       row: GatewaySessionRow,
       changed: () => void,
-      Controller: typeof GitHubPublicationController,
+      Owner: typeof GitHubPublicationOwner,
     ): GitHubPublicationBinding | null {
       const connection = host.connection.capture();
       if (!connection) {
@@ -140,7 +136,7 @@ export function createSessionGitHubPublication(host: Host) {
             host.connection.isCurrent(connection) &&
             identity(host.snapshot()) === owner &&
             host.deletionState(candidate.row) !== "confirmed",
-          controller: new Controller({
+          publication: new Owner({
             client: connection.client,
             target: route,
             isCurrent: () => candidate.current(),
@@ -170,7 +166,7 @@ export function createSessionGitHubPublication(host: Host) {
         entries.set(key, entry);
       }
       const operation = entry;
-      return Object.assign(operation.controller.bind(changed), {
+      return Object.assign(operation.publication.bind(changed), {
         matches: (next: GatewaySessionRow) =>
           operation.current() &&
           !host.deletionState(next) &&
@@ -204,7 +200,7 @@ export function createSessionGitHubPublication(host: Host) {
       if (!event || (isUiGlobalSessionKey(event.key) && !event.agentId)) {
         return;
       }
-      const key = keyFor({ key: event.key, agentId: event.agentId ?? undefined });
+      const key = keyFor({ key: event.key }, event.agentId);
       reconcile((row, retainedKey) =>
         retainedKey === key
           ? reconcileSessionChanged(snapshotFor(row), payload, {
@@ -216,7 +212,7 @@ export function createSessionGitHubPublication(host: Host) {
       if (asNullableRecord(payload)?.reason === "github-publication") {
         const entry = entries.get(key);
         if (entry?.current()) {
-          entry.controller.invalidate();
+          entry.publication.invalidate();
         }
       }
     },
@@ -234,16 +230,16 @@ export function createSessionGitHubPublication(host: Host) {
         }
         // The Gateway decides coverage. Recheck held failure on fresh PR evidence,
         // even with the same head: an earlier coverage read may have been unavailable.
-        // Existing controller coalescing shares this read across presentations.
-        if (entry.current() && entry.controller.result?.status === "failed") {
-          entry.controller.invalidate();
+        // Existing publication coalescing shares this read across presentations.
+        if (entry.current() && entry.publication.result?.status === "failed") {
+          entry.publication.invalidate();
         }
       }
     },
     invalidate() {
       for (const entry of entries.values()) {
         if (entry.current()) {
-          entry.controller.invalidate();
+          entry.publication.invalidate();
         }
       }
     },

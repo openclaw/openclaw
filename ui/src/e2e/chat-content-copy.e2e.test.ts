@@ -204,8 +204,12 @@ suite.define(() => {
       const prose = assistant.getByText(selectionParagraph, { exact: true });
       await prose.scrollIntoViewIfNeeded();
       const selectionPoint = await prose.evaluate((element) => {
-        const text = element.firstChild;
-        if (!text || text.nodeType !== Node.TEXT_NODE) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let text = walker.nextNode();
+        while (text && !text.textContent?.includes("these words")) {
+          text = walker.nextNode();
+        }
+        if (!text) {
           throw new Error("Expected rendered selection paragraph text");
         }
         const start = text.textContent!.indexOf("these words");

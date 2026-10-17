@@ -281,7 +281,7 @@ describe("pending session placement recovery state", () => {
     ).toBeNull();
   });
 
-  it("captures named creating recovery without sharing mutable payloads", () => {
+  it("captures named creating recovery with its submitted payload", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     expect(
       stageCreate(pending, {
@@ -306,7 +306,5 @@ describe("pending session placement recovery state", () => {
         worktreeName: "my-explicit-branch",
       },
     });
-    expect(captured?.attachments).not.toBe(pending.attachments);
-    expect(captured?.createParams).not.toBe(pending.createParams);
   });
 });

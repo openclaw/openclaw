@@ -511,72 +511,131 @@ describe("OpenClawTerminalPanel", () => {
     );
   });
 
-  it("keeps the newest session picker refresh when requests finish out of order", async () => {
+  it("shows a session picker list failure without retiring the active terminal", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    type ListedSession = ReturnType<typeof terminalOpenResult> & {
-      attached: boolean;
-      createdAtMs: number;
-    };
-    const firstList = createDeferred<{ sessions: ListedSession[] }>();
-    const secondList = createDeferred<{ sessions: ListedSession[] }>();
-    let listCount = 0;
+    let listCalls = 0;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
-      request: <T>(method: string) => {
+      request: async <T>(method: string) => {
         if (method === "terminal.open") {
-          return Promise.resolve(terminalOpenResult("current-1")) as Promise<T>;
+          return terminalOpenResult("current-1") as T;
         }
         if (method === "terminal.list") {
-          listCount += 1;
-          return (listCount === 1 ? firstList.promise : secondList.promise) as Promise<T>;
+          if (++listCalls === 1) {
+            throw new Error("synthetic terminal list unavailable");
+          }
+          return {
+            sessions: [{ ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 }],
+          } as T;
         }
-        return Promise.resolve({}) as Promise<T>;
+        return {} as T;
       },
       addEventListener: () => () => {},
     };
     const panel = mountTerminalPanel(client);
     panel.toggle();
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
-
-    (
-      panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
-    ).click();
-    await waitForFast(() => expect(listCount).toBe(1));
-    (panel.renderRoot.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
-    await waitForFast(() => expect(listCount).toBe(2));
-
-    secondList.resolve({
-      sessions: [
-        {
-          ...terminalOpenResult("new"),
-          agentId: "new-agent",
-          attached: false,
-          createdAtMs: 2,
-        },
-      ],
-    });
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
-        "new-agent",
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+        JSON.stringify(["current-1"]),
       ),
     );
-    firstList.resolve({
-      sessions: [
-        {
-          ...terminalOpenResult("old"),
-          agentId: "old-agent",
-          attached: false,
-          createdAtMs: 1,
-        },
-      ],
-    });
-    await Promise.resolve();
-    await panel.updateComplete;
 
-    const menu = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
-    expect(menu).toContain("new-agent");
-    expect(menu).not.toContain("old-agent");
+    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!.click();
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
+        "synthetic terminal list unavailable",
+      ),
+    );
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+      JSON.stringify(["current-1"]),
+    );
+    expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
+    const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
+      '[aria-label="Terminal sessions"]',
+    )!;
+    expect(document.activeElement).toBe(trigger);
+    trigger.click();
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector(".tp-session__agent")?.textContent).toBe("ops"),
+    );
+    expect(panel.renderRoot.querySelector('[role="alert"]')).toBeNull();
+    expect(listCalls).toBe(2);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps the newest session picker refresh when older requests %s out of order",
+    async (outcome) => {
+      createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+      type ListedSession = ReturnType<typeof terminalOpenResult> & {
+        attached: boolean;
+        createdAtMs: number;
+      };
+      const firstList = createDeferred<{ sessions: ListedSession[] }>();
+      const secondList = createDeferred<{ sessions: ListedSession[] }>();
+      let listCount = 0;
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: <T>(method: string) => {
+          if (method === "terminal.open") {
+            return Promise.resolve(terminalOpenResult("current-1")) as Promise<T>;
+          }
+          if (method === "terminal.list") {
+            listCount += 1;
+            return (listCount === 1 ? firstList.promise : secondList.promise) as Promise<T>;
+          }
+          return Promise.resolve({}) as Promise<T>;
+        },
+        addEventListener: () => () => {},
+      };
+      const panel = mountTerminalPanel(client);
+      panel.toggle();
+      await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+
+      (
+        panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
+      ).click();
+      await waitForFast(() => expect(listCount).toBe(1));
+      (panel.renderRoot.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
+      await waitForFast(() => expect(listCount).toBe(2));
+
+      secondList.resolve({
+        sessions: [
+          {
+            ...terminalOpenResult("new"),
+            agentId: "new-agent",
+            attached: false,
+            createdAtMs: 2,
+          },
+        ],
+      });
+      await waitForFast(() =>
+        expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
+          "new-agent",
+        ),
+      );
+      if (outcome === "reject") {
+        firstList.reject(new Error("superseded list failure"));
+      } else {
+        firstList.resolve({
+          sessions: [
+            {
+              ...terminalOpenResult("old"),
+              agentId: "old-agent",
+              attached: false,
+              createdAtMs: 1,
+            },
+          ],
+        });
+      }
+      await Promise.resolve();
+      await panel.updateComplete;
+
+      const menu = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+      expect(menu).toContain("new-agent");
+      expect(menu).not.toContain("old-agent");
+      expect(panel.renderRoot.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
 
   it("shows a picker attach failure after the listed session disappears", async () => {
     createGhosttyTerminalMock

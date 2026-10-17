@@ -66,6 +66,14 @@ vi.mock("./room-info.js", async () => {
   };
 });
 
+function installInboundRuntime(coreRuntime: ReturnType<typeof createPluginRuntimeMock>) {
+  setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+  createChannelPairingControllerMock.mockReturnValue({
+    readStoreForDmPolicy: vi.fn(async () => []),
+    issueChallenge: vi.fn(),
+  });
+}
+
 describe("nextcloud-talk inbound media behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,11 +98,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
   it("admits and stages an attachment-only direct message", async () => {
     const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
 
     await handleNextcloudTalkInbound({
       message: createMessage({
@@ -134,11 +138,7 @@ describe("nextcloud-talk inbound media behavior", () => {
     const coreRuntime = createPluginRuntimeMock();
     coreRuntime.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     coreRuntime.channel.mentions.matchesMentionPatterns = vi.fn(() => false);
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
     const runtime = createRuntimeEnv();
     const channelConfig = {
@@ -183,11 +183,7 @@ describe("nextcloud-talk inbound media behavior", () => {
     const coreRuntime = createPluginRuntimeMock();
     coreRuntime.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     coreRuntime.channel.mentions.matchesMentionPatterns = vi.fn(() => false);
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
     const channelConfig = {
       rooms: { "room-group": { requireMention: false } },
@@ -232,86 +228,49 @@ describe("nextcloud-talk inbound media behavior", () => {
     expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
   });
 
-  it("passes a successful staged image path and type into inbound context", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    (
-      coreRuntime.channel.media.saveRemoteMedia as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValueOnce({
-      id: "camera-shot.png",
-      path: "/tmp/camera-shot.png",
-      size: 4_096,
-      contentType: "image/png",
-    });
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-
-    await handleNextcloudTalkInbound({
-      message: createMessage({
+  it.each([
+    [
+      "passes a successful staged image path and type into inbound context",
+      {
+        fileName: "camera-shot.png",
+        path: "/tmp/camera-shot.png",
+        contentType: "image/png",
+        size: 4_096,
         text: "inspect this image",
-        attachment: {
-          fileId: "9010",
-          name: "camera-shot.png",
-          mimeType: "image/png",
-          declaredSizeBytes: 4_096,
-          shareUrl: "https://cloud.example.com/s/redacted-share-token",
-          hideDownload: false,
-        },
-      }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          mediaAllowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePathHint: "camera-shot.png",
-        fallbackContentType: "image/png",
-        originalFilename: "camera-shot.png",
-      }),
-    );
-    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        media: [{ path: "/tmp/camera-shot.png", contentType: "image/png" }],
-      }),
-    );
-    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes a successful staged PDF path and type into inbound context", async () => {
+        fileId: "9010",
+      },
+    ],
+    [
+      "passes a successful staged PDF path and type into inbound context",
+      {
+        fileName: "receipt.pdf",
+        path: "/tmp/receipt.pdf",
+        contentType: "application/pdf",
+        size: 8_192,
+        text: "inspect this PDF",
+        fileId: "9011",
+      },
+    ],
+  ] as const)("%s", async (_title, { fileName, path, contentType, size, text, fileId }) => {
     const coreRuntime = createPluginRuntimeMock();
     (
       coreRuntime.channel.media.saveRemoteMedia as unknown as ReturnType<typeof vi.fn>
     ).mockResolvedValueOnce({
-      id: "receipt.pdf",
-      path: "/tmp/receipt.pdf",
-      size: 8_192,
-      contentType: "application/pdf",
+      id: fileName,
+      path,
+      size,
+      contentType,
     });
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
 
     await handleNextcloudTalkInbound({
       message: createMessage({
-        text: "inspect this PDF",
+        text,
         attachment: {
-          fileId: "9011",
-          name: "receipt.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 8_192,
+          fileId,
+          name: fileName,
+          mimeType: contentType,
+          declaredSizeBytes: size,
           shareUrl: "https://cloud.example.com/s/redacted-share-token",
           hideDownload: false,
         },
@@ -331,14 +290,14 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
-        filePathHint: "receipt.pdf",
-        fallbackContentType: "application/pdf",
-        originalFilename: "receipt.pdf",
+        filePathHint: fileName,
+        fallbackContentType: contentType,
+        originalFilename: fileName,
       }),
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        media: [{ path: "/tmp/receipt.pdf", contentType: "application/pdf" }],
+        media: [{ path, contentType }],
       }),
     );
     expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
@@ -352,11 +311,7 @@ describe("nextcloud-talk inbound media behavior", () => {
     "logs $label media allowlist denial after normal admission without fetching",
     async ({ mediaAllowFrom }) => {
       const coreRuntime = createPluginRuntimeMock();
-      setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-      createChannelPairingControllerMock.mockReturnValue({
-        readStoreForDmPolicy: vi.fn(async () => []),
-        issueChallenge: vi.fn(),
-      });
+      installInboundRuntime(coreRuntime);
       const runtime = createRuntimeEnv();
 
       await handleNextcloudTalkInbound({
@@ -422,11 +377,7 @@ describe("nextcloud-talk inbound media behavior", () => {
     "drops attachment-only media when the media allowlist is $label",
     async ({ mediaAllowFrom }) => {
       const coreRuntime = createPluginRuntimeMock();
-      setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-      createChannelPairingControllerMock.mockReturnValue({
-        readStoreForDmPolicy: vi.fn(async () => []),
-        issueChallenge: vi.fn(),
-      });
+      installInboundRuntime(coreRuntime);
       const runtime = createRuntimeEnv();
 
       await handleNextcloudTalkInbound({
@@ -466,11 +417,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
   it("rejects hide-download media before fetching", async () => {
     const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({
@@ -522,11 +469,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
   it("bounds missing attachment metadata before fetching", async () => {
     const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({
@@ -576,11 +519,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         commands: { shouldHandleTextCommands: vi.fn(() => true) },
       },
     });
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     const structuredCommand = '{"message":"/status","parameters":[]}';
 
     await handleNextcloudTalkInbound({
@@ -616,11 +555,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
   it("rejects declared oversize media before fetching", async () => {
     const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({
@@ -676,11 +611,7 @@ describe("nextcloud-talk inbound media behavior", () => {
       reason: "media_auth_unavailable",
     });
     const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({
@@ -754,11 +685,7 @@ describe("nextcloud-talk inbound media behavior", () => {
     (
       coreRuntime.channel.media.saveRemoteMedia as unknown as ReturnType<typeof vi.fn>
     ).mockRejectedValueOnce(error);
-    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installInboundRuntime(coreRuntime);
     const runtime = createRuntimeEnv();
 
     await handleNextcloudTalkInbound({

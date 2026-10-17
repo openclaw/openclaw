@@ -1,4 +1,3 @@
-// Twitch plugin owns raw chat-envelope durable admission and replay draining.
 import { HttpStatusCodeError } from "@twurple/api-call";
 import {
   createChannelIngressError,

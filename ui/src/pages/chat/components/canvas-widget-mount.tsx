@@ -7,7 +7,7 @@ import {
   untrack,
   useContext,
 } from "solid-js";
-import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.ts";
+import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 type WidgetProperties = Pick<

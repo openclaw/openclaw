@@ -42,6 +42,10 @@ function readRigProbeSnapshot() {
     loaf: [...(perf?.loaf ?? [])],
     paints: [...(perf?.paints ?? [])],
     rpc: [...(Reflect.get(window, "__wsLog") ?? [])],
+    avatarRequests: performance
+      .getEntriesByType("resource")
+      .filter((entry) => /\/api\/users\/[^/]+\/avatar/u.test(new URL(entry.name).pathname))
+      .map((entry) => ({ url: entry.name, start: entry.startTime, duration: entry.duration })),
   };
 }
 
@@ -201,6 +205,7 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "warm-reload": { type: "boolean", default: false },
+    "large-snapshot": { type: "boolean", default: false },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "probe-dir": { type: "string" },
@@ -209,7 +214,9 @@ const { values } = parseArgs({
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
+    "session-event-churn": { type: "boolean", default: false },
     "duplicate-boot-reads": { type: "boolean", default: false },
+    "closed-menu-members": { type: "boolean", default: false },
     "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
@@ -292,7 +299,10 @@ const fixture = createControlUiTeamScaleFixture({
   liveRun: values["live-events"] || values["streaming-reply"],
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
+  sessionEventChurn: values["session-event-churn"],
   duplicateBootReads: values["duplicate-boot-reads"],
+  closedMenuMembers: values["closed-menu-members"],
+  largeSnapshot: values["large-snapshot"],
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -339,7 +349,7 @@ try {
               ...shareSidebarSessionRows(
                 result.sessions,
                 typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
-                runTransfer === "delta" ? previousRows : undefined,
+                runTransfer === "delta" && previousRows ? [previousRows] : undefined,
               ),
             }
           : result;
@@ -386,7 +396,7 @@ try {
       return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
     });
   }
-  if (values["sidebar-live-churn"]) {
+  if (values["sidebar-live-churn"] || values["closed-menu-members"]) {
     await page.route("**/api/users/*/avatar?*", async (route) => {
       const asset = fixture.assets.get(new URL(route.request().url()).pathname);
       if (!asset) {
@@ -424,7 +434,7 @@ try {
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -506,47 +516,65 @@ try {
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   for (let run = 0; run < runs; run++) {
+    let snapshotSave: unknown;
     if (values["warm-reload"]) {
-      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element, sessionKey) => {
-        const store = Reflect.get(element, "sessionSnapshotStore");
-        if (!store) {
-          throw new Error("Missing transcript snapshot owner");
-        }
-        await store.flush();
-        const request = indexedDB.open("openclaw-chat-snapshots");
-        const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          request.addEventListener("success", () => resolve(request.result), { once: true });
-          request.addEventListener(
-            "error",
-            () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
-            { once: true },
-          );
-        });
-        try {
-          const read = database.transaction("snapshots").objectStore("snapshots").getAll();
-          const snapshots = await new Promise<unknown[]>((resolve, reject) => {
-            read.addEventListener("success", () => resolve(read.result), { once: true });
-            read.addEventListener(
+      snapshotSave = await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate(async (element, sessionKey) => {
+          const store = Reflect.get(element, "sessionSnapshotStore");
+          if (!store) {
+            throw new Error("Missing transcript snapshot owner");
+          }
+          const cache = Reflect.get(element, "chatMessagesBySession");
+          const entry = [...cache.entries()].find(([key]) => key.endsWith(`\u0000${sessionKey}`));
+          if (!entry) {
+            throw new Error("Missing live transcript snapshot");
+          }
+          store.write(entry[0], { ...entry[1].snapshot });
+          const writeStarted = performance.now();
+          const flushed = store.flush();
+          const serializeMs = performance.now() - writeStarted;
+          await flushed;
+          const writeMs = performance.now() - writeStarted;
+          const request = indexedDB.open("openclaw-chat-snapshots");
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            request.addEventListener("success", () => resolve(request.result), { once: true });
+            request.addEventListener(
               "error",
-              () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
+              () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
               { once: true },
             );
           });
-          if (
-            !snapshots.some((value) => {
+          try {
+            const read = database.transaction("snapshots").objectStore("snapshots").getAll();
+            const snapshots = await new Promise<unknown[]>((resolve, reject) => {
+              read.addEventListener("success", () => resolve(read.result), { once: true });
+              read.addEventListener(
+                "error",
+                () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
+                { once: true },
+              );
+            });
+            const record = snapshots.find((value) => {
               const key =
                 typeof value === "object" && value !== null
                   ? Reflect.get(value, "sessionKey")
                   : undefined;
               return typeof key === "string" && key.endsWith(`\u0000${sessionKey}`);
-            })
-          ) {
-            throw new Error("Warm reload requires the selected session's persisted transcript");
+            });
+            if (!record) {
+              throw new Error("Warm reload requires the selected session's persisted transcript");
+            }
+            return {
+              serializeMs,
+              writeMs,
+              bytes: new TextEncoder().encode(JSON.stringify(record)).byteLength,
+              messages: Reflect.get(record, "snapshot").messages.length,
+            };
+          } finally {
+            database.close();
           }
-        } finally {
-          database.close();
-        }
-      }, fixture.selectedSessionKey);
+        }, fixture.selectedSessionKey);
     }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
@@ -808,8 +836,10 @@ try {
       const liveTrace: unknown[] = [];
       collectedTrace = liveTrace;
       if (!values.untraced) {
+        await cdp.send("Profiler.start");
         await cdp.send("Tracing.start", {
-          categories: "toplevel,blink.user_timing,devtools.timeline",
+          categories:
+            "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-v8.cpu_profiler",
           transferMode: "ReportEvents",
         });
       }
@@ -855,6 +885,11 @@ try {
       }
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
       if (!values.untraced) {
+        const liveProfile = await cdp.send("Profiler.stop");
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.live.cpuprofile`),
+          JSON.stringify(liveProfile.profile),
+        );
         const liveComplete = new Promise<void>((resolve) => {
           cdp.once("Tracing.tracingComplete", () => resolve());
         });
@@ -932,7 +967,17 @@ try {
       }
     }
     const overlays = values["overlay-probe"]
-      ? await probeColdLoadOverlays(page, artifactDir, run)
+      ? await probeColdLoadOverlays(
+          page,
+          artifactDir,
+          run,
+          values["closed-menu-members"]
+            ? [
+                ["sharing", ".chat-pane__sharing-trigger", ".chat-pane__sharing-member"],
+                ["layout", ".chat-pane__layout-trigger", ".chat-pane__layout-menu .oc-menu-item"],
+              ]
+            : undefined,
+        )
       : undefined;
     await cdp.detach();
     const result = {
@@ -949,6 +994,7 @@ try {
       live,
       streaming,
       warmReload,
+      snapshotSave,
       overlays,
     };
     results.push(result);

@@ -238,6 +238,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  /** Called before attempt cleanup; only core decides whether to request verified context. */
+  onSettledTurn?: (
+    attempt: EmbeddedRunAttemptResult,
+    captureContext: () => Promise<EmbeddedRunAttemptResult["settledTurnFinalizationContext"]>,
+  ) => Promise<void>;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
   /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */

@@ -19,7 +19,7 @@ export function defineBrowserPanelElement(
     | "handleToggleRequest"
     | "selectHostedTab"
     | "closeHostedTab"
-    | "requestUpdate"
+    | "invalidate"
   >(
     tag,
     createController,
@@ -58,7 +58,7 @@ export function defineBrowserPanelElement(
         "handleToggleRequest",
         "selectHostedTab",
         "closeHostedTab",
-        "requestUpdate",
+        "invalidate",
       ],
       getters: [
         "renderRoot",

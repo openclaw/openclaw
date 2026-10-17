@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -21,6 +21,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
+import * as systemRun from "./invoke-system-run.js";
 import type { RunResult } from "./invoke-types.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -271,13 +272,14 @@ describe("Claude CLI node command", () => {
 
   it("requires binary availability before consulting exec approval policy", async () => {
     const calls: Calls = [];
-    const handleSystemRun = vi.fn();
+    const handleSystemRun = vi.spyOn(systemRun, "handleSystemRunInvoke");
+    onTestFinished(() => handleSystemRun.mockRestore());
     await handleInvoke(
       frame({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
       client(calls),
       { current: async () => [] },
       undefined,
-      { handleSystemRun },
+      {},
     );
 
     expect(handleSystemRun).not.toHaveBeenCalled();
@@ -304,18 +306,16 @@ describe("Claude CLI node command", () => {
       setRuntimeConfigSnapshot(config);
       const { executable } = await nativeCliFixture("process.exit(0);");
       const calls: Calls = [];
-      const handleSystemRun = vi.fn(
-        async (options: {
-          params: { command: string[] };
-          sendInvokeResult: (result: unknown) => Promise<void>;
-        }) => {
+      const handleSystemRun = vi
+        .spyOn(systemRun, "handleSystemRunInvoke")
+        .mockImplementation(async (options) => {
           expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
           await options.sendInvokeResult({
             ok: false,
             error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
           });
-        },
-      );
+        });
+      onTestFinished(() => handleSystemRun.mockRestore());
       await handleInvoke(
         frame({
           argv: ["-p", "--resume", "session-1"],
@@ -326,7 +326,7 @@ describe("Claude CLI node command", () => {
         client(calls),
         { current: async () => [] },
         undefined,
-        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+        { claudePath: executable },
       );
 
       expect(handleSystemRun).toHaveBeenCalledOnce();
@@ -371,17 +371,9 @@ process.stdout.write(JSON.stringify({
 }) + "\\n");`);
       const calls: Calls = [];
       let runResult: RunResult | undefined;
-      const handleSystemRun = vi.fn(
-        async (options: {
-          params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
-          runCommand: (
-            argv: string[],
-            cwd: string | undefined,
-            env: Record<string, string> | undefined,
-            timeoutMs: number | undefined,
-          ) => Promise<RunResult>;
-          sendInvokeResult: (result: unknown) => Promise<void>;
-        }) => {
+      const handleSystemRun = vi
+        .spyOn(systemRun, "handleSystemRunInvoke")
+        .mockImplementation(async (options) => {
           const argv = [...runArgv, ...options.params.command.slice(1)];
           runResult = await options.runCommand(
             argv,
@@ -393,11 +385,11 @@ process.stdout.write(JSON.stringify({
               CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
               CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "9",
             } as Record<string, string>,
-            options.params.timeoutMs,
+            options.params.timeoutMs ?? undefined,
           );
           await options.sendInvokeResult({ ok: true });
-        },
-      );
+        });
+      onTestFinished(() => handleSystemRun.mockRestore());
       await handleInvoke(
         frame({
           argv: ["-p"],
@@ -414,7 +406,7 @@ process.stdout.write(JSON.stringify({
         client(calls),
         { current: async () => [] },
         undefined,
-        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+        { claudePath: executable },
       );
 
       expect(runResult).toMatchObject({
@@ -452,17 +444,9 @@ process.stdout.write(JSON.stringify({
 }) + "\\n");`);
     const calls: Array<{ method: string; params: unknown }> = [];
     let runResult: RunResult | undefined;
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[]; timeoutMs?: number };
-        runCommand: (
-          argv: string[],
-          cwd: string | undefined,
-          env: Record<string, string> | undefined,
-          timeoutMs: number | undefined,
-        ) => Promise<RunResult>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
+    const handleSystemRun = vi
+      .spyOn(systemRun, "handleSystemRunInvoke")
+      .mockImplementation(async (options) => {
         const argv = [...runArgv, ...options.params.command.slice(1)];
         runResult = await options.runCommand(
           argv,
@@ -473,11 +457,11 @@ process.stdout.write(JSON.stringify({
             CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
             CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
           } as Record<string, string>,
-          options.params.timeoutMs,
+          options.params.timeoutMs ?? undefined,
         );
         await options.sendInvokeResult({ ok: true });
-      },
-    );
+      });
+    onTestFinished(() => handleSystemRun.mockRestore());
     await handleInvoke(
       frame({
         argv: ["-p"],
@@ -487,7 +471,7 @@ process.stdout.write(JSON.stringify({
       client(calls),
       { current: async () => [] },
       undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
+      { claudePath: executable },
     );
 
     expect(runResult).toMatchObject({

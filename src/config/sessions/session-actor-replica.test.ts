@@ -234,7 +234,7 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         cell.replica.invalidate();
       }
       const small = Array.from({ length: 129 }, (_, index) => {
-        const cell = create(index % 2 === 0);
+        const cell = create(index % 2 === 0, true);
         return { cell, transcript: retain(cell, 16) };
       });
       expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();

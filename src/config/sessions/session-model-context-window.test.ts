@@ -81,3 +81,37 @@ it("reserves the compaction event slot before deciding that history exceeds the 
     }),
   ).toEqual([boundary, ...requests.slice(-2)]);
 });
+
+it.each([
+  { prefixBytes: 0, selected: [2, 3, 4] },
+  { prefixBytes: 100, selected: [3, 4] },
+])(
+  "keeps the absolute byte cutoff with $prefixBytes discarded bytes",
+  ({ prefixBytes, selected }) => {
+    const requests = [1, 2, 3, 4].map((seq) =>
+      request(seq, { role: "user", content: `request ${seq}`, timestamp: seq }),
+    );
+    expect(
+      selectBoundedModelRequests(
+        requests,
+        sizing([0, 300, 300, 300, 300]),
+        { maxEvents: 4, maxBytes: 1000 },
+        { count: 1, bytes: prefixBytes, hasUser: true, pairing: new Map() },
+      ).map(({ entry }) => entry.seq),
+    ).toEqual(selected);
+  },
+);
+
+it("uses atomic headroom when the newest user turn starts in the discarded prefix", () => {
+  const requests = [1, 2, 3, 4].map((seq) =>
+    request(seq, makeAgentAssistantMessage({ content: [{ type: "text", text: `reply ${seq}` }] })),
+  );
+  expect(
+    selectBoundedModelRequests(
+      requests,
+      sizing([0, 300, 300, 300, 300]),
+      { maxEvents: 4, maxBytes: 1000 },
+      { count: 1, bytes: 100, hasUser: true, pairing: new Map() },
+    ).map(({ entry }) => entry.seq),
+  ).toEqual([2, 3, 4]);
+});

@@ -19,6 +19,7 @@ import {
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
+import type { SqliteTableContractReader } from "../infra/sqlite-schema-contract.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
@@ -207,14 +208,16 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     const reuseIntegrity =
       reuseRuntimeIntegrity ||
       (verification !== undefined && !migrationPending && !hasPendingCurrentVersionMigration);
+    const validateSchema = (readTable?: SqliteTableContractReader) =>
+      assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }, readTable);
     const rebuiltIndexes = yield* verifyAndRepairCanonicalSqliteIndexSteps(
       database,
       pathname,
       OPENCLAW_AGENT_SCHEMA_SQL,
       {
         allowMissingColumns: true,
-        validateAfterRepair: () =>
-          assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
+        validateAfterRepair: validateSchema,
+        validateUnchanged: validateSchema,
         diagnostics,
         reuseIntegrity,
         integrity: integrityCheck ? integrity : undefined,
@@ -231,7 +234,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         },
       );
     }
-    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   } else if (
     userVersion === 0 &&
     !hasApplicationSchema &&

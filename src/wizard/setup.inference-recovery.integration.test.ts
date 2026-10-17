@@ -10,6 +10,7 @@ import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-bindin
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { readConfigFileSnapshot, validateConfigObjectRaw } from "../config/config.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -44,12 +45,12 @@ afterEach(async () => {
 });
 
 it.each([
-  { target: "file", changed: true },
-  { target: "stage", changed: true },
-  { target: "file", changed: false },
+  { target: "file", changed: true, runtimeDefaults: false },
+  { target: "stage", changed: true, runtimeDefaults: false },
+  { target: "file", changed: false, runtimeDefaults: true },
 ])(
-  "wizard activation uses its $target target (credential changed=$changed)",
-  async ({ target, changed }) => {
+  "wizard activation uses its $target target (credential changed=$changed, runtime defaults=$runtimeDefaults)",
+  async ({ target, changed, runtimeDefaults }) => {
     state = await createOpenClawTestState({ label: "wizard-promotion-recovery" });
     let agentDir = state.agentDir("main");
     const validated = validateConfigObjectRaw({
@@ -76,7 +77,9 @@ it.each([
     assert.ok(validated.ok);
     let config = validated.config;
     await state.writeConfig(config);
-    const initialSnapshot = await readSetupConfigFileSnapshot();
+    const initialSnapshot = await (runtimeDefaults
+      ? readConfigFileSnapshot()
+      : readSetupConfigFileSnapshot());
     config = initialSnapshot.runtimeConfig ?? initialSnapshot.config;
     const finalConfig = initialSnapshot.sourceConfig;
     await state.writeAuthProfiles({
@@ -239,6 +242,49 @@ it.each([
     }
   },
 );
+
+it("wizard recovery restores serialized model defaults after provider canonicalization", async () => {
+  state = await createOpenClawTestState({ label: "wizard-serialized-recovery" });
+  const before = {
+    models: {
+      providers: {
+        Example: {
+          baseUrl: "https://fixture.invalid/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "fixture",
+              name: "Fixture",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32768,
+              maxTokens: 4096,
+            },
+          ],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  await state.writeConfig(before);
+  const candidate = materializeRuntimeConfig({
+    ...before,
+    models: { providers: { example: before.models.providers.Example } },
+  });
+  const failure = new Error("activation refused");
+  const target = createWizardInferenceConfigTarget(writeWizardConfigFile);
+  await expect(
+    commitSetupInferenceActivation({
+      configTarget: target,
+      config: candidate,
+      assertCurrent: () => {},
+      activate: async () => {
+        throw failure;
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect((await target.read()).config.models?.providers).toEqual(before.models?.providers);
+});
 
 it.each([
   { pending: true, superseded: false },

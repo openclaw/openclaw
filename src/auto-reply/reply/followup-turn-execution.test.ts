@@ -552,7 +552,6 @@ describe("executeFollowupTurn lifecycle", () => {
           resolved: { provider: "anthropic", model: "claude" },
           fallback: { exhausted: false, attempts: [] },
           autoCompactionCount: 0,
-          didLogHeartbeatStrip: false,
         },
       };
       state.execute.mockImplementation(async (params: AgentTurnParams) => {

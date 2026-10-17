@@ -1,4 +1,3 @@
-// Voice Call plugin module resolves its default persistence root.
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";

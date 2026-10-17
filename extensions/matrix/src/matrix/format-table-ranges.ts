@@ -1,4 +1,3 @@
-// Matrix helper module resolves source ranges owned by Markdown table blocks.
 import MarkdownIt from "markdown-it";
 
 const tableParser = new MarkdownIt({ html: false, linkify: false, typographer: false });

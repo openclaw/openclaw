@@ -38,14 +38,8 @@ import {
   transcriptArchiveRecoveryRowKey,
   writeTranscriptArchiveRecoveryJournal,
 } from "./state-migrations.transcript-archive-publication.js";
-import {
-  type ArchiveLineTransform,
-  transformArchiveBytesIncrementally,
-} from "./state-migrations.transcript-archive-stream.js";
-import {
-  parseDirectiveMigrationTranscriptEvent,
-  transformHistoricalTranscriptEvent,
-} from "./state-migrations.transcript-directives-transform.js";
+import { transformArchiveBytesIncrementally } from "./state-migrations.transcript-archive-stream.js";
+import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
 
 export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE;
 export const MEDIA_ARCHIVE_VERIFICATION_KEY = "media-transcript-archive-verification-v1";
@@ -57,6 +51,13 @@ type TranscriptArchiveMigrationDatabase = Pick<
 >;
 
 type ArchiveCursor = { generation: string; sessionId: string };
+
+/** Line transform for one archive row; the session id scopes recorded-fact lookups. */
+export type ArchiveSessionLineTransform = (
+  line: string,
+  owner: string,
+  sessionId: string,
+) => { changed: boolean; content: string };
 
 type ArchiveMigrationOptions = {
   agentId: string;
@@ -78,7 +79,6 @@ type ArchiveMigrationResult = {
 type ArchiveRowPlan = {
   archiveName: string;
   archiveSha256: string;
-  bytes: Buffer;
   changed: boolean;
   encoding: "identity" | "zstd";
   generation: string;
@@ -89,14 +89,13 @@ type ArchiveRowPlan = {
   fingerprint?: string;
 };
 
-function transformArchiveLine(line: string, owner: string): { changed: boolean; content: string } {
-  const event = parseDirectiveMigrationTranscriptEvent(line, owner);
-  const transformed = transformHistoricalTranscriptEvent(event);
-  return {
-    changed: transformed.changed,
-    content: transformed.changed ? JSON.stringify(transformed.event) : line,
-  };
-}
+const transformArchiveDirectiveLine: ArchiveSessionLineTransform = (raw, owner) =>
+  repairHistoricalTranscriptEventJson({
+    raw,
+    owner,
+    scope: "all",
+    resolveMaskedProvider: () => undefined,
+  });
 
 export function encodeArchiveContent(
   content: string,
@@ -132,7 +131,7 @@ function hasArchiveTable(database: DatabaseSync): boolean {
 async function listArchiveBatch(
   database: DatabaseSync,
   cursor: ArchiveCursor | undefined,
-  transformLine: ArchiveLineTransform,
+  transformLine: ArchiveSessionLineTransform,
   options?: {
     archiveDirectory?: string;
     signal?: AbortSignal;
@@ -189,14 +188,13 @@ async function listArchiveBatch(
             encoding,
             owner,
             signal: options?.signal,
-            transformLine,
+            transformLine: (line, lineOwner) => transformLine(line, lineOwner, row.session_id),
           });
       options?.signal?.throwIfAborted();
       const nextBytes = transformed?.bytes ?? bytes;
       plans.push({
         archiveName: row.archive_name,
         archiveSha256: row.archive_sha256,
-        bytes,
         changed: transformed?.changed === true,
         encoding,
         generation: row.generation,
@@ -222,6 +220,7 @@ async function listArchiveBatch(
 export async function transcriptDirectiveArchivesNeedMigration(
   database: DatabaseSync,
   start: ArchiveCursor,
+  transformLine: ArchiveSessionLineTransform = transformArchiveDirectiveLine,
 ): Promise<boolean> {
   const signal = resolveSqliteInspectionSignal();
   signal?.throwIfAborted();
@@ -234,7 +233,7 @@ export async function transcriptDirectiveArchivesNeedMigration(
   let cursor: ArchiveCursor | undefined = start.sessionId || start.generation ? start : undefined;
   while (true) {
     signal?.throwIfAborted();
-    const batch = await listArchiveBatch(database, cursor, transformArchiveLine, { signal });
+    const batch = await listArchiveBatch(database, cursor, transformLine, { signal });
     const last = batch.at(-1);
     if (!last) {
       return false;
@@ -253,59 +252,6 @@ export function transcriptDirectiveArchiveRecoveryPending(database: DatabaseSync
   return readTranscriptArchiveRecoveryJournal(database) !== undefined;
 }
 
-function assertArchiveSourceUnchanged(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
-  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
-  const current = executeSqliteQueryTakeFirstSync(
-    database,
-    db
-      .selectFrom("session_transcript_archives")
-      .select(["archive_blob", "archive_name", "archive_sha256", "encoding"])
-      .where("session_id", "=", planned.sessionId)
-      .where("generation", "=", planned.generation),
-  );
-  if (!current) {
-    return false;
-  }
-  if (
-    current.archive_name !== planned.archiveName ||
-    current.archive_sha256 !== planned.archiveSha256 ||
-    current.encoding !== planned.encoding ||
-    !Buffer.from(current.archive_blob).equals(planned.bytes)
-  ) {
-    throw new Error(
-      `Transcript archive source changed before migration commit for ${planned.sessionId}`,
-    );
-  }
-  return true;
-}
-
-function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
-  if (!assertArchiveSourceUnchanged(database, planned)) {
-    return false;
-  }
-  if (!planned.changed) {
-    return true;
-  }
-  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
-  const result = executeSqliteQuerySync(
-    database,
-    db
-      .updateTable("session_transcript_archives")
-      .set({
-        archive_blob: planned.nextBytes,
-        archive_sha256: planned.nextSha256,
-        published_at: null,
-      })
-      .where("session_id", "=", planned.sessionId)
-      .where("generation", "=", planned.generation)
-      .where("archive_sha256", "=", planned.archiveSha256),
-  );
-  if (result.numAffectedRows !== 1n) {
-    throw new Error(`Transcript archive changed before rewrite for ${planned.sessionId}`);
-  }
-  return true;
-}
-
 function finalizeArchiveCursor(params: {
   database: DatabaseSync;
   fileCurrent: boolean;
@@ -313,40 +259,20 @@ function finalizeArchiveCursor(params: {
   recoveredPublishedAt?: number;
   writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 }): void {
-  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database);
-  const current = executeSqliteQueryTakeFirstSync(
-    params.database,
-    db
-      .selectFrom("session_transcript_archives")
-      .select(["archive_blob", "archive_sha256"])
-      .where("session_id", "=", params.planned.sessionId)
-      .where("generation", "=", params.planned.generation),
-  );
-  if (current) {
-    if (
-      current.archive_sha256 !== params.planned.nextSha256 ||
-      !Buffer.from(current.archive_blob).equals(params.planned.nextBytes)
-    ) {
-      throw new Error(
-        `Transcript archive changed before migration commit for ${params.planned.sessionId}`,
-      );
-    }
-    const publishedAt = params.planned.publishedAt ?? params.recoveredPublishedAt;
-    if (
-      (params.planned.changed || params.recoveredPublishedAt !== undefined) &&
-      publishedAt !== undefined &&
-      params.fileCurrent
-    ) {
-      executeSqliteQuerySync(
-        params.database,
-        db
-          .updateTable("session_transcript_archives")
-          .set({ published_at: publishedAt })
-          .where("session_id", "=", params.planned.sessionId)
-          .where("generation", "=", params.planned.generation)
-          .where("archive_sha256", "=", params.planned.nextSha256),
-      );
-    }
+  const publishedAt = params.planned.publishedAt ?? params.recoveredPublishedAt;
+  if (
+    (params.planned.changed || params.recoveredPublishedAt !== undefined) &&
+    publishedAt !== undefined &&
+    params.fileCurrent
+  ) {
+    executeSqliteQuerySync(
+      params.database,
+      getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(params.database)
+        .updateTable("session_transcript_archives")
+        .set({ published_at: publishedAt })
+        .where("session_id", "=", params.planned.sessionId)
+        .where("generation", "=", params.planned.generation),
+    );
   }
   params.writeCursor?.({
     generation: params.planned.generation,
@@ -358,7 +284,7 @@ function finalizeArchiveCursor(params: {
 export async function migrateCanonicalTranscriptArchives(
   params: ArchiveMigrationOptions & {
     onArchive?: (archivePath: string) => void;
-    transformLine: ArchiveLineTransform;
+    transformLine: ArchiveSessionLineTransform;
   },
 ): Promise<ArchiveMigrationResult> {
   const signal = resolveSqliteInspectionSignal(params.signal);
@@ -485,67 +411,72 @@ export async function migrateCanonicalTranscriptArchives(
       // Persist the original publication timestamps with the rewritten blobs.
       // Until file repair and cursor commit finish, changed rows remain pending.
       const needsRewrite = batch.some((planned) => planned.changed);
-      const rowsPresent =
-        params.verifyOnly || !needsRewrite
-          ? batch.map((planned) => {
-              current = planned;
-              return !planned.changed && assertArchiveSourceUnchanged(params.database, planned);
-            })
-          : write("historical-transcript-archive-directives", () => {
-              params.beforeRewrite?.();
-              const pending = new Map(
-                (readTranscriptArchiveRecoveryJournal(params.database)?.rows ?? []).map((row) => [
-                  transcriptArchiveRecoveryRowKey(row),
-                  row,
-                ]),
-              );
-              const result = batch.map((planned) => {
-                current = planned;
-                return rewriteArchiveRow(params.database, planned);
-              });
-              let receiptsChanged = false;
-              for (const [index, planned] of batch.entries()) {
-                if (!result[index] || !planned.changed) {
-                  continue;
-                }
-                const key = transcriptArchiveRecoveryRowKey(planned);
-                const prior = pending.get(key);
-                const publishedAt =
-                  planned.publishedAt ??
-                  (prior?.nextSha256 === planned.archiveSha256 ? prior.publishedAt : null);
-                if (publishedAt === null) {
-                  continue;
-                }
-                pending.set(key, {
-                  generation: planned.generation,
-                  nextSha256: planned.nextSha256,
-                  publishedAt,
-                  sessionId: planned.sessionId,
-                });
-                receiptsChanged = true;
-              }
-              if (receiptsChanged) {
-                writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
-                  ...pending.values(),
-                ]);
-              }
-              return result;
+      if (!params.verifyOnly && needsRewrite) {
+        write("historical-transcript-archive-directives", () => {
+          params.beforeRewrite?.();
+          const pending = new Map(
+            (readTranscriptArchiveRecoveryJournal(params.database)?.rows ?? []).map((row) => [
+              transcriptArchiveRecoveryRowKey(row),
+              row,
+            ]),
+          );
+          let receiptsChanged = false;
+          for (const planned of batch) {
+            current = planned;
+            if (!planned.changed) {
+              continue;
+            }
+            executeSqliteQuerySync(
+              params.database,
+              db
+                .updateTable("session_transcript_archives")
+                .set({
+                  archive_blob: planned.nextBytes,
+                  archive_sha256: planned.nextSha256,
+                  published_at: null,
+                })
+                .where("session_id", "=", planned.sessionId)
+                .where("generation", "=", planned.generation),
+            );
+            const key = transcriptArchiveRecoveryRowKey(planned);
+            const prior = pending.get(key);
+            const publishedAt =
+              planned.publishedAt ??
+              (prior?.nextSha256 === planned.archiveSha256 ? prior.publishedAt : null);
+            if (publishedAt === null) {
+              continue;
+            }
+            pending.set(key, {
+              generation: planned.generation,
+              nextSha256: planned.nextSha256,
+              publishedAt,
+              sessionId: planned.sessionId,
             });
+            receiptsChanged = true;
+          }
+          if (receiptsChanged) {
+            writeTranscriptArchiveRecoveryJournal(params.database, params.agentId, [
+              ...pending.values(),
+            ]);
+          }
+        });
+      }
       // Published files never point at rolled-back blobs: rewritten rows are
       // committed as pending before an atomic replacement can touch a file.
-      const filesCurrent = batch.map((planned, index) => {
+      const filesCurrent = batch.map((planned) => {
         current = planned;
+        if (params.verifyOnly && planned.changed) {
+          return false;
+        }
         const archivePath = transcriptArchivePathFor(archiveDirectory, planned.archiveName);
         let fileCurrent: boolean;
         try {
-          fileCurrent = rowsPresent[index]
-            ? repairPublishedTranscriptArchive({
-                archiveDirectory,
-                planned,
-                signal,
-                verifyOnly: params.verifyOnly,
-              })
-            : false;
+          fileCurrent = repairPublishedTranscriptArchive({
+            archiveDirectory,
+            planned,
+            signal,
+            verifyOnly: params.verifyOnly,
+          });
         } catch (error) {
           if (signal?.aborted && error === signal.reason) {
             throw error;
@@ -555,16 +486,13 @@ export async function migrateCanonicalTranscriptArchives(
             cause: error,
           });
         }
-        if (rowsPresent[index] && !planned.changed) {
-          assertArchiveSourceUnchanged(params.database, planned);
-        }
-        if (rowsPresent[index] && !fileCurrent) {
+        if (!fileCurrent) {
           missingCopies += 1;
           if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
             missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
           }
         }
-        if (rowsPresent[index] && planned.fingerprint) {
+        if (planned.fingerprint) {
           observed.add(planned.fingerprint);
           params.verification?.collect?.add(planned.fingerprint);
         }
@@ -591,10 +519,7 @@ export async function migrateCanonicalTranscriptArchives(
                 recorded?.nextSha256 === planned.nextSha256 ? recorded.publishedAt : undefined,
               writeCursor: checkpoint,
             });
-            if (
-              !rowsPresent[index] ||
-              (fileCurrent && recorded?.nextSha256 === planned.nextSha256)
-            ) {
+            if (fileCurrent && recorded?.nextSha256 === planned.nextSha256) {
               pending.delete(key);
             }
           }
@@ -607,9 +532,9 @@ export async function migrateCanonicalTranscriptArchives(
           }
         });
       }
-      rewrittenArchives += batch.filter(
-        (planned, index) => planned.changed && rowsPresent[index],
-      ).length;
+      if (!params.verifyOnly) {
+        rewrittenArchives += batch.filter((planned) => planned.changed).length;
+      }
       const last = batch.at(-1)!;
       cursor = { generation: last.generation, sessionId: last.sessionId };
     } catch (error) {
@@ -662,10 +587,10 @@ export async function prepareCanonicalTranscriptArchiveMigrations(
 }
 
 export function migrateTranscriptDirectiveArchives(
-  params: ArchiveMigrationOptions,
+  params: ArchiveMigrationOptions & { transformLine?: ArchiveSessionLineTransform },
 ): Promise<ArchiveMigrationResult> {
   return migrateCanonicalTranscriptArchives({
     ...params,
-    transformLine: transformArchiveLine,
+    transformLine: params.transformLine ?? transformArchiveDirectiveLine,
   });
 }

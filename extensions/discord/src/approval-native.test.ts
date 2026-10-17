@@ -39,7 +39,7 @@ function resolveOriginTarget(
   request: Partial<PluginApprovalRequest["request"]>,
   options: { cfg?: OpenClawConfig; accountId?: string } = {},
 ) {
-  return createDiscordNativeApprovalAdapter().native?.resolveOriginTarget?.({
+  return createDiscordNativeApprovalAdapter().nativeAsync?.resolveOriginTarget?.({
     cfg: options.cfg ?? NATIVE_DELIVERY_CFG,
     accountId: options.accountId ?? "main",
     approvalKind: "plugin",
@@ -61,7 +61,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(getDiscordApprovalCapability().nativeRuntimeAsync?.eventKinds).toContain("system-agent");
   });
 
-  it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
+  it("keeps approval availability enabled when approvers exist but native delivery is off", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
     const cfg = {
       ...NATIVE_APPROVAL_CFG,
@@ -84,7 +84,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
       }),
     ).toEqual({ kind: "enabled" });
     expect(
-      adapter.native?.describeDeliveryCapabilities({
+      await adapter.nativeAsync?.describeDeliveryCapabilities({
         cfg: cfg as never,
         accountId: "main",
         approvalKind: "exec",
@@ -146,17 +146,19 @@ describe("createDiscordNativeApprovalAdapter", () => {
         },
       },
     } as OpenClawConfig;
-    const authorize = (
+    const authorize = async (
       senderId: string,
       options: { cfg?: OpenClawConfig; accountId?: string } = {},
     ) =>
-      capability.authorizeActorAction?.({
-        cfg: options.cfg ?? cfg,
-        accountId: options.accountId ?? "main",
-        senderId,
-        action: "approve",
-        approvalKind: "exec",
-      }).authorized;
+      (
+        await capability.authorizeActorActionAsync?.({
+          cfg: options.cfg ?? cfg,
+          accountId: options.accountId ?? "main",
+          senderId,
+          action: "approve",
+          approvalKind: "exec",
+        })
+      )?.authorized;
     const request = {
       id: "approval-1",
       request: { command: "pwd", turnSourceChannel: "discord", turnSourceAccountId: "main" },
@@ -165,20 +167,20 @@ describe("createDiscordNativeApprovalAdapter", () => {
     };
 
     expect(
-      await createDiscordNativeApprovalAdapter().native?.resolveApproverDmTargets?.({
+      await createDiscordNativeApprovalAdapter().nativeAsync?.resolveApproverDmTargets?.({
         cfg,
         accountId: "main",
         approvalKind: "exec",
         request,
       }),
     ).toEqual([{ to: "555555555" }]);
-    expect(authorize("555555555")).toBe(true);
-    expect(authorize("666666666")).toBe(false);
+    expect(await authorize("555555555")).toBe(true);
+    expect(await authorize("666666666")).toBe(false);
     // Explicit account approvers still replace the global owner fallback.
-    expect(authorize("555555555", { accountId: "ops" })).toBe(false);
+    expect(await authorize("555555555", { accountId: "ops" })).toBe(false);
     // Authority is read from the config current at decision time.
     expect(
-      authorize("555555555", {
+      await authorize("555555555", {
         cfg: { ...cfg, commands: { ownerAllowFrom: ["discord:user:888888888"] } },
       }),
     ).toBe(false);

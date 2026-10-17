@@ -66,20 +66,27 @@ describe("Control UI build chunking", () => {
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
+    const devices = modulePath("../pages/devices/devices-page.tsx");
+    const sharedUi = modulePath("../components/select-picker-view.tsx");
     const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; export class Chat {} export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class Chat { label = label; } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
-      [newSession, `import ${JSON.stringify(sidebarStyle)}; export class NewSession {}`],
+      [
+        newSession,
+        `import ${JSON.stringify(sidebarStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+      ],
       [optional, 'export const panel = "optional-panel";'],
+      [devices, 'export const page = "devices-page";'],
+      [sharedUi, 'export const label = "shared-ui";'],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
     ]);
@@ -101,7 +108,18 @@ describe("Control UI build chunking", () => {
         rolldownOptions: {
           input: entry,
           preserveEntrySignatures: "allow-extension",
-          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+          output: {
+            codeSplitting: {
+              ...controlUiCodeSplitting,
+              // A stale capture must not pull a lazy page into the shared boot chunk.
+              groups: controlUiCodeSplitting.groups.map((group) =>
+                group.name === "control-ui-boot-shared"
+                  ? { ...group, test: (id: string) => id === devices || group.test(id) }
+                  : group,
+              ),
+            },
+            strictExecutionOrder: true,
+          },
         },
       },
     });
@@ -128,6 +146,9 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
+    expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);
     const deferred = chunks.find((chunk) => optional in chunk.modules)!;
     expect(deferred).toBeDefined();
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
@@ -140,8 +161,10 @@ describe("Control UI build chunking", () => {
       maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
-      ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-runtime"],
-      [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-runtime"],
+      ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
+      ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", undefined],
+      ["/repo/ui/node_modules/entities/dist/esm/index.js", undefined],
+      [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-highlight-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/dompurify/dist/purify.es.mjs", "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/zod/v4/core/schemas.js", "config-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/json5/dist/index.js", "json5-runtime"],
@@ -159,6 +182,7 @@ describe("Control UI build chunking", () => {
         new URL("../styles/sidebar-update-card.css", import.meta.url).pathname,
         "sidebar-update-runtime",
       ],
+      [new URL("../pages/chat/route-entry.ts", import.meta.url).pathname, "chat-route-entry"],
       [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
       [new URL("../pages/plugins/plugins-page.tsx", import.meta.url).pathname, "plugins-page"],
       [new URL("../components/markdown-parser.ts", import.meta.url).pathname, "markdown-runtime"],

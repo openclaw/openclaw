@@ -22,7 +22,7 @@ import {
   backgroundImageReadIdentity,
   readBackgroundImage,
 } from "../../components/session-background-image.ts";
-import type { SessionBackground } from "../../components/session-background.ts";
+import type { SessionBackground } from "../../components/session-background.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -92,9 +92,7 @@ export function createAppearanceBackground(
     if (!connected || application === nextContext) {
       return;
     }
-    for (const stop of subscriptions.splice(0)) {
-      stop();
-    }
+    subscriptions.splice(0).forEach((stop) => stop());
     dismissCanvasPreview();
     retireMutation();
     releasePreview();
@@ -107,10 +105,12 @@ export function createAppearanceBackground(
       return;
     }
     subscriptions.push(
+      // Revoke an active preview immediately when its selected background changes.
       nextContext.theme.subscribe(() => {
         retireChangedCanvasPreview();
         publish();
       }),
+      // Connection receipts retire upload and image-preview authority synchronously.
       nextContext.gateway.subscribe(() => {
         if ((mutationScope && !owns(mutationScope)) || (metadata && !owns(metadata))) {
           retireMutation();
@@ -137,7 +137,7 @@ export function createAppearanceBackground(
         publish();
       }),
       subscribeServerUiPrefWrites(publish),
-      nextContext.router.subscribe(dismissCanvasPreview),
+      nextContext.router.subscribe(dismissCanvasPreview), // Retire the canvas before route rendering.
     );
     const ownerWindow = host().ownerDocument.defaultView ?? window;
     const document = host().ownerDocument;

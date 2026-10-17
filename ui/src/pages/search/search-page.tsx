@@ -1,6 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { Show, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -31,45 +31,13 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
 import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
-
-function SettingsSelectRow(props: {
-  title: string;
-  value: string;
-  description?: string;
-  options: ReadonlyArray<{ value: string; label: string }>;
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <SettingsRow
-      title={props.title}
-      description={props.description}
-      control={
-        <select
-          class="settings-select"
-          aria-label={props.title}
-          disabled={props.disabled}
-          value={props.value}
-          onChange={(event) => props.onChange(event.currentTarget.value)}
-        >
-          <For each={props.options} keyed={(option) => option.value}>
-            {(option) => (
-              <option value={option().value} selected={option().value === props.value}>
-                {option().label}
-              </option>
-            )}
-          </For>
-        </select>
-      }
-    />
-  );
-}
 
 export function SearchPage() {
   const context = useApplication();
@@ -126,6 +94,7 @@ export function SearchPage() {
       void load();
     }
   }
+  // Invalidate admitted tests and reads before config or selection changes can settle them.
   const stopRuntime = runtimeView.subscribe(syncRuntime);
   const stopSelection = selectionProjection.subscribe(syncAgent);
   onCleanup(() => {

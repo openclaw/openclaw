@@ -104,6 +104,9 @@ suite.define(() => {
             exact: true,
           })
           .waitFor();
+        await page
+          .locator(".chat-system-events__summary", { hasText: "Updates not delivered" })
+          .click();
         await page.getByText(blockedReason, { exact: true }).waitFor();
         const restart = page.locator(".chat-notice", { hasText: "System · restart recovery" });
         await restart.waitFor();
@@ -121,6 +124,9 @@ suite.define(() => {
         expect(await page.getByText(/copy it and send again/u).count()).toBe(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await page.reload();
+        await page
+          .locator(".chat-system-events__summary", { hasText: "Updates not delivered" })
+          .click();
         await restart.waitFor();
         await page.getByText("The desktop checks passed.", { exact: true }).waitFor();
         expect(await restart.locator(".chat-notice__body").count()).toBe(0);

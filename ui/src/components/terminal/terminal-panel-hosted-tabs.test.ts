@@ -10,7 +10,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 import {
   createTerminalController,
   createTestTerminalPanel,
@@ -179,15 +179,15 @@ describe("Terminal panel hosted tabs", () => {
     document.body.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
     try {
       sessions.tabs[0]!.shellName = "bash";
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       expect(changed).toHaveBeenCalledTimes(1);
       sessions.activeId = null;
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       expect(changed).toHaveBeenCalledTimes(2);
       sessions.booting = true;
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       expect(changed).toHaveBeenCalledTimes(3);
       expect(changed.mock.calls[0]?.[0]).toMatchObject({
@@ -197,7 +197,7 @@ describe("Terminal panel hosted tabs", () => {
       });
       panel.themeMode = "light";
       await panel.updateComplete;
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       expect(changed).toHaveBeenCalledTimes(3);
       panel.tabsInHeader = false;
@@ -241,12 +241,12 @@ describe("Terminal panel hosted tabs", () => {
     const pending = vi
       .spyOn(panel.terminalPanelUploadController, "hasPendingBatch")
       .mockReturnValue(true);
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(button(actions, "Add files to terminal").disabled).toBe(true);
     pending.mockRestore();
     sessions.activeId = null;
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(button(actions, "Add files to terminal").disabled).toBe(true);
     const dock = vi.fn();

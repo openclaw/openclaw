@@ -101,6 +101,7 @@ export function createCrabboxWorkerProvider(
   const binaryResolver = createCrabboxWorkerBinaryResolver({
     openclawRoot,
     signal: providerAbort.signal,
+    warn,
   });
   const resolveBinary = binaryResolver.resolve;
   const machineOptions = createCrabboxMachineOptionsResolver({

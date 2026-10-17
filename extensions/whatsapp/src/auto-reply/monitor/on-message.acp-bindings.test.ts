@@ -3,11 +3,10 @@ import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversat
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const processMessageMock = vi.hoisted(() => vi.fn());
-const maybeBroadcastMessageMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
-const applyGroupGatingMock = vi.hoisted(() => vi.fn());
+const resolveGroupActivationForMock = vi.hoisted(() => vi.fn());
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const maybeSendAckReactionMock = vi.hoisted(() => vi.fn());
@@ -49,17 +48,15 @@ vi.mock("../../group-session-key.js", () => ({
   resolveWhatsAppGroupSessionRoute: (route: unknown) => route,
 }));
 
-vi.mock("../../identity.js", () => ({
+vi.mock("../../identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../identity.js")>()),
   getPrimaryIdentityId: () => "+15551234567",
   getSenderIdentity: () => ({ e164: "+15551234567", name: "Alice" }),
 }));
 
-vi.mock("./broadcast.js", () => ({
-  maybeBroadcastMessage: (...args: unknown[]) => maybeBroadcastMessageMock(...args),
-}));
-
-vi.mock("./group-gating.js", () => ({
-  applyGroupGating: (...args: unknown[]) => applyGroupGatingMock(...args),
+vi.mock("./group-activation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./group-activation.js")>()),
+  resolveGroupActivationFor: (...args: unknown[]) => resolveGroupActivationForMock(...args),
 }));
 
 vi.mock("./last-route.js", () => ({
@@ -236,6 +233,10 @@ function createCfg(): Record<string, unknown> {
 
 function createGroupCfg(): Record<string, unknown> {
   return {
+    messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    channels: { whatsapp: { groupPolicy: "open", accounts: { work: {} } } },
+    broadcast: { "120363001234567890@g.us": ["main", "backup"] },
+    agents: { entries: { main: {}, backup: {}, "sandboxed-agent": {} } },
     bindings: [
       {
         type: "acp",
@@ -352,13 +353,11 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
   beforeEach(() => {
     processMessageMock.mockReset();
     processMessageMock.mockResolvedValue(true);
-    maybeBroadcastMessageMock.mockReset();
-    maybeBroadcastMessageMock.mockResolvedValue(false);
-    applyGroupGatingMock.mockReset();
-    applyGroupGatingMock.mockResolvedValue({ shouldProcess: true });
+    resolveGroupActivationForMock.mockReset();
+    resolveGroupActivationForMock.mockResolvedValue("always");
     updateLastRouteInBackgroundMock.mockReset();
     transcribeFirstAudioMock.mockReset();
-    transcribeFirstAudioMock.mockResolvedValue("agent please handle this");
+    transcribeFirstAudioMock.mockResolvedValue("openclaw please handle this");
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockResolvedValue(null);
     createStatusReactionControllerMock.mockReset();
@@ -428,21 +427,12 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockImplementationOnce(
       resolvedConfiguredRoute(configuredGroupBindingResolution),
     );
-    const pendingEntry = {
-      sender: "Alice",
-      body: "ambient group message",
-    };
-    applyGroupGatingMock.mockImplementationOnce(
-      async (params: { groupHistories: Map<string, unknown[]>; groupHistoryKey: string }) => {
-        params.groupHistories.set(params.groupHistoryKey, [pendingEntry]);
-        return { shouldProcess: false };
-      },
-    );
+    resolveGroupActivationForMock.mockResolvedValueOnce("mention");
     const { handler, groupHistories } = createHandler(vi.fn(), createGroupCfg());
 
-    await handler(createGroupMessage());
+    await handler(createGroupMessage({ payload: { body: "ambient group message" } }));
 
-    expect(applyGroupGatingMock).toHaveBeenCalledWith(
+    expect(resolveGroupActivationForMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "sandboxed-agent",
         sessionKey: boundSessionKey,
@@ -450,9 +440,10 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     );
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
     expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
-    expect(groupHistories.get("group-key")).toEqual([pendingEntry]);
+    expect(groupHistories.get("group-key")).toEqual([
+      expect.objectContaining({ body: "ambient group message", sender: "Alice (+15551234567)" }),
+    ]);
   });
 
   it("removes preflight ack when configured ACP readiness fails after group audio mention gating", async () => {
@@ -464,9 +455,7 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockImplementationOnce(
       resolvedConfiguredRoute(configuredGroupBindingResolution),
     );
-    applyGroupGatingMock
-      .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
-      .mockResolvedValueOnce({ shouldProcess: true });
+    resolveGroupActivationForMock.mockResolvedValue("mention");
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
     ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
       ok: false,
@@ -479,7 +468,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(ackReaction.remove).toHaveBeenCalledTimes(1);
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 

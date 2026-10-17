@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createWorkerEnvironmentTransportLifecycle } from "./environment-access.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
 import * as support from "./service.test-support.js";
@@ -53,6 +55,109 @@ async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean 
 
 describe("worker provider node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  // Unknown (null) hosts take the same non-dedicated path; transition patches cannot express null.
+  it("rejects stalled computer cleanup on a shared host despite a provider stop reason", async () => {
+    const environmentId = "shared-wedged-desktop";
+    await support.seedReadyNodeDesktop(environmentId);
+    const record = await support.testState.store.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: { ...support.attachedPatch(environmentId, "session-1"), sharedHost: true },
+    });
+    const driverFinished = createDeferred();
+    const warn = vi.fn();
+    const transports = createWorkerEnvironmentTransportLifecycle({
+      store: support.testState.store,
+      nodeTunnelManager: { stop: async () => {} },
+      closeEnvironmentComputers: () => driverFinished.promise,
+      logger: { warn },
+    });
+    if (!transports) {
+      throw new Error("Expected worker transport lifecycle");
+    }
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopped = transports
+      .stop(environmentId, record.ownerEpoch, "provider-destroying")
+      .catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await stopped).toMatchObject({
+        message: "Worker computer cleanup timed out after 60000ms",
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      driverFinished.resolve();
+      vi.useRealTimers();
+      await stopped;
+    }
+  });
+
+  it.each(["stop", "force"] as const)(
+    "continues %s after a computer driver never settles",
+    async (entrance) => {
+      const environmentId = "wedged-desktop";
+      await support.seedReadyNodeDesktop(environmentId);
+      await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: { ...support.attachedPatch(environmentId, "session-1"), sharedHost: false },
+      });
+      const cleanupStarted = createDeferred();
+      const finalCleanupStarted = createDeferred();
+      const driverFinished = createDeferred();
+      const destroy = vi.fn(async () => {});
+      const warn = vi.fn();
+      let cleanupCalls = 0;
+      const service = support.createService(support.createProvider({ destroy }), {
+        // This is the real teardown boundary's driver cleanup callback. The driver
+        // ignores cancellation; only releasing it in finally makes the fixture settle.
+        closeEnvironmentComputers: () => {
+          cleanupCalls += 1;
+          (cleanupCalls === 1 ? cleanupStarted : finalCleanupStarted).resolve();
+          return driverFinished.promise;
+        },
+        logger: { warn },
+        nodeTunnelManager: {
+          status: () => "stopped",
+          start: vi.fn(),
+          stop: async () => {},
+          stopAll: async () => {},
+          observeProcesses: vi.fn(),
+        },
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const forceAbandon = vi.fn(async () => {});
+      const stopping = service.destroy(
+        environmentId,
+        undefined,
+        entrance === "force" ? forceAbandon : undefined,
+      );
+      try {
+        await cleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(destroy).toHaveBeenCalledOnce();
+        await finalCleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        await expect(stopping).resolves.toMatchObject({ state: "destroyed" });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /computer cleanup.*wedged-desktop.*continuing provider teardown.*retry Stop/i,
+          ),
+        );
+        expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+        if (entrance === "force") {
+          expect(forceAbandon).toHaveBeenCalledOnce();
+        }
+      } finally {
+        driverFinished.resolve();
+        vi.useRealTimers();
+        await stopping;
+      }
+    },
+  );
 
   it.each(["retained", "restarted"] as const)(
     "cleans the %s node owner after the provider proves the machine is destroyed",

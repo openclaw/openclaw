@@ -2,9 +2,9 @@ import { createEffect, createMemo } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import type { SessionBackground } from "./session-background.ts";
+import type { SessionBackground } from "./session-background.tsx";
 
-const renderer = createIdleImport(() => import("./session-background.ts"));
+const renderer = createIdleImport(() => import("./session-background.tsx"));
 
 type Props = {
   context?: ApplicationContext;
