@@ -163,7 +163,6 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           source &&
           (source.identity !== store.target.identity ||
             source.birthtime !== store.target.birthtime ||
-            (store.target.filename !== undefined && source.filename !== store.target.filename) ||
             (store.publishedSource?.incarnation === source.incarnation &&
               store.publishedSource.revision !== undefined &&
               source.revision !== undefined &&

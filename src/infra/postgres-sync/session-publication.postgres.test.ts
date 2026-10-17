@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,10 @@ import { readPreparedSessionEntryChange } from "../../config/sessions/session-ac
 import type { SessionEntryPublicationSource } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { captureDurableSessionActor } from "../../config/sessions/session-actor-durable.js";
+import {
+  assertSessionActorPathAliasReuse,
+  createAliasedSessionStateRoot,
+} from "../../config/sessions/session-actor-pathalias.test-support.js";
 import {
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
@@ -31,6 +36,7 @@ const configured: unknown = getEnvironmentData("openclaw.test.workboard.connecti
 const connection = typeof configured === "string" ? configured : undefined;
 const prefix = `publication_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 let root: string;
+let rootPath: string;
 let client: pg.Client;
 let owners: Awaited<ReturnType<typeof loadOwners>>;
 let database: ReturnType<typeof owners.openOpenClawAgentDatabase>;
@@ -47,7 +53,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
         withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
       }
       if (root) {
-        await owners.cleanupSessionStateForTest({ stateDir: root });
+        await owners.cleanupSessionStateForTest({ stateDir: root, rootPath });
       }
       if (client) {
         const schemas = await client.query<{ nspname: string }>(
@@ -105,7 +111,8 @@ function observeEntries(sessionKey: string) {
 
 describe.skipIf(!connection)("PostgreSQL committed session publications", () => {
   beforeAll(async () => {
-    root = directories.make("pg-session-publication-");
+    rootPath = directories.make("pg-session-publication-");
+    root = await createAliasedSessionStateRoot(rootPath);
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     installDatabaseEngineSelection({
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
@@ -119,6 +126,16 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
     );
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+
+  it("reuses the actor through admitted PG path aliases without crossing database identities", async () => {
+    const otherDatabase = withEngineStoreAdmission(() =>
+      owners.openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(path.dirname(database.path), "other.sqlite"),
+      }),
+    );
+    await assertSessionActorPathAliasReuse(database, otherDatabase);
+  });
 
   it("publishes complete replacements under PG admission and reuses fresh actor facts after patches", async () => {
     const scope = scopeFor("patch");
