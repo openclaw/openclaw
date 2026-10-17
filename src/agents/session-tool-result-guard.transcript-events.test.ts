@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -26,6 +27,7 @@ import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -53,6 +55,21 @@ import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { persistAgentSessionMessage } from "./sessions/agent-session-transcript.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+const publicationFailure = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+// mock-isolation: Only the post-commit publisher fails; persistence and owner selection stay real.
+vi.mock("../config/sessions/session-accessor.sqlite-events.js", async (importOriginal) => {
+  const events =
+    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-events.js")>();
+  return {
+    ...events,
+    publishTranscriptUpdate: (...args: Parameters<typeof events.publishTranscriptUpdate>) =>
+      publicationFailure.error
+        ? Promise.reject(publicationFailure.error)
+        : events.publishTranscriptUpdate(...args),
+  };
+});
+
 const assistantText = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 const model = makeProviderModelFixture({
@@ -112,6 +129,7 @@ async function openPersistedSessionManager(
 }
 
 beforeEach(() => {
+  publicationFailure.error = undefined;
   setRuntimeConfigSnapshot({});
 });
 
@@ -581,6 +599,41 @@ describe("guardSessionManager transcript updates", () => {
     });
     expect(guarded.getEntry(entryId)).not.toHaveProperty("message.__openclaw.humanMentions");
   });
+
+  it.each(["appendMessage", "appendMessageAsync"] as const)(
+    "preserves saved messages and records publication failure through %s",
+    async (append) => {
+      const { sessionManager, target } = await openPersistedSessionManager();
+      const guarded = guardSessionManager(sessionManager, target);
+      const warnings = createWarnLogCapture("transcript-publication-failure");
+      const unhandled: unknown[] = [];
+      const onUnhandled = (error: unknown) => unhandled.push(error);
+      process.on("unhandledRejection", onUnhandled);
+      const message = assistantText("synthetic private message");
+      publicationFailure.error = new Error("synthetic private publication detail");
+      try {
+        const entryId = await guarded[append](message);
+        assert(entryId);
+        // A real event-loop turn observes process-level rejections, beyond promise microtasks.
+        await yieldToEventLoop();
+        expect(unhandled).toEqual([]);
+        expect(await warnings.findText("Transcript update publication failed")).toContain(
+          "reload the session",
+        );
+        expect(await warnings.findText("synthetic private")).toBeUndefined();
+        publicationFailure.error = undefined;
+        const nextId = await guarded[append](assistantText("still running"));
+        expect(SessionManager.open(target).getBranch()).toMatchObject([
+          { id: entryId, message },
+          { id: nextId, message: { content: [{ type: "text", text: "still running" }] } },
+        ]);
+      } finally {
+        publicationFailure.error = undefined;
+        process.off("unhandledRejection", onUnhandled);
+        warnings.cleanup();
+      }
+    },
+  );
 
   it("broadcasts the committed SQLite owner when a callback rebinds the manager", async () => {
     const updates = collectUpdates();
