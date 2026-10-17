@@ -116,9 +116,11 @@ type TelegramMessageCachePersistentStore = {
   entries(): Promise<Array<{ key: string; value: unknown }>>;
 };
 
-type TelegramMessageCacheRetainedStore = Pick<
-  PluginStateKeyedStore<PersistedTelegramMessageCacheValue, 2>,
-  "lookup" | "observe" | "compareAndApply" | "entriesInKeyRange" | "moveEntriesFrom"
+type TelegramMessageCacheRetainedStore = Required<
+  Pick<
+    PluginStateKeyedStore<PersistedTelegramMessageCacheValue>,
+    "lookup" | "observe" | "compareAndApply" | "entriesInKeyRange" | "moveEntriesFrom"
+  >
 >;
 
 const RETAINED_MESSAGE_PAGE_SIZE = 256;
@@ -298,13 +300,25 @@ export function createTelegramMessageCache(params?: {
 
   const openRetainedStore = async (): Promise<TelegramMessageCacheRetainedStore> => {
     if (!retainedStore) {
-      if (!runtime) {
-        throw new Error("Telegram group history requires retained plugin-state support");
-      }
-      retainedStore = runtime.state.openKeyedStoreV2<PersistedTelegramMessageCacheValue>({
+      const store = runtime?.state.openKeyedStore<PersistedTelegramMessageCacheValue>({
         namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
         retention: "retained",
       });
+      if (
+        !store?.observe ||
+        !store.compareAndApply ||
+        !store.entriesInKeyRange ||
+        !store.moveEntriesFrom
+      ) {
+        throw new Error("Telegram group history requires retained plugin-state support");
+      }
+      retainedStore = {
+        lookup: (key) => store.lookup(key),
+        observe: store.observe,
+        compareAndApply: store.compareAndApply,
+        entriesInKeyRange: store.entriesInKeyRange,
+        moveEntriesFrom: store.moveEntriesFrom,
+      };
     }
     const store = retainedStore;
     if (!bucket.promoted) {

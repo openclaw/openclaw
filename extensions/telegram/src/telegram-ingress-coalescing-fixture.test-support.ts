@@ -4,7 +4,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createChannelIngressQueueForTests,
   createPluginStateKeyedStoreForTests,
-  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -200,8 +199,6 @@ export function resetTelegramIngressRuntime() {
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
-      openKeyedStoreV2: <T>(options: Parameters<TelegramRuntime["state"]["openKeyedStoreV2"]>[0]) =>
-        createPluginStateKeyedStoreV2ForTests<T>("telegram", options, { assertCurrent() {} }),
     },
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as TelegramRuntime);
