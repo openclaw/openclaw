@@ -29,6 +29,7 @@ export function formatUpdateStateInspectionError(error: unknown): string {
 const ProgressSchema = z.object({
   phase: z.string(),
   path: z.string().optional(),
+  completedIo: z.number().int().positive().optional(),
   snapshot: z
     .object({
       status: z.enum(["copying", "completed"]),
@@ -40,6 +41,25 @@ const ProgressSchema = z.object({
     .optional(),
 });
 export type UpdateStateInspectionProgress = z.infer<typeof ProgressSchema>;
+
+/** Report completed filesystem work, not timer heartbeats or distinct file counts. */
+export function createUpdateStateIoReporter(
+  path: string,
+  phase: string,
+  onProgress?: (progress: UpdateStateInspectionProgress) => void,
+) {
+  let completedIo = 0;
+  let emittedAt = -Infinity;
+  return () => {
+    completedIo++;
+    const now = performance.now();
+    if (!onProgress || now - emittedAt < 500) {
+      return;
+    }
+    emittedAt = now;
+    onProgress({ phase, path, completedIo });
+  };
+}
 
 export function createUpdateStateSnapshotReporter(
   path: string,
@@ -78,10 +98,14 @@ export function createUpdateStateSnapshotReporter(
 }
 
 /** Stderr leaves the released worker's stdout JSON contract unchanged. */
-export function createUpdateStateInspectionReporter(legacy = false) {
+export function createUpdateStateInspectionReporter(legacy = false, entryProgress = false) {
   let emittedBytes = 0;
   let exhausted = false;
   return (progress: UpdateStateInspectionProgress) => {
+    // Released parents did not opt into potentially long entry-progress streams.
+    if (progress.completedIo !== undefined && !entryProgress) {
+      return;
+    }
     if (exhausted) {
       return;
     }

@@ -298,6 +298,9 @@ export function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJo
     return "wal";
   }
   const mountLookupPaths = [checkedPaths.originalPath, checkedPaths.canonicalPath] as const;
+  if (typeof fs.statfsSync !== "function") {
+    return combineMountEntryJournalPolicies(mountLookupPaths);
+  }
   try {
     if (ROLLBACK_FILESYSTEM_MAGIC.has(fs.statfsSync(checkedPaths.canonicalPath).type)) {
       return "rollback";

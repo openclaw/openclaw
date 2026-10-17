@@ -1,7 +1,10 @@
-/** Cleanup for non-authoritative update-report body artifacts. */
+/** Fenced cleanup for non-authoritative update-report body artifacts. */
+import { randomUUID } from "node:crypto";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
-  readUpdateFailureReportReceipt,
+  claimUpdateFailureReportArtifactSweep,
+  hasUpdateFailureReportArtifactSweepLease,
+  releaseUpdateFailureReportArtifactSweep,
   type UpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
 import {
@@ -9,6 +12,7 @@ import {
   listRetiredUpdateFailureReportArtifacts,
   removeRetiredUpdateFailureReportArtifacts,
 } from "./update-failure-report-artifact.js";
+import { retryUpdateReportStateWrite } from "./update-failure-report-precreate.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 export type UpdateFailureReportSweepReceipt = Pick<
@@ -16,37 +20,67 @@ export type UpdateFailureReportSweepReceipt = Pick<
   "artifactSweep" | "previewDigest" | "replacementReady" | "reservationId"
 >;
 
+/** A current lease authorizes captured retired paths; successor reservation paths are never reused. */
 export async function cleanRetiredUpdateFailureReportArtifacts(
   prepared: PreparedUpdateFailureReport,
   receipt: UpdateFailureReportSweepReceipt,
   stateEnv: NodeJS.ProcessEnv,
   keepCurrent = true,
   context = captureOpenClawStateWorkerContext({ env: stateEnv }),
-): Promise<void> {
-  const candidates = await listRetiredUpdateFailureReportArtifacts(prepared);
-  const current = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
-  const keep = [
-    ...(keepCurrent && !receipt.replacementReady ? [receipt] : []),
-    ...(current &&
-    current.status !== "created" &&
-    current.cleanup !== "pending" &&
-    !current.replacementReady
-      ? [current]
-      : []),
-  ];
-  const keepPaths = new Set(
-    keep.flatMap((owner) => {
-      const { savedReportPath } = bindSavedReportArtifact(
-        prepared,
-        owner.reservationId,
-        owner.previewDigest,
-      );
-      return [savedReportPath, `${savedReportPath}.pending`];
-    }),
+): Promise<boolean> {
+  const sweepOwnerId = randomUUID();
+  const sweepGeneration = randomUUID();
+  const claimed = await retryUpdateReportStateWrite(() =>
+    claimUpdateFailureReportArtifactSweep(
+      prepared.attemptId,
+      receipt.reservationId,
+      sweepOwnerId,
+      sweepGeneration,
+      stateEnv,
+      context,
+    ),
   );
-  // Protect a successor already listed; later reservations use names outside this captured set.
-  context.admission.assertCurrent();
-  await removeRetiredUpdateFailureReportArtifacts(
-    candidates.filter((candidate) => !keepPaths.has(candidate)),
-  );
+  if (!claimed) {
+    return false;
+  }
+  const keep =
+    !keepCurrent || receipt.replacementReady
+      ? undefined
+      : bindSavedReportArtifact(prepared, receipt.reservationId, receipt.previewDigest);
+  const hasSweepLease = () =>
+    hasUpdateFailureReportArtifactSweepLease(
+      prepared.attemptId,
+      receipt.reservationId,
+      sweepOwnerId,
+      sweepGeneration,
+      stateEnv,
+      context,
+    );
+  let swept = false;
+  try {
+    if (!(await hasSweepLease())) {
+      return false;
+    }
+    const candidates = await listRetiredUpdateFailureReportArtifacts(prepared, keep);
+    if (!(await hasSweepLease())) {
+      return false;
+    }
+    // A later takeover cannot add its new reservation paths to this already-captured set.
+    context.admission.assertCurrent();
+    await removeRetiredUpdateFailureReportArtifacts(candidates);
+    swept = true;
+  } finally {
+    const released = await retryUpdateReportStateWrite(() =>
+      releaseUpdateFailureReportArtifactSweep(
+        prepared.attemptId,
+        receipt.reservationId,
+        sweepOwnerId,
+        sweepGeneration,
+        stateEnv,
+        context,
+      ),
+    );
+    swept &&= released;
+  }
+  return swept;
 }

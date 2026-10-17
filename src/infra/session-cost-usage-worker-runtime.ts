@@ -268,7 +268,10 @@ async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  const { location, archiveStorePaths, stores } = prepared;
+  const location = structuredClone(prepared.location);
+  const archiveStorePaths = [...prepared.archiveStorePaths];
+  const stores = structuredClone(prepared.stores);
+  const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
     const assertCurrent = () => {
@@ -286,7 +289,7 @@ async function runPreparedUsageCostWorker(
     };
     const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     const lock =
-      operation.kind === "refresh"
+      capturedOperation.kind === "refresh"
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
             env: location.env,
             assertCurrent,
@@ -309,12 +312,12 @@ async function runPreparedUsageCostWorker(
     assertCurrent();
     let workerOperation: UsageCostWorkerOperation;
     let resolveCost: UsageCostResolver;
-    if (operation.kind === "refresh") {
+    if (capturedOperation.kind === "refresh") {
       const pricing = await prepareUsageCostPricing(prepared.config, prepared.agentDir);
-      workerOperation = { ...operation, pricingFingerprint: pricing.fingerprint() };
+      workerOperation = { ...capturedOperation, pricingFingerprint: pricing.fingerprint() };
       resolveCost = createUsageCostResolver(prepared, pricing);
     } else {
-      workerOperation = operation;
+      workerOperation = capturedOperation;
       resolveCost = createUsageCostResolver(prepared);
     }
     const failures = openUsageCostRefreshFailures(location.env);

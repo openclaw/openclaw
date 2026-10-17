@@ -516,7 +516,15 @@ async function prepareHeartbeatDispatchReply(
       if (sent && !failed && deliveryText.trim()) {
         await patchSessionEntryCore(
           { agentId, storePath, sessionKey: stateKey },
-          () => ({ lastHeartbeatText: text, lastHeartbeatSentAt: startedAt }),
+          (current, context) =>
+            (
+              context.existingEntry
+                ? current.sessionId === stateEntry?.sessionId &&
+                  current.lifecycleRevision === stateEntry?.lifecycleRevision
+                : stateEntry === undefined
+            )
+              ? { lastHeartbeatText: text, lastHeartbeatSentAt: startedAt }
+              : null,
           {
             fallbackEntry: mergeSessionEntry(undefined, { updatedAt: startedAt }),
             preserveActivity: true,

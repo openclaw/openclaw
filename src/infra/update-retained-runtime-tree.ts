@@ -43,6 +43,7 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot: string;
     assertCurrent: () => void;
     onProgress?: () => void | Promise<void>;
+    onMaterialized?: () => void;
   },
 ): Promise<{ linked: number; copied: number }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
@@ -175,6 +176,7 @@ export async function linkUpdateCandidatePluginTrees(
         counts.linked += 1;
       }
     }
+    params.onMaterialized?.();
   };
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
@@ -214,6 +216,7 @@ export async function linkUpdateCandidatePluginTrees(
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
     params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
+    params.onMaterialized?.();
   }
   return counts;
 }

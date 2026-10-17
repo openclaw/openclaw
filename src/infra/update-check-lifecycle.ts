@@ -24,6 +24,8 @@ export type UpdateCheckLifecycle = UpdateCheckNotifications & {
     installStatus: StartupInstallStatus,
   ) => Promise<void>;
   isCurrent: () => boolean;
+  /** Shared publication order for background and interactive update discovery. */
+  publicationGeneration: number;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   initialize: () => Promise<StartupInstallStatus>;
@@ -93,6 +95,7 @@ export function createGatewayUpdateLifecycle(
     ...notifications,
     signal,
     isCurrent: () => updateCheckLifecycle === lifecycle,
+    publicationGeneration: 0,
     refreshes: new WeakMap(),
     run,
     initialize,

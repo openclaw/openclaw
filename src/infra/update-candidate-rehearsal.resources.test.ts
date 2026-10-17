@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-service-env.js";
 import * as exec from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
@@ -47,9 +47,11 @@ async function withSyntheticSnapshotWorker(
     `
       import fs from "node:fs/promises";
       import path from "node:path";
+      import { setTimeout as sleep } from "node:timers/promises";
       let text = "";
       for await (const chunk of process.stdin) text += chunk;
       const input = JSON.parse(text);
+      const controlRoot = ${JSON.stringify(root)};
       if (input.mode === "inventory") {
         process.stdout.write(JSON.stringify({ databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json", warnings: [] }));
         process.exit(0);
@@ -66,40 +68,76 @@ async function withSyntheticSnapshotWorker(
   await run({ root, stateDir, receipt });
 }
 
-it("reaps an expired snapshot worker before removing its database and WAL scratch", async () => {
+it("renews the snapshot deadline while the worker keeps writing its private copy", async () => {
+  await withSyntheticSnapshotWorker(
+    `
+      for (const [index, blocks] of [4, 3, 3].entries()) {
+        await fs.appendFile(path.join(scratch, "database.sqlite"), Buffer.alloc(blocks * 1024));
+        while (!(await fs.stat(path.join(controlRoot, "continue-" + index)).catch(() => undefined))) {
+          await sleep(10);
+        }
+      }
+      process.stdout.write(JSON.stringify({ versions: [], pluginPaths: {} }));
+    `,
+    async ({ root, stateDir }) => {
+      const now = Date.now.bind(Date);
+      let elapsed = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+      const started = Date.now();
+      const waitForBytes = observeUpdateCandidateIoProgress();
+      const cancel = new AbortController();
+      const operation = prepareUpdateCandidateRehearsal({
+        config: {},
+        stateDir,
+        candidateRoot: root,
+        timeoutMs: 300_000,
+        signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(10_000)]),
+        env: {},
+      });
+      const prematureExit = operation.then(() => {
+        throw new Error("Snapshot exited before its copy checkpoints were released");
+      });
+      try {
+        for (const [index, blocks] of [4, 7, 10].entries()) {
+          await Promise.race([waitForBytes(blocks * 1024), prematureExit]);
+          elapsed += 200_000;
+          await fs.writeFile(path.join(root, `continue-${index}`), "continue");
+        }
+        const rehearsal = await operation;
+        expect(Date.now() - started).toBeGreaterThan(300_000);
+        expect(
+          (
+            await fs.stat(
+              path.join(rehearsal.stateDir, ".sqlite-snapshot-fixture", "database.sqlite"),
+            )
+          ).size,
+        ).toBe(10 * 1024);
+      } finally {
+        cancel.abort();
+        await operation.then(
+          (rehearsal) => rehearsal.cleanup(),
+          () => undefined,
+        );
+      }
+      await expect(fs.readdir(stateDir)).resolves.toEqual([]);
+    },
+  );
+});
+
+it("reaps a stalled snapshot worker before removing its database and WAL scratch", async () => {
   await withSyntheticSnapshotWorker(
     `
       await fs.writeFile(path.join(scratch, "database.sqlite"), "partial database");
       await fs.writeFile(path.join(scratch, "database.sqlite-wal"), "partial WAL");
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
-      process.stderr.write("snapshot fixture ready\\n");
+      await fs.writeFile(path.join(scratch, "ready"), "ready");
     `,
     async ({ root, stateDir, receipt }) => {
       const now = Date.now.bind(Date);
       let elapsed = 0;
       vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-      const ready = createDeferred();
-      const run = exec.runUtf8CommandWithTimeout;
-      vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
-        if (typeof options === "number") {
-          return run(argv, options);
-        }
-        let stderr = "";
-        return run(argv, {
-          ...options,
-          onOutputChunk(chunk, stream) {
-            options.onOutputChunk?.(chunk, stream);
-            if (stream === "stderr") {
-              stderr += chunk.toString();
-              if (stderr.includes("snapshot fixture ready\n")) {
-                ready.resolve();
-              }
-            }
-          },
-        });
-      });
-      const timers = vi.spyOn(globalThis, "setTimeout");
+      const waitForBytes = observeUpdateCandidateIoProgress();
       const cancel = new AbortController();
       const operation = prepareUpdateCandidateRehearsal({
         config: {},
@@ -113,20 +151,14 @@ it("reaps an expired snapshot worker before removing its database and WAL scratc
         throw new Error("Stalled snapshot unexpectedly completed");
       });
       try {
-        await Promise.race([ready.promise, prematureExit]);
+        await Promise.race([
+          waitForBytes(Buffer.byteLength("partial databasepartial WALready")),
+          prematureExit,
+        ]);
         elapsed = 400_000;
-        const index = timers.mock.calls.findLastIndex(
-          ([, delay]) => delay !== undefined && delay >= 300_000,
+        await expect(operation).rejects.toThrow(
+          /snapshot made no progress.*Check storage performance/,
         );
-        const call = timers.mock.calls[index];
-        const timer = timers.mock.results[index];
-        if (!call || timer?.type !== "return") {
-          throw new Error("Snapshot allowance was not scheduled");
-        }
-        clearTimeout(timer.value);
-        const [callback, , ...args] = call;
-        callback(...args);
-        await expect(operation).rejects.toThrow(/snapshot exceeded its.*Check storage performance/);
         const child = z
           .object({ pid: z.number().int().positive(), directory: z.string() })
           .parse(JSON.parse(await fs.readFile(receipt, "utf8")));

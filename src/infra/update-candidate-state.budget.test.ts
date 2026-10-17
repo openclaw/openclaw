@@ -8,7 +8,11 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as commands from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
@@ -17,13 +21,11 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
+import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-import {
-  captureUpdateCandidateDeadline,
-  materializeUpdateCandidateStateWorker,
-} from "./update-candidate-state.test-support.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
@@ -200,34 +202,34 @@ it.for([undefined, 600_000])(
 );
 
 it.for([
-  { name: "large database", bytes: 2 * 1024 ** 3, elapsedMs: 800_000, completes: true },
+  { name: "large database", bytes: 2 * 1024 ** 3, waits: [800_000], completes: true },
   {
-    name: "growing scratch",
+    name: "late-discovered database",
     bytes: 4096,
     discoveredBytes: 2 * 1024 ** 3,
-    elapsedMs: 800_000,
-    completes: false,
-  },
-  { name: "stalled worker", bytes: 4096, elapsedMs: 400_000, completes: false },
-  {
-    name: "caller allowance",
-    bytes: 4096,
-    elapsedMs: 400_000,
+    waits: [800_000],
     completes: true,
-    timeoutMs: 600_000,
   },
-  { name: "configured cache", bytes: 4096, elapsedMs: 0, completes: true, configuredCache: true },
+  {
+    name: "continuing copy progress",
+    bytes: 4096,
+    waits: [200_000, 200_000, 200_000],
+    completes: true,
+  },
+  { name: "stalled worker", bytes: 4096, waits: [400_000], completes: false },
+  { name: "caller allowance", bytes: 4096, waits: [400_000], completes: true, timeoutMs: 600_000 },
+  { name: "configured cache", bytes: 4096, waits: [0], completes: true, configuredCache: true },
   {
     name: "large diagnostic output",
     bytes: 4096,
-    elapsedMs: 0,
+    waits: [0],
     completes: true,
     diagnosticBytes: 40_000,
   },
 ])(
   "budgets schema inspection for $name",
   async (
-    { bytes, discoveredBytes, elapsedMs, completes, configuredCache, timeoutMs, diagnosticBytes },
+    { bytes, discoveredBytes, waits, completes, configuredCache, timeoutMs, diagnosticBytes },
     { signal, onTestFinished },
   ) => {
     const root = tempDirs.make("openclaw-state-budget-");
@@ -244,6 +246,7 @@ it.for([
     );
     const ready = path.join(root, "ready");
     const release = path.join(root, "release");
+    const progress = path.join(root, "progress");
     const cache = path.join(root, "configured-cache");
     await fs.mkdir(cache);
     await fs.mkdir(path.dirname(worker), { recursive: true });
@@ -275,7 +278,15 @@ it.for([
       await fs.writeFile(${JSON.stringify(`${ready}.tmp`)}, await fs.realpath(scratch));
       await fs.rename(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});
       sendReceipt(${JSON.stringify(ready)}, "ready");
-      while (${elapsedMs > 0} && !(await fs.stat(${JSON.stringify(release)}).catch(() => undefined))) {
+      let last = "";
+      while (${waits.some((milliseconds) => milliseconds > 0)} && !(await fs.stat(${JSON.stringify(release)}).catch(() => undefined))) {
+        const next = await fs.readFile(${JSON.stringify(progress)}, "utf8").catch(() => "");
+        if (next && next !== last) {
+          await fs.appendFile(copy, next);
+          await fs.writeFile(${JSON.stringify(progress)} + "." + next, "written");
+          sendReceipt(${JSON.stringify(progress)}, next);
+          last = next;
+        }
         await sleep(10);
       }
       process.stdout.write(JSON.stringify([{ path: ${JSON.stringify(database)}, userVersion: 3 }]));
@@ -286,8 +297,9 @@ it.for([
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    const expireDeadline = captureUpdateCandidateDeadline();
+    const waitForObservation = observeUpdateCandidateIoProgress();
     const controller = new AbortController();
+    let failed = false;
     const result = readUpdateStateSchemaVersions({
       root,
       stateDir,
@@ -297,7 +309,10 @@ it.for([
       signal: controller.signal,
     }).then(
       (versions) => ({ versions }),
-      (error: unknown) => ({ error }),
+      (error: unknown) => {
+        failed = true;
+        return { error };
+      },
     );
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
@@ -317,15 +332,29 @@ it.for([
     cleanupFixture = cleanup;
     onTestFinished(cleanup);
     try {
-      if (elapsedMs > 0) {
+      if (waits.some((milliseconds) => milliseconds > 0)) {
         await withinTest(
           fixtureEventBeforeSettlement(ready, receipts.waitFor(ready, "ready"), result),
           signal,
         );
-        elapsed = elapsedMs;
-        if (!completes) {
-          expireDeadline();
-          await result;
+        await withinTest(waitForObservation(discoveredBytes ?? 4), signal);
+        for (const [index, milliseconds] of waits.entries()) {
+          elapsed += milliseconds;
+          if (failed) {
+            break;
+          }
+          if (index < waits.length - 1) {
+            await fs.writeFile(progress, String(index + 1));
+            await withinTest(
+              fixtureEventBeforeSettlement(
+                `${progress}.${index + 1}`,
+                receipts.waitFor(progress, String(index + 1)),
+                result,
+              ),
+              signal,
+            );
+            await withinTest(waitForObservation(4 + index + 1), signal);
+          }
         }
       } else {
         await result;
@@ -347,13 +376,30 @@ it.for([
   },
 );
 
-it.each([false, true])(
-  "retains rehearsal scratch when worker settlement is uncertain (cancelled=%s)",
-  async (cancelled) => {
+it.each(
+  (["probe", "worker"] as const).flatMap((source) =>
+    [false, true].map((cancelled) => ({ source, cancelled })),
+  ),
+)(
+  "retains rehearsal scratch when $source settlement is uncertain (cancelled=$cancelled)",
+  async ({ source, cancelled }) => {
     const root = await fs.realpath(tempDirs.make("rehearsal-unsettled-"));
     const stateDir = path.join(root, "source");
+    vi.useFakeTimers();
     const controller = new AbortController();
-    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async () => {
+    const workerEntered = createDeferred();
+    const workerExit =
+      createDeferred<Awaited<ReturnType<typeof commands.runUtf8CommandWithTimeout>>>();
+    const original = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
+      if ((source === "probe") !== argv.includes("--eval")) {
+        if (source === "probe") {
+          // Keep admitted work pending through the reported-progress quiet period.
+          workerEntered.resolve();
+          return workerExit.promise;
+        }
+        return original(argv, options);
+      }
       if (cancelled) {
         controller.abort(new Error("caller cancellation"));
       }
@@ -375,8 +421,28 @@ it.each([false, true])(
       workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
       signal: controller.signal,
     });
+    const rejected = expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
+    const settleWorker = () =>
+      workerExit.resolve({
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: null,
+        killed: true,
+        termination: "signal",
+        cleanup: "normal",
+      });
     try {
-      await expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
+      if (source === "probe") {
+        await awaitGateBeforeSettlement(
+          workerEntered.promise,
+          operation,
+          "worker was not admitted",
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        settleWorker();
+      }
+      await rejected;
       const retained = (await fs.readdir(root)).filter((name) =>
         name.startsWith("openclaw-update-canary-"),
       );
@@ -384,13 +450,14 @@ it.each([false, true])(
       expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
     } finally {
       controller.abort();
+      settleWorker();
       await operation.catch(() => {});
     }
   },
 );
 
 // Insert fixture code behind the real executable, preserving argv-based Windows
-// launch and the actual process/output/cleanup owners.
+// launch and the actual process/output/cleanup owners. Progress probes run unchanged.
 function useRehearsalWorkerFixture(runner: string): void {
   const run = commands.runUtf8CommandWithTimeout;
   vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) =>

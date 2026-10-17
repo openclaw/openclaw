@@ -7,7 +7,10 @@ import type { InternalGetReplyFromConfig } from "../auto-reply/reply/get-reply.t
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   initializeGlobalHookRunner,
@@ -309,35 +312,58 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
     })(),
   );
 
-  it("records the first delivery and suppresses a repeated alert", async () =>
-    heartbeatCase(async ({ cfg, storePath, sendTelegram, run, read }) => {
-      cfg.agents!.defaults!.heartbeat!.to = TELEGRAM_GROUP;
-      const sessionKey = "agent:main:main";
-      expect(readSessionStoreForTest(storePath)[sessionKey]).toBeUndefined();
-      const replyResolver: InternalGetReplyFromConfig = async (ctx, options) => {
-        const initialized = await initSessionState({
-          ctx: finalizeInboundContext(ctx),
-          cfg,
-          commandAuthorized: true,
+  it.each(["none", "same-id"] as const)(
+    "records the first delivery only for its initialized session: %s",
+    async (replacement) =>
+      heartbeatCase(async ({ cfg, storePath, sendTelegram, run, read }) => {
+        cfg.agents!.defaults!.heartbeat!.to = TELEGRAM_GROUP;
+        const sessionKey = "agent:main:main";
+        expect(readSessionStoreForTest(storePath)[sessionKey]).toBeUndefined();
+        const replyResolver: InternalGetReplyFromConfig = async (ctx, options) => {
+          const initialized = await initSessionState({
+            ctx: finalizeInboundContext(ctx),
+            cfg,
+            commandAuthorized: true,
+          });
+          options?.onSessionPrepared?.({
+            sessionKey: initialized.sessionKey,
+            sessionId: initialized.sessionId,
+            lifecycleRevision: initialized.sessionEntry.lifecycleRevision,
+            storePath: initialized.storePath,
+          });
+          return { text: "Deployment requires attention." };
+        };
+        sendTelegram.mockImplementation(async () => {
+          if (replacement !== "none") {
+            replaceSessionEntrySync(
+              { storePath, sessionKey },
+              {
+                sessionId:
+                  replacement === "same-id" ? read(sessionKey).sessionId : "replacement-session",
+                lifecycleRevision: "replacement-revision",
+                updatedAt: Date.now(),
+              },
+            );
+          }
+          return { messageId: "first-alert" };
         });
-        options?.onSessionPrepared?.({
-          sessionKey: initialized.sessionKey,
-          sessionId: initialized.sessionId,
-          lifecycleRevision: initialized.sessionEntry.lifecycleRevision,
-          storePath: initialized.storePath,
-        });
-        return { text: "Deployment requires attention." };
-      };
-      sendTelegram.mockResolvedValue({ messageId: "first-alert" });
-      expect((await run({}, { getReplyFromConfig: replyResolver })).status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledOnce();
-      expect(read(sessionKey)).toMatchObject({
-        lastHeartbeatText: "Deployment requires attention.",
-        lastHeartbeatSentAt: 0,
-      });
-      await run({}, { getReplyFromConfig: replyResolver });
-      expect(sendTelegram).toHaveBeenCalledOnce();
-    })());
+        expect((await run({}, { getReplyFromConfig: replyResolver })).status).toBe("ran");
+        expect(sendTelegram).toHaveBeenCalledOnce();
+        const stored = read(sessionKey);
+        if (replacement === "none") {
+          expect(stored).toMatchObject({
+            lastHeartbeatText: "Deployment requires attention.",
+            lastHeartbeatSentAt: 0,
+          });
+          await run({}, { getReplyFromConfig: replyResolver });
+          expect(sendTelegram).toHaveBeenCalledOnce();
+        } else {
+          expect(stored.lifecycleRevision).toBe("replacement-revision");
+          expect(stored.lastHeartbeatText).toBeUndefined();
+          expect(stored.lastHeartbeatSentAt).toBeUndefined();
+        }
+      })(),
+  );
 
   it.each([
     { failure: "target-none", reason: "target-none" },

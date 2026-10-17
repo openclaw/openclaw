@@ -14,6 +14,7 @@ import {
 } from "./kysely-sync.js";
 import * as reportReceipts from "./restart-sentinel.js";
 import { readUpdateFailureReportReceipt } from "./restart-sentinel.js";
+import * as reportArtifacts from "./update-failure-report-artifact.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { submitUpdateFailureReport } from "./update-failure-report.js";
 
@@ -38,6 +39,10 @@ type ReportFixtureControls = {
     | reportReceipts.UpdateFailureReportReceipt
     | null
     | Promise<reportReceipts.UpdateFailureReportReceipt | null>;
+  artifactSweepHooks?: {
+    beforeList?: () => Promise<void>;
+    listCandidates?: typeof reportArtifacts.listRetiredUpdateFailureReportArtifacts;
+  };
 };
 
 type ReportFixtureOptions = NonNullable<Parameters<typeof submitUpdateFailureReport>[2]> &
@@ -56,6 +61,8 @@ beforeEach(() => {
   const finalize = reportReceipts.finalizeUpdateFailureReportReceipt;
   const pending = reportReceipts.markUpdateFailureReportReceiptPending;
   const read = reportReceipts.readUpdateFailureReportReceipt;
+  const claim = reportReceipts.claimUpdateFailureReportArtifactSweep;
+  const list = reportArtifacts.listRetiredUpdateFailureReportArtifacts;
   vi.spyOn(githubIssue, "submitGithubIssue").mockImplementation((issue, runGh, hooks) => {
     const override = reportFixtureControls.getStore()?.createIssue;
     return override
@@ -88,6 +95,29 @@ beforeEach(() => {
       ? Promise.resolve(withoutFixtureControl("readReceipt", () => override(...args)))
       : read(...args);
   });
+  vi.spyOn(reportReceipts, "claimUpdateFailureReportArtifactSweep").mockImplementation(
+    (...args) => {
+      const beforeList = reportFixtureControls.getStore()?.artifactSweepHooks?.beforeList;
+      const result = claim(...args);
+      // Pause after the real claim commits, before the sweep's first lease read, as before.
+      return beforeList
+        ? result.then(async (claimed) => {
+            if (claimed) {
+              await withoutFixtureControl("artifactSweepHooks", beforeList);
+            }
+            return claimed;
+          })
+        : result;
+    },
+  );
+  vi.spyOn(reportArtifacts, "listRetiredUpdateFailureReportArtifacts").mockImplementation(
+    (...args) => {
+      const override = reportFixtureControls.getStore()?.artifactSweepHooks?.listCandidates;
+      return override
+        ? withoutFixtureControl("artifactSweepHooks", () => override(...args))
+        : list(...args);
+    },
+  );
 });
 
 // useStateDatabaseTempDirs restores the module spies before closing each suite's real stores.
@@ -98,10 +128,17 @@ export function submitUpdateFailureReportFixture(
   previewDigest: string,
   fixture: ReportFixtureOptions = {},
 ) {
-  const { createIssue, reconcileIssue, finalizeReceipt, markPending, readReceipt, ...options } =
-    fixture;
+  const {
+    createIssue,
+    reconcileIssue,
+    finalizeReceipt,
+    markPending,
+    readReceipt,
+    artifactSweepHooks,
+    ...options
+  } = fixture;
   return reportFixtureControls.run(
-    { createIssue, reconcileIssue, finalizeReceipt, markPending, readReceipt },
+    { createIssue, reconcileIssue, finalizeReceipt, markPending, readReceipt, artifactSweepHooks },
     () => submitUpdateFailureReport(prepared, previewDigest, options),
   );
 }
@@ -195,6 +232,9 @@ export function expireUpdateFailureReportReceipt(attemptId: string, stateDir: st
       }
       if (receipt.preparingSinceMs !== undefined) {
         receipt.preparingSinceMs = 1;
+      }
+      if (receipt.sweepSinceMs !== undefined) {
+        receipt.sweepSinceMs = 1;
       }
       executeSqliteQuerySync(
         db,

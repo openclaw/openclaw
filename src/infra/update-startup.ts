@@ -318,18 +318,20 @@ async function runGatewayUpdateCheckOwned(
     setSchedule(withoutUpdateTarget({ ...currentSchedule, autoEnabled: false }));
     return;
   }
+  // Only an admitted discovery attempt supersedes an explicit refresh.
+  const generation = ++lifecycle.publicationGeneration;
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
   const initialized = await lifecycle.initialize();
   params.signal.throwIfAborted();
-  // Discovery publishes only for its current installation and channel policy.
+  // Discovery keeps its starting channel; campaign admission rechecks live policy.
   // Opt-outs replace the background owner without superseding explicit discovery.
   const isCurrent = () =>
     lifecycle.isCurrent() &&
     lifecycle.announceDevGitUpdate === announceDevGitUpdate &&
-    normalizeUpdateChannel(params.getConfig().update?.channel) === configChannel &&
     lifecycle.installStatus?.status.installKind === initialized.status.installKind &&
     !params.signal.aborted &&
-    updateCampaign.getState()?.state !== "applying";
+    updateCampaign.getState()?.state !== "applying" &&
+    generation === lifecycle.publicationGeneration;
   if (!isCurrent()) {
     return;
   }
@@ -455,6 +457,7 @@ async function runGatewayUpdateCheckOwned(
       return;
     }
     lifecycle.installStatus = installStatus;
+    lifecycle.publicationGeneration += 1;
     if (!update) {
       updateCampaign.clear();
       setAvailable(null);

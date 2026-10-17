@@ -632,7 +632,73 @@ describe("interactive Dev update discovery", () => {
     },
   );
 
-  it("publishes the last completed observation and reconciles its campaign", async () => {
+  it.each(["initialization", "fetch", "telemetry", "metadata"] as const)(
+    "keeps a newer manual target when old background %s finishes last",
+    async (stage) => {
+      const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
+      const oldStatus = mockDevGitStatus({ upstreamSha: "old-upstream" });
+      const started = createDeferred();
+      const remote = createDeferred<UpdateCheckResult>();
+      const telemetry = createDeferred<null>();
+      const metadata = createDeferred<Awaited<ReturnType<typeof resolveDevGitCommits>>>();
+      if (stage === "initialization" || stage === "fetch") {
+        vi.mocked(checkUpdateStatus).mockImplementation(({ fetchGit }) => {
+          if (fetchGit || stage === "initialization") {
+            started.resolve();
+            return remote.promise;
+          }
+          return Promise.resolve(oldStatus);
+        });
+      } else if (stage === "telemetry") {
+        vi.mocked(checkTelemetryUpdate).mockImplementationOnce(() => {
+          started.resolve();
+          return telemetry.promise;
+        });
+      } else {
+        vi.mocked(resolveDevGitCommits).mockImplementationOnce(() => {
+          started.resolve();
+          return metadata.promise;
+        });
+      }
+      const background = runGatewayUpdateCheck({
+        cfg,
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+      });
+      try {
+        await started.promise;
+        mockDevGitStatus({ upstreamSha: "new-upstream", behind: 4 });
+        await refreshGatewayUpdateStatus(() => cfg);
+        const latestSchedule = getUpdateSchedule();
+        const latestAvailability = getUpdateAvailable();
+        expect(latestSchedule?.target).toMatchObject({ upstreamSha: "new-upstream" });
+
+        remote.resolve(oldStatus);
+        telemetry.resolve(null);
+        metadata.resolve([]);
+        await background;
+
+        expect(getUpdateSchedule()).toEqual(latestSchedule);
+        expect(getUpdateAvailable()).toEqual(latestAvailability);
+        expect(campaign.getState()?.state).toBe("countdown");
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(runCampaignUpdate).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            version: "new-upstream",
+            devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "new-upstream" },
+          }),
+        );
+      } finally {
+        remote.resolve(oldStatus);
+        telemetry.resolve(null);
+        metadata.resolve([]);
+        await background;
+      }
+    },
+  );
+
+  it("rejects an older manual observation after an overlapping background target publishes", async () => {
     const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
     const fetching = createDeferred();
     const remote = createDeferred<UpdateCheckResult>();
@@ -668,17 +734,12 @@ describe("interactive Dev update discovery", () => {
       const latest = getUpdateSchedule();
       expect(latest?.target).toMatchObject({ upstreamSha: "newer-background" });
       metadata.resolve([]);
-      expect(await manual).toEqual({ status: "fulfilled" });
-      expect(getUpdateSchedule()?.target).toMatchObject({ upstreamSha: "older-manual" });
-      expect(getUpdateAvailable()?.upstreamSha).toBe("older-manual");
-      expect(campaign.getState()?.state).toBe("countdown");
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(runCampaignUpdate).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          version: "older-manual",
-          devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "older-manual" },
-        }),
-      );
+      expect(await manual).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ message: expect.stringContaining("superseded") }),
+      });
+      expect(getUpdateSchedule()).toEqual(latest);
+      expect(getUpdateAvailable()?.upstreamSha).toBe("newer-background");
     } finally {
       remote.resolve(createDevGitStatus());
       metadata.resolve([]);
@@ -744,6 +805,35 @@ describe("interactive Dev update discovery", () => {
       }
     },
   );
+
+  it("does not confirm freshness when newer background discovery supersedes a manual check", async () => {
+    const cfg = { update: { channel: "dev" as const } };
+    const started = createDeferred();
+    const remote = createDeferred<UpdateCheckResult>();
+    vi.mocked(checkUpdateStatus).mockImplementationOnce(() => {
+      started.resolve();
+      return remote.promise;
+    });
+    const refresh = refreshGatewayUpdateStatus(() => cfg).catch((error: unknown) => error);
+    try {
+      await started.promise;
+      mockDevGitStatus({ upstreamSha: "new-upstream" });
+      await runGatewayUpdateCheck({
+        cfg,
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+      });
+      remote.resolve(createDevGitStatus({ upstreamSha: "old-upstream" }));
+      expect(await refresh).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("superseded") }),
+      );
+      expect(getUpdateAvailable()?.upstreamSha).toBe("new-upstream");
+    } finally {
+      remote.resolve(createDevGitStatus());
+      await refresh;
+    }
+  });
 
   it("preserves the admitted target when a campaign starts applying during manual Dev refresh", async () => {
     const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
