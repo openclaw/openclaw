@@ -519,7 +519,10 @@ describe("OpenAI request cache policy", () => {
 });
 
 const nonReasoningNative = makeCompletionsModel({ id: "gpt-5.4", reasoning: false });
-const schema = objectSchema({ reply: { type: "string" } });
+const schema = objectSchema(
+  { reply: { type: "string" } },
+  { required: ["reply"], additionalProperties: false },
+);
 
 describe("OpenAI completions sampling and response format", () => {
   it.each([

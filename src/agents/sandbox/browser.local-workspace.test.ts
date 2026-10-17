@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -22,7 +23,7 @@ describe("managed browser workspace custody", () => {
   const attach = (index = 0) => {
     const callback = startBrowserBridgeServer.mock.calls[index]?.[0].onEnsureAttachTarget;
     expect(callback).toBeTypeOf("function");
-    return callback({});
+    return expectDefined(callback, "browser attach callback")({});
   };
   const custody = (managed: boolean, assertCurrent: () => void) =>
     managed

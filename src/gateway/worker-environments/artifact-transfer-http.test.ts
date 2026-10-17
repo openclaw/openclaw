@@ -438,12 +438,42 @@ describe("artifact transfer interruption observations", () => {
   });
 
   it.each([
-    ["expired", (h: Harness) => (h.state.now = h.prepared.expiresAtMs)],
-    ["owner cancelled", (h: Harness) => h.owner.abort(new Error("private cancellation detail"))],
-    ["authorization lost", (h: Harness) => (h.state.authorized = false)],
-    ["throwing authorization", (h: Harness) => (h.state.error = new Error("private error"))],
-    ["released", (h: Harness) => h.service.revoke(h.prepared.token)],
-    ["shutdown", (h: Harness) => h.service.closeAll()],
+    [
+      "expired",
+      (h: Harness) => {
+        h.state.now = h.prepared.expiresAtMs;
+      },
+    ],
+    [
+      "owner cancelled",
+      (h: Harness) => {
+        h.owner.abort(new Error("private cancellation detail"));
+      },
+    ],
+    [
+      "authorization lost",
+      (h: Harness) => {
+        h.state.authorized = false;
+      },
+    ],
+    [
+      "throwing authorization",
+      (h: Harness) => {
+        h.state.error = new Error("private error");
+      },
+    ],
+    [
+      "released",
+      (h: Harness) => {
+        h.service.revoke(h.prepared.token);
+      },
+    ],
+    [
+      "shutdown",
+      (h: Harness) => {
+        h.service.closeAll();
+      },
+    ],
   ] as const)("reports partial transfer closure for %s", async (closure, close) => {
     const h = await prepare(() => {
       close(h);
