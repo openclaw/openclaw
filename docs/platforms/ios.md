@@ -165,7 +165,11 @@ credentials are not exported to Apple Watch or cloud workers.
 ## Sessions
 
 Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**, or
-**Archived** sessions. Long-press an eligible session and choose **Snooze**:
+**Archived** sessions. The sidebar follows the **Active** scope: archived and
+snoozed chats stay hidden even when pinned or still open. View archived chats
+under **All Sessions… → Archived**.
+
+Long-press an eligible session and choose **Snooze**:
 **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, only when more than
 one hour away), **Tomorrow** (09:00 on the next calendar day), or **Next week**
 (next Monday at 09:00). On Sundays, Next week is omitted because it matches
