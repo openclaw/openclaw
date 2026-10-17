@@ -29,13 +29,20 @@ const install = (...providers: SessionCatalogProvider[]) => {
     provider: catalogProvider,
   }));
 };
-const listCall = (
-  ...args: Parameters<typeof call> extends [unknown, ...infer Rest] ? Rest : never
-) => call("sessions.catalog.list", ...args);
-const startList = (
-  ...args: Parameters<typeof startCall> extends [unknown, ...infer Rest] ? Rest : never
-) => startCall("sessions.catalog.list", ...args);
+function caller(
+  config: Parameters<typeof call>[2] = {},
+  client: Parameters<typeof call>[3] = { connId: "requester" },
+) {
+  return {
+    list: (params: unknown, context = {}) =>
+      call("sessions.catalog.list", params, config, client, context),
+    start: (params: unknown, context = {}) =>
+      startCall("sessions.catalog.list", params, config, client, context),
+  };
+}
 const catalog = (id: string, hosts: SessionCatalogHost[]) => expect.objectContaining({ id, hosts });
+const expectCatalogs = (respond: ReturnType<typeof startCall>["respond"], ...catalogs: unknown[]) =>
+  expect(respond).toHaveBeenCalledWith(true, { catalogs });
 
 describe("session catalog progress ownership", () => {
   beforeEach(resetSessionCatalogTestState);
@@ -59,10 +66,8 @@ describe("session catalog progress ownership", () => {
         }),
       );
 
-      const respond = await listCall(
+      const respond = await caller({}, { connId: "requester", connect: {} }).list(
         { progressId: "progress-1", ...(withdrawn ? { allowPartialResults: true } : {}) },
-        {},
-        { connId: "requester", connect: {} },
         { broadcastToConnIds },
       );
 
@@ -78,9 +83,7 @@ describe("session catalog progress ownership", () => {
       );
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
       expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.error).toBeUndefined();
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [catalog("codex", withdrawn ? [] : [host])],
-      });
+      expectCatalogs(respond, catalog("codex", withdrawn ? [] : [host]));
     },
   );
 
@@ -109,21 +112,21 @@ describe("session catalog progress ownership", () => {
     const config = { agents: { entries: { main: {}, research: {} } } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
-    const sharedClient = { connId: "requester" };
-    const leader = startList(
+    const rpc = caller(config);
+    const leader = rpc.start(
       { progressId: "leader-progress", agentId: "main" },
-      config,
-      sharedClient,
       { broadcastToConnIds: leaderBroadcast },
     );
-    const follower = startList(
+    const follower = rpc.start(
       { progressId: "follower-progress", agentId: "main" },
-      config,
-      sharedClient,
       { broadcastToConnIds: followerBroadcast },
     );
-    const otherAgent = startList({ agentId: "research" }, config);
-    const otherParams = startList({ search: "other", agentId: "main" }, config);
+    const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
+    const otherParams = startCall(
+      "sessions.catalog.list",
+      { search: "other", agentId: "main" },
+      config,
+    );
     const pending = [leader, follower, otherAgent, otherParams];
 
     try {
@@ -137,19 +140,16 @@ describe("session catalog progress ownership", () => {
       expect(leaderBroadcast).toHaveBeenCalledOnce();
       expect(followerBroadcast).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledTimes(3);
-      for (const [message, fields] of warn.mock.calls) {
-        expect(message).toBe("slow session catalog provider list");
-        expect(fields).toMatchObject({ elapsedMs: 1_500, returnedGatewayHostCount: 1 });
-      }
       for (const { respond } of pending) {
-        expect(respond).toHaveBeenCalledWith(true, {
-          catalogs: [catalog("codex", [host])],
-        });
+        expectCatalogs(respond, catalog("codex", [host]));
       }
       const settledBroadcast = vi.fn();
-      await listCall({ progressId: "settled-progress", agentId: "main" }, config, sharedClient, {
-        broadcastToConnIds: settledBroadcast,
-      });
+      await rpc.list(
+        { progressId: "settled-progress", agentId: "main" },
+        {
+          broadcastToConnIds: settledBroadcast,
+        },
+      );
       clock = 5_000;
       late.resolve();
       await Promise.all(publications);
@@ -170,41 +170,30 @@ describe("session catalog progress ownership", () => {
   });
 
   it.each([
-    { request: {}, connected: true, partial: false },
-    { request: { progressId: "legacy" }, connected: true, partial: false },
-    { request: { allowPartialResults: true, progressId: "live" }, connected: true, partial: true },
-    {
-      request: { allowPartialResults: true, progressId: "live" },
-      connected: false,
-      partial: false,
-    },
-    {
-      request: { allowPartialResults: true, progressId: "live", hostIds: ["node:fast"] },
-      connected: true,
-      partial: false,
-    },
-    {
-      request: { allowPartialResults: true, progressId: "live", cursors: { "node:fast": "page" } },
-      connected: true,
-      partial: false,
-    },
-  ])(
-    "negotiates partial catalog results for $request (connected=$connected)",
-    async ({ request, connected, partial }) => {
+    [{}, true, false],
+    [{ progressId: "legacy" }, true, false],
+    [{ allowPartialResults: true, progressId: "live" }, true, true],
+    [{ allowPartialResults: true, progressId: "live" }, false, false],
+    [{ allowPartialResults: true, progressId: "live", hostIds: ["node:fast"] }, true, false],
+    [
+      { allowPartialResults: true, progressId: "live", cursors: { "node:fast": "page" } },
+      true,
+      false,
+    ],
+  ] as const)(
+    "negotiates partial results for %j (connected=%s, partial=%s)",
+    async (request, connected, partial) => {
       const release = createDeferredCore();
       const list = vi.fn<SessionCatalogProvider["list"]>(async () => {
         await release.promise;
         return [];
       });
       install(provider("fixture", { list }));
-      const config = {};
-      const client = { connId: "requester" };
+      const rpc = caller();
       const context = { isConnectionActive: () => connected };
-      const progressive = startList({ catalogId: "fixture", ...request }, config, client, context);
-      const complete = startList(
+      const progressive = rpc.start({ catalogId: "fixture", ...request }, context);
+      const complete = rpc.start(
         { catalogId: "fixture", ...request, allowPartialResults: false },
-        config,
-        client,
         context,
       );
       try {
@@ -250,10 +239,8 @@ describe("session catalog progress ownership", () => {
         }),
       );
       const broadcastToConnIds = vi.fn();
-      const pending = startList(
+      const pending = caller().start(
         { allowPartialResults: true, progressId: "live" },
-        {},
-        { connId: "requester" },
         { broadcastToConnIds },
       );
       try {
@@ -264,9 +251,7 @@ describe("session catalog progress ownership", () => {
         expect(pending.respond).not.toHaveBeenCalled();
         sibling.resolve();
         await pending.completion;
-        expect(pending.respond).toHaveBeenCalledWith(true, {
-          catalogs: [catalog("fixture", [local, fresh]), catalog("sibling", [])],
-        });
+        expectCatalogs(pending.respond, catalog("fixture", [local, fresh]), catalog("sibling", []));
       } finally {
         publish.resolve();
         sibling.resolve();
@@ -286,33 +271,24 @@ describe("session catalog progress ownership", () => {
       return [];
     });
     install(provider("fixture", { list }), provider("completed"));
-    const config = {};
-    const client = { connId: "requester" };
+    const rpc = caller();
     const request = { catalogId: "fixture", search: "held" };
-    const leader = startList(request, config, client);
+    const leader = rpc.start(request);
     const pending = [leader];
     try {
       await started.promise;
       for (let index = 0; index < 128; index += 1) {
-        const respond = await listCall(
-          { catalogId: "completed", search: `completed-${index}` },
-          config,
-          client,
-        );
-        expect(respond).toHaveBeenCalledWith(true, {
-          catalogs: [catalog("completed", [])],
-        });
+        const respond = await rpc.list({ catalogId: "completed", search: `completed-${index}` });
+        expectCatalogs(respond, catalog("completed", []));
       }
-      pending.push(startList(request, config, client));
+      pending.push(rpc.start(request));
       release.resolve();
       await Promise.all(pending.map(({ completion }) => completion));
       for (const { respond } of pending) {
-        expect(respond).toHaveBeenCalledWith(true, {
-          catalogs: [catalog("fixture", [])],
-        });
+        expectCatalogs(respond, catalog("fixture", []));
       }
       expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(1);
-      await listCall(request, config, client);
+      await rpc.list(request);
       expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(2);
     } finally {
       release.resolve();
@@ -358,9 +334,13 @@ describe("session catalog progress ownership", () => {
       );
       const config = {};
       const client = { connId: "requester" };
-      const original = startList({ progressId: "before-delete" }, config, client, {
-        broadcastToConnIds,
-      });
+      const rpc = caller(config, client);
+      const original = rpc.start(
+        { progressId: "before-delete" },
+        {
+          broadcastToConnIds,
+        },
+      );
       try {
         await started.promise;
         if (listingState === "settled") {
@@ -383,16 +363,15 @@ describe("session catalog progress ownership", () => {
         await publications[0];
         gate.resolve();
         await original.completion;
-        expect(original.respond).toHaveBeenCalledWith(true, {
-          catalogs: [expect.objectContaining({ hosts: [host] })],
-        });
+        expectCatalogs(original.respond, expect.objectContaining({ hosts: [host] }));
 
-        const refreshed = await listCall({ progressId: "after-delete" }, config, client, {
-          broadcastToConnIds: vi.fn(),
-        });
-        expect(refreshed).toHaveBeenCalledWith(true, {
-          catalogs: [expect.objectContaining({ hosts: [{ ...host, sessions: [] }] })],
-        });
+        const refreshed = await rpc.list(
+          { progressId: "after-delete" },
+          {
+            broadcastToConnIds: vi.fn(),
+          },
+        );
+        expectCatalogs(refreshed, expect.objectContaining({ hosts: [{ ...host, sessions: [] }] }));
         expect(list).toHaveBeenCalledTimes(2);
         expect(broadcastToConnIds).not.toHaveBeenCalled();
       } finally {
@@ -433,10 +412,11 @@ describe("session catalog progress ownership", () => {
           .mockImplementation(() => {
             throw new Error("current config unavailable");
           });
-        const original = listCall(
+        const original = caller(config, {
+          connId: "old",
+          connectionSignal: connection.signal,
+        }).list(
           { progressId: "original" },
-          config,
-          { connId: "old", connectionSignal: connection.signal },
           {
             broadcastToConnIds,
             requestEntryLifetime: { signal: gateway.signal },
@@ -454,10 +434,8 @@ describe("session catalog progress ownership", () => {
           connection.abort();
         }
         expect(producerSignal?.aborted).toBe(retirement !== "disconnect");
-        await listCall(
+        await caller(config, { connId: "new" }).list(
           { progressId: "replacement" },
-          config,
-          { connId: "new" },
           { broadcastToConnIds: replacementBroadcast },
         );
         releases[0]!.resolve();

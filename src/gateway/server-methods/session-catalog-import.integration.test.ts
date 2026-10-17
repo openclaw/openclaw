@@ -305,8 +305,8 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
-  it("imports and re-imports without waiting on model catalog publication", async () => {
-    await withCatalog(async (fixture) => {
+  it("imports and re-imports without waiting on model catalog publication", () =>
+    withCatalog(async (fixture) => {
       const loadCatalog = vi
         .spyOn(fixture.context, "loadGatewayModelCatalogSnapshot")
         .mockImplementation(() => new Promise(() => {}));
@@ -322,11 +322,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(fixture.entry()).toMatchObject(selection);
       expect(loadCatalog).not.toHaveBeenCalled();
       expect(JSON.stringify(await fixture.transcript())).toContain("Synthetic imported question");
-    });
-  });
+    }));
 
-  it("keeps a copied draft hidden from another viewer until publication and preserves publication on re-import", async () => {
-    await withCatalog(async (fixture) => {
+  it("keeps a copied draft hidden from another viewer until publication and preserves publication on re-import", () =>
+    withCatalog(async (fixture) => {
       await fixture.updateNative({ visibility: "draft" });
       expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
       expect(fixture.entry()?.visibility).toBe("draft");
@@ -386,11 +385,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         expect.arrayContaining([expect.objectContaining({ key: fixture.key })]),
       );
       expect((await canReadHistory(fixture.other)).allowed).toBe(true);
-    }, true);
-  });
+    }, true));
 
-  it("creates and syncs an ordinary durable session through real creation, projection, and transcript owners", async () => {
-    await withCatalog(async (fixture) => {
+  it("creates and syncs an ordinary durable session through real creation, projection, and transcript owners", () =>
+    withCatalog(async (fixture) => {
       await fixture.expectImport(true);
       const first = await fixture.transcript();
       expect(first).toHaveLength(3);
@@ -448,11 +446,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(continueSession).toHaveBeenCalledOnce();
       expect(fixture.nativeKey).not.toBe(fixture.key);
       expect(await fixture.transcript()).toHaveLength(4);
-    });
-  });
+    }));
 
-  it("cancels a stalled Gateway copy without durable artifacts and succeeds on retry", async () => {
-    await withCatalog(async (fixture) => {
+  it("cancels a stalled Gateway copy without durable artifacts and succeeds on retry", () =>
+    withCatalog(async (fixture) => {
       fixture.provider.copyToGatewaySession = vi.fn(async () => ({
         displayName: "Copied catalog session",
         preferredModel: "openai/gpt-5.6-sol",
@@ -510,8 +507,7 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect((await listSessionStateEventsSince(sessionKey, "main", 0)).events).toEqual(
         expect.arrayContaining([expect.objectContaining({ kind: "adopted" })]),
       );
-    });
-  });
+    }));
 
   it.each([undefined, "   "])(
     "uses a generic title instead of the host label when displayName is %j",
@@ -524,40 +520,28 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
     },
   );
 
-  it("appends to a pre-existing import target while its ordinary projection publications advance", async () => {
-    await withCatalog(async (fixture) => {
-      await fixture.precreate();
-
-      await fixture.expectImport(false);
-      expect(await fixture.transcript()).toHaveLength(3);
-    });
-  });
-
-  it.each(["owner", "other"] as const)(
-    "respects existing-target write access in a restricted multi-user Gateway (%s target)",
-    async (targetOwner) => {
+  it.each([
+    { restricted: false, targetOwner: "owner" },
+    { restricted: true, targetOwner: "owner" },
+    { restricted: true, targetOwner: "other" },
+  ])(
+    "respects existing-target write access (restricted=$restricted, target=$targetOwner)",
+    async ({ restricted, targetOwner }) => {
       await withCatalog(async (fixture) => {
         await fixture.precreate(targetOwner === "owner" ? fixture.client : fixture.other!);
-        const response = await fixture.call();
         if (targetOwner === "owner") {
-          expect(response).toHaveBeenCalledWith(true, {
-            sessionKey: fixture.key,
-            importedItems: 2,
-            totalItems: 2,
-            complete: true,
-            created: false,
-          });
+          await fixture.expectImport(false);
           expect(await fixture.transcript()).toHaveLength(3);
         } else {
-          expectFailure(response, { message: "session is shared for this connection" });
+          expectFailure(await fixture.call(), { message: "session is shared for this connection" });
           expect(await fixture.transcript()).toEqual([]);
         }
-      }, true);
+      }, restricted);
     },
   );
 
-  it("forbids a restricted caller who cannot read the source without creating a session", async () => {
-    await withCatalog(async (fixture) => {
+  it("forbids a restricted caller who cannot read the source without creating a session", () =>
+    withCatalog(async (fixture) => {
       await fixture.updateNative({ visibility: "draft" });
       expectFailure(await fixture.call("sessions.catalog.import", fixture.other), {
         code: "FORBIDDEN",
@@ -565,11 +549,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(fixture.read).not.toHaveBeenCalled();
       expect(fixture.entry()).toBeUndefined();
       expect(await fixture.transcript()).toEqual([]);
-    }, true);
-  });
+    }, true));
 
-  it("rejects source sharing revocation after history read before creating the destination", async () => {
-    await withCatalog(async (fixture) => {
+  it("rejects source sharing revocation after history read before creating the destination", () =>
+    withCatalog(async (fixture) => {
       const createGatewaySession = sessionCreation.createGatewaySession;
       const create = vi
         .spyOn(sessionCreation, "createGatewaySession")
@@ -588,11 +571,10 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expectFailure(response, { message: expect.stringContaining("source visibility changed") });
       expect(fixture.entry()).toBeUndefined();
       expect(await fixture.transcript()).toEqual([]);
-    }, true);
-  });
+    }, true));
 
-  it("rejects remaining re-import appends when source visibility is revoked mid-append", async () => {
-    await withCatalog(async (fixture) => {
+  it("rejects remaining re-import appends when source visibility is revoked mid-append", () =>
+    withCatalog(async (fixture) => {
       await fixture.updateNative({ createdActor: fixture.actor(fixture.other) });
       expectSuccess(await fixture.call(), { importedItems: 2 });
       fixture.source.push(
@@ -626,6 +608,5 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(transcript).toHaveLength(4);
       expect(JSON.stringify(transcript)).toContain("First later reply");
       expect(JSON.stringify(transcript)).not.toContain("Revoked later reply");
-    }, true);
-  });
+    }, true));
 });

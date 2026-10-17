@@ -23,6 +23,12 @@ let activeProvider: SessionCatalogProvider;
 let blockedStart = vi.fn();
 const enabled = { gateway: { cliAgents: { enabled: true } } };
 const admin = { connId: "conn-1", connect: { scopes: ["operator.admin"] } };
+const guestId = "profile-terminal-guest";
+const guest = {
+  sessions: { others: "view" },
+  agents: ["research"],
+  scopes: ["operator.read", "operator.write"],
+};
 const request = (overrides = {}) => ({
   catalogId: "codex",
   agentId: "main",
@@ -40,11 +46,8 @@ function launchContext(open = vi.fn(), agentId = "main", cwd = "/agent/workspace
     isConnectionActive: () => true,
   };
 }
-function expectError(
-  respond: ReturnType<typeof vi.fn>,
-  code: string | undefined,
-  message: unknown,
-) {
+type Respond = ReturnType<typeof vi.fn>;
+function expectError(respond: Respond, code: string | undefined, message: unknown) {
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,
@@ -82,13 +85,8 @@ function startCall(
   return { completion, respond };
 }
 
-async function call(
-  params: unknown,
-  config: Record<string, unknown> = {},
-  client?: TerminalTestClient,
-  contextOverrides: Record<string, unknown> = {},
-) {
-  const pending = startCall(params, config, client, contextOverrides);
+async function call(...args: Parameters<typeof startCall>) {
+  const pending = startCall(...args);
   await pending.completion;
   return pending.respond;
 }
@@ -103,85 +101,72 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider({ startTerminalSession: blockedStart });
   });
 
-  it("honors the cliAgents opt-out before terminal start", async () => {
-    const respond = await call(request(), { gateway: { cliAgents: { enabled: false } } });
-
-    expect(blockedStart).not.toHaveBeenCalled();
-    expectError(
-      respond,
+  it.each([
+    [
+      "honors the cliAgents opt-out before terminal start",
+      [request(), { gateway: { cliAgents: { enabled: false } } }],
       ErrorCodes.UNAVAILABLE,
       "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
-    );
-  });
-
-  it("refuses terminal start when the terminal is disabled", async () => {
-    const respond = await call(
-      request(),
-      enabled,
-      { connId: "conn-1" },
-      { isTerminalEnabled: () => false },
-    );
-
-    expect(blockedStart).not.toHaveBeenCalled();
-    expectError(
-      respond,
+    ],
+    [
+      "refuses terminal start when the terminal is disabled",
+      [request(), enabled, { connId: "conn-1" }, { isTerminalEnabled: () => false }],
       ErrorCodes.UNAVAILABLE,
       "terminal is disabled; enable gateway.terminal.enabled and retry",
-    );
-  });
-
-  it("refuses missing local cwd instead of falling back to home", async () => {
-    const respond = await call(
-      request({ cwd: "relative/missing" }),
-      enabled,
-      { connId: "conn-1" },
-      { isTerminalEnabled: () => true, terminalSessions: {} },
-    );
-
-    expect(blockedStart).not.toHaveBeenCalled();
-    expectError(
-      respond,
+    ],
+    [
+      "refuses missing local cwd instead of falling back to home",
+      [
+        request({ cwd: "relative/missing" }),
+        enabled,
+        { connId: "conn-1" },
+        { isTerminalEnabled: () => true, terminalSessions: {} },
+      ],
       ErrorCodes.INVALID_REQUEST,
       "cwd must be an existing absolute directory; create or choose a worktree and retry",
-    );
-  });
-
-  it("rejects terminal start before resolving a disallowed agent's provider target", async () => {
-    const respond = await call(
-      request(),
-      {
-        gateway: {
-          cliAgents: { enabled: true },
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["research"],
-                scopes: ["operator.read", "operator.write"],
-              },
-            },
+    ],
+    [
+      "rejects terminal start before resolving a disallowed agent's provider target",
+      [
+        request(),
+        {
+          gateway: {
+            cliAgents: { enabled: true },
+            roles: { default: "guest", definitions: { guest } },
           },
         },
-      },
-      {
-        authenticatedUserProfile: { profileId: "profile-terminal-guest" },
-        preparedSessionProfile: {
-          profileId: "profile-terminal-guest",
-          aliases: new Set(["profile-terminal-guest"]),
-          role: null,
+        {
+          authenticatedUserProfile: { profileId: guestId },
+          preparedSessionProfile: { profileId: guestId, aliases: new Set([guestId]), role: null },
+          connId: "conn-1",
         },
-        connId: "conn-1",
-      },
-      { isTerminalEnabled: () => true, terminalSessions: {} },
-    );
-
-    expect(blockedStart).not.toHaveBeenCalled();
-    expectError(
-      respond,
+        { isTerminalEnabled: () => true, terminalSessions: {} },
+      ],
       ErrorCodes.FORBIDDEN,
       expect.stringContaining('cannot create sessions for agent "main"'),
-    );
+    ],
+    [
+      "refuses sandboxed agents before requesting a terminal plan",
+      [
+        request({ agentId: "locked" }),
+        enabled,
+        admin,
+        {
+          isTerminalEnabled: () => true,
+          terminalSessions: { open: vi.fn() },
+          resolveTerminalLaunchPolicy: () => ({
+            ok: false,
+            block: { kind: "sandboxed", agentId: "locked", mode: "all" },
+          }),
+        },
+      ],
+      ErrorCodes.INVALID_REQUEST,
+      expect.stringContaining('agent "locked" runs in a sandbox'),
+    ],
+  ] as const)("%s", async (_name, args, code, message) => {
+    const respond = await call(...args);
+    expect(blockedStart).not.toHaveBeenCalled();
+    expectError(respond, code, message);
   });
 
   it("rechecks local cwd after the provider plan resolves", async () => {
@@ -258,13 +243,8 @@ describe("sessions.catalog.startTerminal", () => {
       env: { CODEX_HOME: "/tmp/codex-home" },
       pathEnv: "/usr/local/bin:/usr/bin:/bin",
     }));
-    const open = vi.fn(async () => ({
-      ok: true as const,
-      sessionId: "terminal-1",
-      agentId: "research",
-      cwd,
-      shell: "/bin/zsh",
-    }));
+    const terminal = { sessionId: "terminal-1", agentId: "research", cwd, shell: "/bin/zsh" };
+    const open = vi.fn(async () => ({ ok: true as const, ...terminal }));
     activeProvider = provider({ startTerminalSession, resolveCreateSession });
 
     const config = {
@@ -279,31 +259,23 @@ describe("sessions.catalog.startTerminal", () => {
         },
       },
     };
-    const respond = await call(
-      {
-        catalogId: "codex",
-        hostId: "gateway:local",
-        agentId: "research",
-        cwd,
-        initialMessage: "Inspect the failing test",
-      },
-      config,
-      admin,
-      {
-        ...launchContext(open, "research"),
-        logGateway: { info: vi.fn() },
-      },
-    );
+    const target = {
+      hostId: "gateway:local",
+      agentId: "research",
+      cwd,
+      initialMessage: "Inspect the failing test",
+    };
+    const respond = await call(request(target), config, admin, {
+      ...launchContext(open, "research"),
+      logGateway: { info: vi.fn() },
+    });
 
     expect(resolveCreateSession).not.toHaveBeenCalled();
     expect(startTerminalSession).toHaveBeenCalledOnce();
     expect(open).toHaveBeenCalledOnce();
     expect(startTerminalSession).toHaveBeenCalledWith({
-      agentId: "research",
-      hostId: "gateway:local",
+      ...target,
       allowProcessHomeFallback: false,
-      cwd,
-      initialMessage: "Inspect the failing test",
     });
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -320,14 +292,7 @@ describe("sessions.catalog.startTerminal", () => {
         }),
       }),
     );
-    expect(respond).toHaveBeenCalledWith(true, {
-      sessionId: "terminal-1",
-      agentId: "research",
-      cwd,
-      shell: "/bin/zsh",
-      confined: false,
-      title: "Codex",
-    });
+    expect(respond).toHaveBeenCalledWith(true, { ...terminal, confined: false, title: "Codex" });
   });
 
   it("does not fall back to local when a node host was requested", async () => {
@@ -338,51 +303,26 @@ describe("sessions.catalog.startTerminal", () => {
     }));
     const open = vi.fn();
     activeProvider = provider({ startTerminalSession });
-
-    const respond = await call(
-      { catalogId: "codex", hostId: "node:remote", agentId: "main", cwd: "/remote/worktree" },
-      enabled,
-      admin,
-      {
-        isTerminalEnabled: () => true,
-        terminalSessions: { open },
-        resolveTerminalLaunchPolicy: () => ({
-          ok: true,
-          plan: { agentId: "main", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
-        }),
-      },
-    );
+    const target = { hostId: "node:remote", agentId: "main", cwd: "/remote/worktree" };
+    const respond = await call(request(target), enabled, admin, {
+      isTerminalEnabled: () => true,
+      terminalSessions: { open },
+      resolveTerminalLaunchPolicy: () => ({
+        ok: true,
+        plan: { agentId: "main", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
+      }),
+    });
 
     expect(startTerminalSession).toHaveBeenCalledWith({
-      agentId: "main",
+      ...target,
       allowProcessHomeFallback: false,
-      cwd: "/remote/worktree",
       nodeId: "remote",
-      hostId: "node:remote",
     });
     expect(open).not.toHaveBeenCalled();
     expectError(
       respond,
       ErrorCodes.INVALID_REQUEST,
       expect.stringContaining("cannot start on the selected node"),
-    );
-  });
-
-  it("refuses sandboxed agents before requesting a terminal plan", async () => {
-    const respond = await call(request({ agentId: "locked" }), enabled, admin, {
-      isTerminalEnabled: () => true,
-      terminalSessions: { open: vi.fn() },
-      resolveTerminalLaunchPolicy: () => ({
-        ok: false,
-        block: { kind: "sandboxed", agentId: "locked", mode: "all" },
-      }),
-    });
-
-    expect(blockedStart).not.toHaveBeenCalled();
-    expectError(
-      respond,
-      ErrorCodes.INVALID_REQUEST,
-      expect.stringContaining('agent "locked" runs in a sandbox'),
     );
   });
 });
