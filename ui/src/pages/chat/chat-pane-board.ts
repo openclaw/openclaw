@@ -35,9 +35,9 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { ensureBoardViewElement } from "./board-session-surface.tsx";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { ensureLazySidebarElement } from "./chat-pane-sidebar-layout.ts";
 import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
@@ -418,11 +418,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
       !customElements.get("openclaw-board-view")
     ) {
-      void ensureBoardViewElement().then((loaded) => {
-        if (loaded) {
-          this.invalidate();
-        }
-      });
+      ensureLazySidebarElement("dashboard");
     }
   }
 
@@ -562,7 +558,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (this.state) {
       this.state.settings = next;
     }
-    this.invalidate();
   }
 
   protected isBoardPanelAvailable(board = this.resolveBoardView()): boolean {

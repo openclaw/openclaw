@@ -1,18 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { createMemo, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import {
-  releaseChatMediaResourceSubscriber,
-  type AssistantAttachmentItem,
-  type ImageBlock,
-} from "./chat-message-media.ts";
+import type { AssistantAttachmentItem, ImageBlock } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 
 vi.mock("../../../lib/media/video-poster.ts", async (importOriginal) => ({
@@ -40,6 +37,28 @@ it("keeps the focused native image control and decoded node when gallery metadat
   expect(view.container.querySelector("img")).toBe(image);
   expect(image.alt).toBe("After");
   expect(image.width).toBe(1600);
+});
+
+it("retries a standalone native image after a failed preview", async () => {
+  const source = `/tmp/standalone-preview-${crypto.randomUUID()}.png`;
+  const retry = createDeferred<Response>();
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ available: true }))
+    .mockImplementationOnce(() => retry.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  await loadAssistantAttachmentAvailability(source);
+  const view = mountSolid(() => <MessageImages images={[{ url: source }]} />);
+  const image = view.container.querySelector("img")!;
+  expect(image).not.toBeNull();
+  image.dispatchEvent(new Event("error"));
+  flush();
+  view.getByRole("button", { name: /^Retry$/ }).click();
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  expect(view.container.querySelector("img")).toBeNull();
+  retry.resolve(Response.json({ available: true }));
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 it("cancels an offscreen poster request and releases the visible poster on unmount", async () => {
@@ -136,19 +155,14 @@ it.each(["document", "audio", "video"] as const)(
     const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const pending = createDeferred<{ url: string }>();
     const resolveArtifactDownload = vi.fn(() => pending.promise);
-    const [revision, setRevision] = createSignal(0);
-    const onRequestUpdate = () => setRevision((value) => value + 1);
-    const options = createMemo(() => {
-      revision();
-      return { resolveArtifactDownload, onRequestUpdate };
-    });
+    const options = { resolveArtifactDownload };
     const view = mountSolid(() => (
       <MessageAttachment
         item={{
           type: "attachment",
           attachment: { kind, label: `${kind} recording`, url, artifactId: `fixture-${kind}` },
         }}
-        options={options()}
+        options={options}
         presentation="card"
       />
     ));
@@ -167,7 +181,6 @@ it.each(["document", "audio", "video"] as const)(
       expect(document.activeElement).toBe(download);
     } finally {
       view.unmount();
-      releaseChatMediaResourceSubscriber(onRequestUpdate);
     }
   },
 );

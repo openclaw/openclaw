@@ -74,7 +74,6 @@ export async function copyUpdateCandidatePluginFiles(
     rootIdentity: DirectoryIdentity;
     destinationRoot: Root;
     destinationFor: (source: string) => string;
-    onProgress?: () => void;
   },
 ): Promise<void> {
   const { privateRoot, rootIdentity, destinationRoot, destinationFor } = params;
@@ -110,7 +109,6 @@ export async function copyUpdateCandidatePluginFiles(
             });
           }
         }
-        params.onProgress?.();
       }),
     );
   } finally {

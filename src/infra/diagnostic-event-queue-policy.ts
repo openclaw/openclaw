@@ -7,6 +7,7 @@ export const ASYNC_DIAGNOSTIC_EVENT_NAMES = [
   "gateway.rpc",
   "sessions.list.baseline.retired",
   "sessions.list.retention",
+  "sessions.event.retention",
   "gateway.ws.event",
   "gateway.ws.connections",
   "tool.execution.started",
@@ -42,4 +43,17 @@ export const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_NAMES = [
   "model.call.error",
   "harness.run.completed",
   "harness.run.error",
+] as const;
+
+export const PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES = [
+  "log.record",
+  "gateway.rpc",
+  "sessions.list.retention",
+  "sessions.event.retention",
+  "gateway.ws.event",
+  "gateway.ws.connections",
+  "gateway.event_loop.sample",
+  "gateway.main_thread.stall",
+  "gateway.http.cancelled",
+  "diagnostic.gc",
 ] as const;

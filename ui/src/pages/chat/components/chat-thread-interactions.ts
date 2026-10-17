@@ -76,7 +76,6 @@ export type ChatThreadState = {
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    onRequestUpdate?: () => void;
     turnVideoMessages?: ReadonlyMap<
       string,
       readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
@@ -195,6 +194,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     onAssistantAttachmentLoaded?: () => void;
+    mediaOwner?: object;
     onRequestUpdate?: () => void;
     onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;

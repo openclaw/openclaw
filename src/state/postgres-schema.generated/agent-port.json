@@ -430,48 +430,48 @@
       "name": "memory_index_chunks_revision_after_delete",
       "table": "memory_index_chunks",
       "range": [
-        32299,
-        32486
+        32397,
+        32584
       ]
     },
     {
       "name": "memory_index_chunks_revision_after_insert",
       "table": "memory_index_chunks",
       "range": [
-        31921,
-        32108
+        32019,
+        32206
       ]
     },
     {
       "name": "memory_index_chunks_revision_after_update",
       "table": "memory_index_chunks",
       "range": [
-        32110,
-        32297
+        32208,
+        32395
       ]
     },
     {
       "name": "memory_index_sources_revision_after_delete",
       "table": "memory_index_sources",
       "range": [
-        31730,
-        31919
+        31828,
+        32017
       ]
     },
     {
       "name": "memory_index_sources_revision_after_insert",
       "table": "memory_index_sources",
       "range": [
-        31348,
-        31537
+        31446,
+        31635
       ]
     },
     {
       "name": "memory_index_sources_revision_after_update",
       "table": "memory_index_sources",
       "range": [
-        31539,
-        31728
+        31637,
+        31826
       ]
     },
     {
@@ -510,41 +510,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        31091,
-        31274
+        31189,
+        31372
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        28631,
-        28878
+        28729,
+        28976
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        28414,
-        28629
+        28512,
+        28727
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        28880,
-        29256
+        28978,
+        29354
       ]
     }
   ],
   "preData": [
     0,
-    29285
+    29373
   ],
   "postData": [
-    29285,
-    46623
+    29373,
+    46741
   ]
 }

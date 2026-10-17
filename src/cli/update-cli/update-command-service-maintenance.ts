@@ -567,7 +567,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     await assertAncestry(currentState);
     if (process.platform === "linux") {
       const refreshed = await prepareSystemdMaintenance(currentState, true);
-      if (refreshed) {
+      if (refreshed.kind === "refreshed") {
         // Policy refresh preserves the launcher; retain admitted installation drift.
         currentState = await readCurrentService(currentState.env);
       }

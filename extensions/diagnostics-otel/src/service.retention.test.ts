@@ -19,7 +19,7 @@ installRealOtelSdkTestHarness();
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
 
-test("exports trusted session-list retention gauges and clears them on retirement", async () => {
+test("exports trusted session retention gauges and clears them on retirement", async () => {
   const reader = new PeriodicExportingMetricReader({
     exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
   });
@@ -34,7 +34,11 @@ test("exports trusted session-list retention gauges and clears them on retiremen
     return Object.fromEntries(
       resourceMetrics.scopeMetrics
         .flatMap((scope) => scope.metrics)
-        .filter((metric) => metric.descriptor.name.startsWith("openclaw.sessions.list.retained_"))
+        .filter(
+          (metric) =>
+            metric.descriptor.name.startsWith("openclaw.sessions.list.retained_") ||
+            metric.descriptor.name.startsWith("openclaw.session_event_rows_retained_"),
+        )
         .map(
           (metric) =>
             [
@@ -49,6 +53,7 @@ test("exports trusted session-list retention gauges and clears them on retiremen
   };
   try {
     emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    emit({ type: "sessions.event.retention", entries: 25_600, estimatedBytes: 24_985_600 });
     for (const emitUntrusted of [emitDiagnosticEvent, emitInternalDiagnosticEventForTest]) {
       emitUntrusted({
         type: "sessions.list.retention",
@@ -56,6 +61,7 @@ test("exports trusted session-list retention gauges and clears them on retiremen
         refs: 999,
         estimatedBytes: 99_999,
       });
+      emitUntrusted({ type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 });
     }
     expect(await collectRetention()).toEqual({
       "openclaw.sessions.list.retained_views": {
@@ -70,10 +76,19 @@ test("exports trusted session-list retention gauges and clears them on retiremen
         unit: "By",
         points: [{ attributes: {}, value: 3_504 }],
       },
+      "openclaw.session_event_rows_retained_entries": {
+        unit: "1",
+        points: [{ attributes: {}, value: 25_600 }],
+      },
+      "openclaw.session_event_rows_retained_bytes": {
+        unit: "By",
+        points: [{ attributes: {}, value: 24_985_600 }],
+      },
     });
     emit({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
+    emit({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
     const cleared = await collectRetention();
-    expect(Object.keys(cleared)).toHaveLength(3);
+    expect(Object.keys(cleared)).toHaveLength(5);
     for (const metric of Object.values(cleared)) {
       expect(metric.points).toEqual([{ attributes: {}, value: 0 }]);
     }

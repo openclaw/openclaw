@@ -24,11 +24,9 @@ const DEFAULT_WORKTREE_MAX_COUNT = 4096;
 /** Admission and maintenance share ranking, eviction budgets, and the allocation lease. */
 export function createWorktreeCapacityOwner({
   env,
-  now,
   getConfig = getRuntimeConfig,
 }: {
   env: NodeJS.ProcessEnv;
-  now: () => number;
   getConfig?: () => OpenClawConfig;
 }) {
   const configuredMaxCount = () => getConfig().worktreeMaxCount ?? DEFAULT_WORKTREE_MAX_COUNT;
@@ -106,7 +104,6 @@ export function createWorktreeCapacityOwner({
           record,
           reason,
           guard,
-          now,
           getConfig,
         });
         const counts = (progress.result.evictions ??= {});
