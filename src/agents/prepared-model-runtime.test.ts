@@ -14,6 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquireRun,
   acquireReadOnlyPreparedModelRuntime as acquireReadOnly,
@@ -178,10 +179,8 @@ describe("prepared model runtime snapshots", () => {
     markStale("test in-flight standalone publication");
     build.finish();
 
-    const published = await activation;
-    expect(published).toBeDefined();
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-    await expect(prepare(input)).resolves.toBe(published);
+    await expect(activation).rejects.toThrow(PreparedModelRuntimePublicationSupersededError);
+    expect(readSnapshot(input)).toBeUndefined();
   });
 
   it("keeps provider catalog outcomes on the published live snapshot", async () => {
