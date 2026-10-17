@@ -546,7 +546,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       effortMutationDisabled ||
       !hasResolvableModel ||
       (thinking.options.length === 0 && fastMode.disabled);
-    // CSS keeps the empty effort slot beside an open picker until its catalog resolves.
+    // Keep the effort control mounted but hidden until its catalog resolves.
     const reserveEffortPicker = !hasResolvableModel;
     return {
       model: {

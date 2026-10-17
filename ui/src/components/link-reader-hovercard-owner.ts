@@ -4,10 +4,11 @@ import type {
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { i18n, t } from "../i18n/index.ts";
+import { i18n } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
 import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
 import "../styles/link-reader-hovercard.css";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
@@ -18,7 +19,9 @@ import type {
 import { renderPagePreview, type PageActivation } from "./link-reader-page-preview.tsx";
 import { disposePreview } from "./link-reader-preview-root.ts";
 import {
-  parsePreviewResponse,
+  cacheEntryFromDocument,
+  cachedReaderPreview,
+  requestReaderPreview,
   previewContextFor,
   type PreviewContext,
   type CacheEntry,
@@ -27,6 +30,10 @@ import {
   renderPreviewError,
   type LinkPreview,
 } from "./link-reader-preview.tsx";
+import {
+  LINK_READER_METADATA_UPDATED_EVENT,
+  type LinkReaderMetadataUpdate,
+} from "./link-reader-response.ts";
 import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
   resolveLinkReaderTarget,
@@ -38,7 +45,7 @@ import {
   type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 registerLinkReaderEnglish();
 
@@ -175,7 +182,7 @@ export class HovercardOwner {
         continue;
       }
       const target = resolveLinkReaderTarget(anchor.href, this.host.readers);
-      const preview = target ? this.cachedPreview(target)?.preview : undefined;
+      const preview = target ? cachedReaderPreview(this.cache, target)?.preview : undefined;
       if (!preview?.badge) {
         delete anchor.dataset.linkReaderTone;
         anchor.removeAttribute("aria-description");
@@ -185,6 +192,35 @@ export class HovercardOwner {
       }
     }
   }
+
+  private readonly handleMetadataUpdate = (event: CustomEvent<LinkReaderMetadataUpdate>) => {
+    const { client, agentId, sessionKey, target, preview: detail } = event.detail;
+    if (
+      client !== this.host.client ||
+      agentId !== this.host.agentId ||
+      (sessionKey ?? "") !== (this.host.sessionKey ?? "") ||
+      !this.host.readers.includes(target.reader)
+    ) {
+      return;
+    }
+    this.syncPreviewContext();
+    const key = linkReaderTargetKey(target);
+    const previous = this.cache.get(key);
+    const entry = cacheEntryFromDocument(target, detail, previous, Date.now() + SUCCESS_CACHE_MS);
+    this.cache.set(key, entry);
+    if (this.activeTarget && linkReaderTargetKey(this.activeTarget) === key) {
+      const pending = this.previewRequest;
+      this.previewRequest = {
+        controller: new AbortController(),
+        state: "complete",
+        preview: { ...entry.preview, ...this.activeTarget },
+      };
+      pending?.controller.abort();
+    }
+    previous?.controller.abort();
+    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
+    this.update();
+  };
 
   private readonly inlineObserver = new MutationObserver(() => this.syncInlineStates());
 
@@ -219,7 +255,7 @@ export class HovercardOwner {
   // the portaled card (e.g. clicking the title link) can hold it open, so a
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
-  private readonly hovercard = new PortaledHovercardController(() => this.close());
+  private readonly hovercard = createPortaledHovercardOwner(() => this.close());
   private stopI18n: (() => void) | null = null;
   private previewRequest: {
     controller: AbortController;
@@ -260,6 +296,7 @@ export class HovercardOwner {
 
   connect(): void {
     this.connected = true;
+    window.addEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
     this.host.style.display = "contents";
     this.inlineObserver.observe(this.host, {
       childList: true,
@@ -286,6 +323,7 @@ export class HovercardOwner {
 
   disconnect(): void {
     this.connected = false;
+    window.removeEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
     this.host.removeEventListener("pointerover", this.handlePointerOver);
     this.host.removeEventListener("pointerout", this.handlePointerOut);
     this.host.removeEventListener("focusin", this.handleFocusIn);
@@ -321,14 +359,12 @@ export class HovercardOwner {
       return;
     }
     const request = this.previewRequest;
-    if (request?.state === "pending") {
+    if (request?.state === "pending" && this.hovercard.held) {
       const seed = this.seedPreview(target);
-      if (this.hovercard.held) {
-        if (seed) {
-          this.show(anchor, seed, true);
-        } else if (this.allowLoading && context?.succeeded) {
-          this.show(anchor);
-        }
+      if (seed) {
+        this.show(anchor, seed, true);
+      } else if (this.allowLoading && context?.succeeded) {
+        this.show(anchor);
       }
     } else if (request?.state === "complete" && request.preview) {
       if (request.preview.href === target.href && (this.hovercard.card || this.hovercard.held)) {
@@ -458,7 +494,7 @@ export class HovercardOwner {
       return;
     }
     this.close();
-    this.allowLoading = Boolean(context?.succeeded && !this.cachedPreview(target));
+    this.allowLoading = Boolean(context?.succeeded && !cachedReaderPreview(this.cache, target));
     this.activeAnchor = anchor;
     this.activeTarget = target;
     this.activeAnchorObserver.observe(this.host, {
@@ -517,9 +553,12 @@ export class HovercardOwner {
     if (existing) {
       this.hovercard.position();
     } else {
-      card.addEventListener("pointerleave", this.handleCardPointerLeave);
+      const stopPointerLeave = listen(card, "pointerleave", this.handleCardPointerLeave);
       this.hovercard.markTrigger(anchor);
-      this.hovercard.mount(anchor, card, "vertical", true, () => disposePreview(card));
+      this.hovercard.mount(anchor, card, "vertical", true, () => {
+        stopPointerLeave();
+        disposePreview(card);
+      });
     }
   }
 
@@ -654,68 +693,44 @@ export class HovercardOwner {
     // Anonymous page metadata never unlocks plugin success-dependent loaders.
   }
 
-  private cachedPreview(target: LinkReaderTarget): CacheEntry | undefined {
-    const cached = this.cache.get(linkReaderTargetKey(target));
-    return cached && !cached.controller.signal.aborted && cached.expiresAt > Date.now()
-      ? cached
-      : undefined;
-  }
-
   private loadPreview(
     target: LinkReaderTarget,
     signal: AbortSignal,
   ): Promise<ControlUiLinkReaderPreview> {
     const key = linkReaderTargetKey(target);
-    const now = Date.now();
-    const cached = this.cachedPreview(target);
+    // Backoff expires request reuse, not the last-known facts retained for failed retries.
+    const previous = this.cache.get(key);
+    const cached = cachedReaderPreview(this.cache, target);
     this.cache.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
-    if (cached) {
+    if (cached && (cached.enrichment !== "needed" || cached.preview?.stale)) {
       this.cache.set(key, cached);
       return subscribeToSharedRequest(cached, {}, signal);
     }
 
     const controller = new AbortController();
-    const client = this.host.client;
-    const context = this.previewContext;
-    const agentId = this.host.agentId;
-    const sessionKey = this.host.sessionKey;
-    const load = async (): Promise<ControlUiLinkReaderPreview> => {
-      const method = target.reader.linkReader.previewMethod;
-      if (!client || !method || !this.host.readers.includes(target.reader)) {
-        throw new Error("Link preview requires an available reader");
-      }
-      if (target.reader.linkReader.sessionScoped && !sessionKey) {
-        throw new Error(t("linkReader.sessionRequired"));
-      }
-      const response = await client.request<ControlUiLinkReaderPreview>(
-        method,
-        {
-          ...(agentId ? { agentId } : {}),
-          ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
-          url: target.href,
-        },
-        { signal: controller.signal },
-      );
-      return parsePreviewResponse(target, response);
-    };
-
+    const { client, agentId, sessionKey } = this.host;
+    const scope = { client, agentId, sessionKey };
+    const isCurrent = () =>
+      client !== null &&
+      !controller.signal.aborted &&
+      client === this.host.client &&
+      agentId === this.host.agentId &&
+      sessionKey === this.host.sessionKey &&
+      previewContextFor(client, agentId) === this.previewContext &&
+      this.host.readers.includes(target.reader);
     const entry: CacheEntry = {
-      expiresAt: now + SUCCESS_CACHE_MS,
+      enrichment: previous?.enrichment ? "pending" : undefined,
+      preview: previous?.preview,
+      expiresAt: Date.now() + SUCCESS_CACHE_MS,
       controller,
       subscribers: new Set(),
-      promise: load()
+      promise: requestReaderPreview(scope, target, controller.signal, isCurrent, previous)
         .then((preview) => {
-          if (
-            !controller.signal.aborted &&
-            this.cache.get(key) === entry &&
-            client === this.host.client &&
-            agentId === this.host.agentId &&
-            sessionKey === this.host.sessionKey &&
-            client &&
-            previewContextFor(client, agentId) === context
-          ) {
+          if (isCurrent() && this.cache.get(key) === entry) {
             entry.preview = preview;
+            entry.enrichment = preview.stale && previous?.enrichment ? "needed" : undefined;
+            entry.expiresAt = Date.now() + (preview.stale ? FAILURE_CACHE_MS : SUCCESS_CACHE_MS);
             this.syncInlineStates();
           }
           return preview;

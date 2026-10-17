@@ -676,7 +676,7 @@
   "ui/src/components/session-data.ts",
   "ui/src/components/session-icon-glyph-solid.tsx",
   "ui/src/components/session-leading-indicator.ts",
-  "ui/src/components/session-lineage-controller.ts",
+  "ui/src/components/session-lineage.ts",
   "ui/src/components/session-machine.ts",
   "ui/src/components/session-menu-descendants.ts",
   "ui/src/components/session-menu-work.ts",

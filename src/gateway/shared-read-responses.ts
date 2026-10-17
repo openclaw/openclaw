@@ -12,6 +12,7 @@ import type {
   GatewayRequestContext,
   RespondFn,
 } from "./server-methods/types.js";
+import { retainGatewayRpcResponseDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 type Response = Parameters<RespondFn>;
@@ -170,6 +171,7 @@ export async function dispatchSharedRead(
           // still belong to admission, and encoding may itself execute toJSON.
           entry.publishRows();
           const payload = new SerializedJsonPayload(response[1]);
+          retainGatewayRpcResponseDiagnostics(options.req.method, response[1], payload);
           response[1] = payload;
           if (valid(entry) && payload.bytes.byteLength <= MAX_PAYLOAD_BYTES) {
             entry.result = response;

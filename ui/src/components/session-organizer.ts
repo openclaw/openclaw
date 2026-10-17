@@ -35,7 +35,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sidebarSessionHasArchiveDescendants } from "./session-menu-descendants.ts";
-import type { SessionMenuAction } from "./session-menu.ts";
+import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
 
 export type { SessionOrganizerDependencies } from "./session-organizer-types.ts";

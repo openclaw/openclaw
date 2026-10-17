@@ -807,6 +807,26 @@ automatically included in support exports. The existing profiling RPCs still
 target the main isolate. Capture duration can exceed five seconds if synchronous
 guest work blocks the worker's event loop; retiring the worker can interrupt capture.
 
+## Outbound WebSocket event traffic
+
+The [Prometheus exporter](/gateway/prometheus) records
+`openclaw_gateway_ws_events_total{event}` and
+`openclaw_gateway_ws_event_bytes_total{event}` for outbound event frames accepted
+by the WebSocket sender. Each receiving socket contributes one frame and its full
+encoded JSON size, so fan-out is visible. Bytes are UTF-8 payload bytes before
+WebSocket framing or compression; acceptance does not prove delivery to the client.
+The event label contains only known protocol names, with `other` for unknown
+names. Payload content and session, user, and connection identifiers are excluded.
+The sender batches observations by event name within one event-loop turn,
+preserving the per-socket frame and byte totals without exporting every send
+as a separate diagnostic event.
+`openclaw_gateway_ws_operator_connections` reports the current authenticated
+operator socket count without labels, updating on connect/disconnect and every
+30 seconds to refresh late-starting exporters or recover dropped snapshots.
+OpenTelemetry exports the corresponding
+`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
+`openclaw.gateway.ws.operator_connections` metrics.
+
 ## RPC response size and heap changes
 
 The [Prometheus exporter](/gateway/prometheus) records
@@ -821,7 +841,24 @@ include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
 `filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
 filter kinds contain parameter names, never search text, identities, or paths.
 The optimized WebSocket journal also records fast `sessions.list` responses of
-at least 200 KiB. Metric labels remain unchanged.
+at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
+`client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
+`openclaw_sessions_list_response_bytes_total` attributes successful response
+bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
+`full-no-base`, `full-with-base`, or `not-sidebar`). Full sidebar replies use
+`full-no-base` when the request omits `ifRowsRevision`; `full-with-base` covers
+stale or evicted bases and the rare case where every row changed. Attribution
+uses the request and existing response fields without changing the protocol payload.
+
+`openclaw_chat_history_requests_total` and
+`openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
+responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.
+Shapes distinguish receipt recovery, pending-input paging, older pages, cursor
+reads, message-anchored windows, and tail reads; outcomes are `delta`, `reset`, or
+`page`. Both byte counters
+reuse the encoded frame size above without serializing again or inspecting rows.
+Only bounded labels are recorded, never parameter values, identifiers, or text.
+See [Prometheus metrics](/gateway/prometheus) for bucket and precedence rules.
 
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample
