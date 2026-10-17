@@ -90,11 +90,10 @@ export function createMessageUpdateContext(
       },
     ),
   } as unknown as EmbeddedAgentSubscribeContext;
-  ctx.state = {
-    ...new EmbeddedAgentSubscribeState(ctx.params),
+  ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
     ...params.state,
-  };
+  });
   return ctx;
 }
 
@@ -129,11 +128,10 @@ export function createMessageEndContext(
     builtinToolNames: params.builtinToolNames,
     blockChunker: new EmbeddedBlockChunker(),
   } as unknown as EmbeddedAgentSubscribeContext;
-  ctx.state = {
-    ...new EmbeddedAgentSubscribeState(ctx.params),
+  ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     blockReplyBreak: "message_end",
     ...params.state,
-  };
+  });
   ctx.blockChunker.append(params.bufferedText ?? "");
   const delivery = createReplyDelivery(ctx);
   ctx.emitAssistantStreamData = delivery.emitAssistantStreamData;

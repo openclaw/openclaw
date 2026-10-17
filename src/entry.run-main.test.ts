@@ -22,6 +22,7 @@ describe("entry run-main boundary", () => {
   it("retains JSON console routing through process finalization", async () => {
     const runCli = vi.fn(async () => undefined);
 
+    // mock-isolation: Exercise the entry handoff without starting the real CLI runtime.
     vi.doMock("./cli/run-main.js", async () => ({ runCli }));
     await runMainOrRootHelp(["node", "openclaw", "status"]);
 
@@ -37,6 +38,7 @@ describe("entry run-main boundary", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
     try {
+      // mock-isolation: Exercise entry failure framing without starting the real CLI runtime.
       vi.doMock("./cli/run-main.js", async () => ({
         runCli: vi.fn(async () => {
           throw new Error(
@@ -92,6 +94,7 @@ describe("entry run-main boundary", () => {
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       process.exitCode = undefined;
       try {
+        // mock-isolation: This command runs on the fixture program, not the real CLI runtime.
         vi.doMock("./cli/run-main.js", async () => ({
           runCli: async (argv: string[]) => {
             await host.parseAsync(argv);
@@ -119,6 +122,7 @@ describe("entry run-main boundary", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
     try {
+      // mock-isolation: Model an import failure before the real CLI runtime initializes.
       vi.doMock("./cli/run-main.js", async () => {
         throw new Error("cannot load run-main");
       });
@@ -145,6 +149,7 @@ describe("entry run-main boundary", () => {
     process.exitCode = undefined;
 
     try {
+      // mock-isolation: Exercise expected entry failures without starting the real CLI runtime.
       vi.doMock("./cli/run-main.js", async () => ({
         runCli: vi.fn(async () => {
           throw error;

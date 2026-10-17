@@ -89,6 +89,7 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
       process.exitCode = 0;
       // Retain JSON routing around the root catch as normal runCli does; the outer
       // scope restores it when this in-process test invocation finishes.
+      // mock-isolation: Run the real memory command on the fixture program, not the CLI bootstrap.
       vi.doMock("./cli/run-main.js", async () => ({
         runCli: async (commandArgv: string[]) => {
           const program = new Command().name("openclaw").exitOverride();

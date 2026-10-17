@@ -552,7 +552,7 @@ describe("native heartbeat busy poll settlement", () => {
       }) => {
         // Register real isolated work after the base-session fence; preparation
         // must observe it after delivery resolution and retain this occurrence.
-        const isActive = replyRunRegistry.isActive;
+        const isActive = replyRunRegistry.isActive.bind(replyRunRegistry);
         let lateRun: ReturnType<typeof createReplyOperation> | undefined;
         const activeReply = vi.spyOn(replyRunRegistry, "isActive").mockImplementationOnce((key) => {
           const active = isActive(key);
