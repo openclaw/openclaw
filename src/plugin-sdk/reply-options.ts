@@ -72,17 +72,24 @@ export function publicChannelTurnParams<
 >(
   params: PublicChannelTurnParams<TRaw, TResult, TDelivery>,
 ): RunChannelTurnParams<TRaw, TResult, TDelivery> {
+  const adapter = params.adapter;
+  const { classify, preflight, onFinalize } = adapter;
   return {
     ...params,
     adapter: {
-      ...params.adapter,
+      ingest: (raw) => adapter.ingest(raw),
+      ...(classify ? { classify: (input) => classify.call(adapter, input) } : {}),
+      ...(preflight
+        ? { preflight: (input, eventClass) => preflight.call(adapter, input, eventClass) }
+        : {}),
       resolveTurn: async (...args) => {
-        const turn = await params.adapter.resolveTurn(...args);
+        const turn = await adapter.resolveTurn(...args);
         if (!("replyOptions" in turn)) {
           return turn;
         }
         return { ...turn, replyOptions: publicReplyOptions(turn.replyOptions) };
       },
+      ...(onFinalize ? { onFinalize: (result) => onFinalize.call(adapter, result) } : {}),
     },
   };
 }
