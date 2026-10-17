@@ -88,8 +88,10 @@ describe("awaited binding read ownership", () => {
       listBySession(key: string) {
         return this.#binding?.targetSessionKey === key ? [this.#binding] : [];
       }
-      resolveByConversation(ref: Parameters<SessionBindingAdapterV2["resolveByConversation"]>[0]) {
-        return this.#binding?.conversation.conversationId === ref.conversationId
+      resolveByConversation(
+        conversation: Parameters<SessionBindingAdapterV2["resolveByConversation"]>[0],
+      ) {
+        return this.#binding?.conversation.conversationId === conversation.conversationId
           ? this.#binding
           : null;
       }
@@ -97,20 +99,20 @@ describe("awaited binding read ownership", () => {
         return this.listBySession(key);
       }
       async resolveByConversationAsync(
-        ref: Parameters<SessionBindingAdapterV2["resolveByConversation"]>[0],
+        conversation: Parameters<SessionBindingAdapterV2["resolveByConversation"]>[0],
       ) {
-        return this.resolveByConversation(ref);
+        return this.resolveByConversation(conversation);
       }
       async inspectByConversationAsync(
-        ref: Parameters<SessionBindingAdapterV2["resolveByConversation"]>[0],
+        conversation: Parameters<SessionBindingAdapterV2["resolveByConversation"]>[0],
       ) {
-        return this.resolveByConversation(ref);
+        return this.resolveByConversation(conversation);
       }
       async inspectByConversationsAsync(
         refs: Parameters<SessionBindingAdapterV2["inspectByConversationsAsync"]>[0],
       ) {
         return {
-          bindings: refs.map((ref) => this.resolveByConversation(ref)),
+          bindings: refs.map((conversation) => this.resolveByConversation(conversation)),
           assertCurrent: () => this.assertCurrent(),
         };
       }
