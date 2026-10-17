@@ -3,9 +3,25 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { buildApprovalPresentation } from "../infra/approval-presentation.js";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope } from "../infra/approval-scope.js";
+import { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
+import {
+  exceedsApprovalTextLimit,
+  sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
+} from "../infra/exec-approval-text-sanitize.js";
+import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
+import {
+  PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  truncatePluginApprovalDetail,
+  type PluginApprovalRequestPayload,
+} from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../infra/system-agent-approvals.js";
 import type {
   ExecApprovalManagerOptions,
   ExecApprovalRecord,
@@ -14,6 +30,7 @@ import type { insertOperatorApproval, OperatorApprovalKind } from "./operator-ap
 
 // These opaque ids cross terminal, UI, push, and channel surfaces unchanged.
 const EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN = /[^A-Za-z0-9._:-]/;
+const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 
 /** Typed creation failure for an explicit approval id outside the shared safe format. */
 export class InvalidApprovalIdError extends Error {
@@ -58,6 +75,128 @@ export function createExecApprovalRecord<TPayload>(
   };
 }
 
+function sanitizeOptionalSingleLine(value: unknown): string | null {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
+}
+
+function normalizePluginExternalResolution(
+  value: PluginApprovalRequestPayload["externalResolution"],
+) {
+  if (!value) {
+    return null;
+  }
+  const rawLabel = value.label?.trim();
+  const label = rawLabel ? sanitizeExecApprovalDisplayText(rawLabel) : "";
+  if (!label || exceedsApprovalTextLimit(label, PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH)) {
+    throw new Error("invalid external approval label");
+  }
+  const decisions = value.decisions ?? ["allow-once"];
+  if (
+    decisions.length < 1 ||
+    decisions.length > 2 ||
+    decisions.some((decision) => decision !== "allow-once" && decision !== "allow-always") ||
+    new Set(decisions).size !== decisions.length
+  ) {
+    throw new Error("invalid external approval decisions");
+  }
+  return { label, decisions: [...decisions] };
+}
+
+function buildExecApprovalPresentation(
+  value: unknown,
+  allowedDecisions: ExecApprovalDecision[],
+): ApprovalPresentation | null {
+  const request = value as ExecApprovalRequestPayload;
+  const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request);
+  if (!commandText.trim()) {
+    return null;
+  }
+  const warningText =
+    typeof request.warningText === "string" && request.warningText.trim()
+      ? sanitizeExecApprovalWarningText(request.warningText)
+      : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+  return {
+    kind: "exec",
+    commandText,
+    commandPreview,
+    warningText,
+    host: sanitizeOptionalSingleLine(request.host),
+    nodeId: sanitizeOptionalSingleLine(request.nodeId),
+    agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
+    allowedDecisions,
+  };
+}
+
+function buildPluginApprovalPresentation(
+  value: unknown,
+  allowedDecisions: ExecApprovalDecision[],
+): ApprovalPresentation | null {
+  const request = value as PluginApprovalRequestPayload;
+  const rawTitle = normalizeOptionalString(request.title);
+  const rawDescription = normalizeOptionalString(request.description);
+  if (!rawTitle || !rawDescription) {
+    return null;
+  }
+  // Plugin text crosses every reviewer surface. Apply the same redaction and
+  // spoof-resistant escaping as exec prompts before enforcing wire-size limits.
+  const title = sanitizeExecApprovalDisplayText(rawTitle);
+  const description = sanitizeExecApprovalWarningText(rawDescription);
+  if (
+    exceedsApprovalTextLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+    exceedsApprovalTextLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+  ) {
+    return null;
+  }
+  const severity =
+    request.severity === "info" || request.severity === "warning" || request.severity === "critical"
+      ? request.severity
+      : "warning";
+  const rawDetail = normalizeOptionalString(request.detail);
+  const detail = rawDetail
+    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
+    : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+  let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
+  try {
+    externalResolution = normalizePluginExternalResolution(request.externalResolution);
+  } catch {
+    return null;
+  }
+  return {
+    kind: "plugin",
+    title,
+    description,
+    ...(detail ? { detail } : {}),
+    severity,
+    pluginId: sanitizeOptionalSingleLine(request.pluginId),
+    toolName: sanitizeOptionalSingleLine(request.toolName),
+    agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
+    allowedDecisions,
+    ...(externalResolution ? { externalResolution } : {}),
+  };
+}
+
+function buildSystemAgentApprovalPresentation(value: unknown): ApprovalPresentation | null {
+  const request = value as SystemAgentApprovalRequestPayload;
+  const title = normalizeOptionalString(request.title);
+  const description = normalizeOptionalString(request.description);
+  if (!title || !description || !/^[a-f0-9]{64}$/.test(request.proposalHash)) {
+    return null;
+  }
+  return {
+    kind: "system-agent",
+    title: truncateUtf16Safe(sanitizeExecApprovalDisplayText(title), 80),
+    description: truncateUtf16Safe(sanitizeExecApprovalWarningText(description), 512),
+    proposalHash: request.proposalHash,
+    agentId: sanitizeOptionalSingleLine(request.agentId),
+    allowedDecisions: ["allow-once", "deny"],
+  };
+}
+
 export function prepareExecApprovalPresentation(
   kind: OperatorApprovalKind,
   request: unknown,
@@ -76,7 +215,15 @@ export function prepareExecApprovalPresentation(
   if (!normalized.includes("deny")) {
     normalized.push("deny");
   }
-  const presentation = buildApprovalPresentation({ kind, request, allowedDecisions: normalized });
+  let presentation: ApprovalPresentation | null = null;
+  if (isRecord(request)) {
+    presentation =
+      kind === "exec"
+        ? buildExecApprovalPresentation(request, normalized)
+        : kind === "plugin"
+          ? buildPluginApprovalPresentation(request, normalized)
+          : buildSystemAgentApprovalPresentation(request);
+  }
   if (!presentation) {
     throw new Error("approval cannot be persisted without a valid reviewer presentation");
   }
