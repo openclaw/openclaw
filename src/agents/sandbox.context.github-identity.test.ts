@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -41,6 +41,10 @@ vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const identity = {
+  profileId: "ghp_0123456789abcdef0123456789abcdef",
+  gitAuthor: { name: "Release Bot", email: "release@example.test" },
+};
 afterEach(() => {
   backend.mockClear();
   vi.unstubAllEnvs();
@@ -53,11 +57,10 @@ async function fixture(
 ) {
   const stateDir = tempDirs.make("sandbox-github-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const profileId = "ghp_0123456789abcdef0123456789abcdef";
   const profileDir = resolveManagedGitHubProfileDir({
     agentId: "release",
     scope: "agent",
-    profileId,
+    profileId: identity.profileId,
   });
   await writeManagedGitHubProfileFiles(profileDir, {
     login: "release-bot",
@@ -77,15 +80,7 @@ async function fixture(
         },
       },
       entries: {
-        release: {
-          tools: {
-            github: {
-              profileId,
-              allowInSandbox: options.allowInSandbox,
-              gitAuthor: { name: "Release Bot", email: "release@example.test" },
-            },
-          },
-        },
+        release: { tools: { github: { ...identity, allowInSandbox: options.allowInSandbox } } },
         other: {},
       },
     },
@@ -109,60 +104,53 @@ function resolve(config: OpenClawConfig, agentId = "release", required = false, 
   });
 }
 
-it.each([false, true])(
-  "mounts only the owning agent's identity read-only (role required=%s)",
-  async (required) => {
-    const { config, profileDir } = await fixture({ required, allowInSandbox: true });
-    const sandbox = expectDefined(await resolve(config, "release", required), "sandbox");
-    expect(sandbox?.docker.env).toMatchObject({
-      GH_CONFIG_DIR: "/openclaw/github",
-      GH_TOKEN: "",
-      GITHUB_TOKEN: "",
-      GIT_AUTHOR_NAME: "Release Bot",
-      GIT_COMMITTER_EMAIL: "release@example.test",
-    });
-    expect(sandbox?.readOnlyResourceMounts).toEqual([
-      { hostPath: await fs.realpath(profileDir), containerPath: "/openclaw/github" },
-    ]);
-    const mounts = resolveSandboxMountSelection({
-      workspaceDir: sandbox.workspaceDir,
-      agentWorkspaceDir: sandbox.agentWorkspaceDir,
-      workdir: "/workspace",
-      workspaceAccess: sandbox.workspaceAccess,
-      readOnlyResourceMounts: sandbox.readOnlyResourceMounts,
-      binds: ["/unrelated:/openclaw/github:rw"],
-    });
-    expect(mounts.mounts).toContainEqual(
-      expect.objectContaining({ containerPath: "/openclaw/github", readOnly: true }),
-    );
-    expect(mounts.custom).toEqual([]);
-    const sibling = await resolve(config, "other", required);
-    expect(sibling?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
-    expect(sibling?.readOnlyResourceMounts).toBeUndefined();
-    if (required) {
-      await resolve(config, "release", true, "bob");
-      const scopes = backend.mock.calls.map((args) => args[0]?.scopeKey);
-      expect(new Set(scopes).size).toBe(3);
-    }
-  },
-);
+it.each([false, true])("isolates read-only identity (role required=%s)", async (required) => {
+  const { config, profileDir } = await fixture({ required, allowInSandbox: true });
+  const sandbox = expectDefined(await resolve(config, "release", required), "sandbox");
+  expect(sandbox.docker.env).toMatchObject({
+    GH_CONFIG_DIR: "/openclaw/github",
+    GH_TOKEN: "",
+    GITHUB_TOKEN: "",
+    GIT_AUTHOR_NAME: "Release Bot",
+    GIT_COMMITTER_EMAIL: "release@example.test",
+  });
+  expect(sandbox.readOnlyResourceMounts).toEqual([
+    { hostPath: await fs.realpath(profileDir), containerPath: "/openclaw/github" },
+  ]);
+  const mounts = resolveSandboxMountSelection({
+    workspaceDir: sandbox.workspaceDir,
+    agentWorkspaceDir: sandbox.agentWorkspaceDir,
+    workdir: "/workspace",
+    workspaceAccess: sandbox.workspaceAccess,
+    readOnlyResourceMounts: sandbox.readOnlyResourceMounts,
+    binds: ["/unrelated:/openclaw/github:rw"],
+  });
+  expect(mounts.mounts).toContainEqual(
+    expect.objectContaining({ containerPath: "/openclaw/github", readOnly: true }),
+  );
+  expect(mounts.custom).toEqual([]);
+  const sibling = await resolve(config, "other", required);
+  expect(sibling?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
+  expect(sibling?.readOnlyResourceMounts).toBeUndefined();
+  if (required) {
+    await resolve(config, "release", true, "bob");
+    expect(new Set(backend.mock.calls.map(([params]) => params.scopeKey)).size).toBe(3);
+  }
+});
 
-it("refuses shared identity exposure before provisioning and warns once with the agent", async () => {
+it("rejects shared identity before provisioning and warns once with the agent", async () => {
   const { config } = await fixture({ shared: true, allowInSandbox: true });
   const warnings = createWarnLogCapture("sandbox-github-shared");
   const capture = createDiagnosticLogRecordCapture();
-  try {
-    await expect(resolve(config)).rejects.toThrow(/release.*shared/i);
-    expect(backend).not.toHaveBeenCalled();
-    expect((await warnings.findText("GitHub"))?.match(/release/g)).toHaveLength(1);
-    await capture.flush();
-    expect(
-      capture.records.filter((record) => record.message.includes("GitHub identity")),
-    ).toHaveLength(1);
-  } finally {
-    capture.cleanup();
-    warnings.cleanup();
-  }
+  onTestFinished(warnings.cleanup);
+  onTestFinished(capture.cleanup);
+  await expect(resolve(config)).rejects.toThrow(/release.*shared/i);
+  expect(backend).not.toHaveBeenCalled();
+  expect((await warnings.findText("GitHub"))?.match(/release/g)).toHaveLength(1);
+  await capture.flush();
+  expect(
+    capture.records.filter((record) => record.message.includes("GitHub identity")),
+  ).toHaveLength(1);
 });
 
 it("keeps identity absent without allowInSandbox opt-in", async () => {
@@ -172,16 +160,12 @@ it("keeps identity absent without allowInSandbox opt-in", async () => {
   expect(sandbox?.readOnlyResourceMounts).toBeUndefined();
 });
 
-it("refuses an unsupported backend without handing it the managed identity", async () => {
+it("rejects an unsupported backend before handing it identity", async () => {
   const factory = vi.fn();
-  const restore = registerSandboxBackend("synthetic-remote", factory);
-  try {
-    const { config } = await fixture({ backend: "synthetic-remote", allowInSandbox: true });
-    await expect(resolve(config)).rejects.toThrow(/built-in Docker or Podman/);
-    expect(factory).not.toHaveBeenCalled();
-  } finally {
-    restore();
-  }
+  onTestFinished(registerSandboxBackend("synthetic-remote", factory));
+  const { config } = await fixture({ backend: "synthetic-remote", allowInSandbox: true });
+  await expect(resolve(config)).rejects.toThrow(/built-in Docker or Podman/);
+  expect(factory).not.toHaveBeenCalled();
 });
 
 it.each(["missing", "symlink"])("refuses a %s profile before mounting it", async (kind) => {

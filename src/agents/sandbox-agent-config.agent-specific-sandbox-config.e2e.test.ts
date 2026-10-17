@@ -1,5 +1,5 @@
-// Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -51,9 +51,9 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
     }
   }
   const entries = [
-    ...mounts.map((mount) => ({
-      destination: mount.Destination,
-      writable: mount.RW,
+    ...mounts.map(({ Destination: destination, RW: writable }) => ({
+      destination,
+      writable,
       type: "bind",
     })),
     ...Object.entries(tmpfs).map(([destination, options]) => ({
@@ -146,7 +146,6 @@ let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSa
 let resolvePreparedSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolvePreparedSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
-  // Convenience wrapper keeps session-key specific sandbox context assertions compact.
   const context = await resolveSandboxContext({
     config,
     sessionKey,
@@ -174,11 +173,10 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
       path.join(context.workspaceDir, "marker.txt"),
     );
   }
-  return context;
+  return expectDefined(context, "sandbox context");
 }
 
 function expectDockerSetupCommand(command: string) {
-  // Setup commands are executed through docker exec in the resolved container.
   const matched = spawnCalls.some(
     (call) =>
       call.command === "docker" &&
@@ -190,12 +188,12 @@ function expectDockerSetupCommand(command: string) {
 }
 
 function sandboxConfig(
-  sandbox: AgentSandboxConfig = { mode: "all", scope: "agent" },
+  sandbox: AgentSandboxConfig = {},
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {},
 ): OpenClawConfig {
   return {
     agents: {
-      defaults: { sandbox },
+      defaults: { sandbox: { mode: "all", scope: "agent", ...sandbox } },
       entries,
     },
   };
@@ -203,7 +201,7 @@ function sandboxConfig(
 
 function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig {
   return sandboxConfig(
-    { mode: "all", scope, docker: { setupCommand: "echo global" } },
+    { scope, docker: { setupCommand: "echo global" } },
     {
       work: {
         workspace: "~/openclaw-work",
@@ -229,7 +227,7 @@ describe("Agent-specific sandbox config", () => {
 
   it("should use agent-specific workspaceRoot", async () => {
     const cfg = sandboxConfig(
-      { mode: "all", scope: "agent", workspaceRoot: "~/.openclaw/sandboxes" },
+      { workspaceRoot: "~/.openclaw/sandboxes" },
       {
         isolated: {
           workspace: "~/openclaw-isolated",
@@ -244,22 +242,12 @@ describe("Agent-specific sandbox config", () => {
 
     const context = await resolveContext(cfg, "agent:isolated:main", "/tmp/test-isolated");
 
-    if (!context) {
-      throw new Error("Expected sandbox context for isolated agent");
-    }
     expect(context.workspaceDir).toContain(path.resolve("/tmp/isolated-sandboxes"));
   });
 
   it("should prefer agent-specific sandbox tool policy", () => {
     const cfg = createRestrictedAgentSandboxConfig({
-      agentTools: {
-        sandbox: {
-          tools: {
-            allow: ["read", "write"],
-            deny: ["edit"],
-          },
-        },
-      },
+      agentTools: { sandbox: { tools: { allow: ["read", "write"], deny: ["edit"] } } },
       globalSandboxTools: {
         allow: ["read"],
         deny: ["exec"],
@@ -274,55 +262,31 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it.each([
-    {
-      scope: "agent" as const,
-      expectedSetup: "echo work",
-    },
-    {
-      scope: "shared" as const,
-      expectedSetup: "echo global",
-    },
+    { scope: "agent" as const, expectedSetup: "echo work" },
+    { scope: "shared" as const, expectedSetup: "echo global" },
   ])("should resolve $scope setupCommand overrides", async ({ scope, expectedSetup }) => {
     const cfg = createWorkSetupCommandConfig(scope);
     const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
-    if (!context) {
-      throw new Error(`Expected sandbox context for ${scope} scoped setup`);
-    }
     expect(context.docker?.setupCommand).toBe(expectedSetup);
     expectDockerSetupCommand(expectedSetup);
   });
 
   it("should honor agent-specific sandbox mode overrides", () => {
-    const scenarios = [
-      {
-        cfg: sandboxConfig(undefined, {
-          main: { workspace: "~/openclaw", sandbox: { mode: "off" } },
+    for (const [globalMode, mode, agentId, session, sandboxed] of [
+      ["all", "off", "main", "main", false],
+      ["off", "all", "family", "whatsapp:group:123", true],
+    ] as const) {
+      expect(
+        resolvePreparedSandboxRuntimeStatus({
+          cfg: sandboxConfig(
+            { mode: globalMode },
+            { [agentId]: { sandbox: { mode, scope: "agent" } } },
+          ),
+          sessionKey: `agent:${agentId}:${session}`,
+          preparedSessionEntry: null,
         }),
-        sessionKey: "agent:main:main",
-        expected: { mode: "off", sandboxed: false },
-      },
-      {
-        cfg: sandboxConfig(
-          { mode: "off" },
-          {
-            family: {
-              workspace: "~/openclaw-family",
-              sandbox: { mode: "all", scope: "agent" },
-            },
-          },
-        ),
-        sessionKey: "agent:family:whatsapp:group:123",
-        expected: { mode: "all", sandboxed: true },
-      },
-    ];
-    for (const scenario of scenarios) {
-      const runtime = resolvePreparedSandboxRuntimeStatus({
-        cfg: scenario.cfg,
-        sessionKey: scenario.sessionKey,
-        preparedSessionEntry: null,
-      });
-      expect(runtime).toMatchObject(scenario.expected);
+      ).toMatchObject({ mode, sandboxed });
     }
   });
 
@@ -334,14 +298,7 @@ describe("Agent-specific sandbox config", () => {
       },
       {
         cfg: {
-          tools: {
-            sandbox: {
-              tools: {
-                allow: ["bash", "read"],
-                deny: [],
-              },
-            },
-          },
+          tools: { sandbox: { tools: { allow: ["bash", "read"], deny: [] } } },
           ...sandboxConfig(),
         } satisfies OpenClawConfig,
         expected: ["view_image"],

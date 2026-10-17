@@ -47,16 +47,12 @@ describe("createSandboxBridgeReadFile", () => {
   });
 
   it("rejects workspace-only container paths outside the sandbox workspace mount", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) =>
+      containerPath(filePath, "/remote/agent/secret.png"),
+    );
     await expect(
       resolveSandboxedBridgeMediaPath({
-        sandbox: sandbox(
-          {
-            resolvePath: vi.fn(({ filePath }: { filePath: string }) =>
-              containerPath(filePath, "/remote/agent/secret.png"),
-            ),
-          },
-          true,
-        ),
+        sandbox: sandbox({ resolvePath }, true),
         mediaPath: "/remote/agent/secret.png",
       }),
     ).rejects.toThrow("Sandbox path escapes workspace root: /remote/agent/secret.png");
