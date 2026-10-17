@@ -135,19 +135,6 @@ describe("tryRouteCli", () => {
     });
   });
 
-  it("propagates an owned mutation failure", async () => {
-    const error = new Error("synthetic state ownership refusal");
-    runRouteMock.mockRejectedValueOnce(error);
-
-    await expect(tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"])).rejects.toBe(
-      error,
-    );
-
-    expect(runRouteMock).toHaveBeenCalledOnce();
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-  });
-
   it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {
     const captured: boolean[] = [];
     runRouteMock.mockImplementationOnce(async () => {

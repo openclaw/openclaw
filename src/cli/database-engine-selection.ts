@@ -94,15 +94,7 @@ const OWNED_DATABASE_SELECTION = new Set([
   "doctor update",
   "doctor post-upgrade",
   // Updater contexts, receipts and explicit paths own admission; cleanup reads no config.
-  "update",
-  "update status",
-  "update admit",
-  "update migrate",
-  "update restore",
-  "update finish",
-  "update recover",
-  "update adopt-immutable",
-  "update cleanup",
+  "update *",
 ]);
 
 /** Select storage before stateful startup; true means Doctor completed a no-database report. */

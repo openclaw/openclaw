@@ -10,9 +10,13 @@ import { readConfigSnapshotForEngineSelection } from "./config-preflight-snapsho
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each([true, false])(
-  "selects the final PostgreSQL target using the supplied environment (isolated: %s)",
-  async (isolated) => {
+it.each([
+  { mode: "default", isolated: false, options: undefined },
+  { mode: "isolated", isolated: true, options: { isolateEnv: true } },
+  { mode: "shared", isolated: false, options: { isolateEnv: false } },
+])(
+  "selects the final PostgreSQL target using the supplied environment ($mode)",
+  async ({ isolated, options }) => {
     const home = dirs.make("openclaw-engine-target-");
     const bootstrap = path.join(home, ".openclaw");
     const target = path.join(home, "target");
@@ -49,10 +53,7 @@ it.each([true, false])(
     const sql = observeMainThreadSql();
     try {
       resetDatabaseEngineSelectionForTest();
-      const snapshot = await readConfigSnapshotForEngineSelection(
-        env,
-        isolated ? undefined : { isolateEnv: false },
-      );
+      const snapshot = await readConfigSnapshotForEngineSelection(env, options);
       expect(snapshot).toMatchObject({
         valid: true,
         path: path.join(target, "openclaw.json"),

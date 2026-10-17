@@ -197,6 +197,36 @@ describe("database-only config repair without a PostgreSQL connection", () => {
     await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("validates the redirected source after selecting its engine", async () => {
+    const { root, env } = await fixture();
+    const bootstrapDir = path.join(root, ".openclaw");
+    const targetDir = path.join(root, "redirected");
+    const targetPath = path.join(targetDir, "openclaw.json");
+    await fs.mkdir(bootstrapDir);
+    await fs.mkdir(targetDir);
+    await fs.writeFile(
+      path.join(bootstrapDir, "openclaw.json"),
+      JSON.stringify({ env: { vars: { OPENCLAW_STATE_DIR: targetDir } } }),
+    );
+    await fs.writeFile(targetPath, JSON.stringify({ gateway: { port: "invalid" } }));
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "config", "validate", "--json"],
+      env: { ...env, OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+    });
+    expect(result.code, result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ valid: false, path: targetPath });
+    await expect(
+      fs.access(path.join(bootstrapDir, "state", "openclaw.sqlite")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.access(path.join(targetDir, "state", "openclaw.sqlite"))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+  });
+
   it("requires PostgreSQL selection to validate a readable config", async () => {
     const { configPath, statePath, env } = await fixture();
     const originalConfig = await fs.readFile(configPath, "utf8");

@@ -180,12 +180,12 @@ export async function readConfigSnapshotBeforeEngineSelection(
   return snapshot;
 }
 
-/** Select storage from a core-only read before observation or plugin discovery can open it. */
+/** Select storage and retain its routed environment for subsequent config and state reads. */
 export async function readConfigSnapshotForEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
   options: { isolateEnv?: boolean } = {},
 ): Promise<ConfigFileSnapshot> {
-  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
+  const readEnv = options.isolateEnv === true ? cloneEnvWithPlatformSemantics(env) : env;
   const snapshot = await readConfigSnapshotBeforeEngineSelection(readEnv, { isolateEnv: false });
   if (
     !isConfigReadFailure(snapshot) &&
