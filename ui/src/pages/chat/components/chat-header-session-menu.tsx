@@ -27,7 +27,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
-import { chatQuickActionEntry, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
+import { useChatQuickActionEntries, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {
   canManageChatSessionSharing,
   useChatSessionSharingMenu,
@@ -103,6 +103,7 @@ function ChatHeaderSessionMenuContent(
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   let menu: MenuHandle | undefined;
+  const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
   const close = () => {
@@ -307,36 +308,39 @@ function ChatHeaderSessionMenuContent(
       ...view.primary(),
       primaryDivider,
       ...view.organization(),
-      ...props.sessionActions.map((action) => chatQuickActionEntry(action, `quick:${action.id}`)),
+      ...quickActions(),
       organizationDivider,
       ...view.advanced(),
     ];
   }
   const backDivider = separator("back-divider");
-  const items = createMemo((): MenuEntry[] => {
-    const current = compactView();
-    if (!props.compact || current === "root") {
-      return root();
-    }
-    if (current !== "sharing" && current !== "view") {
-      return view.compact(current);
-    }
-    return [
-      {
-        id: "compact:back",
-        label: t("common.back"),
-        class: "session-menu__item session-menu__back",
-        icon: (
-          <span class="session-menu__icon" aria-hidden="true">
-            <Icon name="arrowLeft" />
-          </span>
-        ),
-        closeOnSelect: false,
-      },
-      backDivider,
-      ...(current === "sharing" && props.sharing ? sharing.items() : viewOptions()),
-    ];
-  });
+  const items = createMemo(
+    (): MenuEntry[] => {
+      const current = compactView();
+      if (!props.compact || current === "root") {
+        return root();
+      }
+      if (current !== "sharing" && current !== "view") {
+        return view.compact(current);
+      }
+      return [
+        {
+          id: "compact:back",
+          label: t("common.back"),
+          class: "session-menu__item session-menu__back",
+          icon: (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name="arrowLeft" />
+            </span>
+          ),
+          closeOnSelect: false,
+        },
+        backDivider,
+        ...(current === "sharing" && props.sharing ? sharing.items() : viewOptions()),
+      ];
+    },
+    { lazy: true },
+  );
   function select(item: MenuItem, event: CustomEvent<MenuItem>) {
     const value = item.id;
     if (value.startsWith("board-widget:")) {

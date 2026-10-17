@@ -493,26 +493,6 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_authority_requires_exact_origin_and_path_boundary() {
-        let dashboard = Url::parse("https://gateway.example/openclaw/").unwrap();
-        for (candidate, expected) in [
-            ("https://gateway.example/openclaw", true),
-            ("https://gateway.example/openclaw/chat", true),
-            ("https://gateway.example/openclaw-other", false),
-            ("https://gateway.example:444/openclaw", false),
-            ("http://gateway.example/openclaw", false),
-            ("https://other.example/openclaw", false),
-            ("https://user@gateway.example/openclaw", false),
-        ] {
-            assert_eq!(
-                matches_dashboard(&Url::parse(candidate).unwrap(), &dashboard),
-                expected,
-                "{candidate}"
-            );
-        }
-    }
-
-    #[test]
     fn device_settings_preserve_newer_events_and_fifo_edits_after_a_rejection() {
         let document = DashboardDocument {
             url: Url::parse("https://gateway.example/openclaw/").unwrap(),

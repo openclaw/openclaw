@@ -58,7 +58,7 @@ export function createSessionMutationRefresh(host: Host) {
     // A scoped read cannot acquire error ownership by later selecting its agent.
     // A replacement foreground snapshot retires this warning, not row reconciliation.
     const foreground = host.readState();
-    const ownsForeground = sessionListAgentMatcher(agentId)(foreground.agentId ?? undefined);
+    const ownsForeground = sessionListAgentMatcher(agentId)(foreground.agentId);
     const isErrorCurrent = () => {
       const current = host.readState();
       return (

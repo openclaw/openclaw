@@ -112,10 +112,15 @@ async function pressureCheck(
 }
 
 describe("installToolResultContextGuard", () => {
-  it("delivers actionable tool text through the real agent loop", async () => {
+  it.each([
+    "Error: missing import;",
+    "(Command exited with code 1)",
+    "Command timed out after 5 seconds.",
+    "Process exited with signal SIGTERM.",
+  ])("delivers the diagnostic %s through the real agent loop", async (diagnostic) => {
     const hint = "Inspect src/fixture.ts before retrying.";
     const preamble = "progress output\n".repeat(400);
-    const sourceTexts = [preamble + "Error: missing import; " + hint];
+    const sourceTexts = [preamble + diagnostic + " " + hint];
     const content = sourceTexts.map((text) => ({ type: "text" as const, text }));
     const original = structuredClone(content);
     const requests: Message[][] = [];
@@ -193,6 +198,7 @@ describe("installToolResultContextGuard", () => {
       estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
     ).toBeLessThanOrEqual(contextWindowTokens);
     expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expect(getAllToolResultText(projected)).toContain(diagnostic);
     expect(getAllToolResultText(projected)).toContain(hint);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",

@@ -391,7 +391,6 @@ it.each(["projection retirement", "ACP read failure"] as const)(
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = { agentId: "main", sessionKey: "agent:main:acp:late-facts" };
-      replaceSessionEntrySync(scope, { sessionId: "late-facts", updatedAt: 1 });
       const releaseForeground = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({
         cfg: { agents: { entries: { main: {} } } },
@@ -402,7 +401,6 @@ it.each(["projection retirement", "ACP read failure"] as const)(
       let reading: Promise<void> | undefined;
       try {
         await projection.ensureMaterialized();
-        const row = projection.findBySessionId({ agentId: "main", sessionId: "late-facts" })[0]!;
         const count = projection.materializedCount;
         const read = stateReads.executeExistingOpenClawStateRead;
         let held = false;
@@ -421,6 +419,8 @@ it.each(["projection retirement", "ACP read failure"] as const)(
             return reply;
           },
         );
+        // A fresh identity has no warmed ACP receipt and must enter the held read.
+        replaceSessionEntrySync(scope, { sessionId: "late-facts", updatedAt: 1 });
         sessionChanges.emit(scope);
         reading = projection.ensureMaterialized();
         await Promise.race([
@@ -429,6 +429,7 @@ it.each(["projection retirement", "ACP read failure"] as const)(
             throw new Error("Drain bypassed the pending ACP read");
           }),
         ]);
+        const row = projection.findBySessionId({ agentId: "main", sessionId: "late-facts" })[0]!;
         expect(row.pendingDatabaseFacts).toBeUndefined();
         if (change === "projection retirement") {
           projection.dispose();

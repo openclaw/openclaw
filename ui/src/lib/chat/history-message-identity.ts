@@ -69,13 +69,9 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   const metadata = asNullableRecord(record?.["__openclaw"]);
   const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
   const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
-  try {
-    // History alone adds recordTimestampMs; delivery metadata is not projection identity.
-    // Keep every other projection byte so siblings from one transcript row stay distinct.
-    return `${sourceIdentity}:${JSON.stringify(projection)}`;
-  } catch {
-    return sourceIdentity;
-  }
+  // History alone adds recordTimestampMs; delivery metadata is not projection identity.
+  // Keep every other projection byte so siblings from one transcript row stay distinct.
+  return `${sourceIdentity}:${JSON.stringify(projection)}`;
 }
 
 /** Preserve projected siblings while removing only overlapping page occurrences. */

@@ -14,7 +14,7 @@ import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import {
   createRouterOutletPresentation,
   selectRenderedRouteMatch,
-} from "./router-outlet-controller.ts";
+} from "./router-outlet-presentation.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,

@@ -418,18 +418,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const run = async () => {
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
-        try {
-          await this.publishedDatabase.refreshFacts();
-        } catch (error) {
-          if (params?.force && !hasTargetedSessionSyncParams(params)) {
-            this.markFailedFullReindexRetry({
-              memory: this.sources.has("memory"),
-              sessions: this.sources.has("sessions"),
-            });
-            this.recordFullReindexFailure(this.provider !== null);
-          }
-          throw error;
-        }
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
         let forceFtsOnly =
           this.embeddingBootstrapFailure !== undefined &&
@@ -457,6 +445,19 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           const dbPath = resolveUserPath(this.settings.store.databasePath);
           const lock = await waitForMemoryReindexLock(dbPath, { waitForActive: true });
           try {
+            // A preceding generation may have replaced the index while this sync waited.
+            try {
+              await this.publishedDatabase.refreshFacts();
+            } catch (error) {
+              if (params?.force && !hasTargetedSessionSyncParams(params)) {
+                this.markFailedFullReindexRetry({
+                  memory: this.sources.has("memory"),
+                  sessions: this.sources.has("sessions"),
+                });
+                this.recordFullReindexFailure(this.provider !== null);
+              }
+              throw error;
+            }
             await this.publishedDatabase.closePublicationWorker();
             this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
             try {

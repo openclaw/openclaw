@@ -49,7 +49,7 @@ import {
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
 } from "./composer-capability-controls.tsx";
-import type { NewSessionComposerTextarea } from "./composer-controller.ts";
+import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
