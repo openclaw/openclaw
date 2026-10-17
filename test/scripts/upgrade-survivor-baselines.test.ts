@@ -16,9 +16,30 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
 
-function withReleaseFixture<T>(releases: unknown[], fn: (file: string) => T): T {
-  return withJsonFixture("releases.json", releases, fn);
-}
+type Steps = Array<{ id?: string; run?: string }>;
+type Workflow = {
+  on: {
+    workflow_call: {
+      inputs: Record<
+        "published_upgrade_survivor_baseline" | "published_upgrade_survivor_baselines",
+        { default: string }
+      >;
+    };
+  };
+  jobs: { resolve_package: { steps: Steps } };
+};
+const workflow = () =>
+  parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as Workflow;
+const readOutputs = (file: string) =>
+  Object.fromEntries(
+    readFileSync(file, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
 
 function withJsonFixture<T>(name: string, contents: unknown, fn: (file: string) => T): T {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-upgrade-baselines-"));
@@ -73,10 +94,7 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
   it.each([false, true])(
     "discovers all release pages before publishing baselines (API failure: %s)",
     (failApi) => {
-      const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
-        jobs: { resolve_package: { steps: Array<{ id?: string; run?: string }> } };
-      };
-      const run = workflow.jobs.resolve_package.steps.find(
+      const run = workflow().jobs.resolve_package.steps.find(
         (step) => step.id === "upgrade_survivor_baselines",
       )?.run;
       assert(run);
@@ -93,7 +111,7 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       const versions = releases
         .filter((release) => !release.isPrerelease && release.tagName !== "v2026.6.3")
         .map((release) => release.tagName.slice(1));
-      withReleaseFixture(releases, (file) => {
+      withJsonFixture("releases.json", releases, (file) => {
         const root = path.dirname(file);
         const bin = path.join(root, "bin");
         const output = path.join(root, "output");
@@ -190,21 +208,11 @@ if (process.env.FAIL_API === "true") process.exit(75);
     "release-checks",
     "minimum",
   ])("pins the %s workflow baseline once before Docker fanout", (entrypoint) => {
-    const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
-      on: {
-        workflow_call: {
-          inputs: Record<
-            "published_upgrade_survivor_baseline" | "published_upgrade_survivor_baselines",
-            { default: string }
-          >;
-        };
-      };
-      jobs: { resolve_package: { steps: Array<{ id?: string; run?: string }> } };
-    };
+    const packageWorkflow = workflow();
     const migration = parse(readFileSync(".github/workflows/update-migration.yml", "utf8")) as {
       on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
     };
-    const inputs = workflow.on.workflow_call.inputs;
+    const inputs = packageWorkflow.on.workflow_call.inputs;
     const release = parse(
       readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
     ) as {
@@ -214,11 +222,11 @@ if (process.env.FAIL_API === "true") process.exit(75);
         };
         prepare_release_package: {
           outputs: { upgrade_survivor_baselines: string };
-          steps: Array<{ id?: string; run?: string }>;
+          steps: Steps;
         };
       };
     };
-    const step = workflow.jobs.resolve_package.steps.find(
+    const step = packageWorkflow.jobs.resolve_package.steps.find(
       (entry) => entry.id === "upgrade_survivor_baselines",
     );
     const run = step?.run;
@@ -291,15 +299,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
             FIXTURE_NPM_CALLS: calls,
           },
         });
-        const selected = Object.fromEntries(
-          readFileSync(profileOutput, "utf8")
-            .trimEnd()
-            .split("\n")
-            .map((line) => {
-              const separator = line.indexOf("=");
-              return [line.slice(0, separator), line.slice(separator + 1)];
-            }),
-        );
+        const selected = readOutputs(profileOutput);
         // Historical qualification keeps the candidate-relative predecessor.
         expect(selected.baselines).toBe("");
         assert(selected.baselines !== undefined, "Missing release baseline output");
@@ -328,15 +328,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         `baselines=${expectedBaselines}\nbaseline_scope=${expanded ? "legacy-operator-state" : "all-scenarios"}\nbaseline=openclaw@2026.7.1-2\n`,
       );
       if (expanded) {
-        const selected = Object.fromEntries(
-          readFileSync(output, "utf8")
-            .trimEnd()
-            .split("\n")
-            .map((line) => {
-              const separator = line.indexOf("=");
-              return [line.slice(0, separator), line.slice(separator + 1)];
-            }),
-        );
+        const selected = readOutputs(output);
         const groups = JSON.parse(
           execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
             encoding: "utf8",

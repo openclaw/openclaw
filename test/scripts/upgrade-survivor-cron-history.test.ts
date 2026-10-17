@@ -13,6 +13,9 @@ import { migrateLegacyCronRunLogsToTaskRuns } from "../../src/infra/state-migrat
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const helper = path.resolve("scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs");
 const diagnostics = path.resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs");
@@ -32,31 +35,22 @@ function prepare(version = "2026.9.4") {
     [candidate, "2026.9.4", 17],
   ] as const) {
     mkdirSync(path.join(directory, "dist"), { recursive: true });
-    writeFileSync(
-      path.join(directory, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: packageVersion,
-        type: "module",
-        openclaw: { schemaVersions: { state: stateSchema } },
-      }),
-    );
-    writeFileSync(
-      path.join(directory, "dist/build-info.json"),
-      JSON.stringify({ fixture: directory }),
-    );
+    writeJson(path.join(directory, "package.json"), {
+      name: "openclaw",
+      version: packageVersion,
+      type: "module",
+      openclaw: { schemaVersions: { state: stateSchema } },
+    });
+    writeJson(path.join(directory, "dist/build-info.json"), { fixture: directory });
   }
   const databasePath = path.join(stateDir, "state/openclaw.sqlite");
   const db = new DatabaseSync(databasePath);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   db.exec(`PRAGMA user_version = ${schema}`);
   db.close();
-  writeFileSync(
-    path.join(artifacts, "legacy-operator-baseline.json"),
-    JSON.stringify({
-      jobs: [{ id: "retained-main" }, { id: "retained-ops" }],
-    }),
-  );
+  writeJson(path.join(artifacts, "legacy-operator-baseline.json"), {
+    jobs: [{ id: "retained-main" }, { id: "retained-ops" }],
+  });
   const tarball = path.join(root, "candidate.tgz");
   execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
   seedCronHistory(stateDir, artifacts, baseline, tarball);
@@ -154,8 +148,8 @@ it.each(["2026.9.3", "2026.9.4"])(
     const result = version === "2026.9.3" ? fixture.invokeUpdater() : fixture.invoke(true);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     assertCronHistory(fixture.artifacts, fixture.observations);
-    const evidence = JSON.parse(
-      readFileSync(path.join(fixture.artifacts, "legacy-operator-cron-history-proof.json"), "utf8"),
+    const evidence = readJson(
+      path.join(fixture.artifacts, "legacy-operator-cron-history-proof.json"),
     );
     expect(evidence.currentSchemaAtDoctorEntry).toBe(version === "2026.9.4");
     expect(evidence.contract).toBe(
@@ -168,23 +162,20 @@ it.each(["2026.9.3", "2026.9.4"])(
       expect(evidence.updater.before.tasks).toEqual([]);
       expect(evidence.updater.identity).toEqual(evidence.baseline);
       expect(evidence.doctor.before.tasks).toEqual(evidence.doctor.after.tasks);
-      writeFileSync(
-        path.join(fixture.artifacts, "summary.json"),
-        JSON.stringify({
-          status: "passed",
-          baseline: { spec: `openclaw@${version}`, version },
-          candidate: { kind: "tarball", version: "2026.9.4" },
-          scenario: "legacy-operator-state",
-          installedVersion: "2026.9.4",
-          candidateInstallMode: "updater",
-          updateRestartMode: "manual",
-          updateOutcome: "success",
-          phases: [],
-        }),
-      );
+      writeJson(path.join(fixture.artifacts, "summary.json"), {
+        status: "passed",
+        baseline: { spec: `openclaw@${version}`, version },
+        candidate: { kind: "tarball", version: "2026.9.4" },
+        scenario: "legacy-operator-state",
+        installedVersion: "2026.9.4",
+        candidateInstallMode: "updater",
+        updateRestartMode: "manual",
+        updateOutcome: "success",
+        phases: [],
+      });
       const published = path.join(fixture.artifacts, "published");
       publishDiagnostics(fixture.artifacts, published, (text: string) => text, "passed");
-      const summary = JSON.parse(readFileSync(path.join(published, "summary.json"), "utf8"));
+      const summary = readJson(path.join(published, "summary.json"));
       expect(JSON.parse(summary.logs["legacy-operator-cron-history-proof.json"])).toEqual(evidence);
     }
   },
@@ -210,23 +201,20 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
     name.startsWith("cron-history-doctor-"),
   );
   expect(receiptName).toBeDefined();
-  const receipt = JSON.parse(readFileSync(path.join(fixture.observations, receiptName!), "utf8"));
+  const receipt = readJson(path.join(fixture.observations, receiptName!));
   for (let index = 1; index < 8; index++) {
-    writeFileSync(
-      path.join(fixture.observations, `cron-history-doctor-${receipt.pid + index}.json`),
-      JSON.stringify({
-        ...receipt,
-        pid: receipt.pid + index,
-        startedAtMs: receipt.startedAtMs + index,
-        observationError: "rejected rehearsal observation ".repeat(40),
-      }),
-    );
+    writeJson(path.join(fixture.observations, `cron-history-doctor-${receipt.pid + index}.json`), {
+      ...receipt,
+      pid: receipt.pid + index,
+      startedAtMs: receipt.startedAtMs + index,
+      observationError: "rejected rehearsal observation ".repeat(40),
+    });
   }
   expect(() => assertCronHistory(fixture.artifacts, fixture.observations)).toThrow(
     "never received the unchanged retained cron history",
   );
-  const evidence = JSON.parse(
-    readFileSync(path.join(fixture.artifacts, "legacy-operator-cron-history-proof.json"), "utf8"),
+  const evidence = readJson(
+    path.join(fixture.artifacts, "legacy-operator-cron-history-proof.json"),
   );
   expect(evidence.status).toBe("failed");
   expect(evidence.observations).toHaveLength(8);
@@ -245,7 +233,7 @@ it("rejects parent-side import even when canonical task rows and Doctor exit are
   expect(captured.status, captured.stderr).toBe(0);
   const published = path.join(fixture.artifacts, "published");
   publishDiagnostics(fixture.artifacts, published, (text: string) => text);
-  const failure = JSON.parse(readFileSync(path.join(published, "failure.json"), "utf8"));
+  const failure = readJson(path.join(published, "failure.json"));
   expect(JSON.parse(failure.logs["legacy-operator-cron-history-proof.json"])).toEqual(evidence);
 });
 

@@ -18,20 +18,34 @@ import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
   resolveScenarioConfigSteps,
-  resolveUpgradeSurvivorConfigSteps,
-  resolveUpgradeSurvivorConfigStepsForBaseline,
+  resolveUpgradeSurvivorConfigSteps as recipeSteps,
+  resolveUpgradeSurvivorConfigStepsForBaseline as baselineSteps,
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 import { buildInlineProviderModels } from "../../src/agents/embedded-agent-runner/model.inline-provider.js";
-import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 import { ModelsConfigSchema } from "../../src/config/zod-schema.core.js";
+
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
 
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const DOCKER_RUNNER_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
+const sharedSteps = [
+  ["update-channel", "update"],
+  ["gateway", "gateway"],
+  ["models-openai", "models"],
+  ["models-anthropic", "models-anthropic"],
+  ["models-google", "models-google"],
+  ["agents", "agents"],
+  ["skills", "skills"],
+  ["plugins", "plugins"],
+];
+const sharedIds = sharedSteps.map(([id]) => id);
+const sharedIntents = sharedSteps.map(([, intent]) => intent);
 
-function configLeafWrites(steps: ReturnType<typeof resolveUpgradeSurvivorConfigSteps>) {
+function configLeafWrites(steps: ReturnType<typeof recipeSteps>) {
   return steps.flatMap((step): { path: string; value: unknown }[] => {
     if (step.argv[0] !== "config" || step.argv[1] !== "set") {
       return [];
@@ -152,7 +166,7 @@ node() {
     return {
       result,
       loggedArgs,
-      summary: existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : null,
+      summary: existsSync(summaryPath) ? readJson(summaryPath) : null,
       legacySeeded: existsSync(legacyMarker),
     };
   } finally {
@@ -302,7 +316,7 @@ esac
   it.each([["prerelease-plugin-registry", undefined, "beta"]])(
     "keeps the %s scenario on the %s override update channel",
     (scenario, channel, expectedChannel) => {
-      const updateChannels = resolveUpgradeSurvivorConfigSteps(scenario, channel)
+      const updateChannels = recipeSteps(scenario, channel)
         .filter((step) => step.argv.slice(0, 3).join(" ") === "config set update.channel")
         .map((step) => step.argv[3]);
 
@@ -321,22 +335,16 @@ esac
     try {
       const config = join(root, "config.json");
       const coverage = join(root, "coverage.json");
-      writeFileSync(
-        config,
-        JSON.stringify({
-          logging: Object.fromEntries(
-            loggedArgs.flatMap((args) =>
-              args[2]?.startsWith("logging.") ? [[args[2].slice("logging.".length), args[3]]] : [],
-            ),
+      writeJson(config, {
+        logging: Object.fromEntries(
+          loggedArgs.flatMap((args) =>
+            args[2]?.startsWith("logging.") ? [[args[2].slice("logging.".length), args[3]]] : [],
           ),
-        }),
-      );
-      writeFileSync(
-        coverage,
-        JSON.stringify({
-          acceptedIntents: summary.acceptedIntents.filter((intent: string) => intent === "logging"),
-        }),
-      );
+        ),
+      });
+      writeJson(coverage, {
+        acceptedIntents: summary.acceptedIntents.filter((intent: string) => intent === "logging"),
+      });
       const assertions = ["baseline", "survival"].map((stage) =>
         spawnSync(
           process.execPath,
@@ -370,21 +378,17 @@ esac
     ]);
     expect(loggedArgs.some((args) => args[2]?.startsWith("logging.console"))).toBe(false);
     expect(
-      resolveUpgradeSurvivorConfigSteps("tilde-log-path")
+      recipeSteps("tilde-log-path")
         .filter((step) => step.intent === "logging")
         .map((step) => step.argv),
     ).toEqual([["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"]]);
-    expect(
-      resolveUpgradeSurvivorConfigSteps("feishu-channel").some((step) => step.intent === "logging"),
-    ).toBe(false);
+    expect(recipeSteps("feishu-channel").some((step) => step.intent === "logging")).toBe(false);
   });
 
   it.each([null])(
     "authors schema-valid provider credentials without changing the primary model for %s",
     (version) => {
-      const writes = configLeafWrites(
-        resolveUpgradeSurvivorConfigStepsForBaseline("base", version),
-      );
+      const writes = configLeafWrites(baselineSteps("base", version));
       const providers = Object.fromEntries(
         writes
           .filter((entry) => entry.path.startsWith("models.providers."))
@@ -424,9 +428,7 @@ esac
       expect(writes.find((entry) => entry.path === "agents")?.value).toMatchObject({
         defaults: { model: { primary: "openai/gpt-5.5" } },
       });
-      const googleStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
-        (step) => step.id === "models-google",
-      );
+      const googleStep = baselineSteps("base", version).find((step) => step.id === "models-google");
       const google = JSON.parse(googleStep?.argv[3] ?? "{}");
       expect(buildInlineProviderModels({ google })).toEqual([
         expect.objectContaining({
@@ -445,7 +447,7 @@ esac
   it.each(["base"])("keeps all configured provider owners allowed in the %s recipe", (scenario) => {
     for (const version of ["2026.6.1", "2026.8.1", "2026.9.5"]) {
       let allow: string[] = [];
-      for (const step of resolveUpgradeSurvivorConfigStepsForBaseline(scenario, version)) {
+      for (const step of baselineSteps(scenario, version)) {
         if (step.argv[2] === "plugins") {
           allow = JSON.parse(step.argv[3] ?? "{}").allow;
         } else if (step.argv[2] === "plugins.allow") {
@@ -457,10 +459,7 @@ esac
   });
 
   it("uses password auth for mobile pairing reconnect coverage", () => {
-    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
-      "mobile-pairing-reconnect",
-      "2026.6.34",
-    );
+    const steps = baselineSteps("mobile-pairing-reconnect", "2026.6.34");
     const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
 
     expect(steps.map((step) => step.intent)).toEqual(["update", "gateway", "validate"]);
@@ -481,13 +480,10 @@ esac
     );
   });
 
-  it.each([
-    { version: "2026.7.1-2", legacy: true, explicit: false },
-    { version: "2026.7.2-beta.3", legacy: true, explicit: false },
-  ])(
-    "authors one version-correct recovery roster for $version",
-    ({ version, legacy, explicit }) => {
-      const steps = resolveUpgradeSurvivorConfigStepsForBaseline("recovery-cleanup", version);
+  it.each(["2026.7.1-2", "2026.7.2-beta.3"])(
+    "authors one version-correct recovery roster for %s",
+    (version) => {
+      const steps = baselineSteps("recovery-cleanup", version);
       const agentSteps = steps.filter(
         (step) =>
           step.argv[0] === "config" && step.argv[1] === "set" && step.argv[2]?.startsWith("agents"),
@@ -495,45 +491,27 @@ esac
       expect(agentSteps).toHaveLength(1);
       expect(agentSteps[0]?.argv.slice(0, 3)).toEqual(["config", "set", "agents"]);
       const agents = JSON.parse(agentSteps[0]?.argv[3] ?? "{}");
-      expect(legacy ? agents.entries : agents.list).toBeUndefined();
-      const ids = legacy
-        ? agents.list.map((agent: { id: string }) => agent.id)
-        : Object.keys(agents.entries);
-      expect(ids).toEqual(["main", "ops", "recovery-clean", "recovery-protected"]);
-      const ops = legacy
-        ? agents.list.find((agent: { id: string }) => agent.id === "ops")
-        : agents.entries.ops;
-      expect(ops.fastModeDefault).toBe(true);
-      expect(agents.defaults.heartbeat.every).toBe("0m");
-      if (!explicit) {
-        expect(agents.ownership).toBeUndefined();
-        const entries: Record<string, { default?: boolean }> = legacy
-          ? Object.fromEntries(agents.list.map(({ id, ...entry }: { id: string }) => [id, entry]))
-          : agents.entries;
-        expect(Object.entries(entries).filter(([, entry]) => entry.default)).toEqual([
-          ["main", expect.objectContaining({ default: true })],
-        ]);
-      } else {
-        expect(agents.ownership).toBe("explicit");
-        expect(AgentsSchema.safeParse(agents).success).toBe(true);
-      }
-      const baseStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
-        (step) => step.id === "agents",
+      expect(agents.entries).toBeUndefined();
+      expect(agents.list.map((agent: { id: string }) => agent.id)).toEqual([
+        "main",
+        "ops",
+        "recovery-clean",
+        "recovery-protected",
+      ]);
+      expect(agents.list.find((agent: { id: string }) => agent.id === "ops").fastModeDefault).toBe(
+        true,
       );
+      expect(agents.defaults.heartbeat.every).toBe("0m");
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.list.filter((entry: { default?: boolean }) => entry.default)).toEqual([
+        expect.objectContaining({ id: "main", default: true }),
+      ]);
+      const baseStep = baselineSteps("base", version).find((step) => step.id === "agents");
       const baseAgents = JSON.parse(baseStep?.argv[3] ?? "{}");
-      expect(
-        legacy
-          ? baseAgents.list.map((agent: { id: string }) => agent.id)
-          : Object.keys(baseAgents.entries),
-      ).toEqual(["main", "ops"]);
+      expect(baseAgents.list.map((agent: { id: string }) => agent.id)).toEqual(["main", "ops"]);
       expect(configLeafWrites(steps)).toContainEqual({
         path: "channels.whatsapp",
-        value: JSON.parse(
-          readFileSync(
-            "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-whatsapp.json",
-            "utf8",
-          ),
-        ),
+        value: readJson("scripts/e2e/lib/upgrade-survivor/config-recipe/channels-whatsapp.json"),
       });
       expect(steps.at(-1)?.id).toBe("validate");
     },
@@ -610,17 +588,10 @@ esac
     const version = "2026.6.34";
     const { result, summary, loggedArgs } = runRecipeFixture({ scenario, version });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(scenario, version);
+    const steps = baselineSteps(scenario, version);
     expect(loggedArgs).toEqual(steps.map((step) => step.argv));
     expect(summary.steps.map((step: { id: string }) => step.id)).toEqual([
-      "update-channel",
-      "gateway",
-      "models-openai",
-      "models-anthropic",
-      "models-google",
-      "agents",
-      "skills",
-      "plugins",
+      ...sharedIds,
       "channels",
       "tools-tool-search",
       "plugins-configured-installs",
@@ -635,14 +606,7 @@ esac
       intents: ["discord-channel", "telegram-channel", "whatsapp-channel"],
     });
     expect(summary.acceptedIntents).toEqual([
-      "update",
-      "gateway",
-      "models",
-      "models-anthropic",
-      "models-google",
-      "agents",
-      "skills",
-      "plugins",
+      ...sharedIntents,
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
@@ -664,18 +628,8 @@ esac
         failPath: "channels.telegram",
       });
       expect(result.status).toBe(1);
-      const previousIds = [
-        "update-channel",
-        "gateway",
-        "models-openai",
-        "models-anthropic",
-        "models-google",
-        "agents",
-        "skills",
-        "plugins",
-      ];
       expect(summary.steps.map((step: { id: string }) => step.id)).toEqual([
-        ...previousIds,
+        ...sharedIds,
         ...(batched ? ["channels"] : ["channels-discord", "channels-telegram"]),
       ]);
       expect(summary.steps.slice(0, -1).every((step: { ok: boolean }) => step.ok)).toBe(true);
@@ -685,20 +639,10 @@ esac
         status: 17,
       });
       expect(summary.acceptedIntents).toEqual([
-        "update",
-        "gateway",
-        "models",
-        "models-anthropic",
-        "models-google",
-        "agents",
-        "skills",
-        "plugins",
+        ...sharedIntents,
         ...(batched ? [] : ["discord-channel"]),
       ]);
-      const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
-        "configured-plugin-installs",
-        version,
-      );
+      const steps = baselineSteps("configured-plugin-installs", version);
       expect(loggedArgs).toEqual(steps.slice(0, batched ? 9 : 10).map((step) => step.argv));
       expect(result.stderr).toContain(
         `baseline config recipe failed at ${batched ? "channels" : "channels-telegram"}: 17`,

@@ -5,9 +5,28 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const selectedSha = "a".repeat(40);
 const version = "2026.9.6";
+function identityExists(artifacts: string, kind: "candidate" | "installed") {
+  return existsSync(path.join(artifacts, `${kind}-package-identity.json`));
+}
+
+function expectRefused(
+  scenario: Scenario,
+  change: Change,
+  error: string,
+  events: readonly string[],
+  kind: "candidate" | "installed" = "installed",
+) {
+  const observed = runCandidateFlow(scenario, change);
+  expect(observed.result.status).not.toBe(0);
+  expect(observed.result.stderr).toContain(error);
+  expect(observed.events).toEqual(events);
+  expect(identityExists(observed.artifacts, kind)).toBe(false);
+}
 type Change =
   | "valid"
   | "stale"
@@ -30,15 +49,9 @@ function runCandidateFlow(scenario: Scenario, change: Change) {
   mkdirSync(path.join(candidate, "dist"), { recursive: true });
   mkdirSync(artifacts);
   mkdirSync(runtime);
-  writeFileSync(
-    path.join(candidate, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
-  );
+  writeJson(path.join(candidate, "package.json"), { name: "openclaw", version });
   writeFileSync(path.join(candidate, "openclaw.mjs"), "export {};\n");
-  writeFileSync(
-    path.join(candidate, "dist/build-info.json"),
-    JSON.stringify({ version, commit: selectedSha }),
-  );
+  writeJson(path.join(candidate, "dist/build-info.json"), { version, commit: selectedSha });
   writeFileSync(path.join(candidate, "dist/entry.mjs"), "export const payload = 'candidate';\n");
   cpSync(candidate, installed, { recursive: true });
   writeFileSync(path.join(installed, "dist/entry.mjs"), "export const payload = 'stale';\n");
@@ -48,12 +61,9 @@ function runCandidateFlow(scenario: Scenario, change: Change) {
   const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
   const audited = scenario === "projects-doctor" || scenario === "workshop-doctor-recovery";
   if (audited && change !== "missing-baseline") {
-    writeFileSync(
-      path.join(artifacts, "baseline-package-identity.json"),
-      JSON.stringify({
-        buildInfo: { commit: change === "published" ? selectedSha : "c".repeat(40) },
-      }),
-    );
+    writeJson(path.join(artifacts, "baseline-package-identity.json"), {
+      buildInfo: { commit: change === "published" ? selectedSha : "c".repeat(40) },
+    });
   }
   const startMarker =
     scenario === "projects-doctor"
@@ -160,14 +170,11 @@ describe.skipIf(process.platform === "win32")(
     it.each(["base", "sqlite-volume"] as const)(
       "%s accepts the exact tarball payload and rejects stale same-version installed bytes",
       (scenario) => {
-        const stale = runCandidateFlow(scenario, "stale");
-        expect(stale.result.status).not.toBe(0);
-        expect(stale.result.stderr).toContain(
+        expectRefused(
+          scenario,
+          "stale",
           "Installed application payload differs from the frozen tarball",
-        );
-        expect(stale.events).toEqual(["updater"]);
-        expect(existsSync(path.join(stale.artifacts, "installed-package-identity.json"))).toBe(
-          false,
+          ["updater"],
         );
 
         const valid = runCandidateFlow(scenario, "valid");
@@ -176,8 +183,7 @@ describe.skipIf(process.platform === "win32")(
         const installed = JSON.parse(
           readFileSync(path.join(valid.artifacts, "installed-package-identity.json"), "utf8"),
         );
-        expect(installed.version).toBe(version);
-        expect(installed.buildInfo.commit).toBe(selectedSha);
+        expect(installed).toMatchObject({ version, buildInfo: { commit: selectedSha } });
       },
     );
 
@@ -195,13 +201,7 @@ describe.skipIf(process.platform === "win32")(
         events: ["updater"],
       },
     ] as const)("refuses $change at the actual candidate boundary", ({ change, error, events }) => {
-      const observed = runCandidateFlow("base", change);
-      expect(observed.result.status).not.toBe(0);
-      expect(observed.result.stderr).toContain(error);
-      expect(observed.events).toEqual(events);
-      expect(existsSync(path.join(observed.artifacts, "installed-package-identity.json"))).toBe(
-        false,
-      );
+      expectRefused("base", change, error, events);
     });
 
     it.each(["projects-doctor", "workshop-doctor-recovery"] as const)(
@@ -209,21 +209,13 @@ describe.skipIf(process.platform === "win32")(
       (scenario) => {
         const valid = runCandidateFlow(scenario, "valid");
         expect(valid.result.status, valid.result.stdout + valid.result.stderr).toBe(0);
-        expect(existsSync(path.join(valid.artifacts, "candidate-package-identity.json"))).toBe(
-          true,
-        );
+        expect(identityExists(valid.artifacts, "candidate")).toBe(true);
 
         for (const [change, error] of [
           ["published", "Candidate still contains published bytes"],
           ["missing-baseline", "ENOENT"],
         ] as const) {
-          const refused = runCandidateFlow(scenario, change);
-          expect(refused.result.status).not.toBe(0);
-          expect(refused.result.stderr).toContain(error);
-          expect(refused.events).toEqual([]);
-          expect(existsSync(path.join(refused.artifacts, "candidate-package-identity.json"))).toBe(
-            false,
-          );
+          expectRefused(scenario, change, error, [], "candidate");
         }
       },
     );

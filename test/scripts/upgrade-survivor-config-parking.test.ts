@@ -4,17 +4,31 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+
 const PUBLISHED_RUNNER_PATH = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/upgrade-survivor/config-parking.mjs");
 const SURVIVOR_SCRIPT_PATH = path.resolve("scripts/e2e/upgrade-survivor-docker.sh");
 const E2E_INSTANCE_SCRIPT_PATH = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function writePublishedRunner(root: string, script: string) {
-  // The Darwin Bash guard replays the complete fixture through /bin/bash.
+function runPublished(root: string, script: string, env: NodeJS.ProcessEnv) {
+  const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
+  const setup = source.slice(0, source.indexOf("phase storage-preflight"));
   const file = path.join(root, "published-runner.sh");
-  writeFileSync(file, script);
-  return file;
+  // The Darwin Bash guard replays the complete fixture through /bin/bash.
+  writeFileSync(file, `${setup}\ntrap - EXIT ERR INT TERM\n${script}`);
+  return spawnSync("bash", [file], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
+      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
+      OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+      ...env,
+    },
+  });
 }
 
 describe("upgrade survivor config parking", () => {
@@ -75,11 +89,7 @@ process.exit(child.status ?? 1);
 `,
         { mode: 0o755 },
       );
-      const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
-      const setup = source.slice(0, source.indexOf("phase storage-preflight"));
-      const script = `${setup}
-trap - EXIT ERR INT TERM
-install_update_restart_systemctl_shim() { :; }
+      const script = `install_update_restart_systemctl_shim() { :; }
 
 check_gateway_status() { :; }
 openclaw_e2e_probe_tcp() { [ -f "$PROBE_LIVE" ]; }
@@ -94,35 +104,27 @@ probe_status=0
 prepare_update_restart_probe || probe_status=$?
 exit "$probe_status"
 `;
-      const result = spawnSync("bash", [writePublishedRunner(root, script)], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: root,
-          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-          OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
-          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER: parkingWrapper,
-          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry ? path.join(root, "registry") : "",
-          PROBE_CAPTURE: capturePath,
-          PROBE_EVENTS: path.join(root, "events"),
-          PROBE_LIVE: path.join(root, "live"),
-          PROBE_STOP_STATUS: String(stopStatus),
-          PROBE_ACTIVE_STATUS: String(activeStatus),
-          PROBE_INSTALLED: path.join(root, "installed"),
-          PROBE_INSTALL_STATUS: String(installStatus),
-        },
+      const result = runPublished(root, script, {
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER: parkingWrapper,
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry ? path.join(root, "registry") : "",
+        PROBE_CAPTURE: capturePath,
+        PROBE_EVENTS: path.join(root, "events"),
+        PROBE_LIVE: path.join(root, "live"),
+        PROBE_STOP_STATUS: String(stopStatus),
+        PROBE_ACTIVE_STATUS: String(activeStatus),
+        PROBE_INSTALLED: path.join(root, "installed"),
+        PROBE_INSTALL_STATUS: String(installStatus),
       });
       const stopped = stopStatus === 0 && activeStatus === 3;
       expect(result.status, result.stdout + result.stderr).toBe(
         stopped ? installStatus : stopStatus || activeStatus,
       );
       expect(existsSync(path.join(root, "installed"))).toBe(true);
-      expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual({
+      expect(readJson(capturePath)).toEqual({
         agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
         channels: { discord: { enabled: true }, whatsapp: { enabled: true } },
         plugins: { enabled: false },
@@ -146,7 +148,7 @@ exit "$probe_status"
       } else {
         expect(events).not.toContain("restore-");
         expect(readFileSync(snapshot, "utf8")).toBe(authoredConfig);
-        expect(JSON.parse(readFileSync(configPath, "utf8")).plugins.enabled).toBe(false);
+        expect(readJson(configPath).plugins.enabled).toBe(false);
       }
     },
   );
@@ -196,16 +198,9 @@ esac
 export const { redactSensitiveText } = await tsImport(${JSON.stringify(path.resolve("src/logging/redact.ts"))}, import.meta.url);
 `,
       );
-      const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
-      const setup = source.slice(0, source.indexOf("phase storage-preflight"));
-      const result = spawnSync(
-        "bash",
-        [
-          writePublishedRunner(
-            root,
-            `${setup}
-trap - EXIT ERR INT TERM
-update_repair_required=0
+      const result = runPublished(
+        root,
+        `update_repair_required=0
 mkdir -p "$HOME/.config/systemd/user" "$OPENCLAW_STATE_DIR"
 printf 'original unit\\n' >"$HOME/.config/systemd/user/openclaw-gateway.service"
 printf 'original env\\n' >"$OPENCLAW_STATE_DIR/gateway.systemd.env"
@@ -257,28 +252,18 @@ openclaw_e2e_maybe_timeout() {
 fi
 exit "$probe_status"
 `,
-          ),
-        ],
         {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-            HOME: root,
-            OPENCLAW_STATE_DIR: path.join(root, "state"),
-            OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-            OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
-            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-            OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-            OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-            OPENCLAW_CLAWHUB_URL: "",
-            PROBE_EVENTS: path.join(root, "events"),
-            OPENCLAW_E2E_REDACTOR_MODULE: redactor,
-            PROBE_ACTIVE_STATUS: String(activeStatus),
-            PROBE_MUTATION: mutation,
-            PROBE_START_STATUS: String(startStatus),
-            PROBE_READY_STATUS: String(readyStatus),
-          },
+          OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+          OPENCLAW_CLAWHUB_URL: "",
+          PROBE_EVENTS: path.join(root, "events"),
+          OPENCLAW_E2E_REDACTOR_MODULE: redactor,
+          PROBE_ACTIVE_STATUS: String(activeStatus),
+          PROBE_MUTATION: mutation,
+          PROBE_START_STATUS: String(startStatus),
+          PROBE_READY_STATUS: String(readyStatus),
         },
       );
       const expected =
@@ -345,16 +330,9 @@ exit "$probe_status"
     "propagates guarded restart survival failure at %s",
     (failure) => {
       const root = tempDirs.make("openclaw-survivor-guarded-assertion-");
-      const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
-      const setup = source.slice(0, source.indexOf("phase storage-preflight"));
-      const result = spawnSync(
-        "bash",
-        [
-          writePublishedRunner(
-            root,
-            `${setup}
-trap - EXIT ERR INT TERM
-SCENARIO=base
+      const result = runPublished(
+        root,
+        `SCENARIO=base
 UPDATE_RESTART_MODE=auto-auth
 update_repair_required=0
 candidate_version=2026.9.3
@@ -375,19 +353,10 @@ probe_status=0
 repair_fixture_plugin_consent || probe_status=$?
 exit "$probe_status"
 `,
-          ),
-        ],
         {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            HOME: root,
-            OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.2",
-            OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-            OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-            PROBE_FAILURE: failure,
-            PROBE_SIDE_EFFECT: path.join(root, "continued"),
-          },
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.2",
+          PROBE_FAILURE: failure,
+          PROBE_SIDE_EFFECT: path.join(root, "continued"),
         },
       );
       expect(result.status, result.stdout + result.stderr).toBe(47);
@@ -399,33 +368,16 @@ exit "$probe_status"
     "preserves phase failure without disabling normal errexit (conditional=%s)",
     (conditional) => {
       const root = tempDirs.make("openclaw-survivor-phase-failure-");
-      const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
-      const setup = source.slice(0, source.indexOf("phase storage-preflight"));
-      const result = spawnSync(
-        "bash",
-        [
-          writePublishedRunner(
-            root,
-            `${setup}
-trap - EXIT ERR INT TERM
-handler() {
+      const result = runPublished(
+        root,
+        `handler() {
   ${conditional ? "return 47" : "bash -c 'exit 47'"}
   touch "$PROBE_SIDE_EFFECT"
 }
 ${conditional ? 'probe_status=0; phase preparation handler || probe_status=$?; exit "$probe_status"' : "phase preparation handler"}
 `,
-          ),
-        ],
         {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            HOME: root,
-            OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-            OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-            OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-            PROBE_SIDE_EFFECT: path.join(root, "side-effect"),
-          },
+          PROBE_SIDE_EFFECT: path.join(root, "side-effect"),
         },
       );
       expect(result.status, result.stdout + result.stderr).toBe(47);
@@ -537,7 +489,7 @@ install_companion_plugins
 
       expect(result.status, result.stderr).toBe(installStatus || inspectStatus);
       if (!installStatus) {
-        expect(JSON.parse(readFileSync(path.join(root, "inspect-config.json"), "utf8"))).toEqual({
+        expect(readJson(path.join(root, "inspect-config.json"))).toEqual({
           plugins: { enabled: false },
         });
       }

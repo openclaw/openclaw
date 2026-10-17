@@ -15,6 +15,9 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: vi.fn(),
 }));
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+
 const originalChildProcess =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,6 +53,17 @@ const reply = (value: unknown) => ({
   stdout: JSON.stringify(value),
   stderr: "",
 });
+function mockOpenClaw(handle: (args: string[]) => ReturnType<typeof reply>) {
+  vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+    if (command !== "openclaw") {
+      return originalChildProcess.spawnSync(command, args, options);
+    }
+    if (!Array.isArray(args)) {
+      throw new Error("CLI arguments missing");
+    }
+    return handle(args);
+  });
+}
 beforeEach(() => {
   vi.mocked(spawnSync).mockReset().mockImplementation(originalChildProcess.spawnSync);
 });
@@ -64,13 +78,7 @@ it.each(["2026.9.4", "2026.9.6"])(
     const baselinePath = path.join(root, "legacy-operator-baseline.json");
     fs.writeFileSync(baselinePath, "{}");
     const ran = new Set<string>();
-    vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-      if (command !== "openclaw") {
-        return originalChildProcess.spawnSync(command, args, options);
-      }
-      if (!Array.isArray(args)) {
-        throw new Error("CLI arguments missing");
-      }
+    mockOpenClaw((args) => {
       if (args[1] === "add") {
         expect(args.includes("--no-deliver")).toBe(version === "2026.9.6");
         const job = jobs.find((candidate) => candidate.name === args[args.indexOf("--name") + 1])!;
@@ -114,7 +122,7 @@ it.each(["2026.9.4", "2026.9.6"])(
         seedLegacyOperatorGatewayState();
       },
     );
-    const saved = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
+    const saved = readJson(baselinePath);
     expect(saved.jobs).toHaveLength(2);
     if (version === "2026.9.6") {
       expect([...ran]).toEqual(["main-job", "ops-job"]);
@@ -143,36 +151,24 @@ it.each([
   { source: "native", damage: "transcript-missing-cursor" },
 ])("checks candidate Cron pages for $source history ($damage)", async ({ source, damage }) => {
   const root = dirs.make("survivor-cron-reader-check-");
-  fs.writeFileSync(
-    path.join(root, "legacy-operator-baseline.json"),
-    JSON.stringify({
-      jobs: jobs.map((job, index) => ({
-        ...job,
-        ...(source === "native"
-          ? { history: [entries[index]], transcriptMarker: marker(job.effectiveAgentId) }
-          : {}),
-      })),
-    }),
-  );
+  writeJson(path.join(root, "legacy-operator-baseline.json"), {
+    jobs: jobs.map((job, index) => ({
+      ...job,
+      ...(source === "native"
+        ? { history: [entries[index]], transcriptMarker: marker(job.effectiveAgentId) }
+        : {}),
+    })),
+  });
   const contract = "candidate-doctor-import";
   if (source !== "native") {
-    fs.writeFileSync(
-      path.join(root, "legacy-operator-cron-history.json"),
-      JSON.stringify({ entries }),
-    );
-    fs.writeFileSync(
-      path.join(root, "legacy-operator-cron-history-proof.json"),
-      JSON.stringify({ status: "passed", contract }),
-    );
+    writeJson(path.join(root, "legacy-operator-cron-history.json"), { entries });
+    writeJson(path.join(root, "legacy-operator-cron-history-proof.json"), {
+      status: "passed",
+      contract,
+    });
   }
   const transcriptRequests: unknown[] = [];
-  vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-    if (command !== "openclaw") {
-      return originalChildProcess.spawnSync(command, args, options);
-    }
-    if (!Array.isArray(args)) {
-      throw new Error("CLI arguments missing");
-    }
+  mockOpenClaw((args) => {
     if (args[1] === "list") {
       return reply({ jobs });
     }
@@ -257,9 +253,7 @@ it.each([
       expect(() => assertLegacyOperatorGatewayState("candidate")).toThrow();
     }
   });
-  const proof = JSON.parse(
-    fs.readFileSync(path.join(root, "legacy-operator-candidate-cron-history.json"), "utf8"),
-  );
+  const proof = readJson(path.join(root, "legacy-operator-candidate-cron-history.json"));
   expect(proof.status).toBe(damage === "none" ? "passed" : "failed");
   expect(proof.source).toBe(source === "native" ? "published-native-runs" : contract);
   if (damage === "none") {
