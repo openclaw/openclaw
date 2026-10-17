@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { IncomingMessage } from "node:http";
@@ -120,24 +121,23 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
     });
     onTestFinished(scope.release);
     let largestAllocation = 0;
-    const allocateSafe = Buffer.alloc.bind(Buffer);
-    const allocate = Buffer.allocUnsafe.bind(Buffer);
-    const allocateSlow = Buffer.allocUnsafeSlow.bind(Buffer);
-    const safeSpy = vi.spyOn(Buffer, "alloc").mockImplementation((bytes, fill, encoding) => {
-      largestAllocation = Math.max(largestAllocation, bytes);
-      return allocateSafe(bytes, fill, encoding);
-    });
-    const fastSpy = vi.spyOn(Buffer, "allocUnsafe").mockImplementation((bytes) => {
-      largestAllocation = Math.max(largestAllocation, bytes);
-      return allocate(bytes);
-    });
-    const slowSpy = vi.spyOn(Buffer, "allocUnsafeSlow").mockImplementation((bytes) => {
-      largestAllocation = Math.max(largestAllocation, bytes);
-      return allocateSlow(bytes);
-    });
+    function trackAllocation<T extends unknown[], R>(allocate: (bytes: number, ...args: T) => R) {
+      return (bytes: number, ...args: T) => {
+        largestAllocation = Math.max(largestAllocation, bytes);
+        return allocate(bytes, ...args);
+      };
+    }
+    using _ = { [Symbol.dispose]: () => vi.restoreAllMocks() };
+    vi.spyOn(Buffer, "alloc").mockImplementation(trackAllocation(Buffer.alloc.bind(Buffer)));
+    vi.spyOn(Buffer, "allocUnsafe").mockImplementation(
+      trackAllocation(Buffer.allocUnsafe.bind(Buffer)),
+    );
+    vi.spyOn(Buffer, "allocUnsafeSlow").mockImplementation(
+      trackAllocation(Buffer.allocUnsafeSlow.bind(Buffer)),
+    );
     const detectMime = mediaMime.detectMime;
     let sourceHeaderChanged = false;
-    const mimeSpy = vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
+    vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
       const mime = await detectMime(params);
       if (!sourceHeaderChanged && !params.filePath && mime === "video/mp4") {
         sourceHeaderChanged = true;
@@ -145,83 +145,72 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
       }
       return mime;
     });
-    try {
-      const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
-        ...scope,
-        payloads: [directive],
-      });
-      expect(payloads[0]).toMatchObject({
-        text: "Here is the movie.",
-        trustedLocalMedia: true,
-        mediaUrls: [expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`)],
-      });
-      expect(sourceHeaderChanged).toBe(true);
-      const preparedPath = payloads[0]?.mediaUrls?.[0];
-      if (!preparedPath) {
-        throw new Error("Expected a prepared video path");
-      }
-      await using prepared = await fs.open(preparedPath, "r");
-      const persistedHeader = Buffer.alloc(header.length);
-      await prepared.read(persistedHeader, 0, persistedHeader.length, 0);
-      expect(persistedHeader).toEqual(header);
-      const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
-        sessionKey: SESSION_KEY,
-        payloads,
-        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
-      });
-      const block = assistantContent?.find((item) => item.type === "video");
-      expect(block).toMatchObject({ type: "video", mimeType: "video/mp4", playback: "native" });
-      if (!block || typeof block.url !== "string") {
-        throw new Error("Expected an inline managed video URL");
-      }
-      const attachmentId = requireAttachmentIdFromUrl(block.url);
-      const originalPath = await requireManagedOriginalPath(stateDir, attachmentId);
-      expect((await fs.stat(originalPath)).size).toBe(size);
-      await attachManagedOutgoingMediaToMessage({
-        messageId: "movie-reply",
-        blocks: persistedAssistantContent,
-        stateDir,
-      });
-      readMessages.mockResolvedValue([
-        {
-          role: "assistant",
-          content: persistedAssistantContent,
-          __openclaw: { id: "movie-reply" },
-        },
-      ]);
+    const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
+      ...scope,
+      payloads: [directive],
+    });
+    expect(payloads[0]).toMatchObject({
+      text: "Here is the movie.",
+      trustedLocalMedia: true,
+      mediaUrls: [expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`)],
+    });
+    expect(sourceHeaderChanged).toBe(true);
+    const preparedPath = payloads[0]?.mediaUrls?.[0];
+    assert(preparedPath, "Expected a prepared video path");
+    await using prepared = await fs.open(preparedPath, "r");
+    const persistedHeader = Buffer.alloc(header.length);
+    await prepared.read(persistedHeader, 0, persistedHeader.length, 0);
+    expect(persistedHeader).toEqual(header);
+    const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
+      sessionKey: SESSION_KEY,
+      payloads,
+      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+    });
+    const block = assistantContent?.find((item) => item.type === "video");
+    expect(block).toMatchObject({ type: "video", mimeType: "video/mp4", playback: "native" });
+    assert(block && typeof block.url === "string", "Expected an inline managed video URL");
+    const attachmentId = requireAttachmentIdFromUrl(block.url);
+    const originalPath = await requireManagedOriginalPath(stateDir, attachmentId);
+    expect((await fs.stat(originalPath)).size).toBe(size);
+    await attachManagedOutgoingMediaToMessage({
+      messageId: "movie-reply",
+      blocks: persistedAssistantContent,
+      stateDir,
+    });
+    readMessages.mockResolvedValue([
+      {
+        role: "assistant",
+        content: persistedAssistantContent,
+        __openclaw: { id: "movie-reply" },
+      },
+    ]);
 
-      const req = new IncomingMessage(new Socket());
-      req.method = "GET";
-      req.url = block.url;
-      req.headers.range = `bytes=${seekStart}-${size - 1}`;
-      const { res, setHeader } = makeMockHttpResponse();
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      const finished = once(res, "finish");
-      expect(
-        await handleManagedOutgoingMediaHttpRequest(req, res, {
-          auth: { mode: "none", allowTailscale: false },
-          stateDir,
-        }),
-      ).toBe(true);
-      await finished;
-      expect(res.statusCode).toBe(206);
-      expect(setHeader).toHaveBeenCalledWith(
-        "Content-Range",
-        `bytes ${seekStart}-${size - 1}/${size}`,
-      );
-      expect(setHeader).toHaveBeenCalledWith("Accept-Ranges", "bytes");
-      expect(Buffer.concat(chunks)).toEqual(marker);
-      expect(largestAllocation).toBeLessThan(size);
-      expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
-        stdinFileDescriptor: expect.any(Number),
-      });
-      expect(runFfmpeg).not.toHaveBeenCalled();
-    } finally {
-      mimeSpy.mockRestore();
-      safeSpy.mockRestore();
-      fastSpy.mockRestore();
-      slowSpy.mockRestore();
-    }
+    const req = new IncomingMessage(new Socket());
+    req.method = "GET";
+    req.url = block.url;
+    req.headers.range = `bytes=${seekStart}-${size - 1}`;
+    const { res, setHeader } = makeMockHttpResponse();
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const finished = once(res, "finish");
+    expect(
+      await handleManagedOutgoingMediaHttpRequest(req, res, {
+        auth: { mode: "none", allowTailscale: false },
+        stateDir,
+      }),
+    ).toBe(true);
+    await finished;
+    expect(res.statusCode).toBe(206);
+    expect(setHeader).toHaveBeenCalledWith(
+      "Content-Range",
+      `bytes ${seekStart}-${size - 1}/${size}`,
+    );
+    expect(setHeader).toHaveBeenCalledWith("Accept-Ranges", "bytes");
+    expect(Buffer.concat(chunks)).toEqual(marker);
+    expect(largestAllocation).toBeLessThan(size);
+    expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
+      stdinFileDescriptor: expect.any(Number),
+    });
+    expect(runFfmpeg).not.toHaveBeenCalled();
   });
 });

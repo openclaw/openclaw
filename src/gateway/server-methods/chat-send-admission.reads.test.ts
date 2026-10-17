@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { deserialize } from "node:v8";
@@ -44,6 +45,50 @@ import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
+
+type Admission = Awaited<ReturnType<typeof admitChatSend>>;
+type Session = Awaited<ReturnType<typeof prepareChatAdmission>>["session"];
+function cleanupAdmission(admitted: Admission | undefined, runId: string) {
+  if (admitted?.ok) {
+    admitted.value.cleanupAdmittedRun();
+  }
+  clearAgentRunContext(runId);
+}
+function lifecycleRelease(session: Session) {
+  return sessionLifecycle.getSessionWorkAdmissionRelease({
+    scope: session.storePath,
+    identities: [session.sessionKey, session.entry?.sessionId],
+  });
+}
+async function withoutHostSql(run: () => Promise<void>) {
+  const sql = observeHostDataSql();
+  try {
+    await run();
+    expect(sql.queries, sql.queries.join("\n")).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+}
+async function pendingWorkspaceResult(
+  placements: Parameters<typeof advancePlacementFixtureToActive>[0],
+  database: Parameters<typeof advancePlacementFixtureToActive>[1],
+  scope: Parameters<typeof advancePlacementFixtureToActive>[2],
+) {
+  const active = await advancePlacementFixtureToActive(placements, database, scope);
+  const claim = await placements.claimTurn({
+    ...scope,
+    claimId: "prior-worker-claim",
+    runId: "prior-worker-run",
+    owner: {
+      kind: "worker",
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    },
+  });
+  await placements.markWorkspaceResultPending(claim);
+  await placements.acceptWorkspaceResult(claim);
+  return claim;
+}
 
 async function withAdmissionTest(
   label: string,
@@ -121,16 +166,13 @@ it.each(["absent", "admitted"] as const)(
             idempotencyKey: "first-turn",
           },
         });
-        if (!request.ok) {
-          throw new Error(request.error);
-        }
+        assert(request.ok, "Request normalization failed");
         await withServingMetadata(cfg, async () => {
           expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(
             store === "admitted",
           );
           const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const sql = observeHostDataSql();
-          try {
+          await withoutHostSql(async () => {
             const authorized = await resolveSessionMutationAuthorizationAsync({
               client,
               method: "chat.send",
@@ -147,9 +189,7 @@ it.each(["absent", "admitted"] as const)(
               context,
             });
             expect(prepared).toMatchObject({ ok: true, value: { entry: undefined } });
-            if (!prepared.ok || !authorized.authorization) {
-              throw new Error("First-turn preparation failed");
-            }
+            assert(prepared.ok && authorized.authorization, "First-turn preparation failed");
             const respond = vi.fn();
             expect(
               await runChatSendPreAdmission({
@@ -163,14 +203,11 @@ it.each(["absent", "admitted"] as const)(
               }),
             ).toBe(true);
             expect(respond).not.toHaveBeenCalled();
-            expect(sql.queries, sql.queries.join("\n")).toEqual([]);
-          } finally {
-            sql.restore();
-          }
+          });
           assertNoRetainedSessionSharingReads();
         });
       },
-      { ...rolePolicyConfig(), agents: { ownership: "explicit", entries: { main: {} } } },
+      rolePolicyConfig(),
     );
   },
 );
@@ -186,23 +223,10 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
       replaceSessionEntrySync(scope, entry);
       const database = openOpenClawStateDatabase();
       const placements = createWorkerSessionPlacementStore({ database });
-      const active = await advancePlacementFixtureToActive(placements, database, {
+      const claim = await pendingWorkspaceResult(placements, database, {
         ...scope,
         sessionId: entry.sessionId,
       });
-      const claim = await placements.claimTurn({
-        ...scope,
-        sessionId: entry.sessionId,
-        claimId: "prior-worker-claim",
-        runId: "prior-worker-run",
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
-      await placements.markWorkspaceResultPending(claim);
-      await placements.acceptWorkspaceResult(claim);
       const context = createDirectChatContext({
         getRuntimeConfig: () => cfg,
         workerSessionPlacementService: placements,
@@ -359,10 +383,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         publishCommit?.();
         releaseReply.resolve();
         await Promise.allSettled([pending, ...(completion ? [completion] : [])]);
-        if (admitted?.ok) {
-          admitted.value.cleanupAdmittedRun();
-        }
-        clearAgentRunContext(runId);
+        cleanupAdmission(admitted, runId);
       }
     });
   },
@@ -412,13 +433,10 @@ it.each([
       client: null,
       params: { sessionKey, message: "Continue this session.", idempotencyKey: name },
     });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
+    assert(request.ok, "Request normalization failed");
     await withServingMetadata(cfg, async () => {
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      const sql = observeHostDataSql();
-      try {
+      await withoutHostSql(async () => {
         const prepared = await prepareChatSendSession({
           request: request.value,
           client: null,
@@ -432,10 +450,7 @@ it.each([
                 error: 'Agent "external-harness" no longer exists in configuration',
               },
         );
-        expect(sql.queries, sql.queries.join("\n")).toHaveLength(0);
-      } finally {
-        sql.restore();
-      }
+      });
     });
   });
 });
@@ -476,33 +491,28 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
         try {
           // Admission must read current settings even though preparation retained the old entry.
           replaceSessionEntrySync(scope, { ...entry, permissionMode: "full", updatedAt: now + 1 });
-          expect(session.entry?.permissionMode).toBeUndefined();
-          expect(session.entry?.sessionStartedAt).toBeUndefined();
-          expect(session.entry?.createdAt).toBeUndefined();
-          const sql = observeHostDataSql();
+          expect([
+            session.entry?.permissionMode,
+            session.entry?.sessionStartedAt,
+            session.entry?.createdAt,
+          ]).toEqual([undefined, undefined, undefined]);
           const respond = vi.fn();
-          try {
+          await withoutHostSql(async () => {
             admitted = await admitChatSend({
               ...admission,
               respond,
             });
             expect(respond).not.toHaveBeenCalled();
             expect(admitted.ok).toBe(true);
-            if (!admitted.ok) {
-              throw new Error("Session admission failed");
-            }
-            expect(admitted.value.admittedSessionSettings?.permissionMode).toBe("full");
-            expect(admitted.value.admittedSessionId).toBe(entry.sessionId);
+            assert(admitted.ok, "Session admission failed");
+            expect(admitted.value).toMatchObject({
+              admittedSessionSettings: { permissionMode: "full" },
+              admittedSessionId: entry.sessionId,
+            });
             expect(Boolean(admitted.value.restartSafeAdmission)).toBe(freshness === "fresh header");
-            expect(sql.queries, sql.queries.join("\n")).toEqual([]);
-          } finally {
-            sql.restore();
-          }
+          });
         } finally {
-          if (admitted?.ok) {
-            admitted.value.cleanupAdmittedRun();
-          }
-          clearAgentRunContext(runId);
+          cleanupAdmission(admitted, runId);
         }
       },
       { session: { reset: { mode: "daily" } } },
@@ -570,10 +580,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
           });
           expect(retried.ok).toBe(true);
         } finally {
-          if (retried?.ok) {
-            retried.value.cleanupAdmittedRun();
-          }
-          clearAgentRunContext(runId);
+          cleanupAdmission(retried, runId);
         }
       }
     },
@@ -660,19 +667,11 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         expect(context.chatAbortControllers.size).toBe(0);
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
         expect(context.dedupe.size).toBe(source === "new-receipt" ? 1 : 0);
-        expect(
-          sessionLifecycle.getSessionWorkAdmissionRelease({
-            scope: session.storePath,
-            identities: [sessionKey, session.entry?.sessionId],
-          }),
-        ).toBeUndefined();
+        expect(lifecycleRelease(session)).toBeUndefined();
       } finally {
         publication?.mockRestore();
         comparison.mockRestore();
-        if (admitted?.ok) {
-          admitted.value.cleanupAdmittedRun();
-        }
-        clearAgentRunContext(runId);
+        cleanupAdmission(admitted, runId);
       }
     });
   },
@@ -709,26 +708,10 @@ it.each([
     const placements = createWorkerSessionPlacementStore({ database });
     const completingClaim =
       change === "completed workspace result"
-        ? await (async () => {
-            const active = await advancePlacementFixtureToActive(placements, database, {
-              ...scope,
-              sessionId: entry.sessionId,
-            });
-            const claim = await placements.claimTurn({
-              ...scope,
-              sessionId: entry.sessionId,
-              owner: {
-                kind: "worker",
-                environmentId: active.environmentId,
-                ownerEpoch: active.activeOwnerEpoch,
-              },
-              claimId: "completed-workspace-claim",
-              runId: "completed-workspace-run",
-            });
-            await placements.markWorkspaceResultPending(claim);
-            await placements.acceptWorkspaceResult(claim);
-            return claim;
-          })()
+        ? await pendingWorkspaceResult(placements, database, {
+            ...scope,
+            sessionId: entry.sessionId,
+          })
         : undefined;
     const retiredPlacement =
       change === "retired placement"
@@ -826,12 +809,7 @@ it.each([
       expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
       expect(sessionAccessor.loadSessionEntry(scope)).toEqual(initialEntry);
       if (!accepted) {
-        expect(
-          sessionLifecycle.getSessionWorkAdmissionRelease({
-            scope: session.storePath,
-            identities: [sessionKey, entry.sessionId],
-          }),
-        ).toBeUndefined();
+        expect(lifecycleRelease(session)).toBeUndefined();
       }
       if (change === "unavailable reader") {
         expect(respond.mock.calls[0]?.[2]?.message).toContain(
@@ -847,18 +825,10 @@ it.each([
       resume.resolve();
       await Promise.allSettled([pending]);
       delayed.mockRestore();
-      if (admitted?.ok) {
-        admitted.value.cleanupAdmittedRun();
-      }
-      clearAgentRunContext(runId);
+      cleanupAdmission(admitted, runId);
     }
     expect(context.chatAbortControllers.size).toBe(0);
-    expect(
-      sessionLifecycle.getSessionWorkAdmissionRelease({
-        scope: session.storePath,
-        identities: [sessionKey, entry.sessionId],
-      }),
-    ).toBeUndefined();
+    expect(lifecycleRelease(session)).toBeUndefined();
     if (admitted?.ok) {
       expect(admitted.value.gatewayWorkAdmission.isActive()).toBe(false);
     }

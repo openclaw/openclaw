@@ -1,49 +1,36 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { onTestFinished, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { onTestFinished, beforeEach, describe, expect, it } from "vitest";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
-  captureWebchatReplyMediaScope,
+  AUDIO_BYTES,
+  PNG_BYTES,
+  gateMediaOpen,
+  useMediaState,
+  writeMedia,
+} from "./chat-media-fixture.test-support.js";
+import {
   getWebchatReplyMediaLocalRoots,
   normalizeWebchatReplyMediaPathsForDisplay,
 } from "./chat-reply-media.js";
 import { seedWebchatReplyMediaScope } from "./chat-reply-media.test-support.js";
 
-const PNG_BYTES = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-  "base64",
-);
 const TEST_SESSION_KEY = "agent:main:webchat:direct:user";
 
 describe("WebChat reply media workspace ownership", () => {
   let testState: OpenClawTestState;
-
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-webchat-reply-media-",
-    });
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await drainGlobalSingletonLifecycleState();
-    await testState.cleanup();
+  const getState = useMediaState();
+  beforeEach(() => {
+    testState = getState();
   });
 
   function createMediaTestContext(params: { allowRead: boolean }) {
@@ -61,18 +48,6 @@ describe("WebChat reply media workspace ownership", () => {
     };
     setRuntimeConfigSnapshot(cfg);
     return { cfg, workspaceDir };
-  }
-
-  async function createAudioFile(audioPath: string): Promise<void> {
-    await fs.mkdir(path.dirname(audioPath), { recursive: true });
-    await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-  }
-
-  async function image(directory: string, name = "chart.png") {
-    await fs.mkdir(directory, { recursive: true });
-    const source = path.join(directory, name);
-    await fs.writeFile(source, PNG_BYTES);
-    return source;
   }
 
   async function seedScope(cfg: OpenClawConfig, entry: Partial<SessionEntry>) {
@@ -120,56 +95,30 @@ describe("WebChat reply media workspace ownership", () => {
     const { cfg } = createMediaTestContext({ allowRead: true });
     cfg.tools = { ...cfg.tools, fs: { workspaceOnly: true } };
     const selected = testState.statePath("worktrees", "selected");
-    const source = await image(selected);
+    const source = await writeMedia(path.join(selected, "chart.png"));
     const target = {
       sessionKey: TEST_SESSION_KEY,
-      sessionId: "changing-media-policy",
       agentId: "main",
-      storePath: (await loadSessionEntryAsync(TEST_SESSION_KEY, { agentId: "main" })).storePath,
     };
     const entry: SessionEntry = {
-      sessionId: target.sessionId,
+      sessionId: "changing-media-policy",
       lifecycleRevision: "initial",
       permissionMode: "full",
       sessionRoot: selected,
       updatedAt: 1,
     };
-    await replaceSessionEntry(target, entry);
-    const scope = await captureWebchatReplyMediaScope({
-      cfg,
-      agentId: "main",
-      sessionKey: TEST_SESSION_KEY,
-      sessionLoadOptions: { agentId: "main" },
-    });
-    onTestFinished(scope.release);
-    const opened = createDeferred();
-    const release = createDeferred();
-    const readCounts: Array<() => number> = [];
-    const nativeOpen = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await nativeOpen(...args);
-      if (String(args[0]) === source) {
-        const read = vi.spyOn(handle, "read");
-        readCounts.push(() => read.mock.calls.length);
-        opened.resolve();
-        await release.promise;
-      }
-      return handle;
-    });
-    const delivery = normalizeWebchatReplyMediaPathsForDisplay({
-      ...scope,
-      payloads: [{ mediaUrls: [source], trustedLocalMedia: false }],
-    });
+    const scope = await seedScope(cfg, entry);
+    const gate = gateMediaOpen(source);
+    const delivery = normalize(scope, [source]);
     const rejected = expect(delivery).rejects.toThrow("Session media access changed");
     try {
-      await opened.promise;
+      await gate.opened;
       await replaceSessionEntry(target, { ...entry, sessionRoot: testState.statePath("other") });
     } finally {
-      release.resolve();
+      gate.release();
     }
     await rejected;
-    expect(readCounts.length).toBeGreaterThan(0);
-    expect(readCounts.reduce((total, count) => total + count(), 0)).toBe(0);
+    gate.assertUnread();
     expect(await fs.readFile(source)).toEqual(PNG_BYTES);
   });
 
@@ -177,7 +126,7 @@ describe("WebChat reply media workspace ownership", () => {
     const { cfg } = createMediaTestContext({ allowRead: false });
     const worktree = testState.statePath("worktrees", "project");
     await fs.mkdir(path.join(worktree, "nested"), { recursive: true });
-    const sourcePath = await image(worktree);
+    const sourcePath = await writeMedia(path.join(worktree, "chart.png"));
     const scope = await seedScope(cfg, {
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: worktree,
@@ -196,11 +145,7 @@ describe("WebChat reply media workspace ownership", () => {
     { mode: "full", configured: true, confined: false },
     { mode: undefined, configured: true, confined: true },
     { mode: undefined, configured: false, confined: false },
-  ] satisfies Array<{
-    mode: SessionEntry["permissionMode"];
-    configured: boolean;
-    confined: boolean;
-  }>)(
+  ] as const)(
     "uses session media permissions before configured containment ($mode, configured=$configured)",
     async ({ mode, configured, confined }) => {
       const { cfg, workspaceDir } = createMediaTestContext({ allowRead: true });
@@ -220,8 +165,8 @@ describe("WebChat reply media workspace ownership", () => {
         path.join(directory, `${labels[index]}.mp3`),
       );
       for (const [index, directory] of directories.entries()) {
-        await image(directory, `${labels[index]}.png`);
-        await createAudioFile(audioPaths[index]!);
+        await writeMedia(path.join(directory, `${labels[index]}.png`));
+        await writeMedia(audioPaths[index]!, AUDIO_BYTES);
       }
       const scope = await seedScope(cfg, {
         sessionRoot: selected,
@@ -252,7 +197,7 @@ describe("WebChat reply media workspace ownership", () => {
     const { cfg } = createMediaTestContext({ allowRead: true });
     cfg.tools = { ...cfg.tools, toolsBySender: { "*": { deny: ["read"] } } };
     const selected = testState.statePath("worktrees", "sender-policy");
-    const source = await image(selected, "private.png");
+    const source = await writeMedia(path.join(selected, "private.png"));
     const scope = await seedScope(cfg, {
       sessionRoot: selected,
       permissionMode: "full",
@@ -281,17 +226,16 @@ describe("WebChat reply media workspace ownership", () => {
         },
       },
     };
-    const source = await image(selected, "host.png");
+    const source = await writeMedia(path.join(selected, "host.png"));
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: cfg,
       agentId: "main",
       sessionKey: TEST_SESSION_KEY,
       workspaceDir: selected,
     });
-    if (!sandbox) {
-      throw new Error("expected sandbox workspace");
-    }
-    await fs.writeFile(path.join(sandbox.workspaceDir, "sandbox.png"), PNG_BYTES);
+    await writeMedia(
+      path.join(expectDefined(sandbox, "sandbox workspace").workspaceDir, "sandbox.png"),
+    );
     const scope = await seedScope(cfg, {
       sessionRoot: selected,
       permissionMode: "full",
@@ -317,8 +261,8 @@ describe("WebChat reply media workspace ownership", () => {
         path.join(directory, `local-${index}.mp3`),
       );
       for (const [index, directory] of rawDirectories.entries()) {
-        await image(directory, `local-${index}.png`);
-        await createAudioFile(rawAudio[index]!);
+        await writeMedia(path.join(directory, `local-${index}.png`));
+        await writeMedia(rawAudio[index]!, AUDIO_BYTES);
       }
       const sessionEntry: SessionEntry = {
         sessionId: "remote-policy-session",
@@ -362,9 +306,7 @@ describe("WebChat reply media workspace ownership", () => {
       expect(payloads.at(-1)?.mediaUrls).toEqual([dataUrl]);
       const managedAudio = await Promise.all(
         ["inbound", "outbound", "tool-remote", "outgoing/originals", "playback-transcode"].map(
-          async (bucket) =>
-            (await saveMediaBuffer(Buffer.from([0xff, 0xfb, 0x90, 0x00]), "audio/mpeg", bucket))
-              .path,
+          async (bucket) => (await saveMediaBuffer(AUDIO_BYTES, "audio/mpeg", bucket)).path,
         ),
       );
       const assistantContent = await content(
@@ -392,7 +334,7 @@ describe("WebChat reply media workspace ownership", () => {
     const { cfg } = createMediaTestContext({ allowRead: true });
     const outside = testState.path("outside-managed-store");
     const source = path.join(outside, "private.mp3");
-    await createAudioFile(source);
+    await writeMedia(source, AUDIO_BYTES);
     const alias = path.join(getMediaDir(), "tool-remote-alias");
     await fs.mkdir(getMediaDir(), { recursive: true });
     await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");

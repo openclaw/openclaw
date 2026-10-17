@@ -1,227 +1,187 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { ChatPendingInputsPage } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   patchSessionEntryCore,
-  type SessionPendingInputReceipt,
   stageSessionPendingInput,
   upsertSessionEntryCore,
+  type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { chatRpc as request } from "./chat-rpc-fixture.test-support.js";
 
-async function request(
-  context: GatewayRequestContext,
-  client: GatewayClient,
-  method: string,
-  params: Record<string, unknown>,
+type Actor = "owner" | "admin" | "view" | "write" | "none";
+type Scope = Parameters<typeof upsertSessionEntryCore>[0] & { sessionId: string };
+async function withReadFixture(
+  run: (f: {
+    scope: Scope;
+    createdActor: NonNullable<SessionEntry["createdActor"]>;
+    call: (method: string, params?: Record<string, unknown>) => ReturnType<typeof request>;
+  }) => Promise<void>,
+  actor: Actor = "owner",
+  keyedIncognito = false,
+  policy = true,
 ) {
-  const respond = vi.fn<RespondFn>();
-  await handleGatewayRequest({
-    req: { type: "req", id: `proof-${method}`, method, params },
-    respond,
-    client,
-    isWebchatConnect: () => true,
-    context,
-  });
-  expect(respond).toHaveBeenCalledOnce();
-  return expectDefined(respond.mock.calls[0], "RPC response");
-}
-
-const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
-
-describe("registered chat read scope", () => {
-  it.each([
-    { name: "owner draft", actor: "owner", visibility: "draft", allowed: true },
-    { name: "admin draft", actor: "admin", visibility: "draft", allowed: true },
-    { name: "foreign draft view", actor: "view", visibility: "draft", allowed: false },
-    { name: "foreign draft write", actor: "write", visibility: "draft", allowed: false },
-    { name: "foreign draft none", actor: "none", visibility: "draft", allowed: false },
-    { name: "foreign shared view", actor: "view", visibility: "shared", allowed: true },
-    { name: "foreign shared none", actor: "none", visibility: "shared", allowed: false },
-    {
-      name: "foreign metadata-incognito",
-      actor: "view",
-      visibility: "shared",
-      allowed: false,
-      incognito: true,
-    },
-    {
-      name: "foreign keyed-incognito",
-      actor: "view",
-      visibility: "shared",
-      allowed: false,
-      incognito: true,
-      keyedIncognito: true,
-    },
-  ] as const)(
-    "$name applies identical session visibility to history and full messages",
-    async (testCase) => {
-      await withOpenClawTestState(profileState, async (state) => {
-        const cfg = rolePolicyConfig();
-        if (testCase.actor === "admin") {
-          expectDefined(cfg.gateway?.roles?.definitions.write, "admin role definition").scopes = [
-            "operator.admin",
-          ];
-        }
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const cfg = policy ? rolePolicyConfig() : await captureRuntimeConfigAsyncReader()();
+      if (actor === "admin") {
+        expectDefined(cfg.gateway?.roles?.definitions.write, "admin role").scopes = [
+          "operator.admin",
+        ];
+      }
+      if (policy) {
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
-        ensureUserProfilesSchema({});
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        const owner = roleClient("write", "synthetic-owner");
-        const client =
-          testCase.actor === "owner"
-            ? owner
-            : roleClient(testCase.actor === "admin" ? "write" : testCase.actor, "synthetic-reader");
-        if (testCase.actor === "admin") {
-          client.connect.scopes = ["operator.admin"];
-        }
-        const scope = {
-          agentId: "main",
-          sessionKey:
-            "keyedIncognito" in testCase
-              ? "agent:main:dashboard:incognito-synthetic-draft"
-              : "agent:main:synthetic-draft",
-          sessionId: "synthetic-draft",
-        };
-        await upsertSessionEntryCore(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: 1,
-          visibility: testCase.visibility,
-          ...("incognito" in testCase ? { incognito: testCase.incognito } : {}),
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: expectDefined(owner.authenticatedUserProfile, "owner profile").profileId,
-          },
-        });
-        await appendTranscriptMessage(scope, {
-          eventId: "synthetic-transcript-id",
-          message: { role: "user", content: "Synthetic private transcript" },
-        });
-        const receipt = expectDefined(
-          await stageSessionPendingInput(scope, {
-            runId: "synthetic-pending-run",
-            assertCurrent: () => {},
-            message: {
-              role: "user",
-              content: "Synthetic private pending input",
-              timestamp: 1,
-              idempotencyKey: "synthetic:user",
-            },
-          }),
-          "pending receipt",
+      }
+      ensureUserProfilesSchema({});
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const owner = roleClient("write", "read-owner");
+      const client =
+        actor === "owner" ? owner : roleClient(actor === "admin" ? "write" : actor, "reader");
+      if (actor === "admin") {
+        client.connect.scopes = ["operator.admin"];
+      }
+      const scope = {
+        agentId: "main",
+        sessionKey: keyedIncognito ? "agent:main:dashboard:incognito-read" : "agent:main:read",
+        sessionId: "read-session",
+      };
+      let context: ReturnType<typeof createHistoryReadContext> | undefined;
+      const call = async (method: string, params: Record<string, unknown> = {}) =>
+        request(
+          await (context ??= createHistoryReadContext(
+            policy ? { getRuntimeConfig: () => cfg } : undefined,
+          )),
+          client,
+          method,
+          { sessionKey: scope.sessionKey, ...params },
         );
+      await run({
+        scope,
+        call,
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: expectDefined(owner.authenticatedUserProfile, "owner").profileId,
+        },
+      });
+    },
+  );
+}
+
+const seed = (scope: Scope, entry: Partial<SessionEntry> = {}) =>
+  upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1, ...entry });
+async function pending(scope: Scope, index = 0, hidden = false) {
+  return expectDefined(
+    await stageSessionPendingInput(scope, {
+      runId: `pending-${index}`,
+      assertCurrent: () => {},
+      message: {
+        role: "user",
+        content: `Synthetic input ${index}`,
+        timestamp: index,
+        idempotencyKey: `pending-${index}:user`,
+        ...(hidden ? { display: false } : {}),
+      },
+    }),
+    "pending receipt",
+  );
+}
+
+it.each([
+  ["owner", "draft", true, false, false],
+  ["admin", "draft", true, false, false],
+  ["view", "draft", false, false, false],
+  ["write", "draft", false, false, false],
+  ["none", "draft", false, false, false],
+  ["view", "shared", true, false, false],
+  ["none", "shared", false, false, false],
+  ["view", "shared", false, true, false],
+  ["view", "shared", false, true, true],
+] as const)(
+  "%s/%s history and message visibility (allowed=%s, incognito=%s, keyed=%s)",
+  async (actor, visibility, allowed, incognito, keyed) => {
+    await withReadFixture(
+      async ({ call, scope, createdActor }) => {
+        await seed(scope, { visibility, createdActor, ...(incognito ? { incognito } : {}) });
+        await appendTranscriptMessage(scope, {
+          eventId: "message",
+          message: { role: "user", content: "Private transcript" },
+        });
+        const receipt = await pending(scope);
         try {
           receipt.finish("cancelled");
-          const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-          const history = await request(context, client, "chat.history", {
-            sessionKey: scope.sessionKey,
-          });
-          expect(history[0]).toBe(testCase.allowed);
-          for (const messageId of [
-            "synthetic-transcript-id",
-            `pending:${receipt.inputId}`,
-            "missing-id",
-          ]) {
-            const result = await request(context, client, "chat.message.get", {
-              sessionKey: scope.sessionKey,
-              messageId,
-            });
-            expect.soft(result[0], messageId).toBe(testCase.allowed);
-            if (testCase.allowed) {
+          const history = await call("chat.history");
+          expect(history[0]).toBe(allowed);
+          for (const messageId of ["message", `pending:${receipt.inputId}`, "missing-id"]) {
+            const result = await call("chat.message.get", { messageId });
+            expect.soft(result[0], messageId).toBe(allowed);
+            if (allowed) {
               expect.soft(result[1]).toMatchObject({ ok: messageId !== "missing-id" });
             } else {
-              expect.soft(result[1], messageId).toBeUndefined();
-              expect.soft(result[2], messageId).toEqual(history[2]);
+              expect.soft(result.slice(1, 3), messageId).toEqual([undefined, history[2]]);
             }
           }
         } finally {
           receipt.finish("interrupted");
         }
-      });
-    },
-  );
+      },
+      actor,
+      keyed,
+    );
+  },
+);
 
-  it("traverses a full hidden page and keeps raw custody counts separate from execution", async () => {
-    await withOpenClawTestState(profileState, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      ensureUserProfilesSchema({});
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const client = roleClient("write", "pagination-owner");
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:paged-inputs",
-        sessionId: "paged-inputs",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+it("traverses a full hidden page and keeps raw custody counts separate from execution", async () => {
+  await withReadFixture(
+    async ({ call, scope }) => {
+      await seed(scope);
       const receipts: SessionPendingInputReceipt[] = [];
       try {
         for (let index = 0; index < 23; index++) {
-          receipts.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId: `synthetic-page-${index}`,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: `Synthetic input ${index}`,
-                  ...(index < 3 ? {} : { display: false }),
-                  timestamp: index,
-                  idempotencyKey: `synthetic-page-${index}:user`,
-                },
-              }),
-              "page receipt",
-            ),
-          );
+          receipts.push(await pending(scope, index, index >= 3));
         }
-        const queued = expectDefined(receipts[0], "queued receipt");
-        const cancelled = expectDefined(receipts[1], "cancelled receipt");
-        const interrupted = expectDefined(receipts[2], "interrupted receipt");
+        const queued = expectDefined(receipts[0], "queued");
+        const cancelled = expectDefined(receipts[1], "cancelled");
+        const interrupted = expectDefined(receipts[2], "interrupted");
         cancelled.finish("cancelled");
         interrupted.finish("interrupted");
-        const context = await createHistoryReadContext();
         const history = async (pendingBefore?: number) => {
-          const [ok, payload, error] = await request(context, client, "chat.history", {
-            sessionKey: scope.sessionKey,
+          const [ok, payload, error] = await call("chat.history", {
             limit: 20,
             ...(pendingBefore === undefined ? {} : { pendingBefore }),
           });
-          expect(error).toBeUndefined();
-          expect(ok).toBe(true);
-          return payload as {
-            pendingInputs: {
-              total: number;
-              items: Array<{ id: string; state: string }>;
-              nextBefore?: number;
-            };
-          };
+          expect([ok, error]).toEqual([true, undefined]);
+          return (payload as { pendingInputs: ChatPendingInputsPage }).pendingInputs;
         };
-        const first = (await history()).pendingInputs;
+        const first = await history();
         expect(first).toEqual({
           total: 23,
           items: [],
           queuedCount: 0,
           nextBefore: expect.any(Number),
         });
-        const second = (await history(first.nextBefore)).pendingInputs;
+        const retainedItems = [
+          { id: cancelled.inputId, state: "cancelled" },
+          { id: interrupted.inputId, state: "interrupted" },
+        ];
+        const second = await history(first.nextBefore);
         expect(second).toMatchObject({
           total: 23,
-          items: [
-            { id: queued.inputId, state: "queued" },
-            { id: cancelled.inputId, state: "cancelled" },
-            { id: interrupted.inputId, state: "interrupted" },
-          ],
+          items: [{ id: queued.inputId, state: "queued" }, ...retainedItems],
         });
         expect(second).not.toHaveProperty("nextBefore");
         expect(await loadTranscriptEvents(scope)).toEqual([]);
@@ -232,88 +192,57 @@ describe("registered chat read scope", () => {
         }
         await queued.run(() => appendTranscriptMessage(scope, { message: queued.message }));
         queued.finish("interrupted");
-        expect((await history(first.nextBefore)).pendingInputs).toMatchObject({
-          total: 22,
-          items: [
-            { id: cancelled.inputId, state: "cancelled" },
-            { id: interrupted.inputId, state: "interrupted" },
-          ],
-        });
+        expect(await history(first.nextBefore)).toMatchObject({ total: 22, items: retainedItems });
         await upsertSessionEntryCore(scope, {
           sessionId: "replacement-physical-session",
           updatedAt: 2,
         });
-        expect((await history()).pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
+        expect(await history()).toEqual({ items: [], total: 0, queuedCount: 0 });
       } finally {
         for (const receipt of receipts) {
           receipt.finish("interrupted");
         }
       }
-    });
-  });
-
-  it.each(["draft", "replacement"] as const)(
-    "rechecks %s after an asynchronous transcript read",
-    async (change) => {
-      await withOpenClawTestState(profileState, async (state) => {
-        const cfg = rolePolicyConfig();
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        ensureUserProfilesSchema({});
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        const owner = roleClient("write", "async-owner");
-        const client = roleClient("view", "async-reader");
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:async-read",
-          sessionId: "original-physical-session",
-        };
-        await upsertSessionEntryCore(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: expectDefined(owner.authenticatedUserProfile, "owner").profileId,
-          },
-        });
-        await appendTranscriptMessage(scope, {
-          eventId: "async-message",
-          message: { role: "user", content: "Synthetic old message" },
-        });
-        const read = transcriptReaders.readSessionMessageByIdAsync;
-        const ready = createDeferredCore();
-        const release = createDeferredCore();
-        const spy = vi
-          .spyOn(transcriptReaders, "readSessionMessageByIdAsync")
-          .mockImplementationOnce(async (...args) => {
-            const result = await read(...args);
-            ready.resolve();
-            await release.promise;
-            return result;
-          });
-        const lookup = request(
-          await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
-          client,
-          "chat.message.get",
-          { sessionKey: scope.sessionKey, messageId: "async-message" },
-        );
-        try {
-          await ready.promise;
-          await patchSessionEntryCore(scope, () =>
-            change === "draft" ? { visibility: "draft" } : { sessionId: "replacement-session" },
-          );
-          release.resolve();
-          const result = await lookup;
-          expect(result[0]).toBe(false);
-          expect(result[1]).toBeUndefined();
-        } finally {
-          release.resolve();
-          spy.mockRestore();
-          await lookup;
-        }
-      });
     },
+    "owner",
+    false,
+    false,
   );
 });
+
+it.each(["draft", "replacement"] as const)(
+  "rechecks %s after an asynchronous transcript read",
+  async (change) => {
+    await withReadFixture(async ({ call, scope, createdActor }) => {
+      await seed(scope, { visibility: "shared", createdActor });
+      await appendTranscriptMessage(scope, {
+        eventId: "message",
+        message: { role: "user", content: "Synthetic old message" },
+      });
+      const read = transcriptReaders.readSessionMessageByIdAsync;
+      const ready = createDeferredCore();
+      const release = createDeferredCore();
+      using _ = vi
+        .spyOn(transcriptReaders, "readSessionMessageByIdAsync")
+        .mockImplementationOnce(async (...args) => {
+          const result = await read(...args);
+          ready.resolve();
+          await release.promise;
+          return result;
+        });
+      const lookup = call("chat.message.get", { messageId: "message" });
+      try {
+        await ready.promise;
+        await patchSessionEntryCore(scope, () =>
+          change === "draft" ? { visibility: "draft" } : { sessionId: "replacement-session" },
+        );
+        release.resolve();
+        const result = await lookup;
+        expect(result.slice(0, 2)).toEqual([false, undefined]);
+      } finally {
+        release.resolve();
+        await lookup;
+      }
+    }, "view");
+  },
+);

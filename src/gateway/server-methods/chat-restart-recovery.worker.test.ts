@@ -107,7 +107,7 @@ it("terminalizes the current source of the same admitted run without tombstoning
     const changed = vi.fn();
     const spy = vi
       .spyOn(writeAdmission, "runOpenClawAgentWorkerWrite")
-      .mockImplementation((options, run, timing, signal) =>
+      .mockImplementation((options, run, ...rest) =>
         write(
           options,
           async () => {
@@ -125,8 +125,7 @@ it("terminalizes the current source of the same admitted run without tombstoning
             }
             return run();
           },
-          timing,
-          signal,
+          ...rest,
         ),
       );
     try {
