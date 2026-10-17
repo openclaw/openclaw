@@ -52,9 +52,7 @@ describe("createLaneTextDeliverer", () => {
     const historyFailure = new Error("retained Telegram history write failed");
     harness.recordPromptContextPreview.mockRejectedValueOnce(historyFailure);
 
-    const result = await deliverProjectedFinalAnswer(harness, HELLO_FINAL);
-
-    expect(result).toMatchObject({
+    expect(await deliverProjectedFinalAnswer(harness, HELLO_FINAL)).toMatchObject({
       kind: "preview-finalized-partial",
       delivery: {
         content: HELLO_FINAL,
@@ -105,18 +103,17 @@ describe("createLaneTextDeliverer", () => {
   it("keeps text on late voice media so blocked voice sends can fall back", async () => {
     const harness = streamedHarness();
     const voice = { mediaUrl: "https://example.com/note.ogg", audioAsVoice: true };
-    const result = await deliver(harness, "resolved voice fallback", {
-      payload: { ...voice, text: "stale voice fallback" },
-    });
-
-    expectPreviewFinalized(result);
+    expectPreviewFinalized(
+      await deliver(harness, "resolved voice fallback", {
+        payload: { ...voice, text: "stale voice fallback" },
+      }),
+    );
     expectSentPayload(harness, { ...voice, spokenText: "resolved voice fallback" }, true);
   });
 
   it("keeps inline buttons on the streamed text instead of late media", async () => {
     const harness = streamedHarness();
-    const result = await deliver(harness, "photo", { payload: photoPayload, buttons });
-    expectPreviewFinalized(result);
+    expectPreviewFinalized(await deliver(harness, "photo", { payload: photoPayload, buttons }));
     expect(harness.editStreamMessage).toHaveBeenCalledWith({
       laneName: "answer",
       messageId: 999,
@@ -191,28 +188,21 @@ describe("createLaneTextDeliverer", () => {
         return { visibleReplySent: true };
       });
       // Flood waits belong to the account limiter; this bare API only counts attempts.
-      const result = await deliverProjectedFinalAnswer(harness, fullAnswer);
-      expect(result.kind).toBe("sent");
+      expect((await deliverProjectedFinalAnswer(harness, fullAnswer)).kind).toBe("sent");
       expect(attempts).toEqual(["1234567890", renderedSuffix, renderedSuffix, renderedSuffix]);
-      expectRecordedPreview(harness.recordPromptContextPreview, 0, {
-        messageId: 997,
-        text: "1234567890",
-        partIndex: 0,
-        finalPart: false,
-      });
-      expectRecordedPreview(harness.recordPromptContextPreview, 1, {
-        messageId: 998,
-        text: "<b>x</b>",
-        partIndex: 1,
-        finalPart: true,
-      });
+      for (const [partIndex, page] of [
+        { messageId: 997, text: "1234567890", finalPart: false },
+        { messageId: 998, text: "<b>x</b>", finalPart: true },
+      ].entries()) {
+        expectRecordedPreview(harness.recordPromptContextPreview, partIndex, {
+          ...page,
+          partIndex,
+        });
+      }
       expect(harness.recordPromptContextPreview).toHaveBeenCalledTimes(2);
       expect(harness.sendPayload).toHaveBeenCalledWith(
         { text: renderedSuffix },
-        expect.objectContaining({
-          afterAcceptedDraft: true,
-          textMode: "html",
-        }),
+        expect.objectContaining({ afterAcceptedDraft: true, textMode: "html" }),
       );
       expect(api.deleteMessage).not.toHaveBeenCalled();
     } finally {
@@ -225,9 +215,7 @@ describe("createLaneTextDeliverer", () => {
     answer.sendMayHaveLanded.mockReturnValue(true);
     const harness = createHarness({ answerStream: answer });
 
-    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
-
-    expect(result).toMatchObject({
+    expect(await deliverFinalAnswer(harness, HELLO_FINAL)).toMatchObject({
       kind: "preview-retained",
       deliveryResult: {
         visibleReplySent: false,
