@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "../../../llm/types.js";
 import {
@@ -14,6 +13,7 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   clearEmbeddedSessionPromptStates,
   prepareSessionSystemPrompt,
@@ -35,20 +35,16 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
   it.each(["tool", "steer", "steer-backlog", "cancelled", "initial-backlog", "agent-end"] as const)(
     "refreshes permissions only for admitted %s continuation input",
     async (continuation) => {
-      const model = {
-        ...testModel,
-        provider: "anthropic",
-        api: "anthropic-messages" as const,
-        id: "claude-opus-5",
-      };
       const { session, sessionManager } = await createTestSession({
-        model,
+        model: {
+          ...testModel,
+          provider: "anthropic",
+          api: "anthropic-messages",
+          id: "claude-opus-5",
+        },
         customTools: [
           {
-            name: "read",
-            label: "Read",
-            description: "Read a fixture",
-            parameters: Type.Object({}),
+            ...createStubTool("read"),
             execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
           },
         ],
@@ -84,16 +80,22 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         timestamp: 2,
       };
       const initial = continuation === "initial-backlog";
-      if (initial) {
-        prepareSystemPromptUpdate(pinnedPrompt).commit();
-        await persistSessionSystemPrompt(input.sessionPromptState, (customType, data) =>
-          sessionManager.appendCustomEntryAsync(customType, data),
-        );
-        currentPrompt = "## Tools\nread";
+      const backlog = initial || continuation === "steer-backlog";
+      const enqueue = () => {
         session.agent.steer(queuedUser);
-        if (continuation === "initial-backlog") {
+        if (backlog) {
           session.agent.steer({ role: "user", content: "A later queued request.", timestamp: 3 });
         }
+      };
+      const persistPrompt = () =>
+        persistSessionSystemPrompt(input.sessionPromptState, (customType, data) =>
+          sessionManager.appendCustomEntryAsync(customType, data),
+        );
+      if (initial) {
+        prepareSystemPromptUpdate(pinnedPrompt).commit();
+        await persistPrompt();
+        currentPrompt = "## Tools\nread";
+        enqueue();
       }
       let finishedTurns = 0;
       let recovered = false;
@@ -113,15 +115,8 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
           return;
         }
         currentPrompt = "## Tools\nread";
-        if (
-          continuation === "steer" ||
-          continuation === "steer-backlog" ||
-          continuation === "cancelled"
-        ) {
-          session.agent.steer(queuedUser);
-          if (continuation === "steer-backlog") {
-            session.agent.steer({ role: "user", content: "A later queued request.", timestamp: 3 });
-          }
+        if (["steer", "steer-backlog", "cancelled"].includes(continuation)) {
+          enqueue();
           if (continuation === "steer") {
             await session.sendCustomMessage(
               {
@@ -152,7 +147,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
             activeModel,
             useTool
               ? [{ type: "toolCall", id: "read-fixture", name: "read", arguments: {} }]
-              : [{ type: "text", text: "Done." }],
+              : "Done.",
             useTool ? "toolUse" : "stop",
           ),
         );
@@ -162,20 +157,11 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         activeSession: session,
         prependContext: undefined,
         appendContext: undefined,
-        ...(initial
-          ? {
-              appendOnlyRuntimeContext: true,
-              runtimeContextMessage: buildRuntimeContextCustomMessage(
-                "Runtime at initial admission.",
-                undefined,
-                true,
-              ),
-            }
-          : {}),
-        persistToolResultProjections: () =>
-          persistSessionSystemPrompt(input.sessionPromptState, (customType, data) =>
-            sessionManager.appendCustomEntryAsync(customType, data),
-          ),
+        appendOnlyRuntimeContext: initial,
+        runtimeContextMessage: initial
+          ? buildRuntimeContextCustomMessage("Runtime at initial admission.", undefined, true)
+          : undefined,
+        persistToolResultProjections: persistPrompt,
         promptActiveSession: (prompt, options) => session.prompt(prompt, options),
       });
       const updates = sessionManager
@@ -189,7 +175,6 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         expect(updates).toHaveLength(0);
       } else {
         const expectedRequests = continuation === "steer-backlog" ? 3 : 2;
-        expect(requests).toHaveLength(expectedRequests);
         expect(updates).toHaveLength(initial ? 2 : 1);
         expect(requests.map((request) => request.systemPrompt)).toEqual(
           Array.from({ length: expectedRequests }, () => pinnedPrompt),
@@ -218,7 +203,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
             operatorMessage: { turnScoped: true },
           });
         }
-        if (continuation === "initial-backlog" || continuation === "steer-backlog") {
+        if (backlog) {
           const first = initial ? 0 : 1;
           expect(JSON.stringify(requests[first])).not.toContain("A later queued request.");
           expect(JSON.stringify(requests[first + 1])).toContain("A later queued request.");

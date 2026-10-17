@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
-import type { AnyAgentTool } from "../../tools/common.js";
 import {
   applyPromptBuildToolsAllow,
   applyResolvedToolPromptFinalizer,
@@ -18,36 +18,21 @@ beforeEach(() => {
   vi.mocked(logDecisionToolPrefilter).mockClear();
 });
 
-function catalogEntry(
-  name: string,
-  tool: { name: string; description?: string } = { name, description: name },
-): ToolSearchCatalogEntry {
-  return {
-    id: name,
-    source: "openclaw",
-    name,
-    description: tool.description ?? "",
-    tool,
-  } as ToolSearchCatalogEntry;
-}
+const named = (...names: string[]) => names.map((name) => ({ name }));
 
-function createSession(activeToolNames: string[]) {
-  let names = [...activeToolNames];
-  return {
-    session: {
-      getActiveToolNames: () => [...names],
-      setActiveToolsByName: vi.fn((next: string[]) => {
-        names = [...next];
-      }),
-    },
-    readNames: () => names,
-  };
-}
-
-function catalog(entries: ToolSearchCatalogEntry[]): ToolSearchCatalogRef {
+function catalog(tools: { name: string }[]): ToolSearchCatalogRef {
   return {
     current: {
-      entries,
+      entries: tools.map(
+        (tool) =>
+          ({
+            id: tool.name,
+            source: "openclaw",
+            name: tool.name,
+            description: "",
+            tool,
+          }) as ToolSearchCatalogEntry,
+      ),
       counterScope: "permissions",
       searchCount: 0,
       describeCount: 0,
@@ -56,33 +41,50 @@ function catalog(entries: ToolSearchCatalogEntry[]): ToolSearchCatalogRef {
   };
 }
 
-function applyAllow(
-  fixture: ReturnType<typeof createSession>,
-  tools: { name: string }[],
-  overrides: Partial<Parameters<typeof applyPromptBuildToolsAllow>[0]> = {},
+function createPolicyFixture(
+  activeToolNames: string[],
+  tools = named(...activeToolNames),
+  catalogRef?: ToolSearchCatalogRef,
 ) {
-  return applyPromptBuildToolsAllow({
-    session: fixture.session,
-    toolsAllow: [],
-    baseline: {
-      activeToolNames: fixture.readNames(),
-      catalogEntries: [...(overrides.catalogRef?.current?.entries ?? [])],
-    },
+  let names = [...activeToolNames];
+  const session = {
+    getActiveToolNames: () => [...names],
+    setActiveToolsByName: vi.fn((next: string[]) => {
+      names = [...next];
+    }),
+  };
+  const params = {
+    session,
+    effectiveTools: named(...names),
+    uncompactedEffectiveTools: tools,
+    tools,
+    catalogRef,
+    codeModeControlsEnabled: false,
+  };
+  return {
+    session,
+    params,
+    readNames: () => names,
+    apply: (overrides: Partial<Parameters<typeof applyPromptBuildToolsAllow>[0]> = {}) =>
+      applyPromptBuildToolsAllow({
+        ...params,
+        toolsAllow: [],
+        baseline: {
+          activeToolNames: names,
+          catalogEntries: [...(catalogRef?.current?.entries ?? [])],
+        },
+        ...overrides,
+      }),
+  };
+}
+
+function expectSurface(result: ReturnType<typeof applyPromptBuildToolsAllow>, names: string[]) {
+  const tools = named(...names);
+  expect(result).toMatchObject({
+    activeToolNames: names,
     effectiveTools: tools,
     uncompactedEffectiveTools: tools,
     tools,
-    codeModeControlsEnabled: false,
-    ...overrides,
-  });
-}
-
-function expectSurface(result: ReturnType<typeof applyAllow>, names: string[]) {
-  const { activeToolNames, effectiveTools, uncompactedEffectiveTools, tools } = result;
-  expect({ activeToolNames, effectiveTools, uncompactedEffectiveTools, tools }).toEqual({
-    activeToolNames: names,
-    effectiveTools: names.map((name) => ({ name })),
-    uncompactedEffectiveTools: names.map((name) => ({ name })),
-    tools: names.map((name) => ({ name })),
   });
 }
 
@@ -98,18 +100,11 @@ describe("applyPromptBuildToolsAllow", () => {
   it.each(["before", "after"] as const)(
     "keeps hook-denied tools fenced when the hook resolves %s a permission change",
     (hookTiming) => {
-      const fixture = createSession(["tool_search"]);
       const oldRead = { name: "read", generation: "old" };
       const tools = [oldRead];
-      const catalogRef = catalog([catalogEntry("read", oldRead)]);
-      const policy = createPromptBuildToolPolicy({
-        session: fixture.session,
-        effectiveTools: [{ name: "tool_search" }],
-        uncompactedEffectiveTools: tools,
-        tools,
-        catalogRef,
-        codeModeControlsEnabled: false,
-      });
+      const catalogRef = catalog([oldRead]);
+      const fixture = createPolicyFixture(["tool_search"], tools, catalogRef);
+      const policy = createPromptBuildToolPolicy(fixture.params);
       if (hookTiming === "before") {
         policy.apply(["read"]);
       }
@@ -118,7 +113,7 @@ describe("applyPromptBuildToolsAllow", () => {
       const freshWrite = { name: "write", generation: "new" };
       const freshExec = { name: "exec", generation: "new" };
       tools.splice(0, tools.length, freshRead, freshWrite, freshExec);
-      catalogRef.current!.entries = tools.map((tool) => catalogEntry(tool.name, tool));
+      catalogRef.current!.entries = catalog(tools).current!.entries;
       fixture.session.setActiveToolsByName(["tool_search"]);
       policy.refresh();
       if (hookTiming === "after") {
@@ -137,13 +132,13 @@ describe("applyPromptBuildToolsAllow", () => {
   );
 
   it("removes every submitted tool and catalog entry for an empty hook allowlist", () => {
-    const fixture = createSession(["tool_search", "message"]);
-    const catalogRef = catalog([catalogEntry("read"), catalogEntry("write")]);
-
-    const result = applyAllow(fixture, [{ name: "read" }, { name: "write" }, { name: "message" }], {
-      effectiveTools: [{ name: "tool_search" }, { name: "message" }],
+    const catalogRef = catalog(named("read", "write"));
+    const fixture = createPolicyFixture(
+      ["tool_search", "message"],
+      named("read", "write", "message"),
       catalogRef,
-    });
+    );
+    const result = fixture.apply();
 
     expectSurface(result, []);
     expect(catalogRef.current?.entries).toEqual([]);
@@ -152,39 +147,25 @@ describe("applyPromptBuildToolsAllow", () => {
   });
 
   it("keeps host-required tools when a hook denies optional tools", () => {
-    const fixture = createSession(["message", "read"]);
-
-    const result = applyAllow(fixture, [{ name: "message" }, { name: "read" }], {
-      forceToolNames: ["message"],
-    });
+    const fixture = createPolicyFixture(["message", "read"]);
+    const result = fixture.apply({ forceToolNames: ["message"] });
 
     expectSurface(result, ["message"]);
     expect(finalize(result.activeToolNames)).toBe("cron:true");
   });
 
   it("cannot add a tool that the host-resolved surface already removed", () => {
-    const fixture = createSession(["read"]);
-
-    const result = applyAllow(fixture, [{ name: "read" }], {
-      toolsAllow: ["exec"],
-    });
+    const result = createPolicyFixture(["read"]).apply({ toolsAllow: ["exec"] });
 
     expectSurface(result, []);
   });
 
   it("keeps cataloged plugin tools allowed through the plugin group", () => {
-    const pluginTool = {
-      name: "plugin_lookup",
-      execute: vi.fn(),
-    } as unknown as AnyAgentTool;
+    const pluginTool = createStubTool("plugin_lookup");
     setPluginToolMeta(pluginTool, { pluginId: "example", optional: false });
-    const fixture = createSession(["tool_search"]);
-    const catalogRef = catalog([catalogEntry(pluginTool.name, pluginTool)]);
-
-    const result = applyAllow(fixture, [pluginTool], {
+    const catalogRef = catalog([pluginTool]);
+    const result = createPolicyFixture(["tool_search"], [pluginTool], catalogRef).apply({
       toolsAllow: ["group:plugins"],
-      effectiveTools: [{ name: "tool_search" }],
-      catalogRef,
     });
 
     expect(result.activeToolNames).toEqual(["tool_search"]);
