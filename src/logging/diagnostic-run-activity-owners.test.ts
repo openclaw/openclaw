@@ -23,6 +23,20 @@ import {
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
 
+function startRequest(
+  owner: ReturnType<typeof createDiagnosticEmbeddedRunOwner>,
+  callId: string,
+  timeoutMs?: number,
+  model = "slow-model",
+) {
+  const { sessionId, sessionKey, runId } = owner;
+  emitCoreModelRequestStartedDiagnosticEvent(
+    { sessionId, sessionKey, runId, callId, provider: "core", model },
+    owner.generation,
+    timeoutMs,
+  );
+}
+
 afterEach(() => {
   vi.useRealTimers();
   resetDiagnosticRunActivityForTest();
@@ -42,11 +56,7 @@ describe("core model owner generations", () => {
     const owner = createDiagnosticEmbeddedRunOwner(ref);
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, owner });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      { ...ref, callId: "quiet-call", provider: "core", model: "request-model" },
-      owner.generation,
-      900_000,
-    );
+    startRequest(owner, "quiet-call", 900_000, "request-model");
     await waitForDiagnosticEventsDrained();
     vi.setSystemTime(startedAt + 800_000);
     markDiagnosticRunProgress({ ...ref, reason: "model_call:stream_progress" });
@@ -188,10 +198,7 @@ describe("core model owner generations", () => {
     markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
     markDiagnosticArgumentChurnObservation({ ...ref, runId: earlier.runId, active: true });
     for (const callId of ["request-1", "request-2"]) {
-      emitCoreModelRequestStartedDiagnosticEvent(
-        { ...ref, runId: earlier.runId, callId, provider: "core", model: "request-model" },
-        earlierOwner.generation,
-      );
+      startRequest(earlierOwner, callId, undefined, "request-model");
     }
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
@@ -222,17 +229,7 @@ describe("core model owner generations", () => {
     const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "call-1",
-        provider: "core",
-        model: "slow-model",
-      },
-      owner.generation,
-      300_000,
-    );
+    startRequest(owner, "call-1", 300_000, "slow-model");
     await waitForDiagnosticEventsDrained();
 
     emitPluginTrustedDiagnosticEvent({
@@ -270,46 +267,16 @@ describe("core model owner generations", () => {
     const ownerA = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "old-call",
-        provider: "core",
-        model: "slow-model",
-      },
-      ownerA.generation,
-      300_000,
-    );
+    startRequest(ownerA, "old-call", 300_000, "slow-model");
     closeDiagnosticEmbeddedRunOwner(ownerA);
 
     const ownerB = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerB });
     const currentRequestStartedAt = startedAt + 100;
     vi.setSystemTime(currentRequestStartedAt);
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "new-call",
-        provider: "core",
-        model: "replacement-model",
-      },
-      ownerB.generation,
-      420_000,
-    );
+    startRequest(ownerB, "new-call", 420_000, "replacement-model");
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
-    emitCoreModelRequestStartedDiagnosticEvent(
-      {
-        ...ref,
-        runId,
-        callId: "resurrected-old-call",
-        provider: "core",
-        model: "stale-model",
-      },
-      ownerA.generation,
-      600_000,
-    );
+    startRequest(ownerA, "resurrected-old-call", 600_000, "stale-model");
     await waitForDiagnosticEventsDrained();
     emitCoreModelRequestEndedDiagnosticEvent(
       {
@@ -360,17 +327,7 @@ describe("core model owner generations", () => {
         workKey: oldOwner.workKey,
         owner: oldOwner,
       });
-      emitCoreModelRequestStartedDiagnosticEvent(
-        {
-          ...ref,
-          runId: oldRunId,
-          callId: "prior-long-call",
-          provider: "core",
-          model: "slow-prior-model",
-        },
-        oldOwner.generation,
-        600_000,
-      );
+      startRequest(oldOwner, "prior-long-call", 600_000, "slow-prior-model");
       await waitForDiagnosticEventsDrained();
 
       const currentRequestStartedAt = startedAt + 100;
@@ -381,17 +338,7 @@ describe("core model owner generations", () => {
         workKey: currentOwner.workKey,
         owner: currentOwner,
       });
-      emitCoreModelRequestStartedDiagnosticEvent(
-        {
-          ...ref,
-          runId: currentRunId,
-          callId: "current-short-call",
-          provider: "core",
-          model: "current-model",
-        },
-        currentOwner.generation,
-        100_000,
-      );
+      startRequest(currentOwner, "current-short-call", 100_000, "current-model");
       await waitForDiagnosticEventsDrained();
 
       const deadlineAtMs =
