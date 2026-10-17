@@ -35,6 +35,20 @@ import {
 } from "./session-transcript-runtime.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-visible-transcript-");
+const decodeCursor = (cursor: string) =>
+  JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+const rewriteCursor = (cursor: string, patch: Record<string, unknown>) =>
+  Buffer.from(JSON.stringify({ ...decodeCursor(cursor), ...patch }), "utf8").toString("base64url");
+async function offThread<T>(read: () => Promise<T>) {
+  const sql = observeHostDataSql();
+  try {
+    const result = await read();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
 function visibleReader(scope: SessionTranscriptReadParams, maxBytes = 10_000, maxMessages = 1) {
   return (cursor?: string, limits = { maxBytes, maxMessages }) =>
     readSessionTranscriptVisibleMessageDelta({ ...scope, cursor, ...limits });
@@ -204,14 +218,7 @@ describe("session transcript visible cursor SDK", () => {
         kind === "raw"
           ? readSessionTranscriptRawDelta({ ...scope, cursor, maxEvents: 10 })
           : readSessionTranscriptVisibleMessageDelta({ ...scope, cursor, maxMessages: 10 });
-      const firstSql = observeHostDataSql();
-      let first: Awaited<ReturnType<typeof read>>;
-      try {
-        first = await read();
-        expect(firstSql.queries).toEqual([]);
-      } finally {
-        firstSql.restore();
-      }
+      const first = await offThread(() => read());
       assert(first.kind === "page", "expected a populated delta");
       // Serialize fixture setup with background writers; the peer still bypasses publication.
       await agentWriteAdmission.runOpenClawAgentWriteAdmission(
@@ -231,16 +238,10 @@ describe("session transcript visible cursor SDK", () => {
           }
         },
       );
-      const nextSql = observeHostDataSql();
-      try {
-        await expect(read(first.cursor)).resolves.toMatchObject({
-          kind: "reset",
-          reason: "generation_mismatch",
-        });
-        expect(nextSql.queries).toEqual([]);
-      } finally {
-        nextSql.restore();
-      }
+      await expect(offThread(() => read(first.cursor))).resolves.toMatchObject({
+        kind: "reset",
+        reason: "generation_mismatch",
+      });
     },
   );
 
@@ -306,15 +307,11 @@ describe("session transcript visible cursor SDK", () => {
     });
     assert(first.kind === "page", "expected first visible transcript page");
 
-    const decodedCursor = JSON.parse(
-      Buffer.from(first.cursor, "base64url").toString("utf8"),
-    ) as Record<string, unknown>;
-    const nonCanonicalCursors = [
+    for (const cursor of [
       `${first.cursor}!`,
       `${first.cursor}=`,
-      Buffer.from(JSON.stringify({ ...decodedCursor, extra: true }), "utf8").toString("base64url"),
-    ];
-    for (const cursor of nonCanonicalCursors) {
+      rewriteCursor(first.cursor, { extra: true }),
+    ]) {
       await expectReset(read(cursor), "invalid_cursor");
     }
 
@@ -331,13 +328,7 @@ describe("session transcript visible cursor SDK", () => {
       hasMore: false,
     });
     assert(second.kind === "page", "expected second visible transcript page");
-    const movedAnchorCursor = Buffer.from(
-      JSON.stringify({
-        ...(JSON.parse(Buffer.from(second.cursor, "base64url").toString("utf8")) as object),
-        lastMessagePosition: 0,
-      }),
-      "utf8",
-    ).toString("base64url");
+    const movedAnchorCursor = rewriteCursor(second.cursor, { lastMessagePosition: 0 });
     await expectReset(read(movedAnchorCursor), "anchor_moved");
 
     const appended = await append(scope, "user", "linear append", 3_000, firstBranch.messageId);
@@ -390,13 +381,7 @@ describe("session transcript visible cursor SDK", () => {
     const invalid = await read("not-a-cursor");
     expect(invalid).toMatchObject({ kind: "reset", reason: "invalid_cursor" });
     assert(invalid.kind === "reset", "expected invalid visible cursor reset");
-    const inconsistentBootstrapCursor = Buffer.from(
-      JSON.stringify({
-        ...(JSON.parse(Buffer.from(invalid.cursor, "base64url").toString("utf8")) as object),
-        lastMessagePosition: 0,
-      }),
-      "utf8",
-    ).toString("base64url");
+    const inconsistentBootstrapCursor = rewriteCursor(invalid.cursor, { lastMessagePosition: 0 });
     await expectReset(read(inconsistentBootstrapCursor), "invalid_cursor");
     const bounded = await read(invalid.cursor);
     expect(bounded).toMatchObject({

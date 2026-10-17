@@ -157,14 +157,14 @@ it("returns raw webhook body contents", async () => {
 });
 
 describe("beginWebhookRequestPipelineOrReject", () => {
-  it("falls back for non-finite in-flight limiter options", () => {
-    const limiter = createWebhookInFlightLimiter({
-      maxInFlightPerKey: Number.NaN,
-      maxTrackedKeys: Number.NaN,
-    });
+  it.each([
+    ["non-finite defaults", Number.NaN, Number.NaN, 8],
+    ["explicit limits", 1, 10, 1],
+  ] as const)("enforces and releases %s", (_name, maxInFlightPerKey, maxTrackedKeys, capacity) => {
+    const limiter = createWebhookInFlightLimiter({ maxInFlightPerKey, maxTrackedKeys });
     const releases: Array<() => void> = [];
     try {
-      for (let index = 0; index < 8; index += 1) {
+      for (let index = 0; index < capacity; index += 1) {
         const result = pipeline(limiter);
         expect(result.ok).toBe(true);
         if (result.ok) {
@@ -177,35 +177,16 @@ describe("beginWebhookRequestPipelineOrReject", () => {
 
       expect(overflow.ok).toBe(false);
       expect(overflowRes.statusCode).toBe(429);
+      releases.shift()?.();
+      const next = pipeline(limiter);
+      expect(next.ok).toBe(true);
+      if (next.ok) {
+        releases.push(next.release);
+      }
     } finally {
       for (const release of releases) {
         release();
       }
-    }
-  });
-
-  it("enforces in-flight request limits and releases slots", () => {
-    const limiter = createWebhookInFlightLimiter({
-      maxInFlightPerKey: 1,
-      maxTrackedKeys: 10,
-    });
-
-    const first = pipeline(limiter);
-    expect(first.ok).toBe(true);
-
-    const secondRes = createMockServerResponse();
-    const second = pipeline(limiter, secondRes);
-    expect(second.ok).toBe(false);
-    expect(secondRes.statusCode).toBe(429);
-
-    if (first.ok) {
-      first.release();
-    }
-
-    const third = pipeline(limiter);
-    expect(third.ok).toBe(true);
-    if (third.ok) {
-      third.release();
     }
   });
 });
@@ -230,39 +211,27 @@ describe("runDetachedWebhookWork", () => {
     expect(order).toEqual(["ack", "work"]);
   });
 
-  it("keeps post-ack processing admitted after the request admission is released", async () => {
+  it.each([
+    ["detached", runDetachedWebhookWork, true],
+    ["inherited", (run: () => Promise<number>) => run(), false],
+  ] as const)("checks %s post-ack admission after request release", async (kind, run, allowed) => {
     const { enqueueCommandInLane } = await import("../process/command-queue.js");
-
-    let detached: Promise<number> | null = null;
+    let continued: Promise<number> | undefined;
     await admitted(async () => {
-      // Ack-first shape: dispatch continues after the handler (and its
-      // admission) completes; the queue enqueue happens well past release.
-      detached = runDetachedWebhookWork(async () => {
+      continued = run(async () => {
         await postAckDelay();
-        return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
+        return await enqueueCommandInLane(`${kind}-webhook-work-test`, async () => 42);
       });
+      continued.catch(() => {});
       return true;
     });
-
-    await expect(detached).resolves.toBe(42);
-  });
-
-  it("refuses the same post-ack processing when it merely inherits the request admission", async () => {
-    const { enqueueCommandInLane } = await import("../process/command-queue.js");
-
-    let inherited: Promise<number> | null = null;
-    await admitted(async () => {
-      inherited = (async () => {
-        await postAckDelay();
-        return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
-      })();
-      inherited.catch(() => {});
-      return true;
-    });
-
-    await expect(inherited).rejects.toThrow(
-      "Gateway is temporarily unavailable. Please try again shortly.",
-    );
+    if (allowed) {
+      await expect(continued).resolves.toBe(42);
+    } else {
+      await expect(continued).rejects.toThrow(
+        "Gateway is temporarily unavailable. Please try again shortly.",
+      );
+    }
   });
 
   it("keeps tracked work accepted after the caller's async work scope closes", async () => {
@@ -273,9 +242,7 @@ describe("runDetachedWebhookWork", () => {
     let detached: Promise<string> | undefined;
     await admitted(
       async () =>
-        // Deferred post-ack work starts under the request's async work scope; that
-        // scope closes once the triggering turn settles, but the detached callback
-        // must still be able to run and track embedded work afterwards.
+        // Detached tracking must outlive the request's async work scope.
         await parentScope.track(async () => {
           detached = runDetachedWebhookWork(async () => {
             const trackOwner = captureAsyncWorkTracker();

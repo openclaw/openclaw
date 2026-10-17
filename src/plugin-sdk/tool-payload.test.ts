@@ -14,6 +14,7 @@ const xmlCall = (name: string, body = "") => `<function=${name}>${body}</functio
 function parseAllowed(raw: string, name: string, maxPayloadBytes?: number) {
   return parse(raw, { allowedToolNames: [name], maxPayloadBytes });
 }
+const image = { type: "image" };
 
 describe("extractToolPayload", () => {
   it("returns undefined for missing results", () => {
@@ -33,16 +34,13 @@ describe("extractToolPayload", () => {
   it("parses JSON text blocks and falls back to raw text, content, or the whole result", () => {
     expect(
       extractToolPayload({
-        content: [
-          { type: "image", url: "https://example.com/a.png" },
-          { type: "text", text: '{"ok":true,"count":2}' },
-        ],
+        content: [image, { type: "text", text: '{"ok":true,"count":2}' }],
       }),
     ).toEqual({ ok: true, count: 2 });
 
     expect(extractToolPayload({ content: [{ type: "text", text: "not json" }] })).toBe("not json");
 
-    const content = [{ type: "image", url: "https://example.com/a.png" }];
+    const content = [image];
     expect(extractToolPayload({ content })).toBe(content);
 
     const result = { status: "ok" } as ToolPayloadCarrier & { status: string };
@@ -117,12 +115,9 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
   });
 
   it("respects allowed tool names for Harmony calls", () => {
-    const blocks = parseAllowed(
-      'commentary to=write code {"path":"/tmp/file.txt","content":"x"}',
-      "read",
-    );
-
-    expect(blocks).toBeNull();
+    expect(
+      parseAllowed('commentary to=write code {"path":"/tmp/file.txt","content":"x"}', "read"),
+    ).toBeNull();
   });
 });
 

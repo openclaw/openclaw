@@ -9,11 +9,9 @@ const echoTool = {
   description: "Echo input.",
   parameters: Type.Object({ input: Type.String() }),
 };
-function register(
-  entry: ReturnType<typeof defineToolPlugin>,
-  id: string,
-  config?: Record<string, unknown>,
-) {
+const pluginDetails = { id: "test-tools", name: "Test Tools", description: "Tool plugin fixture." };
+function register(entry: ReturnType<typeof defineToolPlugin>, config?: Record<string, unknown>) {
+  const id = entry.id;
   const captured = createCapturedPluginRegistration({
     id,
     ...(config ? { config: { plugins: { entries: { [id]: { config } } } } } : {}),
@@ -24,8 +22,9 @@ function register(
   entry.register(captured.api);
   return captured;
 }
-function captureRegistration(entry: ReturnType<typeof defineToolPlugin>, id: string) {
-  const captured = createCapturedPluginRegistration({ id });
+function captureRegistration(entry: ReturnType<typeof defineToolPlugin>, pluginConfig = {}) {
+  const captured = createCapturedPluginRegistration({ id: entry.id });
+  captured.api.pluginConfig = pluginConfig;
   const registerTool = vi.fn<typeof captured.api.registerTool>();
   captured.api.registerTool = registerTool;
   entry.register(captured.api);
@@ -42,9 +41,7 @@ describe("defineToolPlugin", () => {
       { additionalProperties: false },
     );
     const entry = defineToolPlugin({
-      id: "stock-quotes",
-      name: "Stock Quotes",
-      description: "Fetch stock quotes.",
+      ...pluginDetails,
       configSchema: Type.Object({ apiKey: Type.String() }),
       tools: (tool) => [
         tool({
@@ -61,7 +58,7 @@ describe("defineToolPlugin", () => {
         }),
       ],
     });
-    const captured = register(entry, "stock-quotes", { apiKey: "test-key" });
+    const captured = register(entry, { apiKey: "test-key" });
 
     expect(captured.tools).toHaveLength(1);
     expect(captured.tools[0]).toMatchObject({
@@ -80,17 +77,10 @@ describe("defineToolPlugin", () => {
 
   it("wraps plain string results", async () => {
     const entry = defineToolPlugin({
-      id: "echo",
-      name: "Echo",
-      description: "Echo input.",
-      tools: (tool) => [
-        tool({
-          ...echoTool,
-          execute: ({ input }) => input,
-        }),
-      ],
+      ...pluginDetails,
+      tools: (tool) => [tool({ ...echoTool, execute: ({ input }) => input })],
     });
-    const result = await firstTool(register(entry, "echo")).execute("call-1", { input: "hello" });
+    const result = await firstTool(register(entry)).execute("call-1", { input: "hello" });
     expect(result).toEqual({
       content: [{ type: "text", text: "hello" }],
       details: "hello",
@@ -100,9 +90,7 @@ describe("defineToolPlugin", () => {
   it("passes optional tool workspace access through registration and metadata", () => {
     const workspaceAccess = true;
     const entry = defineToolPlugin({
-      id: "optional-tools",
-      name: "Optional Tools",
-      description: "Optional tool demo.",
+      ...pluginDetails,
       tools: (tool) => [
         tool({
           ...echoTool,
@@ -113,7 +101,7 @@ describe("defineToolPlugin", () => {
         }),
       ],
     });
-    const registerTool = captureRegistration(entry, "optional-tools");
+    const registerTool = captureRegistration(entry);
 
     expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "optional_echo" }), {
       optional: true,
@@ -126,9 +114,7 @@ describe("defineToolPlugin", () => {
 
   it("supports context factories while keeping static tool metadata", () => {
     const entry = defineToolPlugin({
-      id: "factory-tools",
-      name: "Factory Tools",
-      description: "Factory tool demo.",
+      ...pluginDetails,
       configSchema: Type.Object({ prefix: Type.String() }),
       tools: (tool) => [
         tool({
@@ -137,7 +123,7 @@ describe("defineToolPlugin", () => {
           label: "Factory Echo",
           optional: true,
           workspaceAccess: "execute",
-          factory({ config, toolContext }) {
+          factory({ toolContext }) {
             if (toolContext.sandboxed) {
               return null;
             }
@@ -145,24 +131,13 @@ describe("defineToolPlugin", () => {
               ...echoTool,
               name: "factory_echo",
               label: "Factory Echo",
-              async execute(_toolCallId: string, params: { input?: unknown }) {
-                const input = typeof params.input === "string" ? params.input : "";
-                return {
-                  content: [{ type: "text", text: `${config.prefix}:${input}` }],
-                  details: undefined,
-                };
-              },
+              execute: async () => ({ content: [], details: undefined }),
             };
           },
         }),
       ],
     });
-    const captured = createCapturedPluginRegistration({ id: "factory-tools" });
-    captured.api.pluginConfig = { prefix: "ctx" };
-    const registerTool = vi.fn<typeof captured.api.registerTool>();
-    captured.api.registerTool = registerTool;
-
-    entry.register(captured.api);
+    const registerTool = captureRegistration(entry, { prefix: "ctx" });
 
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
       name: "factory_echo",
@@ -179,12 +154,7 @@ describe("defineToolPlugin", () => {
   });
 
   it("defaults author config to a strict empty object schema", () => {
-    const entry = defineToolPlugin({
-      id: "empty-config",
-      name: "Empty Config",
-      description: "No config.",
-      tools: () => [],
-    });
+    const entry = defineToolPlugin({ ...pluginDetails, tools: () => [] });
 
     const expected = { type: "object", additionalProperties: false, properties: {} };
     expect(entry.configSchema.jsonSchema).toEqual(expected);

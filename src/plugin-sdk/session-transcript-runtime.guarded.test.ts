@@ -201,20 +201,15 @@ describe("guarded session transcript runtime SDK", () => {
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({ type: "message", message }),
     ]);
-    await expect(superseded(() => appendStrict({ ...scope, message }))).resolves.toEqual({
-      kind: "rejected",
-      reason: "session-rebound",
-    });
+    const rebound = { kind: "rejected", reason: "session-rebound" };
+    await expect(superseded(() => appendStrict({ ...scope, message }))).resolves.toEqual(rebound);
     await upsertSessionEntryCore(persistedScope, {
       sessionId: "replacement-session",
       updatedAt: 20,
     });
     await expect(
-      appendStrict({
-        ...scope,
-        message: { role: "assistant", content: "stale" },
-      }),
-    ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
+      appendStrict({ ...scope, message: { role: "assistant", content: "stale" } }),
+    ).resolves.toEqual(rebound);
     await expect(readEvents(persistedScope)).resolves.toEqual(events);
     await expect(
       readEvents({ ...persistedScope, sessionId: "replacement-session" }),

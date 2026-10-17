@@ -55,20 +55,13 @@ describe("status issue composition", () => {
       message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
       fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
     });
-    expect(
-      standardNotConfiguredIssue({
-        channel: "zalouser",
-        accountId: "default",
-        message: "Not authenticated.",
-        fix: "Run login.",
-      }),
-    ).toEqual({
+    const auth = {
       channel: "zalouser",
       accountId: "default",
-      kind: "auth",
       message: "Not authenticated.",
       fix: "Run login.",
-    });
+    };
+    expect(standardNotConfiguredIssue({ ...auth })).toEqual({ ...auth, kind: "auth" });
   });
 });
 
@@ -77,19 +70,6 @@ const defaultRuntimeState = {
   lastStartAt: null,
   lastStopAt: null,
   lastError: null,
-};
-
-const defaultChannelSummary = {
-  configured: false,
-  ...defaultRuntimeState,
-};
-
-const defaultTokenChannelSummary = {
-  ...defaultChannelSummary,
-  tokenSource: "none",
-  mode: null,
-  probe: undefined,
-  lastProbeAt: null,
 };
 
 const defaultAccountSnapshot = {
@@ -143,18 +123,25 @@ function resolveAccountSnapshot({
   };
 }
 
-function createComputedStatusAdapter() {
-  return createComputedAccountStatusAdapter({
+function createStatus(mode: "sync" | "async") {
+  const options = {
     defaultRuntime: createDefaultChannelRuntimeState("default"),
     resolveAccountSnapshot,
-  });
+  };
+  return mode === "async"
+    ? createAsyncComputedAccountStatusAdapter({
+        ...options,
+        resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
+          resolveAccountSnapshot(params),
+      })
+    : createComputedAccountStatusAdapter(options);
 }
-
-function createAsyncStatusAdapter() {
-  return createAsyncComputedAccountStatusAdapter({
-    defaultRuntime: createDefaultChannelRuntimeState("default"),
-    resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
-      resolveAccountSnapshot(params),
+function accountSnapshot(mode: "sync" | "async", ingressUnavailable?: true) {
+  return createStatus(mode).buildAccountSnapshot!({
+    account: adapterAccount,
+    cfg: {} as never,
+    runtime: { ...adapterRuntime, ...(ingressUnavailable ? { ingressUnavailable } : {}) },
+    probe: adapterProbe,
   });
 }
 
@@ -174,30 +161,13 @@ it("builds account status when configured is computed outside resolver", () => {
 
 describe("computed account status adapters", () => {
   it("builds account snapshots from async computed account metadata and extras", async () => {
-    const status = createAsyncStatusAdapter();
-    await expect(
-      Promise.resolve(
-        status.buildAccountSnapshot?.({
-          account: adapterAccount,
-          cfg: {} as never,
-          runtime: adapterRuntime,
-          probe: adapterProbe,
-        }),
-      ),
-    ).resolves.toEqual(expectedAdapterAccountSnapshot);
+    await expect(Promise.resolve(accountSnapshot("async"))).resolves.toEqual(
+      expectedAdapterAccountSnapshot,
+    );
   });
 
   it("preserves ingress failure for channel health evaluation", async () => {
-    const status = createComputedStatusAdapter();
-    const snapshot = await status.buildAccountSnapshot!({
-      account: adapterAccount,
-      cfg: {} as never,
-      runtime: {
-        ...adapterRuntime,
-        ingressUnavailable: true,
-      },
-      probe: adapterProbe,
-    });
+    const snapshot = await accountSnapshot("sync", true);
 
     expect(
       evaluateChannelHealth(snapshot, {
@@ -229,34 +199,14 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
     running: true,
   };
   it.each([
-    {
-      name: "preserves runtime connectivity metadata",
-      input: { runtime: structuredClone(connectivity) },
-      expected: {
-        ...defaultRuntimeState,
-        ...connectivity,
-        probe: undefined,
-      },
-    },
-    {
-      name: "projects terminalDisconnect when set",
-      input: {
-        runtime: {
-          running: false,
-          lifecycle: "blocked" as const,
-          terminalDisconnect: true,
-        },
-      },
-      expected: {
-        ...defaultRuntimeState,
-        running: false,
-        lifecycle: "blocked",
-        terminalDisconnect: true,
-        probe: undefined,
-      },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(buildRuntimeAccountStatusSnapshot(input)).toEqual(expected);
+    connectivity,
+    { running: false, lifecycle: "blocked" as const, terminalDisconnect: true },
+  ])("projects runtime metadata: $lifecycle", (runtime) => {
+    expect(buildRuntimeAccountStatusSnapshot({ runtime: structuredClone(runtime) })).toEqual({
+      ...defaultRuntimeState,
+      ...runtime,
+      probe: undefined,
+    });
   });
 });
 
@@ -272,20 +222,22 @@ describe("buildTokenChannelStatusSummary", () => {
     lastProbeAt: 3,
   };
   it.each([
-    {
-      name: "includes token/probe fields with mode by default",
-      input: {},
-      options: undefined,
-      expected: defaultTokenChannelSummary,
-    },
-    {
-      name: "can omit mode for channels without a mode state",
-      input: structuredClone(supplied),
-      options: { includeMode: false },
-      expected: supplied,
-    },
-  ])("$name", ({ input, options, expected }) => {
-    expect(buildTokenChannelStatusSummary(input, options)).toEqual(expected);
+    [
+      "defaults",
+      {},
+      undefined,
+      {
+        configured: false,
+        ...defaultRuntimeState,
+        tokenSource: "none",
+        mode: null,
+        probe: undefined,
+        lastProbeAt: null,
+      },
+    ],
+    ["without mode", supplied, { includeMode: false }, supplied],
+  ] as const)("builds token status %s", (_name, input, options, expected) => {
+    expect(buildTokenChannelStatusSummary(structuredClone(input), options)).toEqual(expected);
   });
 });
 
@@ -293,7 +245,7 @@ it("defaults mode to webhook and keeps supplied extras", () => {
   expect(
     buildWebhookChannelStatusSummary({ configured: true, running: true }, { secretSource: "env" }),
   ).toEqual({
-    ...defaultChannelSummary,
+    ...defaultRuntimeState,
     configured: true,
     running: true,
     mode: "webhook",

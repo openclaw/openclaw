@@ -16,6 +16,17 @@ const defaults = {
   visibility: "self",
   a2aPolicy: createAgentToAgentPolicy({}),
 } as const;
+const denied = (error: string) => ({ allowed: false, status: "forbidden", error });
+const historyRestricted =
+  "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.";
+const workAgent = {
+  requesterAgentId: "work",
+  visibility: "agent",
+  defaultAgentId: "main",
+} as const;
+const grantFor = (expectedSessionId: string) => ({ expectedSessionId });
+const { resolveScopedAccess: resolveScoped, resolveScopedAccessAsync: resolveScopedAsync } =
+  createSessionVisibilityChecker;
 function direct(options: Partial<Parameters<typeof createSessionVisibilityChecker>[0]>) {
   return createSessionVisibilityChecker({ ...defaults, spawnedKeys: null, ...options });
 }
@@ -45,55 +56,42 @@ describe("scoped session access providers", () => {
 
   it("keeps synchronous checks fresh while the async companion reads current state", async () => {
     let expectedSessionId = "first-incarnation";
-    const provider = () => ({ expectedSessionId });
+    const provider = () => grantFor(expectedSessionId);
     registerProvider(provider, {
-      resolveAsync: async () => ({ expectedSessionId: `async-${expectedSessionId}` }),
+      resolveAsync: async () => grantFor(`async-${expectedSessionId}`),
     });
-    const params = {
-      ...scopedRequest,
-      ...defaults,
-      requesterSessionKey: scopedRequest.requesterSessionKey,
-    };
+    const params = { ...defaults, ...scopedRequest };
     const checker = direct(params);
     const guard = await createSessionVisibilityGuard(params);
     for (const incarnation of ["first-incarnation", "second-incarnation"]) {
       expectedSessionId = incarnation;
-      expect(checker.check(scopedRequest.targetSessionKey)).toEqual({
-        allowed: true,
-        expectedSessionId,
-      });
-      expect(guard.check(scopedRequest.targetSessionKey)).toEqual({
-        allowed: true,
-        expectedSessionId,
-      });
-      expect(createSessionVisibilityChecker.resolveScopedAccess(scopedRequest)).toEqual({
-        expectedSessionId,
-      });
-      await expect(
-        createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest),
-      ).resolves.toEqual({
-        expectedSessionId: `async-${incarnation}`,
-      });
+      const grant = { allowed: true, expectedSessionId };
+      expect(checker.check(scopedRequest.targetSessionKey)).toEqual(grant);
+      expect(guard.check(scopedRequest.targetSessionKey)).toEqual(grant);
+      expect(resolveScoped(scopedRequest)).toEqual(grantFor(expectedSessionId));
+      await expect(resolveScopedAsync(scopedRequest)).resolves.toEqual(
+        grantFor(`async-${incarnation}`),
+      );
     }
   });
 
   it("discards an awaited grant after unregister-and-replace of the same callback", async () => {
     const pending = createDeferred<{ expectedSessionId: string }>();
-    const provider = () => ({ expectedSessionId: "sync-incarnation" });
+    const provider = () => grantFor("sync-incarnation");
     const unregister = registerProvider(provider, {
       resolveAsync: () => pending.promise,
     });
-    const resolving = createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest);
+    const resolving = resolveScopedAsync(scopedRequest);
     unregister();
     registerProvider(provider, {
-      resolveAsync: async () => ({ expectedSessionId: "replacement-incarnation" }),
+      resolveAsync: async () => grantFor("replacement-incarnation"),
     });
-    pending.resolve({ expectedSessionId: "retired-incarnation" });
+    pending.resolve(grantFor("retired-incarnation"));
     await expect(resolving).resolves.toBeUndefined();
     unregister();
-    await expect(
-      createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest),
-    ).resolves.toEqual({ expectedSessionId: "replacement-incarnation" });
+    await expect(resolveScopedAsync(scopedRequest)).resolves.toEqual(
+      grantFor("replacement-incarnation"),
+    );
   });
 
   it("preserves provider order and skips registrations retired while an earlier provider awaits", async () => {
@@ -101,46 +99,30 @@ describe("scoped session access providers", () => {
     registerProvider(() => undefined, {
       resolveAsync: () => pending.promise,
     });
-    const unregisterSecond = registerProvider(() => ({
-      expectedSessionId: "retired-second",
-    }));
-    registerProvider(() => ({
-      expectedSessionId: "third",
-    }));
-    const resolving = createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest);
+    const unregisterSecond = registerProvider(() => grantFor("retired-second"));
+    registerProvider(() => grantFor("third"));
+    const resolving = resolveScopedAsync(scopedRequest);
     unregisterSecond();
     pending.resolve(undefined);
-    await expect(resolving).resolves.toEqual({ expectedSessionId: "third" });
+    await expect(resolving).resolves.toEqual(grantFor("third"));
   });
 
-  it("does not assign an unscoped default-agent row to a non-default requester", () => {
-    const checker = direct({
-      defaultAgentId: "main",
-      requesterAgentId: "work",
-      requesterSessionKey: "agent:work:main",
-      visibility: "agent",
-    });
-
-    expect(checker.check("main")).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
-    });
-  });
-
-  it("fails closed for an unscoped row without configured ownership", () => {
+  it.each([
+    ["configured default", "main", "agent", historyRestricted],
+    [
+      "missing owner",
+      undefined,
+      "all",
+      "Session history denied because target agent ownership is unavailable.",
+    ],
+  ] as const)("denies unscoped rows with %s", (_name, defaultAgentId, visibility, error) => {
     const checker = direct({
       requesterAgentId: "work",
       requesterSessionKey: "agent:work:main",
-      visibility: "all",
+      defaultAgentId,
+      visibility,
     });
-
-    expect(checker.check("main")).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error: "Session history denied because target agent ownership is unavailable.",
-    });
+    expect(checker.check("main")).toEqual(denied(error));
   });
 
   it("accepts a legacy Set spawnedKeys input on the exported checker", () => {
@@ -150,12 +132,11 @@ describe("scoped session access providers", () => {
     });
 
     expect(checker.check("agent:main:subagent:child-1")).toEqual({ allowed: true });
-    expect(checker.check("agent:main:subagent:unrelated")).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
+    expect(checker.check("agent:main:subagent:unrelated")).toEqual(
+      denied(
         "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
-    });
+      ),
+    );
   });
 
   it("gives the canonical main session agent-wide access under tree visibility", () => {
@@ -180,37 +161,17 @@ describe("scoped session access providers", () => {
     expect(checker.check("current")).toEqual({ allowed: true });
   });
 
-  it("keeps explicit row ownership authoritative when a bare key matches the requester", () => {
-    const checker = rowChecker({
-      defaultAgentId: "main",
-      requesterAgentId: "work",
-      requesterSessionKey: "main",
-      visibility: "agent",
-    });
-
-    expect(checker.check({ key: "main", agentId: "main" })).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
-    });
-  });
-
-  it("resolves a bare requester alias through the configured default before row metadata exists", () => {
-    const checker = rowChecker({
-      action: "send",
-      defaultAgentId: "main",
-      requesterAgentId: "work",
-      requesterSessionKey: "main",
-      visibility: "agent",
-    });
-
-    expect(checker.check({ key: "main" })).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
-        "Session send visibility is restricted. Configure agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations, or tools.sessions.visibility=all for shared access. Global agent-to-agent and sandbox limits still apply.",
-    });
+  it.each([
+    ["explicit row ownership", "history", "main", historyRestricted],
+    [
+      "configured default without row metadata",
+      "send",
+      undefined,
+      "Session send visibility is restricted. Configure agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations, or tools.sessions.visibility=all for shared access. Global agent-to-agent and sandbox limits still apply.",
+    ],
+  ] as const)("honors %s for bare requester aliases", (_name, action, agentId, error) => {
+    const checker = rowChecker({ ...workAgent, action, requesterSessionKey: "main" });
+    expect(checker.check({ key: "main", agentId })).toEqual(denied(error));
   });
 
   it("grants only the exact requester, target, and action supplied by a provider", () => {
@@ -231,7 +192,7 @@ describe("scoped session access providers", () => {
       request.action === "history" &&
       request.requesterSessionKey === "agent:main:clickclack:channel:discussion" &&
       request.targetSessionKey === target
-        ? { expectedSessionId: "main-incarnation" }
+        ? grantFor("main-incarnation")
         : undefined,
     );
     expect(history.check(target)).toEqual({
@@ -247,14 +208,8 @@ describe("scoped session access providers", () => {
   it("keeps incognito sessions hidden from scoped and ownership grants", () => {
     const requesterSessionKey = "agent:main:main";
     const targetSessionKey = "agent:main:dashboard:incognito-private";
-    const expected = {
-      allowed: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${targetSessionKey}`,
-    } as const;
-    registerProvider(() => ({
-      expectedSessionId: "incognito-incarnation",
-    }));
+    const expected = denied(`Session not visible from session tools: ${targetSessionKey}`);
+    registerProvider(() => grantFor("incognito-incarnation"));
     const checker = direct({
       requesterSessionKey,
       mainSessionKey: requesterSessionKey,
@@ -284,74 +239,66 @@ describe("scoped session access providers", () => {
   });
 });
 
-describe("createAgentToAgentPolicy allow list", () => {
-  it("requires both requester and target to match a configured allow entry", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: { agentToAgent: { enabled: true, allow: ["main"] } },
-    });
-    expect(policy.isAllowed("main", "ops")).toBe(false);
-    expect(policy.isAllowed("ops", "main")).toBe(false);
-    expect(policy.isAllowed("main", "main")).toBe(true);
+it("requires both requester and target to match a configured allow entry", () => {
+  const policy = createAgentToAgentPolicy({
+    tools: { agentToAgent: { enabled: true, allow: ["main"] } },
   });
+  expect(policy.isAllowed("main", "ops")).toBe(false);
+  expect(policy.isAllowed("ops", "main")).toBe(false);
+  expect(policy.isAllowed("main", "main")).toBe(true);
 });
 
-describe("directed send matcher", () => {
-  it.each([
-    { send: [" "], narrow: false, broad: false },
-    { send: ["ops-*"], narrow: true, broad: true },
-    { send: ["*"], narrow: true, broad: true },
-  ])("matches only explicit send destinations: $send", ({ send, narrow, broad }) => {
-    const a2aPolicy = createAgentToAgentPolicy({
-      agents: { entries: { ReSeArCh: { tools: { agentToAgent: { send } } } } },
-    });
-    expect(a2aPolicy.isAllowed("research", "ops-west")).toBe(true);
-    for (const [visibility, allowed] of [
-      ["agent", narrow],
-      ["all", broad],
-    ] as const) {
-      const checker = rowChecker({
-        action: "send",
-        requesterSessionKey: "agent:research:main",
-        visibility,
-        a2aPolicy,
-      });
-      expect(checker.check({ key: "agent:ops-west:main" }).allowed).toBe(allowed);
-    }
+it.each([
+  [[" "], false],
+  [["ops-*"], true],
+  [["*"], true],
+] as const)("matches only explicit send destinations: %s", (destinations, allowed) => {
+  const send = [...destinations];
+  const a2aPolicy = createAgentToAgentPolicy({
+    agents: { entries: { ReSeArCh: { tools: { agentToAgent: { send } } } } },
   });
+  expect(a2aPolicy.isAllowed("research", "ops-west")).toBe(true);
+  for (const visibility of ["agent", "all"] as const) {
+    const checker = rowChecker({
+      action: "send",
+      requesterSessionKey: "agent:research:main",
+      visibility,
+      a2aPolicy,
+    });
+    expect(checker.check({ key: "agent:ops-west:main" }).allowed).toBe(allowed);
+  }
 });
 
 describe("classifyLookupFailure", () => {
-  it("classifies a retryable gateway request error as transient", () => {
-    const error = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "transport timeout",
-      retryable: true,
+  const transportError = (code: number) =>
+    Object.assign(new Error("gateway transport failed"), {
+      name: "GatewayTransportError",
+      kind: "closed",
+      connectionDetails: {},
+      code,
     });
-    expect(classifyLookupFailure(error)).toBe("transient");
-  });
-
   it.each([
-    { kind: "closed", code: 1013, expected: "transient" },
-    { kind: "closed", code: 1008, expected: "unknown" },
-  ] as const)(
-    "classifies gateway transport $kind/$code as $expected",
-    ({ kind, code, expected }) => {
-      const error = Object.assign(new Error("gateway transport failed"), {
-        name: "GatewayTransportError",
-        kind,
-        connectionDetails: {},
-        ...(code === undefined ? {} : { code }),
-      });
-      expect(classifyLookupFailure(error)).toBe(expected);
-    },
-  );
-
-  it("classifies an explicit pre-connect auth failure as credentials", () => {
-    const error = new GatewayCredentialsRequiredError({
-      method: "sessions.list",
-      configPath: "/tmp/openclaw.json",
-    });
-    expect(classifyLookupFailure(error)).toBe("credentials");
+    [
+      "retryable request",
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "transport timeout",
+        retryable: true,
+      }),
+      "transient",
+    ],
+    ["transport 1013", transportError(1013), "transient"],
+    ["transport 1008", transportError(1008), "unknown"],
+    [
+      "pre-connect auth",
+      new GatewayCredentialsRequiredError({
+        method: "sessions.list",
+        configPath: "/tmp/openclaw.json",
+      }),
+      "credentials",
+    ],
+  ] as const)("classifies %s", (_name, error, expected) => {
+    expect(classifyLookupFailure(error)).toBe(expected);
   });
 
   it("renders cause-appropriate denial suffixes", () => {
