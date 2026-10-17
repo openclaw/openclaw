@@ -302,6 +302,58 @@ describe("gateway health collection deadline", () => {
     }
   }, 1_000);
 
+  // The aggregate deadline must be measured on the monotonic clock so a wall-clock
+  // jump (NTP step, manual time change) cannot make healthy channels look stale
+  // or stall collection past its budget.
+  it("ignores a wall-clock forward step while probing accounts under the aggregate deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+    vi.setSystemTime(0);
+    const probe = vi.fn(async () => ({ ok: true }));
+    healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
+    readSessionStoreSummaryReadOnly.mockImplementation(() => {
+      // Jump only the wall clock forward; the monotonic clock stays near zero.
+      vi.setSystemTime(Date.now() + 60_000);
+      return { count: 0, recent: [], byAgent: new Map() };
+    });
+
+    const snap = await collectDeadlineSnapshot({ timeoutMs: 50 });
+    const channel = snap.channels["deadline-test"];
+
+    expect(probe).toHaveBeenCalled();
+    expect(channel?.accounts?.default?.probe).toEqual({ ok: true });
+  }, 1_000);
+
+  it("still expires unfinished probes within the monotonic budget after a wall-clock backward step", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+    vi.setSystemTime(0);
+    const slowProbe = createDeferredCore<Record<string, unknown>>();
+    healthPluginsForTest = [
+      createDeadlinePlugin({
+        accountIds: ["default"],
+        probe: async () => slowProbe.promise,
+      }),
+    ];
+    readSessionStoreSummaryReadOnly.mockImplementation(() => {
+      // Jump the wall clock backward; the monotonic clock stays near zero.
+      vi.setSystemTime(Date.now() - 60_000);
+      return { count: 0, recent: [], byAgent: new Map() };
+    });
+
+    const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50 });
+    await flushHealthPreparation();
+    // The monotonic budget must still expire after 50ms despite the backward wall-clock jump.
+    await vi.advanceTimersByTimeAsync(50);
+    const snap = await snapshotPromise;
+    const channel = snap.channels["deadline-test"];
+
+    expect(channel?.accounts?.default?.probe).toEqual({
+      timedOut: true,
+      error: "health collection timed out after 50ms",
+    });
+    slowProbe.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+  }, 1_000);
+
   it("retains timed-out permits across repeated health collections", async () => {
     vi.useFakeTimers();
     const accountIds = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];

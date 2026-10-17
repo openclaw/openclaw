@@ -44,9 +44,14 @@ export function createPermitPool(limit: number) {
     async acquire({
       signal,
       deadlineAtMs,
-    }: { signal?: AbortSignal; deadlineAtMs?: number } = {}): Promise<PermitRelease | null> {
+      now = () => Date.now(),
+    }: {
+      signal?: AbortSignal;
+      deadlineAtMs?: number;
+      now?: () => number;
+    } = {}): Promise<PermitRelease | null> {
       const expired = () =>
-        signal?.aborted === true || (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs);
+        signal?.aborted === true || (deadlineAtMs !== undefined && now() >= deadlineAtMs);
       if (expired()) {
         return null;
       }
@@ -72,7 +77,7 @@ export function createPermitPool(limit: number) {
         signal?.addEventListener("abort", cancel, { once: true });
         waiters.push(waiter);
         if (deadlineAtMs !== undefined) {
-          cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, cancel, undefined, {
+          cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, cancel, now, {
             unref: true,
           });
         }

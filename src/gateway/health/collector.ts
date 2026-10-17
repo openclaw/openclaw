@@ -274,7 +274,7 @@ function buildHealthTimeoutRecord(
 }
 
 function resolveHealthProbeTimeoutMs(deadlineAtMs: number): number {
-  return Math.max(1, deadlineAtMs - Date.now());
+  return Math.max(1, Math.floor(deadlineAtMs - performance.now()));
 }
 
 async function buildHealthAccountRecord(params: {
@@ -330,7 +330,7 @@ async function buildHealthAccountRecord(params: {
       cfg: params.cfg,
       accountId: params.accountId,
     });
-  if (Date.now() >= params.deadlineAtMs) {
+  if (performance.now() >= params.deadlineAtMs) {
     return timedOut();
   }
   if (diagnostics.length > 0) {
@@ -372,7 +372,7 @@ async function buildHealthAccountRecord(params: {
       ...(typeof failure.error === "string" ? { lastError: failure.error } : {}),
     };
   }
-  if (Date.now() >= params.deadlineAtMs) {
+  if (performance.now() >= params.deadlineAtMs) {
     return timedOut();
   }
 
@@ -403,7 +403,7 @@ async function buildHealthAccountRecord(params: {
           enabledFallback: enabled,
           configuredFallback: configured,
         });
-  if (Date.now() >= params.deadlineAtMs) {
+  if (performance.now() >= params.deadlineAtMs) {
     return timedOut();
   }
   if (lastProbeAt) {
@@ -428,7 +428,7 @@ async function buildHealthAccountRecord(params: {
           snapshot,
         })
       : undefined;
-  if (Date.now() >= params.deadlineAtMs) {
+  if (performance.now() >= params.deadlineAtMs) {
     return timedOut();
   }
   // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
@@ -468,7 +468,10 @@ async function runHealthAccountWithinDeadline(
   const deadlineFallback = { record: buildHealthTimeoutRecord(params.accountId, params.timeoutMs) };
   // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
   const operation = trackAsyncWork(async () => {
-    const release = await healthOperationPermits.acquire({ deadlineAtMs: params.deadlineAtMs });
+    const release = await healthOperationPermits.acquire({
+      deadlineAtMs: params.deadlineAtMs,
+      now: () => performance.now(),
+    });
     if (!release) {
       return deadlineFallback.record;
     }
@@ -478,7 +481,11 @@ async function runHealthAccountWithinDeadline(
       release();
     }
   });
-  const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
+  const result = await awaitWithinDeadline(
+    () => operation,
+    params.deadlineAtMs,
+    () => performance.now(),
+  );
   return result === ABSOLUTE_DEADLINE_EXPIRED ? deadlineFallback.record : result;
 }
 
@@ -493,7 +500,7 @@ export async function collectGatewayHealthSnapshot(params: {
   sessionRowProjection?: SessionRowProjection;
 }): Promise<HealthSummary> {
   const stateContext = captureDeliveryQueueHealthContext();
-  const start = Date.now();
+  const start = performance.now();
   const timeoutMs = Math.min(
     resolveTimerTimeoutMs(params.timeoutMs, HEALTH_COLLECTION_TIMEOUT_MS, 50),
     HEALTH_COLLECTION_TIMEOUT_MS,
@@ -646,7 +653,7 @@ export async function collectGatewayHealthSnapshot(params: {
   return {
     ok: true,
     ts: Date.now(),
-    durationMs: Date.now() - start,
+    durationMs: Math.floor(performance.now() - start),
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
