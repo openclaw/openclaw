@@ -1,6 +1,7 @@
 // Synthetic authored content through the built Gateway, real RPC, and real browser sandbox.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { BrowserContextOptions } from "playwright";
 import { expect, it } from "vitest";
 import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
@@ -55,6 +56,42 @@ const suite = createControlUiE2eSuite({
   },
 });
 
+function gatewayOwner() {
+  if (!instance) {
+    throw new Error("Gateway fixture is not running");
+  }
+  return instance;
+}
+
+function browserOptions(): BrowserContextOptions {
+  return {
+    viewport: { width: 1440, height: 900 },
+    serviceWorkers: "block",
+    permissions: ["local-network-access"],
+    ...(captureEnabled
+      ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
+      : {}),
+  };
+}
+
+const rpc = (owner: OpenClawTestInstance, method: string, params: Record<string, unknown>) =>
+  cliJson(owner, ["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
+
+async function sessionUrl(owner: OpenClawTestInstance, key: string, face: "chat" | "dashboard") {
+  const handoff = await cliJson(owner, ["dashboard", "--json"]);
+  expect(typeof handoff.browserUrl).toBe("string");
+  const url = new URL(controlUiSessionUrl(suite.server.baseUrl, key, face));
+  url.hash = new URL(String(handoff.browserUrl)).hash;
+  return url.toString();
+}
+
+function canvasDocument(owner: OpenClawTestInstance, id: string, title: string, html: string) {
+  return createCanvasDocument(
+    { id, title, html, cspSandbox: "scripts", surface: "assistant_message" },
+    { stateDir: owner.stateDir },
+  );
+}
+
 async function cliJson(
   owner: OpenClawTestInstance,
   args: string[],
@@ -67,37 +104,27 @@ async function cliJson(
 
 suite.define(() => {
   it("reads persisted Canvas bytes through an authenticated browser connection", async () => {
-    if (!instance) {
-      throw new Error("Gateway fixture is not running");
-    }
-    const owner = instance;
+    const owner = gatewayOwner();
     const sessionKey = "agent:main:widget-live-proof";
     const docId = "widget-live-proof";
-    const session = await cliJson(owner, [
-      "gateway",
-      "call",
-      "sessions.create",
-      "--params",
-      JSON.stringify({ key: sessionKey, agentId: "main", label: "Synthetic widget proof" }),
-      "--json",
-    ]);
+    const session = await rpc(owner, "sessions.create", {
+      key: sessionKey,
+      agentId: "main",
+      label: "Synthetic widget proof",
+    });
     expect(session.ok).toBe(true);
     expect(typeof session.sessionId).toBe("string");
-    await createCanvasDocument(
-      {
-        id: docId,
-        title: "Live widget proof",
-        cspSandbox: "scripts",
-        surface: "assistant_message",
-        html: buildWidgetDocument(
-          "Live widget proof",
-          `<style>body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
+    await canvasDocument(
+      owner,
+      docId,
+      "Live widget proof",
+      buildWidgetDocument(
+        "Live widget proof",
+        `<style>body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
               input{padding:12px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border)}</style>
               <h1>Live widget proof</h1><p>Loaded from this isolated Gateway's persisted Canvas document.</p>
               <label>Local note <input aria-label="Local note"></label>`,
-        ),
-      },
-      { stateDir: owner.stateDir },
+      ),
     );
     const a2uiDocId = `${docId}-a2ui`;
     const a2uiBundlePath = "/__openclaw__/a2ui/a2ui-v0.9.bundle.js";
@@ -123,19 +150,15 @@ suite.define(() => {
       ],
       actionTier: "state",
     }).replaceAll("<", "\\u003c");
-    await createCanvasDocument(
-      {
-        id: a2uiDocId,
-        title: "A2UI live proof",
-        cspSandbox: "scripts",
-        surface: "assistant_message",
-        html: buildWidgetDocument(
-          "A2UI live proof",
-          `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
-          { scriptOrigins: ["'self'"] },
-        ),
-      },
-      { stateDir: owner.stateDir },
+    await canvasDocument(
+      owner,
+      a2uiDocId,
+      "A2UI live proof",
+      buildWidgetDocument(
+        "A2UI live proof",
+        `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
+        { scriptOrigins: ["'self'"] },
+      ),
     );
     const content = [
       {
@@ -158,97 +181,70 @@ suite.define(() => {
         },
       },
     );
-    const history = await cliJson(owner, [
-      "gateway",
-      "call",
-      "chat.history",
-      "--params",
-      JSON.stringify({ sessionKey, agentId: "main" }),
-      "--json",
-    ]);
+    const history = await rpc(owner, "chat.history", { sessionKey, agentId: "main" });
     expect(history.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ content })]),
     );
-    const handoff = await cliJson(owner, ["dashboard", "--json"]);
-    expect(typeof handoff.browserUrl).toBe("string");
-    const issued = new URL(String(handoff.browserUrl));
-    const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
-    url.hash = issued.hash;
-    await suite.withPage(
-      {
-        viewport: { width: 1440, height: 900 },
-        serviceWorkers: "block",
-        permissions: ["local-network-access"],
-        ...(captureEnabled
-          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
-          : {}),
-      },
-      async ({ page }) => {
-        const canvasReads: unknown[] = [];
-        page.on("websocket", (socket) => {
-          socket.on("framesent", ({ payload }) => {
-            const request = JSON.parse(payload.toString()) as { method?: string; params?: unknown };
-            if (request.method === "canvas.document.view") {
-              canvasReads.push(request.params);
-            }
-          });
-        });
-        const response = await page.goto(url.toString());
-        expect(response?.status()).toBe(404);
-        await enterControlUiSession(page);
-        await waitForControlUiGatewayReady(page);
-        const outer = page
-          .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
-          .first();
-        const inner = outer.contentFrame().frameLocator("iframe");
-        await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
-        await inner
-          .getByRole("textbox", { name: "Local note" })
-          .fill("Persisted bytes, isolated UI");
-        const a2uiOuter = page
-          .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
-          .nth(1);
-        const a2uiInner = a2uiOuter.contentFrame().frameLocator("iframe");
-        await a2uiInner.getByText("A2UI live proof", { exact: true }).waitFor();
-        expect(canvasReads).toHaveLength(2);
-        expect(canvasReads).toEqual(expect.arrayContaining([{ docId }, { docId: a2uiDocId }]));
-        expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
-        const opaque = await inner.locator("body").evaluate(() => {
-          try {
-            void window.top?.document;
-            return false;
-          } catch {
-            return true;
+    const url = await sessionUrl(owner, sessionKey, "chat");
+    await suite.withPage(browserOptions(), async ({ page }) => {
+      const canvasReads: unknown[] = [];
+      page.on("websocket", (socket) => {
+        socket.on("framesent", ({ payload }) => {
+          const request = JSON.parse(payload.toString()) as { method?: string; params?: unknown };
+          if (request.method === "canvas.document.view") {
+            canvasReads.push(request.params);
           }
         });
-        expect(opaque).toBe(true);
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "real-gateway-widget.png") });
-          await writeFile(
-            path.join(suite.artifactDir, "real-gateway-evidence.json"),
-            JSON.stringify(
-              { docId, a2uiDocId, canvasReads, opaque, sessionKey, gatewayPort: owner.port },
-              null,
-              2,
-            ),
-          );
+      });
+      const response = await page.goto(url);
+      expect(response?.status()).toBe(404);
+      await enterControlUiSession(page);
+      await waitForControlUiGatewayReady(page);
+      const outer = page
+        .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
+        .first();
+      const inner = outer.contentFrame().frameLocator("iframe");
+      await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
+      await inner.getByRole("textbox", { name: "Local note" }).fill("Persisted bytes, isolated UI");
+      const a2uiOuter = page
+        .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
+        .nth(1);
+      const a2uiInner = a2uiOuter.contentFrame().frameLocator("iframe");
+      await a2uiInner.getByText("A2UI live proof", { exact: true }).waitFor();
+      expect(canvasReads).toHaveLength(2);
+      expect(canvasReads).toEqual(expect.arrayContaining([{ docId }, { docId: a2uiDocId }]));
+      expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
+      const opaque = await inner.locator("body").evaluate(() => {
+        try {
+          void window.top?.document;
+          return false;
+        } catch {
+          return true;
         }
-      },
-    );
+      });
+      expect(opaque).toBe(true);
+      if (captureEnabled) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "real-gateway-widget.png") });
+        await writeFile(
+          path.join(suite.artifactDir, "real-gateway-evidence.json"),
+          JSON.stringify(
+            { docId, a2uiDocId, canvasReads, opaque, sessionKey, gatewayPort: owner.port },
+            null,
+            2,
+          ),
+        );
+      }
+    });
   });
 
   it("retains a real dashboard, article position, and chat draft across navigation and Settings", async () => {
-    if (!instance) {
-      throw new Error("Gateway fixture is not running");
-    }
-    const owner = instance;
+    const owner = gatewayOwner();
     const dashboardKey = "agent:main:daily-claw-retention";
     const chatKey = "agent:main:chat-navigation-retention";
     const widgetName = "daily-claw";
     const note = "Read the navigation story after lunch.";
     const draft = "Explain how retaining this dashboard preserves my reading position.";
-    const rpc = (method: string, params: Record<string, unknown>) =>
-      cliJson(owner, ["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
+    const call = (method: string, params: Record<string, unknown>) => rpc(owner, method, params);
     const articleHtml = (edition: string) =>
       buildWidgetDocument(
         "The Daily Claw",
@@ -264,23 +260,23 @@ suite.define(() => {
           ${Array.from({ length: 30 }, (_, index) => `<p>Story ${index + 1}: Synthetic engineering news for the navigation retention proof.</p>`).join("")}
         </article>`,
       );
-    await rpc("sessions.create", {
+    await call("sessions.create", {
       key: dashboardKey,
       agentId: "main",
       label: "The Daily Claw",
     });
-    await rpc("sessions.patch", { key: dashboardKey, boardFace: "dashboard" });
+    await call("sessions.patch", { key: dashboardKey, boardFace: "dashboard" });
     const widgetParams = {
       sessionKey: dashboardKey,
       name: widgetName,
       title: "The Daily Claw",
       placement: { size: "full" },
     };
-    await rpc("board.widget.put", {
+    await call("board.widget.put", {
       ...widgetParams,
       content: { kind: "html", html: articleHtml("Morning edition") },
     });
-    const chat = await rpc("sessions.create", {
+    const chat = await call("sessions.create", {
       key: chatKey,
       agentId: "main",
       label: "Navigation proof chat",
@@ -296,109 +292,96 @@ suite.define(() => {
         },
       },
     );
-    const handoff = await cliJson(owner, ["dashboard", "--json"]);
-    const url = new URL(controlUiSessionUrl(suite.server.baseUrl, dashboardKey, "dashboard"));
-    url.hash = new URL(String(handoff.browserUrl)).hash;
-    await suite.withPage(
-      {
-        viewport: { width: 1440, height: 900 },
-        serviceWorkers: "block",
-        permissions: ["local-network-access"],
-        ...(captureEnabled
-          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
-          : {}),
-      },
-      async ({ page }) => {
-        const capture = async (filename: string) => {
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(suite.artifactDir, filename) });
-          }
-        };
-        const sessionLink = (key: string) =>
-          page.locator(
-            `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
-          );
-        const response = await page.goto(url.toString());
-        expect(response?.status()).toBe(200);
-        await waitForControlUiGatewayReady(page);
-        const board = page.locator("openclaw-board-view").first();
-        const outer = board.locator(
-          `.board-widget[data-widget-name="${widgetName}"] .board-widget__frame`,
-        );
-        const inner = outer.contentFrame().frameLocator("iframe");
-        const readingNote = inner.getByRole("textbox", { name: "Reading note" });
-        const article = inner.getByRole("article", { name: "Daily Claw article" });
-        await readingNote.fill(note);
-        await article.evaluate((element) => {
-          element.scrollTop = 480;
-        });
-        const articleScrollTop = await article.evaluate((element) => element.scrollTop);
-        expect(articleScrollTop).toBeGreaterThan(0);
-        const originalFrame = await outer.elementHandle();
-        const originalBoard = await board.elementHandle();
-        if (!originalFrame || !originalBoard) {
-          throw new Error("Daily Claw frame and board were not mounted");
+    const url = await sessionUrl(owner, dashboardKey, "dashboard");
+    await suite.withPage(browserOptions(), async ({ page }) => {
+      const capture = async (filename: string) => {
+        if (captureEnabled) {
+          await page.screenshot({ path: path.join(suite.artifactDir, filename) });
         }
-        const composer = page.locator(
-          "openclaw-chat-pane.chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea",
+      };
+      const sessionLink = (key: string) =>
+        page.locator(
+          `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
         );
-        await capture("01-daily-claw-warmed.png");
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          await sessionLink(chatKey).click();
-          await composer.waitFor();
-          await expect.poll(() => sessionLink(chatKey).getAttribute("aria-current")).toBe("page");
-          if (attempt === 0) {
-            await composer.fill(draft);
-            await capture("02-chat-with-draft.png");
-          } else {
-            expect(await composer.inputValue()).toBe(draft);
-          }
-          expect(await originalFrame.evaluate((element) => element.isConnected)).toBe(true);
-          await expect
-            .poll(() => originalBoard.evaluate((element) => Reflect.get(element, "active")))
-            .toBe(false);
-          await sessionLink(dashboardKey).click();
-          await readingNote.waitFor();
-          expect(
-            await outer.evaluate((element, previous) => element === previous, originalFrame),
-          ).toBe(true);
-          expect(await readingNote.inputValue()).toBe(note);
-          expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
-        }
-        await page.locator("openclaw-app-sidebar .sidebar-identity-card").click();
-        await page.locator('openclaw-app-sidebar [data-value="command:settings"]').click();
-        await page.locator(".settings-sidebar__back").waitFor();
-        const parked = {
-          frameConnected: await originalFrame.evaluate((element) => element.isConnected),
-          boardActive: await originalBoard.evaluate((element) => Reflect.get(element, "active")),
-        };
-        await page.locator(".settings-sidebar__back").click();
-        await readingNote.waitFor();
-        // Retain the pre-fix failure's returned dashboard before checking its lost frame.
-        await capture("03-daily-claw-after-settings.png");
+      const response = await page.goto(url);
+      expect(response?.status()).toBe(200);
+      await waitForControlUiGatewayReady(page);
+      const board = page.locator("openclaw-board-view").first();
+      const outer = board.locator(
+        `.board-widget[data-widget-name="${widgetName}"] .board-widget__frame`,
+      );
+      const inner = outer.contentFrame().frameLocator("iframe");
+      const readingNote = inner.getByRole("textbox", { name: "Reading note" });
+      const article = inner.getByRole("article", { name: "Daily Claw article" });
+      await readingNote.fill(note);
+      await article.evaluate((element) => {
+        element.scrollTop = 480;
+      });
+      const articleScrollTop = await article.evaluate((element) => element.scrollTop);
+      expect(articleScrollTop).toBeGreaterThan(0);
+      const originalFrame = await outer.elementHandle();
+      const originalBoard = await board.elementHandle();
+      if (!originalFrame || !originalBoard) {
+        throw new Error("Daily Claw frame and board were not mounted");
+      }
+      const expectRetainedArticle = async () => {
         expect(
           await outer.evaluate((element, previous) => element === previous, originalFrame),
         ).toBe(true);
-        expect(parked).toEqual({ frameConnected: true, boardActive: false });
         expect(await readingNote.inputValue()).toBe(note);
         expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
+      };
+      const composer = page.locator(
+        "openclaw-chat-pane.chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea",
+      );
+      await capture("01-daily-claw-warmed.png");
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         await sessionLink(chatKey).click();
         await composer.waitFor();
-        expect(await composer.inputValue()).toBe(draft);
+        await expect.poll(() => sessionLink(chatKey).getAttribute("aria-current")).toBe("page");
+        if (attempt === 0) {
+          await composer.fill(draft);
+          await capture("02-chat-with-draft.png");
+        } else {
+          expect(await composer.inputValue()).toBe(draft);
+        }
+        expect(await originalFrame.evaluate((element) => element.isConnected)).toBe(true);
+        await expect
+          .poll(() => originalBoard.evaluate((element) => Reflect.get(element, "active")))
+          .toBe(false);
         await sessionLink(dashboardKey).click();
         await readingNote.waitFor();
-        await rpc("board.widget.put", {
-          ...widgetParams,
-          content: {
-            kind: "html",
-            html: articleHtml("Afternoon edition: refreshed from the Gateway"),
-          },
-        });
-        await inner
-          .getByText("Afternoon edition: refreshed from the Gateway", { exact: true })
-          .waitFor();
-        await capture("04-daily-claw-refreshed.png");
-      },
-    );
+        await expectRetainedArticle();
+      }
+      await page.locator("openclaw-app-sidebar .sidebar-identity-card").click();
+      await page.locator('openclaw-app-sidebar [data-value="command:settings"]').click();
+      await page.locator(".settings-sidebar__back").waitFor();
+      const parked = {
+        frameConnected: await originalFrame.evaluate((element) => element.isConnected),
+        boardActive: await originalBoard.evaluate((element) => Reflect.get(element, "active")),
+      };
+      await page.locator(".settings-sidebar__back").click();
+      await readingNote.waitFor();
+      // Retain the pre-fix failure's returned dashboard before checking its lost frame.
+      await capture("03-daily-claw-after-settings.png");
+      await expectRetainedArticle();
+      expect(parked).toEqual({ frameConnected: true, boardActive: false });
+      await sessionLink(chatKey).click();
+      await composer.waitFor();
+      expect(await composer.inputValue()).toBe(draft);
+      await sessionLink(dashboardKey).click();
+      await readingNote.waitFor();
+      await call("board.widget.put", {
+        ...widgetParams,
+        content: {
+          kind: "html",
+          html: articleHtml("Afternoon edition: refreshed from the Gateway"),
+        },
+      });
+      await inner
+        .getByText("Afternoon edition: refreshed from the Gateway", { exact: true })
+        .waitFor();
+      await capture("04-daily-claw-refreshed.png");
+    });
   });
 });

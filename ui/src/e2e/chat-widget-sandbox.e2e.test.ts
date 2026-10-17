@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Route } from "playwright";
+import type { FrameLocator, Route } from "playwright";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
@@ -232,6 +232,10 @@ suite.define(() => {
           recordVideo: { dir: suite.artifactDir, size: { width: 1600, height: 1000 } },
         },
         async ({ page, context }) => {
+          const capture = (name: string) =>
+            page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+          const click = (widget: FrameLocator, name: string) =>
+            clickBoardWidgetControl(page, widget.getByRole("button", { name }));
           await installWidgetPromptDiagnostics(context);
           const storageKey = controlUiBundledSettingsStorageKey(proxy.baseUrl);
           await page.addInitScript(
@@ -296,9 +300,7 @@ suite.define(() => {
             expect(
               proxy.sourceRequests.filter(({ destination }) => destination !== undefined),
             ).toEqual([]);
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "01-auth-gated-widget.png"),
-            });
+            await capture("01-auth-gated-widget");
           } finally {
             await page.unroute(configRoute, holdConfig);
             releaseConfig();
@@ -316,25 +318,14 @@ suite.define(() => {
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
           for (const widget of [inline, board]) {
-            await clickBoardWidgetControl(
-              page,
-              widget.getByRole("button", { name: "Toggle details" }),
-            );
+            await click(widget, "Toggle details");
             await widget.getByText("Additional community details").waitFor();
-            await clickBoardWidgetControl(
-              page,
-              widget.getByRole("button", { name: "Toggle details" }),
-            );
+            await click(widget, "Toggle details");
             await widget.getByText("Additional community details").waitFor({ state: "hidden" });
-            await clickBoardWidgetControl(
-              page,
-              widget.getByRole("button", { name: "Try native popup" }),
-            );
+            await click(widget, "Try native popup");
             await widget.getByText("Popup blocked", { exact: true }).waitFor();
           }
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "02-inline-and-sidebar.png"),
-          });
+          await capture("02-inline-and-sidebar");
 
           const isolation = await inline.locator("body").evaluate(() => {
             const denied = (read: () => unknown) => {
@@ -366,6 +357,10 @@ suite.define(() => {
           const retainedBoardFrame = await boardOuter.elementHandle();
           const note = inline.getByRole("textbox", { name: "Local note" });
           const boardNote = board.getByRole("textbox", { name: "Local note" });
+          const expectRetainedNote = async () => {
+            expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
+            expect(await note.inputValue()).toBe("State survives rerenders");
+          };
           await note.fill("State survives rerenders");
           await boardNote.fill("Dashboard state survives swaps");
           for (const region of ["main", "side"]) {
@@ -373,30 +368,19 @@ suite.define(() => {
             await expect
               .poll(() => page.locator('[data-panel-slot="dashboard"]').getAttribute("data-region"))
               .toBe(region);
-            expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
+            await expectRetainedNote();
             expect(await retainedBoardFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
-            expect(await note.inputValue()).toBe("State survives rerenders");
             expect(await boardNote.inputValue()).toBe("Dashboard state survives swaps");
           }
           const originalHeight = (await outer.boundingBox())?.height ?? 0;
-          await clickBoardWidgetControl(
-            page,
-            inline.getByRole("button", { name: "Toggle details" }),
-          );
+          await click(inline, "Toggle details");
           await expect
             .poll(async () => (await outer.boundingBox())?.height ?? 0)
             .toBeGreaterThan(originalHeight + 400);
-          expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
-          expect(await note.inputValue()).toBe("State survives rerenders");
-          await clickBoardWidgetControl(
-            page,
-            inline.getByRole("button", { name: "Toggle details" }),
-          );
+          await expectRetainedNote();
+          await click(inline, "Toggle details");
 
-          await clickBoardWidgetControl(
-            page,
-            inline.getByRole("button", { name: "Refresh via chat" }),
-          );
+          await click(inline, "Refresh via chat");
           const sent = asRecord((await gateway.waitForRequest("chat.send")).params);
           expect(sent).toMatchObject({
             sessionKey,
@@ -427,41 +411,27 @@ suite.define(() => {
             .getByRole("paragraph")
             .filter({ hasText: /^Synthetic dashboard refreshed\.$/u })
             .waitFor();
-          expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
-          expect(await note.inputValue()).toBe("State survives rerenders");
+          await expectRetainedNote();
           expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
-          await clickBoardWidgetControl(page, board.getByRole("button", { name: "Record state" }));
+          await click(board, "Record state");
           await board.getByText("State recorded", { exact: true }).waitFor();
           expect((await gateway.getRequests("board.event"))[0]?.params).toEqual({
             ticket: "ticket",
             payload: { clicked: true },
           });
           await page.emulateMedia({ colorScheme: "dark" });
-          await expect
-            .poll(() =>
-              inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
-            )
-            .toBe("dark");
           // A light proxy between dark documents paints an opaque UA canvas.
-          await expect
-            .poll(() =>
-              outer
-                .contentFrame()
-                .locator("html")
-                .evaluate((root) => getComputedStyle(root).colorScheme),
-            )
-            .toBe("dark");
-          await expect
-            .poll(() =>
-              board.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
-            )
-            .toBe("dark");
+          for (const frame of [inline, outer.contentFrame(), board]) {
+            await expect
+              .poll(() =>
+                frame.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
+              )
+              .toBe("dark");
+          }
           expect(await note.inputValue()).toBe("State survives rerenders");
           await outer.scrollIntoViewIfNeeded();
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "03-interactive-state-retained.png"),
-          });
+          await capture("03-interactive-state-retained");
           await writeFile(
             path.join(suite.artifactDir, "evidence.json"),
             JSON.stringify(

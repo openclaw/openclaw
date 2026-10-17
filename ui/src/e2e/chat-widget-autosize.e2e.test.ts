@@ -2,6 +2,7 @@
 // frame, so a tall document must not end up scrolling inside its own row.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
@@ -23,6 +24,21 @@ const documentPath = `/__openclaw__/canvas/documents/${documentId}/index.html`;
 // can only come from the reported height rather than from the layout box.
 const rowCount = 90;
 const rowHeight = 28;
+const assistant = (content: unknown, timestamp: number) => ({
+  role: "assistant",
+  content,
+  timestamp,
+});
+const embed = (title: string) => [
+  { type: "text", text: `[embed ref="${documentId}" title="${title}" /]` },
+];
+
+async function captureFrame(page: Page, surface: Locator, anchor: Locator, file: string) {
+  const capture = await takeControlUiScreenshotFrame(page, surface, [anchor], {
+    animations: "disabled",
+  });
+  writeFileSync(file, capture.png);
+}
 const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url));
 const trailer = `<div id="primetime-trailer"><video aria-label="Primetime official trailer" controls playsinline preload="auto" style="display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px"><source src="data:video/mp4;base64,${video.toString("base64")}" type="video/mp4"></video><p id="trailer-status" style="font:13px var(--font-body);color:var(--muted)">Press play. <a href="https://www.youtube.com/watch?v=synthetic" target="_blank" rel="noopener noreferrer">Watch on YouTube</a></p></div>`;
 // Stored pre-fix shell and body reporter, independent of the current wrapper.
@@ -80,14 +96,7 @@ suite.define(() => {
             __openclaw: { id: `widget-context-${index}`, seq: index + 1 },
           })),
           {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: `[embed ref="${documentId}" title="Synthetic dashboard preview" /]`,
-              },
-            ],
-            timestamp: 1_800_000_012_000,
+            ...assistant(embed("Synthetic dashboard preview"), 1_800_000_012_000),
             __openclaw: { id: "widget-preview", seq: 13 },
           },
           {
@@ -183,10 +192,7 @@ suite.define(() => {
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       const anchor = thread.locator('[data-entry-id="widget-reload-anchor"]');
       if (artifacts) {
-        const capture = await takeControlUiScreenshotFrame(page, thread, [anchor], {
-          animations: "disabled",
-        });
-        writeFileSync(path.join(artifacts, "waiting.png"), capture.png);
+        await captureFrame(page, thread, anchor, path.join(artifacts, "waiting.png"));
       }
       await gateway.resolveDeferred("canvas.document.view");
       await frame
@@ -204,10 +210,7 @@ suite.define(() => {
         return window.widgetReloadFrames ?? [];
       });
       if (artifacts) {
-        const capture = await takeControlUiScreenshotFrame(page, thread, [anchor], {
-          animations: "disabled",
-        });
-        writeFileSync(path.join(artifacts, "loaded.png"), capture.png);
+        await captureFrame(page, thread, anchor, path.join(artifacts, "loaded.png"));
         writeFileSync(path.join(artifacts, "frames.json"), JSON.stringify(samples));
       }
       expect(samples.length).toBeGreaterThanOrEqual(40);
@@ -230,15 +233,7 @@ suite.define(() => {
           methodResponses: {
             "canvas.document.view": canvasView(buildWidgetDocument("Primetime trailer", trailer)),
           },
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                { type: "text", text: `[embed ref="${documentId}" title="Primetime trailer" /]` },
-              ],
-              timestamp: 100,
-            },
-          ],
+          historyMessages: [assistant(embed("Primetime trailer"), 100)],
         });
         const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
           ? createControlUiE2eArtifactDir("trailer")
@@ -280,18 +275,9 @@ suite.define(() => {
             overflow: document.scrollingElement!.scrollHeight - innerHeight,
             fullscreenEnabled: document.fullscreenEnabled,
           }));
-          expect
-            .soft(
-              measurements.overflow,
-              saved ? "saved document overflow" : "new document overflow",
-            )
-            .toBeLessThanOrEqual(0);
-          expect
-            .soft(
-              measurements.fullscreenEnabled,
-              saved ? "saved document fullscreen" : "new document fullscreen",
-            )
-            .toBe(true);
+          const label = saved ? "saved document" : "new document";
+          expect.soft(measurements.overflow, `${label} overflow`).toBeLessThanOrEqual(0);
+          expect.soft(measurements.fullscreenEnabled, `${label} fullscreen`).toBe(true);
         }
       },
     );
@@ -340,9 +326,8 @@ suite.define(() => {
           ),
         },
         historyMessages: [
-          {
-            role: "assistant",
-            content: [
+          assistant(
+            [
               {
                 type: "toolCall",
                 id: "autosize-widget",
@@ -365,8 +350,8 @@ suite.define(() => {
                 }),
               },
             ],
-            timestamp: 100,
-          },
+            100,
+          ),
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -376,9 +361,7 @@ suite.define(() => {
       await expect
         .poll(async () => Math.round((await frame.boundingBox())?.height ?? 0))
         .toBeGreaterThanOrEqual(contentHeight);
-      // The document is fully laid out inside the frame, so nothing is hidden
-      // behind a nested scrollbar the transcript cannot reach. The frame is
-      // sandboxed and cross-origin, so measure from inside it.
+      // Measure inside the cross-origin frame to detect inaccessible nested overflow.
       const overflow = await frame
         .contentFrame()
         .frameLocator("iframe")

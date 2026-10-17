@@ -29,6 +29,12 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+const chatMessage = <T>(role: string, content: T, timestamp: number) => ({
+  role,
+  content,
+  timestamp,
+});
+
 async function captureProof(page: import("playwright").Page, name: string) {
   if (!artifactDir) {
     return;
@@ -77,11 +83,11 @@ suite.define(() => {
                 : json;
             const result = { content: [{ type: "text", text }], details };
             return [
-              {
-                role: "assistant",
-                content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
+              chatMessage(
+                "assistant",
+                [{ type: "toolCall", id, name: "exec", arguments: {} }],
                 timestamp,
-              },
+              ),
               createNestedToolActivity({
                 runId: "visual-order-run",
                 scopeId: id,
@@ -97,11 +103,9 @@ suite.define(() => {
                 timestamp: timestamp + 200,
               }),
               {
-                role: "toolResult",
+                ...chatMessage("toolResult", result.content, timestamp + 300),
                 toolCallId: id,
                 toolName: "exec",
-                content: result.content,
-                timestamp: timestamp + 300,
               },
             ];
           };
@@ -113,11 +117,11 @@ suite.define(() => {
               canvasResult,
               browserFirst ? 3_000 : 2_000,
             ),
-            {
-              role: "assistant",
-              content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
-              timestamp: browserFirst ? 4_000 : 3_000,
-            },
+            chatMessage(
+              "assistant",
+              `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
+              browserFirst ? 4_000 : 3_000,
+            ),
           ];
           const browserMessages = nestedExec(
             "open",
@@ -128,11 +132,7 @@ suite.define(() => {
             { browserTab },
           );
           const history = [
-            {
-              role: "user",
-              content: "Show a widget and check the release page.",
-              timestamp: 1_000,
-            },
+            chatMessage("user", "Show a widget and check the release page.", 1_000),
             ...(browserFirst
               ? [...browserMessages, ...widgetMessages]
               : [...widgetMessages, ...browserMessages]),
@@ -143,11 +143,7 @@ suite.define(() => {
               { ok: true },
               5_000,
             ),
-            {
-              role: "assistant",
-              content: "The widget and release reference are ready.",
-              timestamp: 6_000,
-            },
+            chatMessage("assistant", "The widget and release reference are ready.", 6_000),
           ];
           await installMockGateway(page, {
             sessionKey,
@@ -178,11 +174,14 @@ suite.define(() => {
             .waitFor();
           const widget = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
           const browser = page.locator("openclaw-browser-tab-card");
+          const expectSingleOutputs = async () => {
+            expect(await widget.count()).toBe(1);
+            expect(await browser.count()).toBe(1);
+          };
           await widget.waitFor();
           await browser.waitFor();
           await waitForChatScrollIdle(page);
-          expect(await widget.count()).toBe(1);
-          expect(await browser.count()).toBe(1);
+          await expectSingleOutputs();
           expect(
             await page
               .locator('.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card')
@@ -198,8 +197,7 @@ suite.define(() => {
             await workedFor.click();
             await waitForChatScrollIdle(page);
             expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
-            expect(await widget.count()).toBe(1);
-            expect(await browser.count()).toBe(1);
+            await expectSingleOutputs();
             const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
               const rects = elements.map((element) => element.getBoundingClientRect());
               return rects.flatMap((rect, index) => {
@@ -267,10 +265,10 @@ suite.define(() => {
         sessionKey,
         methodResponses: { "canvas.document.view": canvasView(documentHtml) },
         historyMessages: [
-          { role: "user", content: "Check it.", timestamp: 1_000 },
-          {
-            role: "assistant",
-            content: [
+          chatMessage("user", "Check it.", 1_000),
+          chatMessage(
+            "assistant",
+            [
               { type: "text", text: "Here is the visualization." },
               {
                 type: "canvas",
@@ -286,30 +284,22 @@ suite.define(() => {
                 },
               },
             ],
-            timestamp: 1_500,
-          },
+            1_500,
+          ),
           {
-            role: "assistant",
-            content: [{ type: "text", text: "Checking." }],
+            ...chatMessage("assistant", [{ type: "text", text: "Checking." }], 2_000),
             openclawStreamFallback: {
               itemId: "worked-for-checking",
               replacementText: "Checking.",
               source: "segment",
             },
-            timestamp: 2_000,
           },
           {
-            role: "toolResult",
+            ...chatMessage("toolResult", "ok", 3_000),
             toolCallId: "worked-for-tool",
             toolName: "bash",
-            content: "ok",
-            timestamp: 3_000,
           },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Done." }],
-            timestamp: 4_000,
-          },
+          chatMessage("assistant", [{ type: "text", text: "Done." }], 4_000),
         ],
       });
 

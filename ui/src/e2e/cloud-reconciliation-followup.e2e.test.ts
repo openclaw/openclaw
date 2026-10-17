@@ -94,6 +94,15 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
+        const capture = async (name: string) => {
+          if (captureUiProofEnabled) {
+            await page.screenshot({
+              fullPage: true,
+              path: path.join(suite.artifactDir, "cloud-reconciliation", `${name}.png`),
+            });
+          }
+        };
+        const waiting = page.getByText("Received · waiting for workspace sync", { exact: true });
         const reconciling = session("active", false, true);
         const reconcilingHistory = {
           inFlightRun: null,
@@ -116,6 +125,13 @@ suite.define(() => {
           sessionKey,
           sessions: [reconciling],
         });
+        const setHistory = async <T extends { sessionInfo: ReturnType<typeof session> }>(
+          history: T,
+        ) => {
+          await gateway.setMethodResponse("chat.history", history);
+          await gateway.setMethodResponse("chat.startup", history);
+          await gateway.setSessionsListResponse(chatSessionListResponse([history.sessionInfo]));
+        };
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("chat.startup");
@@ -124,11 +140,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await page.getByText("your message starts automatically", { exact: false }).waitFor();
-        await expect
-          .poll(() =>
-            page.getByText("Received · waiting for workspace sync", { exact: true }).count(),
-          )
-          .toBe(0);
+        await expect.poll(() => waiting.count()).toBe(0);
 
         await composer.fill(pendingInput.message.content);
         await page.getByRole("button", { name: "Send message" }).click();
@@ -148,25 +160,18 @@ suite.define(() => {
           pendingInputs: { items: [admittedInput], total: 1 },
           sessionInfo: queued,
         };
-        await gateway.setMethodResponse("chat.history", queuedHistory);
-        await gateway.setMethodResponse("chat.startup", queuedHistory);
-        await gateway.setSessionsListResponse(chatSessionListResponse([queued]));
+        await setHistory(queuedHistory);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           hasActiveRun: true,
           reason: "send",
           sessionKey,
         });
-        await page.getByText("Received · waiting for workspace sync", { exact: true }).waitFor();
+        await waiting.waitFor();
         await expect
           .poll(() => page.getByText(pendingInput.message.content, { exact: true }).count())
           .toBe(1);
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, "cloud-reconciliation", "01-slow-sync.png"),
-          });
-        }
+        await capture("01-slow-sync");
 
         const active = session("active");
         // The persisted event and later history reads describe the same reply.
@@ -177,7 +182,7 @@ suite.define(() => {
           __openclaw: { id: resumedReplyId, seq: 3, runId },
         };
         const activeHistory = {
-          inFlightRun: null,
+          ...reconcilingHistory,
           messages: [
             { role: "assistant", content: "Cloud edits are ready to apply." },
             {
@@ -187,13 +192,9 @@ suite.define(() => {
             resumedReply,
           ],
           pendingInputs: { items: [], total: 0 },
-          sessionId: active.sessionId,
           sessionInfo: active,
-          thinkingLevel: null,
         };
-        await gateway.setMethodResponse("chat.history", activeHistory);
-        await gateway.setMethodResponse("chat.startup", activeHistory);
-        await gateway.setSessionsListResponse(chatSessionListResponse([active]));
+        await setHistory(activeHistory);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           reason: "placement",
@@ -214,20 +215,11 @@ suite.define(() => {
           .getByRole("paragraph")
           .filter({ hasText: "The queued follow-up started automatically." })
           .waitFor();
-        await expect
-          .poll(() =>
-            page.getByText("Received · waiting for workspace sync", { exact: true }).count(),
-          )
-          .toBe(0);
+        await expect.poll(() => waiting.count()).toBe(0);
         await expect
           .poll(() => page.getByText(pendingInput.message.content, { exact: true }).count())
           .toBe(1);
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, "cloud-reconciliation", "02-resumed.png"),
-          });
-        }
+        await capture("02-resumed");
 
         const completedUpdatedAt = await evaluateControlUiContext(
           page,
@@ -243,9 +235,7 @@ suite.define(() => {
         const failed = session("failed");
         expect(completedUpdatedAt).toBeLessThanOrEqual(failed.updatedAt);
         const failedHistory = { ...activeHistory, sessionInfo: failed };
-        await gateway.setMethodResponse("chat.history", failedHistory);
-        await gateway.setMethodResponse("chat.startup", failedHistory);
-        await gateway.setSessionsListResponse(chatSessionListResponse([failed]));
+        await setHistory(failedHistory);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           reason: "placement",
@@ -264,12 +254,7 @@ suite.define(() => {
         expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
           "Workspace reconciliation failed: local worktree is locked.",
         );
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, "cloud-reconciliation", "03-true-failure.png"),
-          });
-        }
+        await capture("03-true-failure");
       },
     );
   });

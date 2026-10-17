@@ -27,6 +27,58 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+function artifactDirectory() {
+  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  return parent ? createControlUiE2eArtifactDir("claude-sessions", parent) : undefined;
+}
+
+async function capture(
+  page: Page,
+  directory: string | undefined,
+  name: string,
+  options: { surface?: Locator; fullPage?: boolean } = {},
+) {
+  if (directory) {
+    const screenshotPath = path.join(directory, `${name}.png`);
+    if (options.surface) {
+      await options.surface.screenshot({ path: screenshotPath, animations: "disabled" });
+    } else {
+      await page.screenshot({ path: screenshotPath, fullPage: options.fullPage });
+    }
+  }
+}
+
+const terminalSession = (sessionId: string) => ({
+  agentId: "main",
+  confined: false,
+  cwd: "/workspace",
+  sessionId,
+  shell: "/bin/zsh",
+  title: "claude --resume claude-termi…",
+});
+
+function terminalGatewayOptions(items: Array<{ type: string; text: string }> = []) {
+  return {
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "terminal.open",
+    ],
+    methodResponses: {
+      "sessions.catalog.list": resumableClaudeCatalog(),
+      "sessions.catalog.read": {
+        hostId: "gateway:local",
+        threadId: "claude-terminal-session",
+        items,
+      },
+      "terminal.list": { sessions: [] },
+    },
+    terminalEnabled: true,
+  };
+}
+
 async function catalogHeaderAffordances(header: Locator) {
   return header.evaluate((element) => {
     const toggle = element.querySelector<HTMLElement>(".sidebar-session-group-toggle");
@@ -52,9 +104,11 @@ async function catalogHeaderAffordances(header: Locator) {
       actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(chevron).opacity,
       finePointer: matchMedia("(pointer: fine)").matches,
+      coarsePointer: matchMedia("(pointer: coarse)").matches,
       focusWithin: element.matches(":focus-within"),
       gripOpacity: getComputedStyle(grip).opacity,
       hoverCapable: matchMedia("(hover: hover)").matches,
+      noHover: matchMedia("(hover: none)").matches,
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(providerIcon).opacity,
       toolbarButtonColor: toolbarButtonStyle.color,
@@ -126,17 +180,11 @@ suite.define(() => {
           '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
         );
         const toggle = header.locator(".sidebar-session-group-toggle");
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        const artifactDir = artifactRoot
-          ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-          : undefined;
+        const artifactDir = artifactDirectory();
         await header.hover();
-        if (artifactDir) {
-          await page.locator(".sidebar-sessions").screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "sessions-sidebar-hover.png"),
-          });
-        }
+        await capture(page, artifactDir, "sessions-sidebar-hover", {
+          surface: page.locator(".sidebar-sessions"),
+        });
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
@@ -156,32 +204,15 @@ suite.define(() => {
         await toggle.click();
         await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
         await expect
-          .poll(() =>
-            header.evaluate((element) => {
-              const focusedToggle = element.querySelector<HTMLElement>(
-                ".sidebar-session-group-toggle",
-              );
-              return {
-                focusWithin: element.matches(":focus-within"),
-                hovered: element.matches(":hover"),
-                toggleFocusVisible: focusedToggle?.matches(":focus-visible") ?? false,
-                toggleFocused: document.activeElement === focusedToggle,
-              };
-            }),
-          )
-          .toEqual({
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
             focusWithin: true,
             hovered: false,
             toggleFocusVisible: false,
             toggleFocused: true,
           });
 
-        if (artifactDir) {
-          await header.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "catalog-header-pointer-away.png"),
-          });
-        }
+        await capture(page, artifactDir, "catalog-header-pointer-away", { surface: header });
 
         await expect
           .poll(() => catalogHeaderAffordances(header))
@@ -245,31 +276,9 @@ suite.define(() => {
         );
       }
 
-      const touchAffordance = await page
-        .locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head')
-        .evaluate((header) => {
-          const providerIcon = header.querySelector<HTMLElement>(
-            ".sidebar-session-catalog-provider-icon",
-          );
-          const chevron = header.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
-          const actions = header.querySelector<HTMLElement>(".sidebar-session-group-actions");
-          const toolbarButton = header.ownerDocument.querySelector<HTMLElement>(
-            ".sidebar-session-toolbar__button",
-          );
-          if (!providerIcon || !chevron || !actions || !toolbarButton) {
-            throw new Error("expected complete touch catalog header affordances");
-          }
-          return {
-            actionsColor: getComputedStyle(actions).color,
-            actionsOpacity: getComputedStyle(actions).opacity,
-            coarsePointer: matchMedia("(pointer: coarse)").matches,
-            noHover: matchMedia("(hover: none)").matches,
-            providerOpacity: getComputedStyle(providerIcon).opacity,
-            chevronOpacity: getComputedStyle(chevron).opacity,
-            toolbarButtonColor: getComputedStyle(toolbarButton).color,
-            toolbarButtonOpacity: getComputedStyle(toolbarButton).opacity,
-          };
-        });
+      const touchAffordance = await catalogHeaderAffordances(
+        page.locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head'),
+      );
       expect(touchAffordance).toMatchObject({
         actionsOpacity: "0.55",
         coarsePointer: true,
@@ -280,16 +289,7 @@ suite.define(() => {
       });
       expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
 
-      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-        : undefined;
-      if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "native-session-host-groups.png"),
-          fullPage: true,
-        });
-      }
+      await capture(page, artifactDirectory(), "native-session-host-groups", { fullPage: true });
     } finally {
       await page.close();
     }
@@ -298,24 +298,8 @@ suite.define(() => {
   it("shows catalog connection progress until the first terminal output", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        ...terminalGatewayOptions([{ type: "userMessage", text: "Continue the native session" }]),
         deferredMethods: ["terminal.open"],
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "sessions.catalog.list",
-          "sessions.catalog.read",
-          "terminal.open",
-        ],
-        methodResponses: {
-          "sessions.catalog.list": resumableClaudeCatalog(),
-          "sessions.catalog.read": {
-            hostId: "gateway:local",
-            threadId: "claude-terminal-session",
-            items: [{ type: "userMessage", text: "Continue the native session" }],
-          },
-          "terminal.list": { sessions: [] },
-        },
-        terminalEnabled: true,
       });
 
       await openClaudeCatalogTerminal(page);
@@ -336,22 +320,10 @@ suite.define(() => {
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
-      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-        : undefined;
-      if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "claude-terminal-connecting.png") });
-      }
+      const artifactDir = artifactDirectory();
+      await capture(page, artifactDir, "claude-terminal-connecting");
 
-      await gateway.resolveDeferred("terminal.open", {
-        agentId: "main",
-        confined: false,
-        cwd: "/workspace",
-        sessionId: "claude-terminal-e2e",
-        shell: "/bin/zsh",
-        title: "claude --resume claude-termi…",
-      });
+      await gateway.resolveDeferred("terminal.open", terminalSession("claude-terminal-e2e"));
       await expect.poll(() => connecting.count()).toBe(1);
       const terminalOutput = "Claude Code ready\r\n";
       await gateway.emitGatewayEvent("terminal.data", {
@@ -362,40 +334,19 @@ suite.define(() => {
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-      if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "claude-terminal-ready.png") });
-      }
+      await capture(page, artifactDir, "claude-terminal-ready");
     });
   });
 
   it("closes a catalog terminal that produces no output before the deadline", async () => {
     await suite.withPage(undefined, async ({ page }) => {
+      const options = terminalGatewayOptions();
       const gateway = await installMockGateway(page, {
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "sessions.catalog.list",
-          "sessions.catalog.read",
-          "terminal.open",
-        ],
+        ...options,
         methodResponses: {
-          "sessions.catalog.list": resumableClaudeCatalog(),
-          "sessions.catalog.read": {
-            hostId: "gateway:local",
-            threadId: "claude-terminal-session",
-            items: [],
-          },
-          "terminal.list": { sessions: [] },
-          "terminal.open": {
-            agentId: "main",
-            confined: false,
-            cwd: "/workspace",
-            sessionId: "claude-terminal-timeout",
-            shell: "/bin/zsh",
-            title: "claude --resume claude-termi…",
-          },
+          ...options.methodResponses,
+          "terminal.open": terminalSession("claude-terminal-timeout"),
         },
-        terminalEnabled: true,
       });
 
       await navigateToClaudeCatalog(page);
@@ -431,10 +382,7 @@ suite.define(() => {
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
     await page.clock.install();
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-      : undefined;
+    const artifactDir = artifactDirectory();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -537,14 +485,12 @@ suite.define(() => {
     const initialCatalogRequest = (await gateway.getRequests("sessions.catalog.list"))[0]?.params;
     expect(initialCatalogRequest).toMatchObject({ agentId: "main", limitPerHost: 40 });
     expect(initialCatalogRequest).not.toHaveProperty("hostIds");
-    if (artifactDir) {
-      await page.screenshot({ path: path.join(artifactDir, "catalog-initial-discovery.png") });
-    }
+    await capture(page, artifactDir, "catalog-initial-discovery");
     await page.locator('[data-session-catalog-load-more="claude"]').click();
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
     if (artifactDir) {
-      await page.screenshot({ path: path.join(artifactDir, "catalog-after-pagination.png") });
+      await capture(page, artifactDir, "catalog-after-pagination");
       await writeFile(
         path.join(artifactDir, "catalog-pagination-requests.json"),
         JSON.stringify(await gateway.getRequests("sessions.catalog.list"), null, 2),
@@ -662,16 +608,11 @@ suite.define(() => {
       expect(
         Math.abs(composerBox!.x + composerBox!.width / 2 - workbenchCenter),
       ).toBeLessThanOrEqual(1);
-      if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, screenshotName),
-          fullPage: true,
-        });
-      }
+      await capture(page, artifactDir, screenshotName, { fullPage: true });
     };
-    await expectCenteredLayout("claude-external-session-centered-1280.png");
+    await expectCenteredLayout("claude-external-session-centered-1280");
     await page.setViewportSize({ width: 1600, height: 900 });
-    await expectCenteredLayout("claude-external-session-centered-1600.png");
+    await expectCenteredLayout("claude-external-session-centered-1600");
     expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
       catalogId: "claude",
       cursor: "older",
@@ -691,10 +632,7 @@ suite.define(() => {
 
   it("keeps the earlier-history action vertically stable while loading and preserves the reader after retry", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-      : undefined;
+    const artifactDir = artifactDirectory();
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
       content: [
@@ -779,12 +717,7 @@ suite.define(() => {
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     const loadingEarlier = await expectHistoryBoundaryState(page, true);
     const loadingHistoryAction = await loadingEarlier.boundingBox();
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "01-native-history-loading.png"),
-        fullPage: true,
-      });
-    }
+    await capture(page, artifactDir, "01-native-history-loading", { fullPage: true });
     expect(loadingHistoryAction).not.toBeNull();
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
@@ -803,12 +736,7 @@ suite.define(() => {
       (idleHistoryAction?.x ?? 0) + (idleHistoryAction?.width ?? 0) / 2,
       0,
     );
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "02-native-history-retry-ready.png"),
-        fullPage: true,
-      });
-    }
+    await capture(page, artifactDir, "02-native-history-retry-ready", { fullPage: true });
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
     await showEarlier.click();
@@ -845,12 +773,7 @@ suite.define(() => {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
     expectPaintedVirtualRowAnchor(readerAnchor, paintResult);
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "03-native-history-prepended-visible.png"),
-        fullPage: true,
-      });
-    }
+    await capture(page, artifactDir, "03-native-history-prepended-visible", { fullPage: true });
     // The applied page reports more history, so the pane stages the next page
     // (offset 1100) in the background without entering the loading state.
     await expect
