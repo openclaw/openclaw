@@ -38,3 +38,4 @@ export {
   resolveExecModePolicy,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+export { applyExecPolicyLayer } from "../infra/exec-policy.js";
