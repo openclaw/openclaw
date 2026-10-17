@@ -281,12 +281,6 @@ export function subscribeForegroundChatBootstrap({
   initialChatRoute: boolean;
 }): () => void {
   connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
-  const stopConnection = gateway.subscribe((snapshot) => {
-    connectionBootstrap.synchronize({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    });
-  });
   const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
     const match = state.pendingMatches[0] ?? state.matches[0];
     if (!match && state.status === "idle") {
@@ -321,7 +315,16 @@ export function subscribeForegroundChatBootstrap({
   };
   const synchronize = () => synchronizeRoute(router.getState());
   const stops = [
-    stopConnection,
+    gateway.subscribe((snapshot) => {
+      connectionBootstrap.synchronize({
+        client: snapshot.client,
+        connected: snapshot.phase === "connected",
+      });
+      // A route restored before connect resolved its transcript key without the
+      // connected account scope; re-key it so the mounted pane can release
+      // background bootstrap work such as the sidebar session list.
+      synchronize();
+    }),
     router.subscribe(synchronizeRoute),
     agentSelection.subscribe(synchronize),
     chatSubmissions.subscribeCreate(synchronize),

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import {
+  resolveInitialApplicationLocation,
+  subscribeForegroundChatBootstrap,
+} from "./bootstrap-location.ts";
+import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 
 describe("resolveInitialApplicationLocation", () => {
@@ -259,5 +264,83 @@ describe("resolveInitialApplicationLocation", () => {
       search: "",
       hash: "",
     });
+  });
+});
+
+describe("subscribeForegroundChatBootstrap", () => {
+  it("re-keys a route restored before connect so the mounted pane releases background work", async () => {
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+    const gatewayListeners = new Set<GatewayListener>();
+    const connection = { gatewayUrl: "ws://127.0.0.1:18789" };
+    let snapshot = {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const gateway = {
+      connection,
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe: (listener: GatewayListener) => {
+        gatewayListeners.add(listener);
+        return () => gatewayListeners.delete(listener);
+      },
+    } as unknown as ApplicationContext["gateway"];
+    const sessionKey = "agent:main:dashboard:restored";
+    const routerState = {
+      status: "idle",
+      pendingMatches: [],
+      matches: [{ routeId: "chat", status: "success", data: { kind: "session", sessionKey } }],
+    };
+    let routeListener: ((state: typeof routerState) => void) | undefined;
+    const router = {
+      getState: () => routerState,
+      subscribe: (listener: (state: typeof routerState) => void) => {
+        routeListener = listener;
+        return () => undefined;
+      },
+    } as unknown as Parameters<typeof subscribeForegroundChatBootstrap>[0]["router"];
+    const connectionBootstrap = createConnectionBootstrapCoordinator();
+    const setForegroundRoute = vi.spyOn(connectionBootstrap, "setForegroundRoute");
+    const stop = subscribeForegroundChatBootstrap({
+      router,
+      gateway,
+      agents: { state: { agentsList: null } } as unknown as ApplicationContext["agents"],
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      } as unknown as ApplicationContext["agentSelection"],
+      connectionBootstrap,
+      initialChatRoute: true,
+      chatSubmissions: {
+        creation: null,
+        subscribeCreate: () => () => undefined,
+      } as unknown as ApplicationContext["chatSubmissions"],
+    });
+    // The restored route resolves while the Gateway is still connecting.
+    routeListener?.(routerState);
+    const restoredKey = setForegroundRoute.mock.lastCall?.[0];
+    expect(restoredKey).toMatch(/^scope:unowned:/u);
+
+    const client = { recoveryScopeReady: true, recoveryScope: "account-1" };
+    snapshot = { phase: "connected", client, hello: null } as unknown as typeof snapshot;
+    for (const listener of gatewayListeners) {
+      listener(snapshot);
+    }
+    // The chat pane keys its transcript with the connected account scope.
+    const paneKey = resolveChatSnapshotKey(
+      { settings: connection, client, agentsList: null, hello: null, assistantAgentId: "main" },
+      { sessionKey },
+    );
+    expect(paneKey).not.toBe(restoredKey);
+    expect(setForegroundRoute.mock.lastCall?.[0]).toBe(paneKey);
+
+    const listSessions = vi.fn(async () => undefined);
+    const discovery = connectionBootstrap.run("sessions.list", listSessions, { background: true });
+    connectionBootstrap.setForegroundPane({}, { sessionKey: paneKey, client, ready: true });
+    await discovery;
+    expect(listSessions).toHaveBeenCalledOnce();
+    stop();
   });
 });
