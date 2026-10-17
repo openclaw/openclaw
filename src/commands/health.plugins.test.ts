@@ -12,6 +12,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { formatHealthChannelLines } from "./health-format.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 import { channelRuntime, pluginHealthError, unavailablePlugin } from "./health.test-fixtures.js";
 
 const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
@@ -46,10 +47,7 @@ function failedPlugin(id: string, error: string, overrides: Partial<PluginSeed> 
 
 describe("collectGatewayHealthSnapshot plugin state", () => {
   beforeAll(async () => {
-    vi.doMock("../config/config.js", () => ({
-      getRuntimeConfig: () => testConfig,
-      loadConfig: () => testConfig,
-    }));
+    installHealthConfigMock(() => testConfig);
     vi.doMock("../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));

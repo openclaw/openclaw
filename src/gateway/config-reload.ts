@@ -10,12 +10,7 @@ import {
   readLatestConfigSnapshotAuditRecordAsync,
   upsertConfigSnapshotAuditRecordAsync,
 } from "../config/config-journal-snapshot.js";
-import {
-  appendConfigAuditRecord,
-  capConfigAuditIssues,
-  capConfigAuditPaths,
-  type ConfigExternalChangeAuditRecord,
-} from "../config/io.audit.js";
+import { capConfigAuditIssues, capConfigAuditPaths } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
@@ -55,7 +50,9 @@ import {
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { createExternalConfigAudit } from "./config-reload-audit.js";
 import { reconcileInitialConfigSource } from "./config-reload-initial-source.js";
+import { publishReloadObservation, trackReloadObservations } from "./config-reload-observed.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
@@ -206,6 +203,7 @@ export function startGatewayConfigReloader(
   const activeReloads = new Set<Promise<unknown>>();
   let pluginOperationTail: Promise<unknown> = Promise.resolve();
   let missingConfigRetries = 0;
+  const reloadObservations = trackReloadObservations(() => source.observation);
   let pendingInProcessConfig: GatewayConfigReloadCandidate | null = null;
   let activeConfigCandidate: GatewayConfigReloadCandidate | null = null;
   let retryCandidate: GatewayConfigReloadCandidate | null = null;
@@ -225,21 +223,7 @@ export function startGatewayConfigReloader(
       throw new GatewayConfigReloadSupersededError();
     }
   };
-  const appendExternalAudit = async (
-    record: Omit<ConfigExternalChangeAuditRecord, "ts" | "source" | "event" | "configPath">,
-  ) => {
-    await appendConfigAuditRecord({
-      env: process.env,
-      homedir,
-      record: {
-        ts: new Date().toISOString(),
-        source: "config-io",
-        event: "config.external",
-        configPath: opts.watchPath,
-        ...record,
-      },
-    });
-  };
+  const appendExternalAudit = createExternalConfigAudit(opts.watchPath);
 
   // CAS token is the unfiltered slot: a slot owned by another config path must
   // still be the expected value so this path can take the slot over. Only a
@@ -870,11 +854,13 @@ export function startGatewayConfigReloader(
     pending = false;
     clearReloadTimer();
     let attemptedCandidate: GatewayConfigReloadCandidate | null = null;
+    const observation = reloadObservations.track();
     try {
       assertLeaseOwned();
       if (pendingInProcessConfig) {
         const pendingWrite = pendingInProcessConfig;
         attemptedCandidate = pendingWrite;
+        observation.observeSnapshot(pendingWrite.epoch, pendingWrite.snapshot);
         pendingInProcessConfig = null;
         activeConfigCandidate = pendingWrite;
         missingConfigRetries = 0;
@@ -920,7 +906,7 @@ export function startGatewayConfigReloader(
       const transactionEpoch = source.observation.revision;
       const intentCandidate = retryCandidate;
       attemptedCandidate = intentCandidate;
-      const snapshot = await source.readSnapshot();
+      const snapshot = await observation.read(transactionEpoch, () => source.readSnapshot());
       assertLeaseOwned();
       if (source.observation.revision !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
@@ -1089,6 +1075,7 @@ export function startGatewayConfigReloader(
         );
       }
     } finally {
+      observation.publishIfCurrent();
       if (activeConfigCandidate === attemptedCandidate) {
         activeConfigCandidate = null;
       }
@@ -1192,6 +1179,7 @@ export function startGatewayConfigReloader(
       const retriedCandidate = retryCandidate;
       let candidate = pendingInProcessConfig ?? retriedCandidate;
       let committed = false;
+      const observation = reloadObservations.track();
       try {
         const expectedSourceConfig = params.write
           ? params.write.persistedSourceConfig
@@ -1199,7 +1187,8 @@ export function startGatewayConfigReloader(
         // Refresh identity and bytes without inventing independent passive reload work.
         source.observe(undefined, false);
         const epoch = source.observation.revision;
-        const snapshot = await source.readSnapshot();
+        // This read can consume a pending write and its echo; no follow-up reload publishes it.
+        const snapshot = await observation.read(epoch, () => source.readSnapshot());
         params.assertInvokerOwned?.();
         if (!snapshot.valid || !snapshot.exists) {
           throw new Error("Plugin runtime application requires a valid persisted config.");
@@ -1287,6 +1276,7 @@ export function startGatewayConfigReloader(
           { cause: error },
         );
       } finally {
+        observation.publishIfCurrent();
         if (activeConfigCandidate === candidate) {
           activeConfigCandidate = null;
         }
@@ -1436,6 +1426,8 @@ export function startGatewayConfigReloader(
       }
       if (opts.initialSnapshotRawHash !== null && opts.initialSnapshotValid) {
         await updateAcceptedSnapshot(opts.initialSnapshotRawHash, opts.initialAuthoredConfig);
+        // A write or watcher event during preparation publishes through its own transaction.
+        publishReloadObservation(initialSourceConfig);
       }
     }
     currentPluginInstallRecords = initialPluginInstallRecords;
