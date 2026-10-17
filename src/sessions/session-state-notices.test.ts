@@ -1,4 +1,3 @@
-// Session-state notice parsing and coalesced producer handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
@@ -84,6 +83,22 @@ function encodeTarget(sessionKey: string): string {
   return `session-state:${Buffer.from(sessionKey, "utf8").toString("hex")}`;
 }
 
+function enqueue(
+  targetSessionKey: string,
+  options: Partial<Parameters<typeof enqueueSessionStateNotice>[0]> = {},
+) {
+  enqueueSessionStateNotice({
+    watcherSessionKey: "agent:main:main",
+    targetSessionKey,
+    lastSeenSequence: 1,
+    ...options,
+  });
+}
+
+function receipt(id: string, settled: Promise<SessionEventOutcome>) {
+  return { id, accepted: Promise.resolve({ ok: true as const }), cancel: () => true, settled };
+}
+
 describe("decodeSessionStateNoticeContextKey", () => {
   it("round-trips a session key with a leading U+FEFF unchanged", () => {
     const sessionKey = "﻿agent:main";
@@ -110,26 +125,10 @@ describe("enqueueSessionStateNotice", () => {
     const secondSettled = createDeferred<SessionEventOutcome>();
     const secondEnqueued = createDeferred();
     mocks.enqueue
-      .mockImplementationOnce(() => ({
-        id: "first-batch",
-        accepted: Promise.resolve({ ok: true }),
-        cancel: () => true,
-        settled: firstSettled.promise,
-      }))
+      .mockImplementationOnce(() => receipt("first-batch", firstSettled.promise))
       .mockImplementationOnce(() => {
         secondEnqueued.resolve();
-        return {
-          id: "second-batch",
-          accepted: Promise.resolve({ ok: true }),
-          cancel: () => true,
-          settled: secondSettled.promise,
-        };
-      });
-    const enqueue = (targetSessionKey: string) =>
-      enqueueSessionStateNotice({
-        watcherSessionKey: "agent:main:main",
-        targetSessionKey,
-        lastSeenSequence: 1,
+        return receipt("second-batch", secondSettled.promise);
       });
     try {
       enqueue("agent:main:first");
@@ -153,18 +152,9 @@ describe("enqueueSessionStateNotice", () => {
   });
 
   it("keeps the first notice's 20-second deadline when another watched session changes", async () => {
-    const watcherSessionKey = "agent:main:main";
-    enqueueSessionStateNotice({
-      watcherSessionKey,
-      targetSessionKey: "agent:main:first",
-      lastSeenSequence: 1,
-    });
+    enqueue("agent:main:first");
     await vi.advanceTimersByTimeAsync(10_000);
-    enqueueSessionStateNotice({
-      watcherSessionKey,
-      targetSessionKey: "agent:main:second",
-      lastSeenSequence: 2,
-    });
+    enqueue("agent:main:second", { lastSeenSequence: 2 });
     await vi.advanceTimersByTimeAsync(9_999);
     expect(mocks.enqueue).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -186,11 +176,7 @@ describe("enqueueSessionStateNotice", () => {
         deliveryContext: { channel: "slack", to: "second" },
       });
     for (const targetSessionKey of ["agent:main:first", "agent:main:second"]) {
-      enqueueSessionStateNotice({
-        watcherSessionKey: "agent:main:main",
-        targetSessionKey,
-        lastSeenSequence: 1,
-      });
+      enqueue(targetSessionKey);
     }
     await vi.advanceTimersByTimeAsync(20_000);
     expect(mocks.enqueue).toHaveBeenCalledTimes(2);
@@ -239,11 +225,7 @@ describe("enqueueSessionStateNotice", () => {
     { watcherSessionKey: "agent:main:main", queueOnly: true },
     { watcherSessionKey: "agent:main:subagent:child", queueOnly: false },
   ])("keeps ambient notices passive for $watcherSessionKey", async (options) => {
-    enqueueSessionStateNotice({
-      ...options,
-      targetSessionKey: "agent:main:group:watched",
-      lastSeenSequence: 42,
-    });
+    enqueue("agent:main:group:watched", { ...options, lastSeenSequence: 42 });
     await vi.advanceTimersByTimeAsync(20_000);
     expect(mocks.pending).toHaveLength(1);
     expect(mocks.capture).not.toHaveBeenCalled();
@@ -252,11 +234,7 @@ describe("enqueueSessionStateNotice", () => {
   });
 
   it("does not adopt a notice consumed during coalescing", async () => {
-    enqueueSessionStateNotice({
-      watcherSessionKey: "agent:main:main",
-      targetSessionKey: "agent:main:group:watched",
-      lastSeenSequence: 42,
-    });
+    enqueue("agent:main:group:watched", { lastSeenSequence: 42 });
     await vi.advanceTimersByTimeAsync(1);
     mocks.pending.length = 0;
     await vi.advanceTimersByTimeAsync(19_999);

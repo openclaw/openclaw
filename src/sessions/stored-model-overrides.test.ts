@@ -10,12 +10,41 @@ import {
   resolveStoredModelOverrideAsync,
 } from "./stored-model-overrides.js";
 
+function makeEntry(fields: Partial<SessionEntry>): SessionEntry {
+  return { sessionId: "session", updatedAt: 1, ...fields };
+}
+
+const staleDefault = makeEntry({
+  modelOverrideSource: "default",
+  providerOverride: "anthropic",
+  modelOverride: "stale-model",
+});
+const userPin = {
+  providerOverride: "anthropic",
+  modelOverride: "claude-sonnet-4-6",
+  modelOverrideSource: "user" as const,
+};
+const automatic = {
+  providerOverride: "google-vertex",
+  modelOverride: "gemini-fallback",
+  modelOverrideSource: "auto" as const,
+};
+const fallback = {
+  ...automatic,
+  modelOverrideFallbackOriginProvider: "openai",
+  modelOverrideFallbackOriginModel: "gpt-primary",
+};
+
+function parentChoice(provider: string, model: string) {
+  return { provider, model, source: "parent", routeResolution: "raw" };
+}
+
 function resolveParentOverride(parent: Partial<SessionEntry>) {
   const parentKey = "agent:main:discord:channel:root";
   return resolveStoredModelOverrideAsync({
     defaultProvider: "openai",
     sessionKey: `${parentKey}:thread:child`,
-    sessionStore: { [parentKey]: { sessionId: "parent-session", updatedAt: 1, ...parent } },
+    sessionStore: { [parentKey]: makeEntry(parent) },
   });
 }
 
@@ -24,15 +53,13 @@ describe("resolveStoredModelOverride", () => {
     expect(
       resolveStoredModelOverride({
         defaultProvider: "openai",
-        sessionEntry: {
-          sessionId: "legacy-fallback",
-          updatedAt: 1,
+        sessionEntry: makeEntry({
           providerOverride: "cloudflare-ai-gateway",
           modelOverride: "gemini-2.5-flash-lite",
           modelOverrideSource: "auto",
           modelOverrideFallbackOriginProvider: "anthropic",
           modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-        },
+        }),
       }),
     ).toMatchObject({ routeResolution: "resolved" });
   });
@@ -40,12 +67,10 @@ describe("resolveStoredModelOverride", () => {
   it("awaits parent overrides without requiring a whole session store", async () => {
     const loadSessionEntry = vi.fn(async (sessionKey: string) =>
       sessionKey === "agent:main:telegram:dm:parent"
-        ? {
-            sessionId: "parent-session",
-            updatedAt: 1782259200000,
+        ? makeEntry({
             providerOverride: "anthropic",
             modelOverride: "claude-sonnet-4-7",
-          }
+          })
         : undefined,
     );
 
@@ -55,53 +80,25 @@ describe("resolveStoredModelOverride", () => {
         loadSessionEntry,
         sessionKey: "agent:main:telegram:dm:parent:thread:child",
       }),
-    ).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet-4-7",
-      source: "parent",
-      routeResolution: "raw",
-    });
+    ).toEqual(parentChoice("anthropic", "claude-sonnet-4-7"));
     expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
   });
 
   it("does not inherit active automatic fallback overrides from parent sessions", async () => {
-    expect(
-      await resolveParentOverride({
-        providerOverride: "google-vertex",
-        modelOverride: "gemini-fallback",
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "openai",
-        modelOverrideFallbackOriginModel: "gpt-primary",
-      }),
-    ).toBeNull();
+    expect(await resolveParentOverride(fallback)).toBeNull();
   });
 
   it("inherits configured automatic selections without fallback provenance", async () => {
-    expect(
-      await resolveParentOverride({
-        providerOverride: "google-vertex",
-        modelOverride: "gemini-fallback",
-        modelOverrideSource: "auto",
-      }),
-    ).toEqual({
-      provider: "google-vertex",
-      model: "gemini-fallback",
-      source: "parent",
-      routeResolution: "raw",
-    });
+    expect(await resolveParentOverride(automatic)).toEqual(
+      parentChoice("google-vertex", "gemini-fallback"),
+    );
   });
 
   it("rejects stale direct fields behind an explicit Default marker", () => {
     expect(
       resolveDirectStoredModelOverride({
         defaultProvider: "openai",
-        sessionEntry: {
-          sessionId: "default-session",
-          updatedAt: 1,
-          modelOverrideSource: "default",
-          providerOverride: "anthropic",
-          modelOverride: "stale-model",
-        },
+        sessionEntry: staleDefault,
       }),
     ).toBeNull();
   });
@@ -111,15 +108,7 @@ describe("resolveStoredModelOverride", () => {
       resolveStoredModelOverride({
         defaultProvider: "openai",
         sessionKey: "agent:main:dashboard:parent:thread:child",
-        sessionStore: {
-          "agent:main:dashboard:parent": {
-            sessionId: "parent-session",
-            updatedAt: 1,
-            modelOverrideSource: "default",
-            providerOverride: "anthropic",
-            modelOverride: "stale-model",
-          },
-        },
+        sessionStore: { "agent:main:dashboard:parent": staleDefault },
       }),
     ).toBeNull();
   });
@@ -128,24 +117,10 @@ describe("resolveStoredModelOverride", () => {
     expect(
       resolveStoredModelOverride({
         defaultProvider: "openai",
-        sessionEntry: {
-          sessionId: "child-session",
-          updatedAt: 2,
-          modelOverrideSource: "default",
-          providerOverride: "google-vertex",
-          modelOverride: "stale-model",
-        },
+        sessionEntry: { ...staleDefault, providerOverride: "google-vertex" },
         sessionKey: "agent:main:dashboard:child",
         parentSessionKey: "agent:main:dashboard:parent",
-        sessionStore: {
-          "agent:main:dashboard:parent": {
-            sessionId: "parent-session",
-            updatedAt: 1,
-            providerOverride: "anthropic",
-            modelOverride: "claude-sonnet-4-6",
-            modelOverrideSource: "user",
-          },
-        },
+        sessionStore: { "agent:main:dashboard:parent": makeEntry(userPin) },
       }),
     ).toBeNull();
   });
@@ -165,18 +140,8 @@ describe("resolveStoredModelOverride", () => {
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       for (const [index, entry] of [
-        {
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-          modelOverrideSource: "user" as const,
-        },
-        {
-          providerOverride: "google-vertex",
-          modelOverride: "gemini-fallback",
-          modelOverrideSource: "auto" as const,
-          modelOverrideFallbackOriginProvider: "openai",
-          modelOverrideFallbackOriginModel: "gpt-primary",
-        },
+        userPin,
+        fallback,
         {
           providerOverride: "openai",
           modelOverride: "gpt-primary",
@@ -192,12 +157,7 @@ describe("resolveStoredModelOverride", () => {
         if (entry.modelOverrideSource === "auto") {
           expect(result).toBeNull();
         } else {
-          expect(result).toEqual({
-            provider: entry.providerOverride,
-            model: entry.modelOverride,
-            source: "parent",
-            routeResolution: "raw",
-          });
+          expect(result).toEqual(parentChoice(entry.providerOverride, entry.modelOverride));
         }
       }
     } finally {

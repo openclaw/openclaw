@@ -10,6 +10,16 @@ import {
 } from "./transcript-events.js";
 
 const cleanup: Array<() => void> = [];
+const target = { agentId: "main", sessionId: "sess-1", sessionKey: "agent:main:main" };
+const identity = { target, ...target };
+
+function listen() {
+  const publicListener = vi.fn();
+  const internalListener = vi.fn();
+  cleanup.push(onSessionTranscriptUpdate(publicListener));
+  cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+  return { publicListener, internalListener };
+}
 
 afterEach(() => {
   while (cleanup.length > 0) {
@@ -38,10 +48,7 @@ describe("transcript events", () => {
   });
 
   it("does not expose file-only archive updates to public listeners", () => {
-    const publicListener = vi.fn();
-    const internalListener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(publicListener));
-    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const { publicListener, internalListener } = listen();
 
     emitSessionTranscriptUpdate({
       sessionFile: "  /tmp/session.jsonl  ",
@@ -54,42 +61,22 @@ describe("transcript events", () => {
       runId: "  run-1  ",
     });
 
-    expect(publicListener).toHaveBeenCalledWith({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      sessionId: "sess-1",
+    const expected = {
+      ...identity,
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
       runId: "run-1",
-    });
+    };
+    expect(publicListener).toHaveBeenCalledWith(expected);
     expect(internalListener).toHaveBeenCalledWith({
+      ...expected,
       sessionFile: "/tmp/session.jsonl",
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      sessionId: "sess-1",
-      message: { role: "assistant", content: "hi" },
-      messageId: "msg-1",
-      messageSeq: 2,
-      runId: "run-1",
     });
   });
 
   it("keeps normalized committed lifecycle and store ownership on internal events only", () => {
-    const publicListener = vi.fn();
-    const internalListener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(publicListener));
-    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const { publicListener, internalListener } = listen();
 
     emitSessionTranscriptUpdate({
       target: {
@@ -104,37 +91,20 @@ describe("transcript events", () => {
     });
 
     expect(internalListener).toHaveBeenCalledWith({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/custom-sessions.json",
-      },
-      agentId: "main",
-      sessionId: "sess-1",
-      sessionKey: "agent:main:main",
+      ...identity,
+      target: { ...target, storePath: "/tmp/custom-sessions.json" },
       lifecycleRevision: "committed-revision",
       messageId: "msg-1",
       assistantItemIds: ["native-item"],
     });
     expect(publicListener).toHaveBeenCalledWith({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
-      agentId: "main",
-      sessionId: "sess-1",
-      sessionKey: "agent:main:main",
+      ...identity,
       messageId: "msg-1",
     });
   });
 
   it("omits provider replay only from the shallow public message projection", () => {
-    const publicListener = vi.fn();
-    const internalListener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(publicListener));
-    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const { publicListener, internalListener } = listen();
     const content = [{ type: "text", text: "visible" }];
     const metadata = { nested: true };
     const providerReplay = { type: "opaque", data: "private" };
@@ -146,11 +116,7 @@ describe("transcript events", () => {
     };
 
     emitSessionTranscriptUpdate({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
+      target,
       message,
       messageId: "msg-1",
     });
@@ -176,23 +142,11 @@ describe("transcript events", () => {
       sessionId: "sess-1",
     });
 
-    expect(listener).toHaveBeenCalledWith({
-      target: {
-        agentId: "main",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:main",
-      },
-      agentId: "main",
-      sessionId: "sess-1",
-      sessionKey: "agent:main:main",
-    });
+    expect(listener).toHaveBeenCalledWith(identity);
   });
 
   it("drops public global file updates without target identity", () => {
-    const publicListener = vi.fn();
-    const internalListener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(publicListener));
-    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const { publicListener, internalListener } = listen();
 
     emitSessionTranscriptUpdate({
       sessionFile: "/tmp/session.jsonl",

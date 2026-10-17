@@ -35,9 +35,29 @@ import {
   upsertSessionUpstreamLinkAsync,
   upsertSessionUpstreamLinkWithCurrentSource,
 } from "./session-upstream-links.js";
-import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
+import {
+  readSessionUpstreamLinkInDatabase,
+  type SessionUpstreamLinkInput,
+} from "./session-upstream-links.kernel.js";
 
 const tempDirs: string[] = [];
+
+function linkInput(
+  sessionKey: string,
+  overrides: Partial<SessionUpstreamLinkInput> = {},
+): SessionUpstreamLinkInput {
+  return {
+    sessionKey,
+    agentId: "main",
+    catalogId: "codex",
+    hostId: "gateway:local",
+    threadId: "created",
+    upstreamKind: "codex-app-server",
+    upstreamRef: { threadId: "created" },
+    marker: null,
+    ...overrides,
+  };
+}
 
 function createDatabaseOptions() {
   const stateDir = makeTempDir(tempDirs, "openclaw-session-upstream-links-");
@@ -52,16 +72,13 @@ function upsertLink(
   database: ReturnType<typeof createDatabaseOptions>,
 ) {
   upsertSessionUpstreamLink(
-    {
-      sessionKey,
-      agentId: "main",
+    linkInput(sessionKey, {
       catalogId,
-      hostId: "gateway:local",
       threadId: `thread-${sessionKey}`,
       upstreamKind: catalogId === "claude" ? "claude-cli" : "codex-app-server",
       upstreamRef: { source: sessionKey },
       marker: { offset: 1 },
-    },
+    }),
     { ...database, now: 100 },
   );
 }
@@ -168,16 +185,10 @@ describe("session upstream links", () => {
 
   it("orders asynchronous writes and exact deletion without caller-thread SQL", async () => {
     const database = createDatabaseOptions();
-    const input = {
-      sessionKey: "agent:main:adopted:async",
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
+    const input = linkInput("agent:main:adopted:async", {
       threadId: "async",
-      upstreamKind: "codex-app-server" as const,
       upstreamRef: { threadId: "async" },
-      marker: null,
-    };
+    });
     const expected = { ...input, createdAt: 100, updatedAt: 100 };
     const sql = observeMainThreadSql();
     try {
@@ -239,16 +250,7 @@ describe("session upstream links", () => {
     "%s initializer rolls back only its own link (replaced: %s)",
     async (mode, replaced) => {
       const database = createDatabaseOptions();
-      const input = {
-        sessionKey: "agent:main:adopted:initialization",
-        agentId: "main",
-        catalogId: "codex",
-        hostId: "gateway:local",
-        threadId: "created",
-        upstreamKind: "codex-app-server" as const,
-        upstreamRef: { threadId: "created" },
-        marker: null,
-      };
+      const input = linkInput("agent:main:adopted:initialization");
       const identity = { sessionId: "created" };
       const bindingStore = {};
       const cleanup = vi.fn(async () => {});
@@ -413,16 +415,10 @@ describe("session upstream links", () => {
       if (order === "watch-then-link") {
         expect(
           await upsertSessionUpstreamLinkAsync(
-            {
-              sessionKey,
-              agentId: "main",
-              catalogId: "codex",
-              hostId: "gateway:local",
+            linkInput(sessionKey, {
               threadId: "idle-thread",
-              upstreamKind: "codex-app-server",
               upstreamRef: { source: sessionKey },
-              marker: null,
-            },
+            }),
             database,
           ),
         ).toBe(true);
@@ -473,16 +469,11 @@ describe("session upstream links", () => {
     upsertLink(ambiguous, "claude", database);
     expect(
       upsertSessionUpstreamLink(
-        {
-          sessionKey: ambiguous,
+        linkInput(ambiguous, {
           agentId: "other",
-          catalogId: "codex",
-          hostId: "gateway:local",
           threadId: "ambiguous-thread",
-          upstreamKind: "codex-app-server",
           upstreamRef: null,
-          marker: null,
-        },
+        }),
         database,
       ),
     ).toBe(true);
