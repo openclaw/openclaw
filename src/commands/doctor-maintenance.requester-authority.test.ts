@@ -189,8 +189,9 @@ it.each(["configured-owner", "profile"] as const)(
             repairGatewayMaintenanceStartupFailures(state.env);
           });
           expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
-          // Lease admission rechecks authority after acquisition inside the held scope.
-          expect(admissionWorkerLaunches).toBeLessThanOrEqual(9);
+          // Doctor settles the inherited state-cache owner and rechecks authority
+          // inside maintenance, which adds two bounded read admissions.
+          expect(admissionWorkerLaunches).toBeLessThanOrEqual(10);
           // The Doctor flow leaves runChecks before its post-repair cleanup.
           // Draining those readers requires fresh admission before restoration.
           await maintenance!.cleanupRetainedRuntimes();

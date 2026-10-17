@@ -704,7 +704,8 @@ it("rechecks external leases under the process owner after an empty observation"
   });
   const refusal: unknown = await begin().catch((error: unknown) => error);
   expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([leaseFact]);
-  expectCalls(1, "readLeases", "gatewayAcquire", "ownerAssert");
+  expectCalls(1, "readLeases", "gatewayAcquire");
+  expectCalls(3, "ownerAssert");
   expectOrder("readLeases", "gatewayAcquire");
   expectOrder("ownerAssert", "lease");
   expectCalls(1, "release");
@@ -755,7 +756,8 @@ it.each(["unknown", "unreadable"] as const)(
         }),
       ).toBe("DoctorMaintenanceRefusalError: Doctor could not enter maintenance.");
     }
-    expectCalls(1, "gatewayAcquire", "ownerAssert", "lease", "release", "close");
+    expectCalls(1, "gatewayAcquire", "lease", "release", "close");
+    expectCalls(3, "ownerAssert");
     expectCalls(0, "stop");
     expectOrder("close", "release");
   },
