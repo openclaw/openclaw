@@ -184,12 +184,25 @@ describe("Discord durable ingress", () => {
     await withQueue(async (queue) => {
       const appendGate = createDeferred<void>();
       const appendStarted = createDeferred<void>();
-      const enqueue = vi.fn(async (...args: Parameters<typeof queue.enqueue>) => {
+      const gateAppend = vi.fn(async () => {
         appendStarted.resolve();
         await appendGate.promise;
-        return await queue.enqueue(...args);
       });
-      const gatedQueue: ChannelIngressQueue<DiscordIngressPayload> = { ...queue, enqueue };
+      // An idle monitor admits a fresh singleton through the fused append-and-claim.
+      const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
+      const gatedQueue: ChannelIngressQueue<DiscordIngressPayload> = {
+        ...queue,
+        enqueue: async (...args) => {
+          await gateAppend();
+          return await queue.enqueue(...args);
+        },
+        enqueueAndClaim:
+          enqueueAndClaim &&
+          (async (...args) => {
+            await gateAppend();
+            return await enqueueAndClaim(...args);
+          }),
+      };
       const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -204,7 +217,7 @@ describe("Discord durable ingress", () => {
       const accepted = monitor.accept(createRawMessage("1001"));
       try {
         await Promise.race([appendStarted.promise, accepted]);
-        expect(enqueue).toHaveBeenCalledTimes(1);
+        expect(gateAppend).toHaveBeenCalledTimes(1);
 
         expect(dispatch).not.toHaveBeenCalled();
 
