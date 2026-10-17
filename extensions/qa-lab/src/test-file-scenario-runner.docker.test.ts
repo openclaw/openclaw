@@ -77,16 +77,17 @@ function run(repoRoot: string, options: Partial<RunOptions> & Pick<RunOptions, "
 
 async function writeSummary(
   command: QaScenarioCommandExecution,
-  lanes = [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
-  createDir = true,
+  statuses: Record<string, number> = { "gateway-network": 0 },
 ) {
   const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
   if (!logDir) {
     throw new Error("missing Docker scheduler log dir");
   }
-  if (createDir) {
-    await fs.mkdir(logDir, { recursive: true });
-  }
+  const lanes = Object.entries(statuses).map(([name, status]) => ({
+    name,
+    status,
+    elapsedSeconds: 1,
+  }));
   await fs.writeFile(
     path.join(logDir, "summary.json"),
     JSON.stringify({
@@ -118,9 +119,6 @@ it("only batches the canonical Docker lane argument shape", () => {
 
 it("prepares the exact Docker lane union in a sanitized bound environment", async () => {
   const repoRoot = await makeTempRepo("qa-docker-candidate-");
-  const outputDir = path.join(repoRoot, "out");
-  const packagePath = path.join(repoRoot, "openclaw.tgz");
-  const registryDir = path.join(repoRoot, "registry");
   const runCommand = vi.fn(async (command: QaScenarioCommandExecution) => {
     expect(command.env).toMatchObject({
       KEEP_ME: "yes",
@@ -135,15 +133,13 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
       candidateManifest(repoRoot, true, "openclaw.tgz"),
     );
   });
-  const env = await prepareDockerE2eEnvironment({
+  const env = await prepare(repoRoot, {
     env: {
       KEEP_ME: "yes",
       OPENCLAW_DOCKER_ALL_BUILD: "1",
       OPENCLAW_CURRENT_PACKAGE_TGZ: "/stale.tgz",
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "/stale-registry",
     },
-    outputDir,
-    repoRoot,
     runCommand,
     scenarios: [
       makeDockerE2eScenario("one", "gateway-network"),
@@ -161,10 +157,10 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
     KEEP_ME: "yes",
     OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot,
     OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
-    OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
+    OPENCLAW_CURRENT_PACKAGE_TGZ: path.join(repoRoot, "openclaw.tgz"),
     OPENCLAW_CURRENT_PACKAGE_VERSION: "2026.8.1",
     OPENCLAW_CURRENT_PACKAGE_SHA256: "b".repeat(64),
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
+    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: path.join(repoRoot, "registry"),
     OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: "2026.8.1",
     OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "c".repeat(64),
   });
@@ -253,14 +249,11 @@ it("retains immutable prepared Docker receipts without claiming installed or run
 
 describe("qa test file scenario runner", () => {
   it("executes repeated Docker lanes independently after an earlier failure", async () => {
-    const lastId = "same";
-
     const repoRoot = await makeTempRepo("qa-docker-repeated-lanes-");
-    const repeated = makeDockerE2eScenario("same", "gateway-network");
     const scenarios = [
-      repeated,
+      makeDockerE2eScenario("same", "gateway-network"),
       makeDockerE2eScenario("other", "openai-chat-tools"),
-      makeDockerE2eScenario(lastId, "gateway-network"),
+      makeDockerE2eScenario("same", "gateway-network"),
     ];
     const prepareCommand = vi.fn((command: QaScenarioCommandExecution) =>
       writeDockerCandidateManifest(command, candidateManifest()),
@@ -277,22 +270,10 @@ describe("qa test file scenario runner", () => {
       scenarios,
       runCommand: async (command) => {
         commands.push(command);
-        const failed = commands.length === 1;
+        const exitCode = commands.length === 1 ? 1 : 0;
         const names = command.env.OPENCLAW_DOCKER_ALL_LANES!.split(",");
-        await writeSummary(
-          command,
-          names.map((name) => ({
-            name,
-            elapsedSeconds: 1,
-            status: failed ? 1 : 0,
-          })),
-          false,
-        );
-        return {
-          exitCode: failed ? 1 : 0,
-          stdout: `actual batch ${commands.length}`,
-          stderr: "",
-        };
+        await writeSummary(command, Object.fromEntries(names.map((name) => [name, exitCode])));
+        return { exitCode, stdout: `actual batch ${commands.length}`, stderr: "" };
       },
     });
     expect(prepareCommand).toHaveBeenCalledTimes(1);
@@ -306,7 +287,7 @@ describe("qa test file scenario runner", () => {
     expect(result.results.map((entry) => [entry.scenario.id, entry.status])).toEqual([
       ["same", "fail"],
       ["other", "fail"],
-      [lastId, "pass"],
+      ["same", "pass"],
     ]);
     const [first, , last] = result.results;
     expect(last!.logPath).not.toBe(first!.logPath);
@@ -352,16 +333,16 @@ describe("qa test file scenario runner", () => {
       ["long-script-b", 3_000],
       ["short-docker", 1_000],
     ];
-    const scenarios = schedule.map(([id, timeoutMs]) => {
-      return scriptScenario(
+    const scenarios = schedule.map(([id, timeoutMs]) =>
+      scriptScenario(
         id,
         id.endsWith("docker") ? "test/e2e/qa-lab/runtime/docker-e2e-lane.ts" : `scripts/${id}.ts`,
         {
           timeoutMs,
           ...(id.endsWith("docker") ? { args: ["--lane", "gateway-network"] } : {}),
         },
-      );
-    });
+      ),
+    );
     const executionOrder: string[] = [];
     const output: string[] = [];
     const progress: string[] = [];
@@ -375,17 +356,11 @@ describe("qa test file scenario runner", () => {
       progress: (message) => progress.push(message),
       runCommand: async (command) => {
         const isDocker = command.args[0] === "scripts/test-docker-all.mjs";
-        let scenarioId =
-          command.env.OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS === "3000"
+        const scenarioId = isDocker
+          ? command.env.OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS === "3000"
             ? "long-docker"
-            : "short-docker";
-        if (!isDocker) {
-          const scriptPath = command.args[2];
-          if (!scriptPath) {
-            throw new Error("missing script scenario path");
-          }
-          scenarioId = path.basename(scriptPath, ".ts");
-        }
+            : "short-docker"
+          : path.basename(command.args[2]!, ".ts");
         executionOrder.push(scenarioId);
         activeCommands += 1;
         maximumActiveCommands = Math.max(maximumActiveCommands, activeCommands);
@@ -448,14 +423,13 @@ describe("qa test file scenario runner", () => {
       runCommand: async (command) => {
         commands.push(command);
         expect(await fs.readFile(staleSummaryPath, "utf8")).toBe('{"status":"passed"}\n');
-        const failedLane = { elapsedSeconds: 2, name: "gateway-network", status: 1 };
-        await writeSummary(command, [
-          { elapsedSeconds: 4, name: "openai-chat-tools", status: 0 },
-          { elapsedSeconds: 7, name: "bundled-plugin-install-uninstall-0", status: 0 },
-          { elapsedSeconds: 6, name: "bundled-plugin-install-uninstall-1", status: 0 },
-          { elapsedSeconds: 1, name: "gateway", status: 0 },
-          failedLane,
-        ]);
+        await writeSummary(command, {
+          "openai-chat-tools": 0,
+          "bundled-plugin-install-uninstall-0": 0,
+          "bundled-plugin-install-uninstall-1": 0,
+          gateway: 0,
+          "gateway-network": 1,
+        });
         return { exitCode: 1, stdout: "", stderr: "scheduler failed\n" };
       },
     });

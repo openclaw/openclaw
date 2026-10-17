@@ -58,6 +58,14 @@ async function expectBoth(summary: unknown, error?: string | RegExp | { code: st
   }
 }
 
+function expectCount(
+  summary: unknown,
+  count: number,
+  reader = readQaSuiteFailedOrSkippedScenarioCountFromFile,
+) {
+  return expect(readSummary(summary, reader)).resolves.toBe(count);
+}
+
 describe("qa suite summary helpers", () => {
   it("counts the selected instance without letting retained retry failures contradict a pass", async () => {
     const invocation = createQaEvidenceInvocation({
@@ -155,26 +163,15 @@ describe("qa suite summary helpers", () => {
   });
 
   it("counts failed and skipped scenarios from scenario statuses", async () => {
-    await expect(
-      readSummary(
-        {
-          scenarios: [
-            { status: "pass" },
-            { status: "skip" },
-            { status: "skipped" },
-            { status: "fail" },
-          ],
-        },
-        readQaSuiteFailedOrSkippedScenarioCountFromFile,
-      ),
-    ).resolves.toBe(3);
+    await expectCount(
+      { scenarios: ["pass", "skip", "skipped", "fail"].map((status) => ({ status })) },
+      3,
+    );
   });
 
   it("counts missing scenario statuses as failures in both gates", async () => {
     for (const reader of readers) {
-      await expect(
-        readSummary({ counts: { failed: 0, skipped: 0 }, scenarios: [{}] }, reader),
-      ).resolves.toBe(1);
+      await expectCount({ counts: { failed: 0, skipped: 0 }, scenarios: [{}] }, 1, reader);
     }
   });
 
@@ -206,12 +203,7 @@ describe("qa suite summary helpers", () => {
   });
 
   it("keeps evidence-only skip results blocking for strict package gates", async () => {
-    await expect(
-      readSummary(
-        { entries: [{ result: { status: "skip" } }] },
-        readQaSuiteFailedOrSkippedScenarioCountFromFile,
-      ),
-    ).resolves.toBe(1);
+    await expectCount({ entries: [{ result: { status: "skip" } }] }, 1);
   });
 
   it("uses scenario outcomes instead of counting lower-level producer checks", async () => {
@@ -233,24 +225,21 @@ describe("qa suite summary helpers", () => {
   });
 
   it("retains positive legacy execution counts in the failure and skip gate", async () => {
-    await expect(
-      readSummary({ counts: passed.counts }, readQaSuiteFailedOrSkippedScenarioCountFromFile),
-    ).resolves.toBe(0);
+    await expectCount({ counts: passed.counts }, 0);
   });
 
   it("keeps a report-only skip non-blocking when a real scenario also ran", async () => {
-    await expect(
-      readSummary(
-        {
-          counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
-          scenarios: [
-            { name: "required scenario", status: "pass" },
-            { ...optionalSkip, status: "skipped" },
-          ],
-        },
-        readWithOptional,
-      ),
-    ).resolves.toBe(0);
+    await expectCount(
+      {
+        counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+        scenarios: [
+          { name: "required scenario", status: "pass" },
+          { ...optionalSkip, status: "skipped" },
+        ],
+      },
+      0,
+      readWithOptional,
+    );
   });
 
   it("uses the larger failure signal when counts and scenarios disagree", async () => {
@@ -258,12 +247,11 @@ describe("qa suite summary helpers", () => {
       [0, 1],
       [3, 3],
     ]) {
-      await expect(
-        readSummary(
-          { counts: { failed }, scenarios: [{ status: "pass" }, { status: "fail" }] },
-          readQaSuiteFailedScenarioCountFromFile,
-        ),
-      ).resolves.toBe(expected);
+      await expectCount(
+        { counts: { failed }, scenarios: [{ status: "pass" }, { status: "fail" }] },
+        expected,
+        readQaSuiteFailedScenarioCountFromFile,
+      );
     }
   });
 

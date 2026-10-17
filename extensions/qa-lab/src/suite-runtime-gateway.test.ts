@@ -80,9 +80,7 @@ function guardedStream(events: string[], name: string, release: () => Promise<vo
 
 describe("qa suite gateway helpers", () => {
   it("classifies transport readiness failures without replacing typed infrastructure errors", async () => {
-    const readinessError = new Error(
-      'telegram account "sut" did not become ready; last check error: proxy returned 502',
-    );
+    const readinessError = new Error("transport readiness failed: proxy returned 502");
     waitReady.mockRejectedValueOnce(readinessError);
     const failure = await waitForTransportReady(env, 1_234).catch((error: unknown) => error);
 
@@ -116,9 +114,10 @@ describe("qa suite gateway helpers", () => {
     await vi.advanceTimersByTimeAsync(1_750);
 
     await expect(restarting).resolves.toEqual({ ok: true });
+    const mutationTimeout = { timeoutMs: 180_000 };
     expect(gatewayCall.mock.calls).toEqual([
       ["config.get", {}, { timeoutMs: 60_000 }],
-      ["system.info", {}, { timeoutMs: 180_000 }],
+      ["system.info", {}, mutationTimeout],
       [
         "config.patch",
         {
@@ -127,13 +126,9 @@ describe("qa suite gateway helpers", () => {
           restartDelayMs: 1_000,
           replacePaths: ["gateway.controlUi.allowedOrigins"],
         },
-        { timeoutMs: 180_000 },
+        mutationTimeout,
       ],
-      [
-        "gateway.restart.request",
-        { reason: "config.patch", skipDeferral: true },
-        { timeoutMs: 180_000 },
-      ],
+      ["gateway.restart.request", { reason: "config.patch", skipDeferral: true }, mutationTimeout],
     ]);
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledWith({
       env: runtimeEnv,
@@ -186,17 +181,15 @@ describe("qa suite gateway helpers", () => {
           setTimeout(() => reject(new Error("request timed out")), timeoutMs);
         });
       }
-      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
       const response = new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
-            bodyController = controller;
             controller.enqueue(new TextEncoder().encode('{"pending":'));
+            setTimeout(() => controller.error(new Error("request timed out")), timeoutMs);
           },
         }),
         { headers: { "content-type": "application/json" } },
       );
-      setTimeout(() => bodyController?.error(new Error("request timed out")), timeoutMs);
       return { response, release };
     });
 
@@ -218,40 +211,37 @@ describe("qa suite gateway helpers", () => {
 
   it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
     const events: string[] = [];
-    const cancelBody = vi.fn(() => {
-      events.push("cancel");
-      throw new Error("cancel failed");
-    });
-    const release = vi.fn(async () => {
-      events.push("release");
-    });
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
         new ReadableStream<Uint8Array>({
-          cancel: cancelBody,
+          cancel() {
+            events.push("cancel");
+            throw new Error("cancel failed");
+          },
         }),
         { status: 503 },
       ),
-      release,
+      release: async () => {
+        events.push("release");
+      },
     });
 
     await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
       "request failed 503: http://127.0.0.1:43123/config",
     );
-    expect(cancelBody).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["cancel", "release"]);
   });
 
   it("retries healthy gateway responses until their guard releases successfully", async () => {
     vi.useFakeTimers();
     const sleep = vi.spyOn(timersPromises, "setTimeout");
+    const released = createDeferred<void>();
+    let settled = Promise.resolve();
     try {
       // Keep the named promise-timer binding on the same fake clock.
       sleep.mockImplementation(promisify(globalThis.setTimeout));
       syncBuiltinESMExports();
       const events: string[] = [];
-      const released = createDeferred<void>();
       fetchWithSsrFGuardMock
         .mockResolvedValueOnce(
           guardedStream(events, "first", async () => {
@@ -259,50 +249,38 @@ describe("qa suite gateway helpers", () => {
           }),
         )
         .mockResolvedValueOnce(guardedStream(events, "second", () => released.promise));
-      let ready = false;
-      const readiness = waitForGatewayHealthy(env, 1_000).then(() => {
-        ready = true;
-      });
+      const onReady = vi.fn<() => void>();
+      const readiness = waitForGatewayHealthy(env, 1_000).then(onReady);
+      settled = readiness.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(events).toEqual(["first:cancel", "first:release"]);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(onReady).not.toHaveBeenCalled();
 
-      const settled = readiness.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["first:cancel", "first:release", "second:cancel", "second:release"]);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(onReady).not.toHaveBeenCalled();
 
+      released.resolve();
+      await expect(readiness).resolves.toBeUndefined();
+      expect(onReady).toHaveBeenCalledOnce();
+    } finally {
       try {
-        await vi.advanceTimersByTimeAsync(249);
-        expect(events).toEqual(["first:cancel", "first:release"]);
-        expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-        expect(ready).toBe(false);
-
-        await vi.advanceTimersByTimeAsync(1);
-        expect(events).toEqual([
-          "first:cancel",
-          "first:release",
-          "second:cancel",
-          "second:release",
-        ]);
-        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
-        expect(ready).toBe(false);
-
-        released.resolve();
-        await expect(readiness).resolves.toBeUndefined();
-        expect(ready).toBe(true);
-      } finally {
         released.resolve();
         await vi.advanceTimersByTimeAsync(1_000);
         await settled;
+      } finally {
+        sleep.mockRestore();
+        vi.useRealTimers();
+        syncBuiltinESMExports();
       }
-    } finally {
-      sleep.mockRestore();
-      vi.useRealTimers();
-      syncBuiltinESMExports();
     }
   });
 
   it.each(["unchanged snapshot", "prototype keys"])("skips cleanup writes for %s", async (kind) => {
     const config = {
       tools: { profile: "coding" },
-      agents: {
-        entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } },
-      },
       meta: { updatedAt: "2026-04-25T10:00:00.000Z" },
     };
     gatewayCall.mockImplementation(async (method: string) => {
@@ -324,11 +302,7 @@ describe("qa suite gateway helpers", () => {
     });
     if (kind === "unchanged snapshot") {
       await expect(
-        applyConfig({
-          env,
-          nextConfig: { tools: config.tools, agents: config.agents },
-          restartDelayMs: 0,
-        }),
+        applyConfig({ env, nextConfig: { tools: config.tools }, restartDelayMs: 0 }),
       ).resolves.toEqual({ ok: true, noop: true });
     }
     expect(gatewayCall).toHaveBeenCalledTimes(kind === "unchanged snapshot" ? 2 : 1);

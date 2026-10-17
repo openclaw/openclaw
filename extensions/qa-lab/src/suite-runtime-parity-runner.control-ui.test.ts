@@ -2,20 +2,19 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
 import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
 import {
   getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
-import type { QaLabServerHandle } from "./lab-server.types.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
+import { artifactPaths, childResult, createTestLab } from "./suite-runtime-parity.test-support.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteResolvedRunContext, QaSuiteResult, QaSuiteRunParams } from "./suite-types.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -62,19 +61,6 @@ vi.mock("./suite-artifacts.js", async (importOriginal) => ({
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 
-function createControlUiTestLab(): QaLabServerHandle {
-  return {
-    baseUrl: "http://127.0.0.1:43123",
-    listenUrl: "http://127.0.0.1:43123",
-    state: createQaBusState(),
-    setControlUi: vi.fn(),
-    setScenarioRun: vi.fn(),
-    setLatestReport: vi.fn(),
-    runSelfCheck: vi.fn(),
-    stop: vi.fn(async () => {}),
-  };
-}
-
 beforeEach(async () => {
   repoRoot = await tempDirs.makeTempDir("qa-parity-control-ui-");
   outputDir = path.join(repoRoot, "output");
@@ -89,40 +75,11 @@ beforeEach(async () => {
     async (
       params: QaSuiteRunParams | undefined,
       context: QaSuiteResolvedRunContext,
-    ): Promise<QaSuiteResult> => ({
-      outputDir: context.outputDir,
-      evidencePath: "/qa-output/qa-evidence.json",
-      reportPath: "/qa-output/qa-suite-report.md",
-      summaryPath: "/qa-output/qa-suite-summary.json",
-      report: "",
-      ...recordQaSuiteTestResults(
-        params,
-        context.selectedScenarios,
-        context.selectedScenarios.map((scenario) => ({
-          name: scenario.title,
-          status: "pass",
-          steps: [],
-        })),
-      ),
-      startedScenarioIds: context.selectedScenarios.map((scenario) => scenario.id),
-      watchUrl: "http://127.0.0.1:43123",
-      runtimeParityCell: {
-        runtime: params?.forcedRuntime ?? "openclaw",
-        transcriptBytes: "",
-        toolCalls: [],
-        finalText: "ok",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        wallClockMs: 1,
-        bootStateLines: [],
-      },
-    }),
+    ): Promise<QaSuiteResult> => childResult(params, context.selectedScenarios, context.outputDir),
   );
   mocks.writeQaSuiteArtifacts.mockImplementation(async (params) => ({
     evidence: params.recordedEvidence,
-    evidencePath: "/qa-output/qa-evidence.json",
-    reportPath: "/qa-output/qa-suite-report.md",
-    summaryPath: "/qa-output/qa-suite-summary.json",
-    report: "",
+    ...artifactPaths,
   }));
 });
 
@@ -197,7 +154,7 @@ describe("runtime parity Control UI ownership", () => {
       });
       let continuation: QaEvidenceSummaryV3Json | undefined;
       let firstAttempt: QaEvidenceSummaryV3Json | undefined;
-      const lab = createControlUiTestLab();
+      const lab = createTestLab();
       const result = await runQaSuiteWithInfraRetry(
         (attempt) =>
           runQaFlowSuiteFromRuntime({
@@ -312,7 +269,7 @@ describe("runtime parity Control UI ownership", () => {
   );
 
   it("preserves repeated parity starts without merging progress slots", async () => {
-    const lab = createControlUiTestLab();
+    const lab = createTestLab();
     const result = await runQaFlowSuiteFromRuntime({
       repoRoot,
       outputDir,
