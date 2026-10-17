@@ -16,6 +16,66 @@ function leafValues(results: ReturnType<typeof findOcPaths>): string[] {
   });
 }
 
+describe("empty string keys", () => {
+  it.each([
+    { file: "f.json", parse: parseJsonc, raw: '{"":"old","keep":"unchanged"}', suffix: '""' },
+    { file: "f.yaml", parse: parseYaml, raw: '"": old\nkeep: unchanged\n', suffix: '""' },
+    { file: "f.jsonl/L1", parse: parseJsonl, raw: '{"":"old","keep":"unchanged"}\n', suffix: '""' },
+    {
+      file: "f.json",
+      parse: parseJsonc,
+      raw: '{"":{"value":"old"},"keep":"unchanged"}',
+      suffix: '""/value',
+    },
+    {
+      file: "f.yaml",
+      parse: parseYaml,
+      raw: '"":\n  value: old\nkeep: unchanged\n',
+      suffix: '""/value',
+    },
+    {
+      file: "f.jsonl/L1",
+      parse: parseJsonl,
+      raw: '{"":{"value":"old"},"keep":"unchanged"}\n',
+      suffix: '""/value',
+    },
+  ])("finds, resolves, and edits $suffix in $file", ({ file, parse, raw, suffix }) => {
+    const ast = parse(raw).ast;
+    const prefix = "oc://" + file;
+    const results = findOcPaths(ast, parseOcPath(prefix + "/*"));
+    expect(results.map(({ path }) => formatOcPath(path))).toEqual([
+      prefix + '/""',
+      prefix + "/keep",
+    ]);
+    for (const { path, match } of results) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+    const target = parseOcPath(prefix + "/" + suffix);
+    expect(resolveOcPath(ast, target)).toMatchObject({ kind: "leaf", valueText: "old" });
+    const edited = setOcPath(ast, target, "new");
+    expect(edited.raw).toBe(raw.replace("old", "new"));
+    expect(resolveOcPath(edited, target)).toMatchObject({ kind: "leaf", valueText: "new" });
+    expect(resolveOcPath(edited, parseOcPath(prefix + "/keep"))).toMatchObject({
+      kind: "leaf",
+      valueText: "unchanged",
+    });
+    expect(ast.raw).toBe(raw);
+  });
+
+  it.each([
+    { file: "f.json", parse: parseJsonc },
+    { file: "f.yaml", parse: parseYaml },
+    { file: "f.jsonl/L1", parse: parseJsonl },
+  ])("does not treat an empty key as array index zero in $file", ({ file, parse }) => {
+    const ast = parse('["unchanged"]\n').ast;
+    const target = parseOcPath("oc://" + file + '/""');
+    expect(resolveOcPath(ast, target)).toBeNull();
+    expect(() => setOcPath(ast, target, "new")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
+    );
+  });
+});
+
 describe("single-match wildcard guards", () => {
   const ast = parseJsonc('{"steps":[{"id":"a","command":"foo"}]}').ast;
 
