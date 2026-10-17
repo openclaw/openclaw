@@ -211,11 +211,13 @@ export async function restoreDoctorMissingJournalStores(params: {
     );
   }
   const { createAgent } = await import("../agents/agent-create.js");
+  let expectedConfigHash = snapshot.hash ?? null;
   for (const agentId of new Set(eligible.map((target) => target.agentId))) {
     const targets = eligible.filter((target) => target.agentId === agentId);
     assertCurrent();
     const result = await createAgent({
       name: agentId,
+      expectedConfigHash,
       restorePaths: targets.map((target) => target.path),
       beforePersistentApply: assertCurrent,
     });
@@ -223,6 +225,7 @@ export async function restoreDoctorMissingJournalStores(params: {
       warnings.push(`Agent ${agentId} remains held: ${result.message}`);
       continue;
     }
+    expectedConfigHash = result.configHash ?? expectedConfigHash;
     // Check the selected owner actually resolved each hold before reporting recovery.
     for (const target of targets) {
       const stillHeld = withExistingOpenClawStateDatabaseCurrentReadOnly(

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
@@ -14,6 +14,7 @@ import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.
 import { withEnvAsync } from "../test-utils/env.js";
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import * as migrationBackup from "./doctor-migration-backup.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -93,7 +94,33 @@ it.each(["first-upgrade", "already-held"])(
       using shared = new DatabaseSync(sharedPath);
       shared.exec("DROP TABLE agent_deletion_journal");
       shared.close();
-      const bytes = fs.readFileSync(agentPath);
+      const agentPaths = [agentPath];
+      if (phase === "first-upgrade") {
+        const otherPath = path.join(
+          env.OPENCLAW_STATE_DIR!,
+          "agents/ops/agent/openclaw-agent.sqlite",
+        );
+        fs.mkdirSync(path.dirname(otherPath), { recursive: true });
+        fs.copyFileSync(agentPath, otherPath);
+        using other = new DatabaseSync(otherPath);
+        other.exec("UPDATE schema_meta SET agent_id = 'ops'");
+        other.close();
+        const config = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH!, "utf8"));
+        config.agents.ownership = "explicit";
+        config.agents.entries.ops = {
+          workspace: path.join(env.OPENCLAW_STATE_DIR!, "workspace-ops"),
+        };
+        fs.writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+        agentPaths.push(otherPath);
+        const preview = await repairDoctorAgentDeletionJournal({
+          preflight: await prepareDoctorDatabasePreflight(),
+          shouldRepair: false,
+          env,
+        });
+        expect(preview.warnings.join("\n")).toContain("automatically after verified backups");
+        expect(preview.warnings.join("\n")).not.toContain("without activating held stores");
+      }
+      const bytes = agentPaths.map((pathname) => fs.readFileSync(pathname));
       if (phase === "already-held") {
         // The old Doctor owner produces a real reconstruction receipt; remove only
         // the new optional observation field to exercise the published format.
@@ -119,16 +146,19 @@ it.each(["first-upgrade", "already-held"])(
       const result = await repair(env);
       expect(result.warnings.join("\n")).toContain("Automatically restored agent main");
       expect(result.warnings.join("\n")).toContain("Verified backup:");
+      if (phase === "first-upgrade") {
+        expect(result.warnings.join("\n")).toContain("Automatically restored agent ops");
+      }
       expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toEqual([]);
-      expect(fs.readFileSync(agentPath)).toEqual(bytes);
+      expect(agentPaths.map((pathname) => fs.readFileSync(pathname))).toEqual(bytes);
       const backups = result.changes
         .filter((change) => change.startsWith("Saved pre-migration SQLite backup: "))
         .map((change) => change.slice("Saved pre-migration SQLite backup: ".length));
-      expect(backups).toHaveLength(2);
+      expect(backups).toHaveLength(agentPaths.length + 1);
       for (const backup of backups) {
         using database = new DatabaseSync(backup, { readOnly: true });
         expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-        if (backup.startsWith(agentPath)) {
+        if (agentPaths.some((pathname) => backup.startsWith(pathname))) {
           expect(
             database.prepare("SELECT value_json FROM cache_entries WHERE key='preserved'").get()
               ?.value_json,
@@ -202,6 +232,51 @@ it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
           configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
         }),
       ).rejects.toThrow("Doctor could not complete repair");
+    });
+  },
+);
+
+it.each(["root", "included"])(
+  "does not restore after the %s config removes an agent during backup",
+  async (source) => {
+    await withFixture(async ({ env, agentPath, sharedPath }) => {
+      using shared = new DatabaseSync(sharedPath);
+      shared.exec("DROP TABLE agent_deletion_journal");
+      shared.close();
+      const configPath = env.OPENCLAW_CONFIG_PATH!;
+      const originalConfig = fs.readFileSync(configPath, "utf8");
+      const changedPath =
+        source === "root" ? configPath : path.join(env.OPENCLAW_STATE_DIR!, "roster.json");
+      if (source === "included") {
+        fs.writeFileSync(changedPath, originalConfig);
+        fs.writeFileSync(configPath, JSON.stringify({ $include: "./roster.json" }));
+      }
+      const newerConfig = JSON.stringify({
+        agents: { entries: { ops: {} } },
+        plugins: { enabled: false },
+      });
+      const bytes = fs.readFileSync(agentPath);
+      const backup = migrationBackup.backupDoctorSqliteDatabases;
+      const mutation = vi
+        .spyOn(migrationBackup, "backupDoctorSqliteDatabases")
+        .mockImplementationOnce(async (params) => {
+          const result = await backup(params);
+          fs.writeFileSync(changedPath, newerConfig);
+          return result;
+        });
+      try {
+        await expect(repair(env)).rejects.toThrow("config changed before");
+        expect(mutation).toHaveBeenCalledOnce();
+        expect(fs.readFileSync(changedPath, "utf8")).toBe(newerConfig);
+        expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR!, "workspace"))).toBe(false);
+        expect(fs.readFileSync(agentPath)).toEqual(bytes);
+        expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toContainEqual({
+          agentId: "main",
+          path: agentPath,
+        });
+      } finally {
+        mutation.mockRestore();
+      }
     });
   },
 );

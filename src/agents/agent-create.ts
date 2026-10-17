@@ -106,7 +106,7 @@ type CreateAgentParams = {
   bootstrapMain?: boolean;
   /** Replace the load-time compatibility roster when onboarding creates the first real agent. */
   bootstrapFirstAgent?: boolean;
-  /** Config revision that must still own first-agent creation under the write lock. */
+  /** Config revision that must still own creation or restoration under the write lock. */
   expectedConfigHash?: string | null;
   /** Guided staging retains the original native write receipt until creation publishes it. */
   stagedConfig?: { config: OpenClawConfig; writeSnapshot: ReadConfigFileSnapshotForWriteResult };
@@ -446,9 +446,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             (params.stagedConfig || Object.hasOwn(params, "expectedConfigHash")) &&
             context.previousHash !== expectedConfigHash
           ) {
-            throw new ConfigMutationConflictError("config changed before first-agent creation", {
-              retryable: false,
-            });
+            throw new ConfigMutationConflictError(
+              "config changed before agent creation or restoration",
+              {
+                retryable: false,
+              },
+            );
           }
           const hasAuthoredRoster =
             params.bootstrapFirstAgent === true &&
