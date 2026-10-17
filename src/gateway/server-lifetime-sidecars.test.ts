@@ -124,7 +124,7 @@ describe("gateway lifetime sidecars", () => {
     oauth.install.mockReset().mockReturnValue(oauth.uninstall);
   });
 
-  test("keeps scheduled secret expiry responsive and joins its accepted sweep on shutdown", async () => {
+  test("parks empty expiry, resumes on writes, and joins responsive worker sweeps on shutdown", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
       const { clock, owner, attach } = sidecarFixture();
       const sweeps: Promise<number>[] = [];
@@ -148,7 +148,13 @@ describe("gateway lifetime sidecars", () => {
       const worker = openingMessages.mock.contexts[openIndex];
       openingMessages.mockRestore();
       assert(worker instanceof Worker);
+      await clock.advanceBy(5 * 60_000);
+      expect(sweeps).toHaveLength(1);
       const handoff = "github-setup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      await writeStoredSecret(handoff, "synthetic-expired-handoff");
+      await clock.wake();
+      expect(await Promise.all(sweeps)).toEqual([0, 0]);
+      expect(secretStore.getSecretStoreExpiryDeadline()).toEqual(expect.any(Number));
       await writeStoredSecret(handoff, "synthetic-expired-handoff");
       openOpenClawStateDatabase()
         .db.prepare("UPDATE secret_store_entries SET created_at_ms = ? WHERE name = ?")
@@ -177,7 +183,7 @@ describe("gateway lifetime sidecars", () => {
       try {
         await holder.ready;
         checkpoint.port2.postMessage(null);
-        scheduledSweep = clock.advanceBy(60_000);
+        scheduledSweep = clock.wake();
         await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
           expect(
             await withTestTimeout(hostYielded.promise, 10_000, "Expiry did not yield to the host"),
@@ -188,7 +194,7 @@ describe("gateway lifetime sidecars", () => {
             "Expiry did not reach its shared-state worker",
           );
           await clock.advanceBy(60_000);
-          expect(sweeps).toHaveLength(2);
+          expect(sweeps).toHaveLength(3);
           const stopped = vi.fn();
           stopping = owner.stop().then(stopped);
           await withTestTimeout(nextTurn(checkpoint), 5_000, "Shutdown did not yield to the host");
@@ -198,10 +204,10 @@ describe("gateway lifetime sidecars", () => {
           await expect(holder.joined).resolves.toBe(0);
           await stopping;
           await scheduledSweep;
-          expect(await sweeps[1]).toBe(1);
+          expect(await sweeps[2]).toBe(1);
 
           await clock.advanceBy(60_000);
-          expect(sweeps).toHaveLength(2);
+          expect(sweeps).toHaveLength(3);
         });
         expect(
           openOpenClawStateDatabase()
@@ -216,30 +222,6 @@ describe("gateway lifetime sidecars", () => {
         await owner.stop();
         observeDispatch.mockRestore();
         observePurge.mockRestore();
-      }
-    });
-  });
-
-  test("parks empty secret maintenance and resumes from an in-process write", async () => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
-      const { clock, scheduler, owner, attach } = sidecarFixture();
-      const purge = vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries");
-      try {
-        await attach();
-        await clock.wake();
-        const initial = purge.mock.calls.length;
-        await clock.advanceBy(5 * 60_000);
-        expect(purge).toHaveBeenCalledTimes(initial);
-        await writeStoredSecret(
-          "github-setup-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "synthetic-handoff",
-        );
-        await clock.wake();
-        expect(purge).toHaveBeenCalledTimes(initial + 1);
-        expect(secretStore.getSecretStoreExpiryDeadline()).toEqual(expect.any(Number));
-      } finally {
-        await owner.stop();
-        await scheduler.stop();
       }
     });
   });

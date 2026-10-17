@@ -228,18 +228,17 @@ it("joins notice cleanup and upstream deletion after close prelude", async ({ si
     ).get(watcher, target),
   ).toEqual({ notified_sequence: 3 });
   const reopened = openOpenClawStateDatabase(options).db;
-  expect(readSessionUpstreamLinkInDatabase(reopened, deletedTarget, "main")).toBeUndefined();
-  expect(
+  expect([
+    readSessionUpstreamLinkInDatabase(reopened, deletedTarget, "main"),
     sql("SELECT 1 FROM session_watch_cursors WHERE watcher_session_key = ?").get(resetWatcher),
-  ).toBeUndefined();
-  expect(
     sql("SELECT 1 FROM session_state_events WHERE session_key = ?").get(deletedTarget),
-  ).toBeUndefined();
+  ]).toEqual([undefined, undefined, undefined]);
 });
 
 it("joins workspace writes and releases leases after close prelude", async ({ signal }) => {
   let custody: LocalWorkspaceStore | undefined;
   const worktreeId = "local-workspace-close";
+  const expectedProjection = { worktree_id: worktreeId, revision: 0 };
   const context = await prepareClosingGateway(signal);
   const { fixture, kernel, options, shared, release, sql } = context;
   context.holdCommand("localWorkspace.mutate");
@@ -259,15 +258,14 @@ it("joins workspace writes and releases leases after close prelude", async ({ si
   expect(lateWork).not.toHaveBeenCalled();
   expect(shared.isOpen).toBe(true);
   release.resolve();
-  await expect(writing).resolves.toMatchObject({ worktree_id: worktreeId, revision: 0 });
+  await expect(writing).resolves.toMatchObject(expectedProjection);
   await closing;
   expect(shared.isOpen).toBe(false);
   assert(custody);
   expect(custody.assertCurrent).toThrow();
-  expect(await readLocalWorkspaceProjection(worktreeId, fixture.state.env)).toMatchObject({
-    worktree_id: worktreeId,
-    revision: 0,
-  });
+  expect(await readLocalWorkspaceProjection(worktreeId, fixture.state.env)).toMatchObject(
+    expectedProjection,
+  );
   expect(
     sql("SELECT count(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?").get(
       "workspace.local-reconciliation",

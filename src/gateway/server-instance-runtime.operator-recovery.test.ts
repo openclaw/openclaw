@@ -57,12 +57,14 @@ const chatContext = () => createDirectChatContext({ trackExecution: trackAsyncWo
 const createRuntime = (
   getContext: () => ReturnType<typeof chatContext>,
   registry = createGatewayMethodRegistry([]),
-) =>
-  createGatewayInstanceRuntime({
+) => {
+  const runtime = createGatewayInstanceRuntime({
     getContext,
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
   });
+  return Object.assign(runtime, { [Symbol.dispose]: runtime.close });
+};
 const recoveryRequest = (target: OperatorRecoveryTarget) => ({
   message: "Continue the interrupted turn",
   agentId: target.agentId,
@@ -92,11 +94,17 @@ function registerRecovery(
 }
 async function withRecovery(
   run: (
-    fixture: Awaited<ReturnType<typeof createOperatorRecoveryFixture>>,
-    context: ReturnType<typeof chatContext>,
+    fixture: Awaited<ReturnType<typeof createOperatorRecoveryFixture>> & {
+      stateDir: string;
+      profileId: string;
+    },
   ) => Promise<void>,
+  internal = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    if (internal) {
+      setRuntimeConfigSnapshot({});
+    }
     const context = chatContext();
     const profile = ensureProfileForEmail("runtime-recovery@example.test");
     const fixture = await createOperatorRecoveryFixture({
@@ -104,8 +112,11 @@ async function withRecovery(
       context,
       profileId: profile.id,
       config: {},
+      ...(internal
+        ? { sessionKey: "agent:main:dashboard:repeat-recovery", sourceIngress: "internal" as const }
+        : {}),
     });
-    await run(fixture, context);
+    await run({ ...fixture, stateDir, profileId: profile.id });
   });
 }
 
@@ -113,17 +124,7 @@ describe("typed restart recovery operator admission", () => {
   it.each([false, true])(
     "retains an internal operator source across repeated restarts (revoked=%s)",
     async (revoked) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot({});
-        const profile = ensureProfileForEmail("repeat-recovery@example.test");
-        const { entry, target } = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context: chatContext(),
-          profileId: profile.id,
-          config: {},
-          sessionKey: "agent:main:dashboard:repeat-recovery",
-          sourceIngress: "internal",
-        });
+      await withRecovery(async ({ entry, target, stateDir, profileId }) => {
         const source = entry.restartRecoveryOperatorSource;
         let runId = target.recoveryRunId;
         const { sessionKey, sessionId } = target;
@@ -147,13 +148,13 @@ describe("typed restart recovery operator admission", () => {
           });
           await markRestartAbortedMainSessions({
             resolveGatewayContext: () => context,
-            stateDir: state.stateDir,
+            stateDir,
             activeRuns: [{ sessionKey, sessionId, runId, lifecycleGeneration: generation }],
             isActiveRun: () => true,
           });
           rotateAgentEventLifecycleGeneration();
           if (revoked && attempt === 1) {
-            setUserProfileRole(profile.id, "changed-role");
+            setUserProfileRole(profileId, "changed-role");
           }
           const runtime = createRuntime(() => context);
           const finish = createDeferred();
@@ -164,7 +165,7 @@ describe("typed restart recovery operator admission", () => {
               principal?.internal?.operatorRunAuthority,
               "restored source authority",
             );
-            expect(authority.profileId).toBe(profile.id);
+            expect(authority.profileId).toBe(profileId);
             expect(authority.assertCurrent).not.toThrow();
             registration = registerRecovery(context, target, runId);
             io.emitStartOwner?.(runId, registration.entry);
@@ -181,7 +182,7 @@ describe("typed restart recovery operator admission", () => {
               onSkipped: (reason) => skipped.push(reason),
               cfg: {},
               storePath: target.storePath,
-              stateDir: state.stateDir,
+              stateDir,
               handledSessionKeys: new Set(),
               expectedTarget: target,
               gatewayRuntime: runtime.recovery,
@@ -205,26 +206,22 @@ describe("typed restart recovery operator admission", () => {
             registration?.cleanup();
           }
         }
-      });
+      }, true);
     },
   );
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
     async (field) => {
-      await withRecovery(async ({ target }, context) => {
-        const runtime = createRuntime(() => context);
+      await withRecovery(async ({ target, context }) => {
+        using runtime = createRuntime(() => context);
         const request = recoveryRequest(target);
         request[field] = "another-claim";
-        try {
-          await expect(
-            runtime.recovery.dispatchAgent(request, undefined, {
-              restartRecoveryOperatorTarget: target,
-            }),
-          ).rejects.toThrow("dispatch does not match its operator claim");
-          expect(startTurn).not.toHaveBeenCalled();
-        } finally {
-          runtime.close();
-        }
+        await expect(
+          runtime.recovery.dispatchAgent(request, undefined, {
+            restartRecoveryOperatorTarget: target,
+          }),
+        ).rejects.toThrow("dispatch does not match its operator claim");
+        expect(startTurn).not.toHaveBeenCalled();
       });
     },
   );
@@ -232,7 +229,7 @@ describe("typed restart recovery operator admission", () => {
   it.each(["authenticated operator", "legacy claim"] as const)(
     "applies the actual admin-method fence to a %s principal",
     async (source) => {
-      await withRecovery(async ({ target }, context) => {
+      await withRecovery(async ({ target, context }) => {
         const registry = createGatewayMethodRegistry([
           {
             name: "cron.add",
@@ -241,7 +238,7 @@ describe("typed restart recovery operator admission", () => {
             handler: vi.fn(),
           },
         ]);
-        const runtime = createRuntime(() => context, registry);
+        using runtime = createRuntime(() => context, registry);
         startTurn.mockImplementation(async ({ principal, io }) => {
           const authorization = authorizeGatewayMethod(
             "cron.add",
@@ -259,19 +256,11 @@ describe("typed restart recovery operator admission", () => {
         const options = {
           restartRecoveryOperatorTarget: source === "authenticated operator" ? target : undefined,
         };
-        try {
-          const result = runtime.recovery.dispatchAgent(
-            recoveryRequest(target),
-            undefined,
-            options,
-          );
-          if (source === "authenticated operator") {
-            await expect(result).resolves.toMatchObject({ status: "ok" });
-          } else {
-            await expect(result).rejects.toThrow("missing scope: operator.admin");
-          }
-        } finally {
-          runtime.close();
+        const result = runtime.recovery.dispatchAgent(recoveryRequest(target), undefined, options);
+        if (source === "authenticated operator") {
+          await expect(result).resolves.toMatchObject({ status: "ok" });
+        } else {
+          await expect(result).rejects.toThrow("missing scope: operator.admin");
         }
       });
     },
@@ -284,10 +273,10 @@ describe("typed restart recovery operator admission", () => {
     "Gateway closed",
     "Gateway context replaced",
   ] as const)("refuses retained operator work after its exact %s", async (boundary) => {
-    await withRecovery(async ({ target }, context) => {
+    await withRecovery(async ({ target, context }) => {
       let activeContext = context;
       const registration = registerRecovery(context, target);
-      const runtime = createRuntime(() => activeContext);
+      using runtime = createRuntime(() => activeContext);
       const entered = createDeferred<AgentTurnPrincipal>();
       const finish = createDeferred();
       startTurn.mockImplementation(async ({ principal, io }) => {
@@ -338,7 +327,6 @@ describe("typed restart recovery operator admission", () => {
         await pending.catch(() => undefined);
         await startTurn.mock.results.at(-1)?.value;
         registration.cleanup();
-        runtime.close();
       }
     });
   });

@@ -30,18 +30,22 @@ function createContext(): GatewayRequestContext {
     trackExecution: trackAsyncWork,
     deps: {},
     getRuntimeConfig: () => ({}),
-    logGateway: {
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
+    logGateway: { warn: vi.fn(), error: vi.fn() },
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
 
-function createRegistry(handlers: GatewayRequestHandlers) {
-  return createGatewayMethodRegistry(
+function createRuntime({
+  context = createContext(),
+  handlers = {},
+  ...options
+}: Partial<Parameters<typeof createGatewayInstanceRuntime>[0]> & {
+  context?: GatewayRequestContext;
+  handlers?: GatewayRequestHandlers;
+} = {}) {
+  const registry = createGatewayMethodRegistry(
     Object.entries(handlers).map(([name, handler]) => ({
       name,
       handler,
@@ -49,12 +53,9 @@ function createRegistry(handlers: GatewayRequestHandlers) {
       scope: name.includes("approval") ? APPROVALS_SCOPE : WRITE_SCOPE,
     })),
   );
-}
-
-function createRuntime(options: Partial<Parameters<typeof createGatewayInstanceRuntime>[0]> = {}) {
   const runtime = createGatewayInstanceRuntime({
-    getContext: createContext,
-    getMethodRegistry: () => createRegistry({}),
+    getContext: () => context,
+    getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
     ...options,
   });
@@ -90,7 +91,7 @@ it.each([false, true])(
     const context = createContext();
     const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
     context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
-    const runtime = createRuntime({ getContext: () => context });
+    const { recovery } = createRuntime({ context });
     let requesterCurrent = true;
     const options = {
       expectFinal: true,
@@ -104,10 +105,8 @@ it.each([false, true])(
       },
     };
     const request = { message: "completed media", idempotencyKey: "bound-recovery" };
-    await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
-      payload,
-    );
-    const pending = runtime.recovery.dispatchAgent(request, undefined, options);
+    await expect(recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(payload);
+    const pending = recovery.dispatchAgent(request, undefined, options);
     requesterCurrent = false;
     await expect(pending).rejects.toThrow("Recovery requester retired");
   },
@@ -115,15 +114,14 @@ it.each([false, true])(
 
 it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
   let available = false;
-  const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
-    respond(true, { raw: true });
-  });
-  const registry = createRegistry({ agent: rawAgent });
+  const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) =>
+    respond(true, { raw: true }),
+  );
   const context = createContext();
   const preparing = createDeferred<number | undefined>();
   const runtime = createRuntime({
-    getContext: () => context,
-    getMethodRegistry: () => registry,
+    context,
+    handlers: { agent: rawAgent },
     isDispatchAvailable: () => available,
     prepareRestartRecovery: () => preparing.promise,
   });
@@ -143,27 +141,23 @@ it("uses the typed recovery path and fails closed when the owning instance close
     status: "timeout",
   });
   const onExecutionStarted = vi.fn();
-  context.dedupe.set("agent:run-cached-active", {
+  context.dedupe.set("agent:active", {
     ts: Date.now(),
     ok: true,
-    payload: { runId: "run-cached-active", status: "accepted" },
+    payload: { runId: "active", status: "accepted" },
   });
-  context.chatAbortControllers.set("run-cached-active", {
+  context.chatAbortControllers.set("active", {
     controller: new AbortController(),
     executionStarted: true,
   } as never);
   await expect(
-    recovery.dispatchAgent({ message: "test", idempotencyKey: "run-cached-active" }, undefined, {
+    recovery.dispatchAgent({ message: "test", idempotencyKey: "active" }, undefined, {
       onExecutionStarted,
     }),
-  ).resolves.toMatchObject({ runId: "run-cached-active", status: "in_flight" });
+  ).resolves.toMatchObject({ runId: "active", status: "in_flight" });
   expect(onExecutionStarted).toHaveBeenCalledOnce();
   await expect(
-    recovery.dispatchAgent({
-      message: "test",
-      idempotencyKey: "run-typed-recovery",
-      cwd: "relative",
-    }),
+    recovery.dispatchAgent({ message: "test", idempotencyKey: "typed", cwd: "relative" }),
   ).rejects.toThrow("cwd must be absolute");
   expect(rawAgent).not.toHaveBeenCalled();
 
@@ -226,7 +220,7 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       ...createContext(),
       getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
     } as GatewayRequestContext;
-    const runtime = createRuntime({ getContext: () => context });
+    const runtime = createRuntime({ context });
 
     try {
       const idempotencyKey = "main-session-restart-recovery:run-1:failed-notice";
@@ -284,9 +278,8 @@ it("sends recovery notices through normal outbound without invoking plugin actio
 });
 
 it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
-  const registry = createRegistry({});
-  const first = createRuntime({ getMethodRegistry: () => registry });
-  const second = createRuntime({ getMethodRegistry: () => registry });
+  const first = createRuntime();
+  const second = createRuntime();
   expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
   const onRequested = vi.fn();
   const unsubscribe = subscribe(first, onRequested);
@@ -364,23 +357,17 @@ it("rejects methods outside each closed internal principal", async () => {
 });
 
 it("preserves a trusted approval resolver display name", async () => {
-  const context = createContext();
-  const runtime = createRuntime({
-    getContext: () => context,
-    getMethodRegistry: () =>
-      createRegistry({
-        "exec.approval.list": ({ client, respond }) =>
-          respond(true, { displayName: client?.connect.client.displayName }),
-      }),
+  const displayName = "Telegram approval (owner)";
+  const { nativeApprovals } = createRuntime({
+    handlers: {
+      "exec.approval.list": ({ client, respond }) =>
+        respond(true, { displayName: client?.connect.client.displayName }),
+    },
   });
 
   await expect(
-    runtime.nativeApprovals.request(
-      "exec.approval.list",
-      {},
-      { clientDisplayName: "Telegram approval (owner)" },
-    ),
-  ).resolves.toEqual({ displayName: "Telegram approval (owner)" });
+    nativeApprovals.request("exec.approval.list", {}, { clientDisplayName: displayName }),
+  ).resolves.toEqual({ displayName });
 });
 
 it("preserves the Gateway client's approval request deadline", async () => {
@@ -388,16 +375,13 @@ it("preserves the Gateway client's approval request deadline", async () => {
   onTestFinished(() => vi.useRealTimers());
   const { promise: started, resolve: markStarted } = createDeferred();
   const { promise: handlerCanFinish, resolve: finishHandler } = createDeferred();
-  const context = createContext();
   const runtime = createRuntime({
-    getContext: () => context,
-    getMethodRegistry: () =>
-      createRegistry({
-        send: async () => {
-          markStarted();
-          await handlerCanFinish;
-        },
-      }),
+    handlers: {
+      send: async () => {
+        markStarted();
+        await handlerCanFinish;
+      },
+    },
   });
 
   try {

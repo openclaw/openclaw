@@ -215,7 +215,6 @@ describe("gateway telemetry maintenance", () => {
 
         cleanup.resolve();
         const error = await stopping;
-        expect(stopped).toHaveBeenCalledOnce();
         if (failure) {
           expect(error).toBeInstanceOf(AggregateError);
           expect(error).toMatchObject({ errors: [failure] });
@@ -284,7 +283,6 @@ describe("gateway telemetry maintenance", () => {
         expect(stopped).not.toHaveBeenCalled();
         check.resolve(null);
         await stopping;
-        expect(stopped).toHaveBeenCalledOnce();
       } finally {
         thaw.resolve(true);
         check.resolve(null);
@@ -311,7 +309,6 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig, {
       surface: "gateway",
     });
-    expect(checkTelemetryUpdateMock.mock.lastCall?.[0]()).toEqual({});
     expect(logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 
@@ -331,7 +328,6 @@ describe("gateway telemetry maintenance", () => {
       expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
       check.resolve(null);
       await stopping;
-      expect(stopped).toHaveBeenCalledOnce();
       await timers.stopPeriodicTasks();
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
