@@ -46,8 +46,7 @@ export type ChatMetadataProjectionFacts = {
 export type PreparedChatMetadataProjection = Awaited<
   ReturnType<typeof prepareChatMetadataModelProjection>
 > & {
-  agent: ChatMetadataProjectionFacts &
-    Pick<ChatMetadataResult, "commands" | "revision" | "swarmEnabled">;
+  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
 };
 
 export function readPreparedChatMetadata(

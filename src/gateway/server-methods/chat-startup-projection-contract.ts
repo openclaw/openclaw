@@ -14,7 +14,7 @@ export type ChatStartupProjectionReadParams = {
 export type ChatStartupProjectionResult = {
   metadata?: Pick<
     ChatMetadataResult,
-    "commands" | "revision" | "swarmEnabled" | "requiredWorkerInferenceProfileId"
+    "commands" | "swarmEnabled" | "requiredWorkerInferenceProfileId"
   >;
   sessionModelCatalog: ModelCatalogEntry[];
   defaultModelCatalog: ModelCatalogEntry[];

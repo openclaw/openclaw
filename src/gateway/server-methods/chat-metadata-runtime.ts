@@ -588,7 +588,6 @@ export function createGatewayChatMetadataRuntime(params: {
           : {
               metadata: {
                 commands: session.agent.commands,
-                revision: session.agent.revision,
                 swarmEnabled: session.agent.swarmEnabled,
                 requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
                   readParams,

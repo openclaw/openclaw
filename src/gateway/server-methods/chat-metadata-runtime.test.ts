@@ -191,7 +191,6 @@ describe("gateway chat metadata runtime", () => {
         expect(first?.metadata).toEqual({
           commands: [{ name: "command-1-1" }],
           swarmEnabled: true,
-          revision: expect.any(String),
         });
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);

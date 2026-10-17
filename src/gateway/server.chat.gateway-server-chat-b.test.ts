@@ -1301,7 +1301,7 @@ describe("gateway server chat", () => {
       expect(startup.payload?.metadata).not.toHaveProperty("models");
       expect(startup.payload?.metadata).not.toHaveProperty("accountSelection");
       expect(startup.payload?.metadata).not.toHaveProperty("runtimeSelectionLocked");
-      expect(startup.payload?.metadata?.revision).toEqual(expect.any(String));
+      expect(startup.payload?.metadata).not.toHaveProperty("revision");
       expect(startup.payload?.metadata?.commands).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
