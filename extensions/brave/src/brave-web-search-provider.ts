@@ -88,7 +88,6 @@ function createBraveToolDefinition(
   };
 }
 
-/** Create the runtime Brave Search provider descriptor. */
 export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
   return {
     ...buildBraveWebSearchProviderBase(),

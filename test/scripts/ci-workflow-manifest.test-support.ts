@@ -363,10 +363,10 @@ export function runCiManifestFixture(options: {
         "scripts/run-tsgo-core-test-shards.mts",
         `
         // ${options.changedCoreTestSupport ? "--changed-paths-json" : "no changed-path capability"}
-        import { TSGO_CI_GRAPHS, selectChangedCiTsgoGraphs } from "./lib/tsgo-core-test-shards.mts";
-        const selectedNames = ${JSON.stringify(options.ciTypeGraphNames ?? ["core", "core-test-agents-root", "core-test-gateway-root", "scripts", "test-root"])};
+        import { TSGO_CI_GRAPHS, expandTsgoExecutionGraphs, selectChangedCiTsgoGraphs } from "./lib/tsgo-core-test-shards.mts";
+        const selectedNames = ${JSON.stringify(options.ciTypeGraphNames ?? ["core", "core-test-agents-root", "core-test-gateway-root", "scripts", "test-root-tooling"])};
         export async function createChangedCiTypeCheckPlan(paths) {
-          const inventory = TSGO_CI_GRAPHS.map((graph) => ({ ...graph,
+          const inventory = expandTsgoExecutionGraphs(TSGO_CI_GRAPHS).map((graph) => ({ ...graph,
             files: selectedNames.includes(graph.name) ? paths : [],
           }));
           const selected = selectChangedCiTsgoGraphs(paths, inventory);

@@ -42,6 +42,7 @@ const { values } = parseArgs({
     "writer-reads": { type: "boolean", default: false },
     "cheap-handlers": { type: "boolean", default: false },
     "transcript-reads": { type: "boolean", default: false },
+    "sqlite-queues": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -82,6 +83,9 @@ cfg.plugins = {
 if (values["writer-reads"] || values["cheap-handlers"] || values["transcript-reads"]) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
+if (values["sqlite-queues"]) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
 }
 if (values["cheap-handlers"]) {
   cfg.plugins.entries.github = { enabled: true };
@@ -142,6 +146,141 @@ writeFileSync(
 import { isMainThread, MessagePort } from 'node:worker_threads';
 if (isMainThread) {
   if (!process.send) throw new Error('Benchmark requires private IPC');
+  ${
+    values["sqlite-queues"]
+      ? `if (process.env.OPENCLAW_BENCH_QUEUE_START_NS) {
+    const { onInternalDiagnosticEvent, setDiagnosticsEnabledForProcess, waitForDiagnosticEventsDrained } =
+      await import(${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)});
+    const { deserialize } = await import('node:v8');
+    const startNs = BigInt(process.env.OPENCLAW_BENCH_QUEUE_START_NS);
+    const startWall = Number(process.env.OPENCLAW_BENCH_QUEUE_START_WALL_MS);
+    const windowMs = ${durationMs};
+    const binMs = Math.max(10000, Math.ceil(windowMs / 180));
+    const elapsed = () => Number(process.hrtime.bigint() - startNs) / 1e6;
+    const captureStartedMs = elapsed();
+    const groups = new Map();
+    const sharedSqliteKinds = new Set(['sqlite_writer', 'sqlite_read', 'stateRead']);
+    const eventSamples = [];
+    const commandCounts = new Map();
+    let events = 0;
+    let droppedDiagnosticEvents = 0;
+    let inconsistentDepths = 0;
+    let overflow = false;
+    let maxDeliveryDelayMs = 0;
+    let maxClockSkewMs = 0;
+    let lastEventMs = 0;
+    const group = (key, kind, requestClass) => {
+      let row = groups.get(key);
+      if (!row && groups.size < 512) {
+        row = { kind, requestClass, queued: 0, started: 0, completed: 0, cancelledBeforeStart: 0,
+          queueDepth: 0, active: 0, maxQueueDepth: 0, maxActive: 0,
+          queuedTimeMs: 0, serviceTimeMs: 0, startedQueueWaitMs: 0,
+          maxQueueWaitMs: 0, completedDurationMs: 0, at: 0, bins: [] };
+        groups.set(key, row);
+      }
+      if (!row) overflow = true;
+      return row;
+    };
+    const advance = (row, at) => {
+      at = Math.max(row.at, Math.min(windowMs, at));
+      while (row.at < at) {
+        const index = Math.floor(row.at / binMs);
+        const until = Math.min(at, (index + 1) * binMs);
+        const bin = row.bins[index] ??= { fromMs: index * binMs,
+          toMs: Math.min(windowMs, (index + 1) * binMs), queuedTimeMs: 0, serviceTimeMs: 0,
+          maxQueueDepth: row.queueDepth };
+        const wait = (until - row.at) * row.queueDepth;
+        const service = (until - row.at) * row.active;
+        row.queuedTimeMs += wait; row.serviceTimeMs += service;
+        bin.queuedTimeMs += wait; bin.serviceTimeMs += service;
+        bin.maxQueueDepth = Math.max(bin.maxQueueDepth, row.queueDepth);
+        row.at = until;
+      }
+    };
+    setDiagnosticsEnabledForProcess(true);
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === 'diagnostic.async_queue.dropped') {
+        droppedDiagnosticEvents += event.droppedEvents;
+        return;
+      }
+      if (event.type !== 'worker.request') return;
+      const observedMs = elapsed();
+      const eventMs = event.ts - startWall;
+      if (eventMs < 0 || eventMs >= windowMs) return;
+      events++;
+      maxDeliveryDelayMs = Math.max(maxDeliveryDelayMs, observedMs - eventMs);
+      maxClockSkewMs = Math.max(maxClockSkewMs, Math.abs(Date.now() - startWall - observedMs));
+      if (eventMs < lastEventMs) inconsistentDepths++;
+      lastEventMs = Math.max(lastEventMs, eventMs);
+      const owner = group('kind:' + event.kind, event.kind);
+      const request = group('class:' + event.kind + ':' + event.requestClass, event.kind, event.requestClass);
+      const total = group('total', 'all');
+      if (!owner || !request || !total) return;
+      const shared = sharedSqliteKinds.has(event.kind) ? group('shared', 'sharedSqlite') : undefined;
+      const queueDelta = event.phase === 'queued' ? 1
+        : event.phase === 'started' || (event.phase === 'completed' && event.durationMs === undefined) ? -1 : 0;
+      const activeDelta = event.phase === 'started' ? 1
+        : event.phase === 'completed' && event.durationMs !== undefined ? -1 : 0;
+      for (const row of [owner, request, total, ...(shared ? [shared] : [])]) {
+        advance(row, eventMs);
+        row.queueDepth += queueDelta; row.active += activeDelta;
+        if (row.queueDepth < 0 || row.active < 0) inconsistentDepths++;
+        row.maxQueueDepth = Math.max(row.maxQueueDepth, row.queueDepth);
+        const index = Math.floor(eventMs / binMs);
+        const bin = row.bins[index] ??= { fromMs: index * binMs,
+          toMs: Math.min(windowMs, (index + 1) * binMs), queuedTimeMs: 0, serviceTimeMs: 0,
+          maxQueueDepth: 0 };
+        bin.maxQueueDepth = Math.max(bin.maxQueueDepth, row.queueDepth);
+        row.maxActive = Math.max(row.maxActive, row.active);
+        row[event.phase]++;
+        if (event.phase === 'completed' && event.durationMs === undefined) row.cancelledBeforeStart++;
+        row.startedQueueWaitMs += event.queueWaitMs ?? 0;
+        row.maxQueueWaitMs = Math.max(row.maxQueueWaitMs, event.queueWaitMs ?? 0);
+        row.completedDurationMs += event.durationMs ?? 0;
+      }
+      if (owner.queueDepth !== event.queueDepth) inconsistentDepths++;
+      if (eventSamples.length < 2000) eventSamples.push({ observedMs, eventMs, kind: event.kind,
+        requestClass: event.requestClass, phase: event.phase, queueDepth: event.queueDepth,
+        queueWaitMs: event.queueWaitMs, durationMs: event.durationMs });
+    }, { include: ['worker.request', 'diagnostic.async_queue.dropped'] });
+    const worktreeCommands = new Set(['abortRemoval', 'admitRunLease', 'assertPredicates', 'claimRemoval',
+      'cleanupState', 'deferCleanup', 'delete', 'finalizeRemoval', 'findLiveByOwner', 'findLiveByPath',
+      'get', 'insert', 'list', 'liveIds', 'pendingSlots', 'provisionedChunk', 'provisionedPaths',
+      'provisionedState', 'reapRunLeases', 'recoverPending', 'releasePending', 'releaseRunLease',
+      'reserveCapacity', 'reservePending', 'retireMissing', 'sessionBinding', 'slotCount', 'update',
+      'writeProvisionedSnapshot'].map((name) => 'worktrees.' + name));
+    const queueNativePost = MessagePort.prototype.postMessage;
+    MessagePort.prototype.postMessage = function(message, ...args) {
+      const body = message?.type === 'post' ? message.value : message;
+      if (elapsed() < windowMs && body?.type === 'execute' && body.input instanceof Uint8Array) {
+        const request = deserialize(body.input);
+        const command = request.command ?? request;
+        if (worktreeCommands.has(command.type)) commandCounts.set(command.type, (commandCounts.get(command.type) ?? 0) + 1);
+      }
+      return queueNativePost.call(this, message, ...args);
+    };
+    setTimeout(async () => {
+      await waitForDiagnosticEventsDrained();
+      unsubscribe();
+      for (const row of groups.values()) advance(row, windowMs);
+      const rows = [...groups.values()].map(({ at, ...row }) => row);
+      process.send?.({ channel: 'post-restart-burst-sqlite-queues', pid: process.pid, report: {
+        windowMs, binMs, captureStartedMs, snapshotObservedMs: elapsed(), events,
+        complete: events > 0 && !overflow && !droppedDiagnosticEvents && !inconsistentDepths && maxClockSkewMs < 100,
+        overflow, droppedDiagnosticEvents, inconsistentDepths, maxDeliveryDelayMs, maxClockSkewMs,
+        total: rows.find((row) => row.kind === 'all'),
+        totalBoundary: 'sum of all instrumented worker-kind queues; overlapping, not one FIFO or exclusively SQLite',
+        sharedSqliteKinds: [...sharedSqliteKinds],
+        sharedSqlite: rows.find((row) => row.kind === 'sharedSqlite'),
+        kinds: rows.filter((row) => row.kind !== 'all' && row.kind !== 'sharedSqlite' && row.requestClass === undefined),
+        classes: rows.filter((row) => row.requestClass !== undefined).sort((a, b) => b.queuedTimeMs - a.queuedTimeMs),
+        worktreeCommandDispatchCounts: Object.fromEntries(commandCounts), eventSamples,
+        eventSamplesTruncated: events > eventSamples.length,
+      } });
+    }, Math.max(0, windowMs - elapsed())).unref();
+  }`
+      : ""
+  }
   ${
     values["cheap-handlers"]
       ? `const { MockAgent } = await import(${JSON.stringify(import.meta.resolve("undici"))});
@@ -251,6 +390,7 @@ type EluSample = {
 };
 const eluSamples: EluSample[] = [];
 const transcriptSnapshot = Promise.withResolvers<Record<string, number>>();
+const sqliteQueueSnapshot = Promise.withResolvers<Record<string, unknown>>();
 let githubFixtureRequests = 0;
 let vapidPublicKey: string | undefined;
 let timeToSteadyMs: number | null = null;
@@ -385,9 +525,20 @@ function launch(name: string) {
     throw new Error("Benchmark launch helper did not provide an explicit auth mode");
   }
   args[authIndex + 1] = "token";
+  if (recovering) {
+    restartAt = performance.now();
+  }
+  const queueClock =
+    recovering && values["sqlite-queues"]
+      ? {
+          OPENCLAW_BENCH_QUEUE_START_NS: String(process.hrtime.bigint()),
+          OPENCLAW_BENCH_QUEUE_START_WALL_MS: String(Date.now()),
+        }
+      : {};
   const child = spawn(process.execPath, args, {
     env: {
       ...env,
+      ...queueClock,
       OPENCLAW_BENCH_CAPTURE_DEADLINE_MS: String(Date.now() + Math.min(durationMs, 120_000)),
     },
     detached: true,
@@ -414,6 +565,20 @@ function launch(name: string) {
     }
   });
   child.on("message", (sample: unknown) => {
+    if (
+      recovering &&
+      isRecord(sample) &&
+      sample.channel === "post-restart-burst-sqlite-queues" &&
+      sample.pid === child.pid &&
+      isRecord(sample.report)
+    ) {
+      writeFileSync(
+        path.join(output, "sqlite-queues.json"),
+        `${JSON.stringify(sample.report, null, 2)}\n`,
+      );
+      sqliteQueueSnapshot.resolve(sample.report);
+      return;
+    }
     if (
       recovering &&
       isRecord(sample) &&
@@ -1001,8 +1166,18 @@ try {
     writeFileSync(configPath, JSON.stringify(cfg));
   }
   await assertPortAvailable(port);
-  restartAt = performance.now();
   const restarted = launch("gateway-after-restart");
+  const sqliteQueueMetrics = values["sqlite-queues"]
+    ? Promise.race([
+        sqliteQueueSnapshot.promise,
+        delay(durationMs + 30_000, undefined, { ref: false }).then(() => {
+          throw new Error("SQLite queue snapshot timed out");
+        }),
+      ])
+    : Promise.resolve(undefined);
+  void sqliteQueueMetrics.catch((error: unknown) => {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  });
   await ready(restarted);
   const readyMs = performance.now() - restartAt;
   console.log(`PHASE restarted-ready ${readyMs.toFixed(1)}ms`);
@@ -1065,6 +1240,7 @@ try {
   };
   const metrics = await diagnosticMetrics;
   const transcriptTaskCounts = await transcriptMetrics;
+  const sqliteQueues = await sqliteQueueMetrics;
   const result = {
     output,
     fixture,
@@ -1072,6 +1248,7 @@ try {
     runCount,
     durationMs,
     pollMs,
+    sqliteQueues,
     nativeTaskInputs: {
       windowMs: Math.min(durationMs, 120_000),
       counts: transcriptTaskCounts,
@@ -1157,11 +1334,29 @@ try {
     eluSamples,
   };
   writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
-  console.log(JSON.stringify({ ...result, timings: undefined, eluSamples: undefined }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ...result,
+        timings: undefined,
+        eluSamples: undefined,
+        sqliteQueues: sqliteQueues
+          ? {
+              complete: sqliteQueues.complete,
+              events: sqliteQueues.events,
+              file: "sqlite-queues.json",
+            }
+          : undefined,
+      },
+      null,
+      2,
+    ),
+  );
   if (
     connectedClients.size < clientCount ||
     shapes.some(({ method }) => !timings.some((row) => row.method === method && !row.error)) ||
     (values["cheap-handlers"] && githubFixtureRequests === 0) ||
+    (sqliteQueues && sqliteQueues.complete !== true) ||
     eluSamples.length === 0
   ) {
     throw new Error(`incomplete measurement; inspect ${output}/result.json`);

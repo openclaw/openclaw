@@ -12,11 +12,11 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { GatewayClient } from "../../gateway/client.js";
 import { openUrl } from "../../infra/browser-open.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError, type WizardPrompter } from "../../wizard/prompts.js";
+import { answerGatewayWizardStep } from "../gateway-wizard-step.js";
 import {
   withModelsAccountsGateway,
   type ModelsAccountsGatewayOptions,
@@ -70,53 +70,25 @@ async function answerAccountStep(step: WizardStep, signal: AbortSignal): Promise
       label: sanitizeTerminalText(option.label),
       hint: option.hint && sanitizeTerminalText(option.hint),
     })) ?? [];
-  switch (step.type) {
-    case "note":
-      if (step.format === "plain") {
-        await prompter.plain?.(message);
-      } else {
-        await prompter.note(message, step.title && sanitizeTerminalText(step.title));
-      }
-      return undefined;
-    case "text": {
-      const value = await prompter.text({
-        message,
-        sensitive: step.sensitive,
-        placeholder: step.placeholder && sanitizeTerminalText(step.placeholder),
-        initialValue:
-          typeof step.initialValue === "string"
-            ? sanitizeTerminalText(step.initialValue)
-            : undefined,
-      });
-      if (step.sensitive) {
-        registerSecretValueForRedaction(value);
-      }
-      return value;
-    }
-    case "select":
-      return await prompter.select({
-        message,
-        options,
-        initialValue: step.initialValue,
-        searchable: true,
-      });
-    case "multiselect":
-      return await prompter.multiselect({
-        message,
-        options,
-        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
-        searchable: true,
-      });
-    case "confirm":
-    case "action":
-      return await prompter.confirm({
-        message,
-        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
-      });
-    case "progress":
-      return undefined;
+  if (step.type === "note" && step.format === "plain") {
+    await prompter.plain?.(message);
+    return undefined;
   }
-  return undefined;
+  return await answerGatewayWizardStep(
+    {
+      ...step,
+      message,
+      title: step.title && sanitizeTerminalText(step.title),
+      placeholder: step.placeholder && sanitizeTerminalText(step.placeholder),
+      initialValue:
+        step.type === "text" && typeof step.initialValue === "string"
+          ? sanitizeTerminalText(step.initialValue)
+          : step.initialValue,
+      options,
+    },
+    prompter,
+    { searchable: true },
+  );
 }
 
 async function connectAccount(

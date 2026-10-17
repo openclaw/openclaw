@@ -165,6 +165,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
+    // Native draft commands must pass through the synchronous editing owner in order.
     this.nativeDraftCleanup = this.context.nativeChatDrafts.subscribe((draft) => {
       const state = this.state;
       if (!state || !this.active || !this.presented) {
@@ -368,6 +369,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         pageState.requestUpdate?.();
       }),
     );
+    // Identity publications start scoped loads even when this retained pane is hidden.
     chatState.addCleanup(
       this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
     );
@@ -398,6 +400,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
     chatState.addCleanup(listen(window, BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation));
+    // Each connection edge retires media custody and transcript subscriptions synchronously.
     chatState.addCleanup(
       this.context.gateway.subscribe((next) => {
         this.applyGatewaySnapshot(next);
@@ -405,6 +408,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeForegroundTranscript();
       }),
     );
+    // Chat actions read these synchronous owner settings before any render commits.
     chatState.addCleanup(
       this.context.theme.subscribe(() => {
         pageState.settings = {
@@ -414,6 +418,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         pageState.requestUpdate();
       }),
     );
+    // Agent changes retire scoped owners and subscriptions before admitting another action.
     chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
         const previousAgentId = this.state?.assistantAgentId;
@@ -504,8 +509,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     this.applyApplicationConfig(this.context.config.current);
+    // Apply execution/media policy at publication, not at Solid's deferred render boundary.
     chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
     this.applySessionsState(this.context.sessions.state);
+    // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
     chatState.addCleanup(

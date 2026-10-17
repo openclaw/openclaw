@@ -20,7 +20,7 @@ export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" 
   avatarRevision: string;
 };
 
-export type UserProfileAuthority = {
+type UserProfileAuthority = {
   profileId: string;
   role: string | null;
   githubLogin?: string | null;

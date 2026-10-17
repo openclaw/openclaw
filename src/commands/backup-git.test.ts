@@ -99,6 +99,38 @@ describe("Git backup command agent selection", () => {
     ).resolves.toMatchObject({ commit: "backup-commit" });
   });
 
+  it.each(["workboard", "logbook", "team-reports", "matrix__account_state"])(
+    "selects the recorded plugin store %s for Git verification and restore",
+    async (store) => {
+      await backupGitVerifyCommand(createTestRuntime(), { repository: "/tmp/repository", store });
+      await backupGitRestoreCommand(createTestRuntime(), {
+        repository: "/tmp/repository",
+        store,
+        target: "/tmp/restored.sqlite",
+      });
+      expect(mocks.verifyGitBackupRef).toHaveBeenCalledWith(
+        expect.objectContaining({ identity: { role: "generic", id: store } }),
+      );
+      expect(mocks.restoreGitBackupRef).toHaveBeenCalledWith(
+        expect.objectContaining({ identity: { role: "generic", id: store } }),
+      );
+    },
+  );
+
+  it.each([{ global: true }, { agent: "main" }])(
+    "rejects an ambiguous plugin store selector alongside %j",
+    async (scope) => {
+      await expect(
+        backupGitVerifyCommand(createTestRuntime(), {
+          repository: "/tmp/repository",
+          store: "workboard",
+          ...scope,
+        }),
+      ).rejects.toThrow("Choose exactly one Git backup scope");
+      expect(mocks.verifyGitBackupRef).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["success", "failure", "uncertain"] as const)(
     "retains backup custody through artifact and outcome settlement: %s",
     async (outcome) => {

@@ -10,13 +10,6 @@ export type NodeWorkerBundleStatus =
   | { status: "installed"; version: string }
   | { status: "missing" };
 
-export const NODE_APPROVAL_STATE_VALUES = [
-  "approved",
-  "pending-approval",
-  "pending-reapproval",
-  "unapproved",
-] as const;
-
 /** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
   nodeId: string;
@@ -45,7 +38,7 @@ export type NodeListNode = {
   issues?: readonly RuntimeTargetIssue[];
   nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;
-  approvalState?: (typeof NODE_APPROVAL_STATE_VALUES)[number];
+  approvalState?: "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
   pendingRequestId?: string;
   pendingDeclaredCaps?: string[];
   pendingDeclaredCommands?: string[];

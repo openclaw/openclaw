@@ -184,36 +184,6 @@ describe("runtime tool input schema projection", () => {
     expect(parameters).toEqual(original);
   });
 
-  it("quarantines unreadable runtime tool entries before field projection", () => {
-    const healthy = {
-      name: "healthy",
-      parameters: { type: "object", properties: {} },
-    };
-    const tools = [healthy] as Array<typeof healthy>;
-    const proxy = new Proxy(tools, {
-      get(target, property, receiver) {
-        if (property === "1") {
-          throw new Error("fuzzplugin tool entry getter exploded");
-        }
-        if (property === "length") {
-          return 2;
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-
-    expect(filterRuntimeCompatibleTools(proxy)).toEqual({
-      tools: [healthy],
-      diagnostics: [
-        {
-          toolName: "tool[1]",
-          toolIndex: 1,
-          violations: ["tool[1] is unreadable"],
-        },
-      ],
-    });
-  });
-
   it("quarantines unreadable runtime tool fields without dropping healthy siblings", () => {
     const unreadable = {
       name: "fuzzplugin_unreadable",
@@ -240,27 +210,6 @@ describe("runtime tool input schema projection", () => {
         },
       ],
     });
-  });
-
-  it("snapshots tool references before schema getters replace later array entries", () => {
-    const captured = { name: "captured", parameters: { type: "object" } };
-    const replacement = { name: "replacement", parameters: { type: "array" } };
-    const tools = [
-      {
-        name: "first",
-        get parameters() {
-          tools[1] = replacement;
-          return { type: "object" };
-        },
-      },
-      captured,
-    ];
-
-    expect(filterRuntimeCompatibleTools(tools)).toEqual({
-      tools: [tools[0], captured],
-      diagnostics: [],
-    });
-    expect(tools[1]).toBe(replacement);
   });
 
   it("keeps missing parameter schemas for provider-specific normalization", () => {

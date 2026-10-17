@@ -224,6 +224,51 @@ subscription is not covered. The `execute` class groups multiple unclassified
 commands; it does not identify an individual caller. Use the same driver options
 and fresh fixtures for both revisions.
 
+Add `--sqlite-queues --clients 50 --seconds 180` to capture every instrumented
+worker queue for the full first three minutes from restart spawn. Combine it
+with `--writer-reads` or `--cheap-handlers` to include those workloads. A private
+preload subscribes to the source diagnostic dispatcher before the built Gateway
+entrypoint starts; both use the same process-global dispatcher. It enables
+diagnostics before config loading, so capture does not depend on the Prometheus
+exporter's later subscription. Only the restarted main isolate is observed.
+
+`sqlite-queues.json` and `result.json.sqliteQueues` contain all worker kinds,
+per-kind and per-request-class counts, queue depth peaks, summed queued-time and
+service-occupancy integrals, completed service duration, observed queue-wait
+sums/maxima, and ten-second bins (at most 180 bins for longer runs). Classes are
+ranked by their queued-time contribution. `queueDepth` and `active` in the final
+rows count work still pending or running at the cutoff; their elapsed occupancy
+is included, even when they finish after the window. Cancellation before start
+is counted separately. Aggregates are bounded to 512 kind/class rows and retain
+only the first 2,000 metadata-only events as samples. No payloads, paths,
+session IDs or request values are retained. The existing native-task counter
+still covers only its original first-120-second window.
+
+The totals sum overlapping worker-kind queues, including SQLite reads and
+writes; they are **not one FIFO** and nested operations can occupy multiple
+kinds at once. A kind may itself combine several workers or database owners.
+`sharedSqlite` separately sums the `sqlite_writer`, `sqlite_read`, and `stateRead`
+transports named in `sharedSqliteKinds`; other database-using workers remain
+visible in the complete per-kind results rather than being guessed into this subset.
+Queued time identifies classes suffering waits, not which class blocked them.
+Compare service occupancy and request counts when investigating the blocker;
+service occupancy also includes transport and scheduling, not just SQLite CPU.
+`worktreeCommandDispatchCounts` splits the grouped `worktrees` class by a fixed
+allowlist of exact commands. This private probe decodes serialized dispatch
+inputs, including nested state-read commands, to count only command names; use
+it identically on both revisions.
+
+Events carry wall-clock emission timestamps, while `observedMs` records
+monotonic receipt time from restart spawn. Integrals and the cutoff use emission
+timestamps at millisecond resolution, avoiding asynchronous diagnostic-delivery
+lag; `maxDeliveryDelayMs` and `maxClockSkewMs` expose that limitation. The preload
+drains events already queued at the deadline before snapshotting, while excluding
+events emitted after it. `captureStartedMs` records the small process/loader gap
+before the listener is installed. Diagnostic drops, inconsistent depth accounting,
+row overflow, or clock skew of 100 ms or more mark the capture incomplete and
+fail the run after preserving its report. There are no request IDs or causal
+links, so this cannot prove individual request ordering across worker owners.
+
 Add `--cheap-handlers --clients 30 --seconds 120` to measure the first two minutes
 of reconnect traffic for `push.web.vapidPublicKey`, `push.web.subscribe`,
 `workboard.cards.list`, `sessions.github.options`, and `github.preview`, alongside

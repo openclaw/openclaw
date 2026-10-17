@@ -1,4 +1,3 @@
-// Shared Chrome MCP contracts and constants.
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -87,7 +86,6 @@ export type ChromeMcpPageProbe = {
 
 export const MCP_REQUEST_TIMEOUT_CODE: number = ErrorCode.RequestTimeout;
 
-/** Browser profile options used to connect or launch chrome-devtools-mcp. */
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;
   cdpUrl?: string;

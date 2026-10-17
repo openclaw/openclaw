@@ -59,6 +59,7 @@ export type GitBackupIdentity = import("./snapshot-provider.js").SnapshotDatabas
 export type GitBackupManifest = {
   schemaVersion: 1 | 2;
   identity: GitBackupIdentity;
+  postgresSource?: { storeId: string; namespace: string };
   userVersion: number;
   excludedTables: string[];
   excludedConfigStateKeyPrefixes: string[];
@@ -99,7 +100,9 @@ function normalizeIdentity(identity: GitBackupIdentity): GitBackupIdentity {
     return identity;
   }
   if (identity.role === "generic") {
-    requireSafeTableName(identity.id);
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(identity.id)) {
+      throw new Error(`Git backup store id is not filesystem-safe: ${identity.id}`);
+    }
     return identity;
   }
   const agentId = normalizeAgentId(identity.agentId);
@@ -345,7 +348,15 @@ export function parseGitBackupManifest(value: string, source: string): GitBackup
       (!Array.isArray(manifest.excludedConfigStateKeyPrefixes) ||
         manifest.excludedConfigStateKeyPrefixes.some((prefix) => typeof prefix !== "string"))) ||
     !manifest.tables ||
-    typeof manifest.tables !== "object"
+    typeof manifest.tables !== "object" ||
+    (manifest.postgresSource !== undefined &&
+      (!manifest.postgresSource ||
+        typeof manifest.postgresSource !== "object" ||
+        Array.isArray(manifest.postgresSource) ||
+        typeof manifest.postgresSource.storeId !== "string" ||
+        !manifest.postgresSource.storeId ||
+        typeof manifest.postgresSource.namespace !== "string" ||
+        !manifest.postgresSource.namespace))
   ) {
     throw new Error(`Git backup manifest has unsupported fields: ${source}`);
   }
@@ -556,10 +567,10 @@ export async function restoreGitBackupDirectory(params: {
   }
   if (manifest.schemaVersion === 2) {
     const { createLocalSnapshotProvider } = await import("./local-repository.js");
-    await createLocalSnapshotProvider({ repositoryPath: params.sourcePath }).restoreFresh(
-      { path: path.join(params.sourcePath, "postgres") },
-      targetPath,
-    );
+    await createLocalSnapshotProvider({
+      repositoryPath: params.sourcePath,
+      expectedPostgresSource: manifest.postgresSource,
+    }).restoreFresh({ path: path.join(params.sourcePath, "postgres") }, targetPath);
     return {
       manifest,
       targetPath,

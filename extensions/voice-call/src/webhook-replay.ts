@@ -1,4 +1,3 @@
-// Voice Call plugin module owns bounded webhook replay tracking.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   isFutureDateTimestampMs,
