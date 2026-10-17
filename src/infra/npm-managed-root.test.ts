@@ -473,7 +473,7 @@ describe("managed npm root", () => {
       dependencies: { plugin: "1.0.0" },
     });
 
-    const runCommand = mockPeerPlan(async (cwd, call): Promise<void | typeof successfulSpawn> => {
+    const runCommand = mockPeerPlan(async (cwd, call) => {
       if (call === 1) {
         return {
           ...successfulSpawn,
@@ -488,6 +488,7 @@ describe("managed npm root", () => {
           version: "1.0.0",
         },
       });
+      return successfulSpawn;
     });
 
     await expect(
