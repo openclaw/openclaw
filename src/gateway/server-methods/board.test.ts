@@ -30,24 +30,31 @@ const mainTarget = { sessionKey: "agent:main:main" };
 type Widget = BoardSnapshot["widgets"][number];
 type WidgetIdentity = Pick<Widget, "name" | "revision" | "instanceId">;
 const explicitOwners = { ownership: "explicit", entries: { main: {}, work: {} } } as const;
+const html = (markup: string) => ({ kind: "html", html: markup }) as const;
 const responseBoard = (response: Awaited<ReturnType<ReturnType<typeof createHarness>["invoke"]>>) =>
   response.mock.calls[0]![1] as BoardSnapshot;
 const findWidget = (board: BoardSnapshot, name: string) =>
   board.widgets.find((widget) => widget.name === name)!;
-
-function widgetHarness(...args: Parameters<typeof createHarness>) {
-  const harness = createHarness(...args);
-  return scopeWidgets(harness, mainTarget);
+async function withoutBoardReads<T>(read: () => Promise<T>) {
+  const host = observeHostDataSql();
+  try {
+    const result = await read();
+    expect(
+      host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
+    ).toEqual([]);
+    return result;
+  } finally {
+    host.restore();
+  }
 }
+
+const widgetHarness = (...args: Parameters<typeof createHarness>) =>
+  scopeWidgets(createHarness(...args), mainTarget);
 
 function scopeWidgets(
   harness: ReturnType<typeof createHarness>,
   target: { sessionKey: string; agentId?: string },
 ) {
-  const get = async () => {
-    const response = await harness.invoke("board.get", target);
-    return responseBoard(response);
-  };
   const put = async (
     name: string,
     content: BoardWidgetPutParams["content"],
@@ -69,14 +76,14 @@ function scopeWidgets(
     revision,
     instanceId,
   });
-  const grant = (widget: WidgetIdentity, decision: "granted" | "rejected" = "granted") =>
-    harness.invoke("board.widget.grant", {
-      ...identity(widget),
-      decision,
-    });
-  const appView = (widget: WidgetIdentity) =>
-    harness.invoke("board.widget.appView", identity(widget));
-  return { ...harness, get, put, grant, appView };
+  return {
+    ...harness,
+    put,
+    get: async () => responseBoard(await harness.invoke("board.get", target)),
+    grant: (widget: WidgetIdentity, decision: "granted" | "rejected" = "granted") =>
+      harness.invoke("board.widget.grant", { ...identity(widget), decision }),
+    appView: (widget: WidgetIdentity) => harness.invoke("board.widget.appView", identity(widget)),
+  };
 }
 const appSource = { kind: "mcp-app", viewId: "mcp-app-source" } as const;
 const activeView = {
@@ -128,7 +135,7 @@ describe("board gateway methods", () => {
       sessionKey: "global",
       agentId: "work",
       name: "owner",
-      content: { kind: "html", html: "work" },
+      content: html("work"),
     });
     expect(work.mock.calls[0]).toMatchObject([true, { sessionKey: "agent:work:global" }]);
     expect(await store.getSnapshot({ sessionKey: "global", agentId: "work" })).toMatchObject({
@@ -142,9 +149,9 @@ describe("board gateway methods", () => {
       true,
       { sessionKey: "agent:main:global", revision: 0 },
     ]);
-    expect((await store.getSnapshot({ sessionKey: "global", agentId: "main" })).widgets).toEqual(
-      [],
-    );
+    expect(await store.getSnapshot({ sessionKey: "global", agentId: "main" })).toMatchObject({
+      widgets: [],
+    });
 
     const ambiguous = await invoke("board.get", { sessionKey: "global" });
     expect(ambiguous.mock.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
@@ -164,35 +171,21 @@ describe("board gateway methods", () => {
       },
       client,
     );
-    await put(
-      "status",
-      { kind: "html", html: "status" },
-      { netOrigins: ["https://status.example"], tools: ["status.refresh"] },
-    );
+    await put("status", html("status"), {
+      netOrigins: ["https://status.example"],
+      tools: ["status.refresh"],
+    });
     await put("app", appSource);
-    await put("plain", { kind: "html", html: "plain" });
+    await put("plain", html("plain"));
     const pending = await get();
     const status = findWidget(pending, "status");
     expect(status).not.toHaveProperty("frameUrl");
     await grant(status);
-    const { widget: rejected } = await put(
-      "rejected",
-      { kind: "html", html: "no" },
-      { tools: ["status.reject"] },
-    );
+    const { widget: rejected } = await put("rejected", html("no"), { tools: ["status.reject"] });
     await grant(rejected, "rejected");
     const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
     const documentRead = vi.spyOn(store, "useWidgetDocument");
-    const host = observeHostDataSql();
-    let first: BoardSnapshot;
-    try {
-      first = await get();
-      expect(
-        host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
-      ).toEqual([]);
-    } finally {
-      host.restore();
-    }
+    const first = await withoutBoardReads(get);
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
     expect(preparedRead).toHaveBeenCalledOnce();
     expect(documentRead).not.toHaveBeenCalled();
@@ -225,7 +218,7 @@ describe("board gateway methods", () => {
         origin: "https://ui.example.test",
         pathname: `/__openclaw__/board/agent%3Amain%3Amain/${name}/index.html`,
       });
-      expect(widget.sandboxOrigin).toBe("https://sandbox.example.test");
+      expect(widget).toMatchObject({ sandboxOrigin: "https://sandbox.example.test" });
       expect(new URL(widget.sandboxUrl!)).toMatchObject({
         origin: "https://sandbox.example.test",
         pathname: "/mcp-app-sandbox",
@@ -285,18 +278,12 @@ describe("board gateway methods", () => {
     await appView(widget);
     expectLease(mcpApp, true);
     await grant(widget);
-    const host = observeHostDataSql();
-    try {
+    await withoutBoardReads(async () => {
       expect((await appView(widget)).mock.calls[0]?.[0]).toBe(true);
       const interactive = vi.mocked(mcpApp.mintFromTranscript).mock.calls.at(-1)?.[0];
       expectLease(mcpApp, false);
       expect(await interactive?.authorizeAppInteraction?.()).toBe(true);
-      expect(
-        host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
-      ).toEqual([]);
-    } finally {
-      host.restore();
-    }
+    });
   });
 
   it("captures MCP App tools and binds fresh leases to the explicit owner", async () => {
@@ -310,7 +297,7 @@ describe("board gateway methods", () => {
     });
     const { invoke, mcpApp, store, put, grant, appView } = scopeWidgets(harness, target);
 
-    const { snapshot } = await put("server-app", appSource);
+    const { snapshot, widget } = await put("server-app", appSource);
     expect(snapshot.widgets).toMatchObject([
       {
         name: "server-app",
@@ -323,18 +310,16 @@ describe("board gateway methods", () => {
     );
     const originalInstanceId = (await store.getSnapshot(target)).widgets[0]?.instanceId;
     expect(originalInstanceId).toMatch(/^[a-f0-9]{32}$/u);
-    const widget = { name: "server-app", revision: 1, instanceId: originalInstanceId! };
+    expect(widget).toMatchObject({ revision: 1, instanceId: originalInstanceId });
 
-    const readOnly = await appView(widget);
-    expect(readOnly).toHaveBeenCalledWith(true, {
+    expect(await appView(widget)).toHaveBeenCalledWith(true, {
       viewId: "mcp-app-board-1",
       expiresAtMs: 10_001,
     });
     expectLease(mcpApp, true, [], target);
 
     await grant(widget);
-    const interactive = await appView(widget);
-    expect(interactive).toHaveBeenCalledWith(true, {
+    expect(await appView(widget)).toHaveBeenCalledWith(true, {
       viewId: "mcp-app-board-2",
       expiresAtMs: 10_002,
     });
@@ -377,8 +362,7 @@ describe("board gateway methods", () => {
     const response = await invoke("board.widget.put", {
       sessionKey: "session",
       name: "complete-document",
-      title: "Complete document",
-      content: { kind: "html", html: untrusted },
+      content: html(untrusted),
       declared: {
         netOrigins: ["https://api.open-meteo.com"],
         tools: ["prompt"],
@@ -391,10 +375,12 @@ describe("board gateway methods", () => {
       { sessionKey: "session", agentId: "main" },
       "complete-document",
     );
-    const html = stored && "html" in stored ? stored.html : "";
-    expect(html).toContain("openclaw:widget-host-init-ack");
-    expect(html.indexOf("openclaw:widget-bridge-port-offer")).toBeLessThan(html.indexOf(untrusted));
-    expect(html).toContain("connect-src https://api.open-meteo.com");
+    const document = stored && "html" in stored ? stored.html : "";
+    expect(document).toContain("openclaw:widget-host-init-ack");
+    expect(document.indexOf("openclaw:widget-bridge-port-offer")).toBeLessThan(
+      document.indexOf(untrusted),
+    );
+    expect(document).toContain("connect-src https://api.open-meteo.com");
   });
 
   it.each([
@@ -411,24 +397,22 @@ describe("board gateway methods", () => {
       content: { kind: "canvas-doc", docId: "canvas-doc" },
     });
     expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-    expect((await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets).toEqual(
-      [],
-    );
+    expect(await store.getSnapshot({ sessionKey: "session", agentId: "main" })).toMatchObject({
+      widgets: [],
+    });
     expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
     const { invoke, put, grant, get } = widgetHarness();
-    await put("plain", { kind: "html", html: "plain" });
+    await put("plain", html("plain"));
     const plain = await invoke("board.prompt.authorize", {
       ticket: (await get()).widgets[0]!.viewTicket,
     });
     expect(plain.mock.calls[0]?.[1]).toEqual({ confirmationRequired: true });
-    const { widget: approvedWidget } = await put(
-      "approved",
-      { kind: "html", html: "approved" },
-      { tools: ["prompt"] },
-    );
+    const { widget: approvedWidget } = await put("approved", html("approved"), {
+      tools: ["prompt"],
+    });
     await grant(approvedWidget);
     const approved = await invoke("board.prompt.authorize", {
       ticket: findWidget(await get(), "approved").viewTicket,
@@ -448,10 +432,9 @@ describe("board gateway methods", () => {
       await invoke("board.widget.put", {
         ...target,
         name: "counter",
-        content: { kind: "html", html: "ok" },
+        content: html("ok"),
       });
-      const board = await invoke("board.get", target);
-      const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+      const snapshot = responseBoard(await invoke("board.get", target));
       const ticket = snapshot.widgets[0]?.viewTicket;
       const first = await invoke("board.event", { ticket, payload: { count: 1 } });
       const duplicate = await invoke("board.event", {
@@ -472,6 +455,12 @@ describe("board gateway methods", () => {
 
 describe("website dashboard authoring", () => {
   const sessionKey = "agent:main:website";
+  const website = {
+    name: "status",
+    title: "Status",
+    pluginKind: "session:website",
+    props: { url: "https://status.example/overview?view=queue#active" },
+  };
 
   afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync();
@@ -499,29 +488,12 @@ describe("website dashboard authoring", () => {
 
   it("creates, reopens, and updates the live URL through the agent tool without frame credentials", async () => {
     const { tool, invoke, store } = createWebsiteHarness();
-    const create = {
-      action: "widget_put",
-      name: "status",
-      title: "Status",
-      pluginKind: "session:website",
-      props: { url: "https://status.example/overview?view=queue#active" },
-      size: "full",
-    };
+    const create = { ...website, action: "widget_put", size: "full" };
     const created = await tool.execute("create", create);
     expect(created.details).toMatchObject({
       sessionKey,
       revision: 1,
-      widgets: [
-        {
-          name: "status",
-          title: "Status",
-          pluginKind: "session:website",
-          contentOwner: "plugin",
-          props: create.props,
-          sizeW: 12,
-          grantState: "none",
-        },
-      ],
+      widgets: [{ ...website, contentOwner: "plugin", sizeW: 12, grantState: "none" }],
     });
 
     await closeOpenClawAgentDatabasesAsync();
@@ -542,25 +514,16 @@ describe("website dashboard authoring", () => {
   });
 
   it.each([
-    { name: "HTTP URL", props: { url: "http://status.example" } },
-    { name: "password-only", props: { url: "https://:example-password@status.example/" } },
-    {
-      name: "oversized URL shortened by normalization",
-      props: { url: `https://status.example/${"a/../".repeat(500)}` },
-    },
-  ])("rejects invalid website props without changing a saved board: $name", async (testCase) => {
-    const { props } = testCase;
+    ["HTTP URL", "http://status.example"],
+    ["password-only", "https://:example-password@status.example/"],
+    ["oversized URL shortened by normalization", `https://status.example/${"a/../".repeat(500)}`],
+  ])("rejects invalid website props without changing a saved board: %s", async (_name, url) => {
     const { tool, store, broadcast } = createWebsiteHarness();
-    const widget = {
-      action: "widget_put",
-      name: "status",
-      pluginKind: "session:website",
-      props: { url: "https://status.example" },
-    };
+    const widget = { ...website, action: "widget_put" };
     await tool.execute("create", widget);
     const before = await store.getSnapshot({ sessionKey });
     broadcast.mockClear();
-    await expect(tool.execute("invalid", { ...widget, props })).rejects.toThrow(/Website/);
+    await expect(tool.execute("invalid", { ...widget, props: { url } })).rejects.toThrow(/Website/);
     expect(await store.getSnapshot({ sessionKey })).toEqual(before);
     expect(broadcast).not.toHaveBeenCalled();
   });

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   errorShape,
   ErrorCodes,
@@ -18,10 +18,15 @@ import { createPluginGatewayMethodDescriptor } from "../methods/descriptor.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  return () => resetPluginRuntimeStateForTest();
+});
+
 async function widgetHarness(
   handlerPair: {
-  readHandler: GatewayRequestHandlers[string];
-  actionHandler: GatewayRequestHandlers[string];
+    readHandler: GatewayRequestHandlers[string];
+    actionHandler: GatewayRequestHandlers[string];
   },
   mode: "ask" | "full" = "full",
 ) {
@@ -31,9 +36,9 @@ async function widgetHarness(
     ["workboard.cards.dispatch", "operator.write", handlerPair.actionHandler],
   ] as const) {
     registry.gatewayHandlers[name] = handler;
-  registry.gatewayMethodDescriptors.push(
+    registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({ pluginId: "workboard", name, handler, scope }),
-  );
+    );
   }
   const plugin = createPluginRecord({
     id: "workboard",
@@ -105,169 +110,160 @@ function widgetRequest(
   };
 }
 
-describe("board plugin capabilities", () => {
-  beforeEach(() => resetPluginRuntimeStateForTest());
-  afterEach(() => resetPluginRuntimeStateForTest());
-
-  it.each([
-    { operation: "read", phase: "start" },
-    { operation: "action", phase: "publish" },
-  ] as const)(
-    "keeps $operation $phase in the authorized read turn",
-    async ({ operation, phase }) => {
-      const order: string[] = [];
-      let started = false;
-      const handler: GatewayRequestHandlers[string] = ({ respond }) => {
-        started = true;
-        order.push("started");
-        respond(true, { ok: true });
-      };
-      const { store, handlers, context, ticket } = await widgetHarness({
-        readHandler: handler,
-        actionHandler: handler,
-      });
-      const viewTicket = await ticket();
-      const removed = createDeferred();
-      let removalScheduled = false;
-      const read = store.useWidgetDocument.bind(store);
-      vi.spyOn(store, "useWidgetDocument").mockImplementation((session, name, consume) =>
-        read(session, name, (document) => {
-          if (!removalScheduled && (phase === "start" || started)) {
-            removalScheduled = true;
-            queueMicrotask(() => {
-              order.push("removal");
-              void store
-                .applyOps(session, [{ kind: "widget_remove", name }])
-                .then(() => removed.resolve(), removed.reject);
-            });
-          }
-          return consume(document);
-        }),
-      );
-      const { method, params } = widgetRequest(operation, viewTicket);
-      const respond = vi.fn<RespondFn>((ok) => {
-        if (ok) {
-          order.push("published");
-        }
-      });
-      await handlers[method]!({
-        req: { type: "req", id: "handoff", method, params },
-        params,
-        respond,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(removalScheduled).toBe(true);
-      await removed.promise;
-      expect(order).toEqual(
-        phase === "start" ? ["started", "removal"] : ["started", "published", "removal"],
-      );
-      expect(respond.mock.calls[0]?.[0]).toBe(phase === "publish");
-    },
-  );
-
-  it.each([
-    { operation: "read", retired: false },
-    { operation: "action", retired: false },
-    { operation: "action", retired: true },
-  ] as const)(
-    "publishes plugin $operation errors only with current authority (retired=$retired)",
-    async ({ operation, retired }) => {
-      const detail = "private plugin result detail";
-      const started = createDeferred();
-      const release = createDeferred();
-      const handler: GatewayRequestHandlers[string] = async ({ respond }) => {
-        started.resolve();
-        await release.promise;
-        if (operation === "action") {
-          throw new Error(detail);
-        }
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
-      };
-      const { invoke, ticket, call } = await widgetHarness({
-        readHandler: handler,
-        actionHandler: handler,
-      });
-      const viewTicket = await ticket();
-      const pending = call(operation, viewTicket);
-      try {
-        await started.promise;
-        if (retired) {
-          await invoke("board.update", {
-            sessionKey: target.sessionKey,
-            ops: [{ kind: "widget_remove", name: target.name }],
-          });
-        }
-        release.resolve();
-        const response = await pending;
-        expect(response.mock.calls[0]?.[0]).toBe(false);
-        if (retired) {
-          expect(JSON.stringify(response.mock.calls)).not.toContain(detail);
-        } else {
-          expect(response.mock.calls[0]).toMatchObject([
-            false,
-            undefined,
-            {
-            code: operation === "action" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            message: expect.stringContaining(detail),
-            },
-          ]);
-        }
-      } finally {
-        release.resolve();
-        await pending;
-      }
-    },
-  );
-
-  it("routes granted bindings and actions only while their plugin registry is active", async () => {
-    const readHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
-      respond(true, { items: [params.filter ?? "all"] });
-    });
-    const actionHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
-      respond(true, { refreshed: params.force });
-    });
-    const { invoke, registry, widget, ticket, call } = await widgetHarness(
-      { readHandler, actionHandler },
-      "ask",
-    );
-    expect(widget.declaredSummary).toEqual([
-      "Tool access: workboard.cards.list",
-      "Tool access: workboard.dispatch",
-    ]);
-    await invoke("board.widget.grant", {
-      ...target,
-      decision: "granted",
-      revision: widget.revision,
-      instanceId: widget.instanceId,
-    });
-    const viewTicket = await ticket();
-    const read = await call("read", viewTicket, { filter: "ready" });
-    expect(read.mock.calls[0]?.[1]).toEqual({ items: ["ready"] });
-    expect(readHandler).toHaveBeenCalledOnce();
-    const action = (actionTicket: string | undefined, force: boolean | string) =>
-      call("action", actionTicket, { force });
-    expect((await action(viewTicket, "yes")).mock.calls[0]?.[0]).toBe(false);
-    expect(actionHandler).not.toHaveBeenCalled();
-    expect((await action(viewTicket, true)).mock.calls[0]?.[1]).toEqual({ refreshed: true });
-    expect(actionHandler).toHaveBeenCalledOnce();
-    setActivePluginRegistry(registry);
-    const stale = await action(viewTicket, true);
-    expect(stale.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
-    expect(actionHandler).toHaveBeenCalledOnce();
-    expect((await action(await ticket(), true)).mock.calls[0]?.[1]).toEqual({ refreshed: true });
-    expect(actionHandler).toHaveBeenCalledTimes(2);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const unavailable = await call("read", viewTicket);
-    expect(unavailable.mock.calls[0]).toMatchObject([
-      false,
-      undefined,
-      { message: expect.stringContaining("dashboard unavailable") },
-    ]);
+it.each([
+  { operation: "read", phase: "start" },
+  { operation: "action", phase: "publish" },
+] as const)("keeps $operation $phase in the authorized read turn", async ({ operation, phase }) => {
+  const order: string[] = [];
+  let started = false;
+  const handler: GatewayRequestHandlers[string] = ({ respond }) => {
+    started = true;
+    order.push("started");
+    respond(true, { ok: true });
+  };
+  const { store, handlers, context, ticket } = await widgetHarness({
+    readHandler: handler,
+    actionHandler: handler,
   });
+  const viewTicket = await ticket();
+  const removed = createDeferred();
+  let removalScheduled = false;
+  const read = store.useWidgetDocument.bind(store);
+  vi.spyOn(store, "useWidgetDocument").mockImplementation((session, name, consume) =>
+    read(session, name, (document) => {
+      if (!removalScheduled && (phase === "start" || started)) {
+        removalScheduled = true;
+        queueMicrotask(() => {
+          order.push("removal");
+          void store
+            .applyOps(session, [{ kind: "widget_remove", name }])
+            .then(() => removed.resolve(), removed.reject);
+        });
+      }
+      return consume(document);
+    }),
+  );
+  const { method, params } = widgetRequest(operation, viewTicket);
+  const respond = vi.fn<RespondFn>((ok) => {
+    if (ok) {
+      order.push("published");
+    }
+  });
+  await handlers[method]!({
+    req: { type: "req", id: "handoff", method, params },
+    params,
+    respond,
+    context,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  expect(removalScheduled).toBe(true);
+  await removed.promise;
+  expect(order).toEqual(
+    phase === "start" ? ["started", "removal"] : ["started", "published", "removal"],
+  );
+  expect(respond.mock.calls[0]?.[0]).toBe(phase === "publish");
 });
 
+it.each([
+  { operation: "read", retired: false },
+  { operation: "action", retired: false },
+  { operation: "action", retired: true },
+] as const)(
+  "publishes plugin $operation errors only with current authority (retired=$retired)",
+  async ({ operation, retired }) => {
+    const detail = "private plugin result detail";
+    const started = createDeferred();
+    const release = createDeferred();
+    const handler: GatewayRequestHandlers[string] = async ({ respond }) => {
+      started.resolve();
+      await release.promise;
+      if (operation === "action") {
+        throw new Error(detail);
+      }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
+    };
+    const { invoke, ticket, call } = await widgetHarness({
+      readHandler: handler,
+      actionHandler: handler,
+    });
+    const viewTicket = await ticket();
+    const pending = call(operation, viewTicket);
+    try {
+      await started.promise;
+      if (retired) {
+        await invoke("board.update", {
+          sessionKey: target.sessionKey,
+          ops: [{ kind: "widget_remove", name: target.name }],
+        });
+      }
+      release.resolve();
+      const response = await pending;
+      expect(response.mock.calls[0]?.[0]).toBe(false);
+      if (retired) {
+        expect(JSON.stringify(response.mock.calls)).not.toContain(detail);
+      } else {
+        expect(response.mock.calls[0]).toMatchObject([
+          false,
+          undefined,
+          {
+            code: operation === "action" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining(detail),
+          },
+        ]);
+      }
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
+
+it("routes granted bindings and actions only while their plugin registry is active", async () => {
+  const readHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
+    respond(true, { items: [params.filter ?? "all"] });
+  });
+  const actionHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
+    respond(true, { refreshed: params.force });
+  });
+  const { invoke, registry, widget, ticket, call } = await widgetHarness(
+    { readHandler, actionHandler },
+    "ask",
+  );
+  expect(widget.declaredSummary).toEqual([
+    "Tool access: workboard.cards.list",
+    "Tool access: workboard.dispatch",
+  ]);
+  await invoke("board.widget.grant", {
+    ...target,
+    decision: "granted",
+    revision: widget.revision,
+    instanceId: widget.instanceId,
+  });
+  const viewTicket = await ticket();
+  const read = await call("read", viewTicket, { filter: "ready" });
+  expect(read.mock.calls[0]?.[1]).toEqual({ items: ["ready"] });
+  expect(readHandler).toHaveBeenCalledOnce();
+  const action = (actionTicket: string | undefined, force: boolean | string) =>
+    call("action", actionTicket, { force });
+  expect((await action(viewTicket, "yes")).mock.calls[0]?.[0]).toBe(false);
+  expect(actionHandler).not.toHaveBeenCalled();
+  expect((await action(viewTicket, true)).mock.calls[0]?.[1]).toEqual({ refreshed: true });
+  expect(actionHandler).toHaveBeenCalledOnce();
+  setActivePluginRegistry(registry);
+  const stale = await action(viewTicket, true);
+  expect(stale.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+  expect(actionHandler).toHaveBeenCalledOnce();
+  expect((await action(await ticket(), true)).mock.calls[0]?.[1]).toEqual({ refreshed: true });
+  expect(actionHandler).toHaveBeenCalledTimes(2);
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  const unavailable = await call("read", viewTicket);
+  expect(unavailable.mock.calls[0]).toMatchObject([
+    false,
+    undefined,
+    { message: expect.stringContaining("dashboard unavailable") },
+  ]);
+});
 function registeredWidgetHarness() {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({
@@ -315,88 +311,85 @@ function registeredWidgetHarness() {
   return { ...harness, validateSource, composeDocument, put };
 }
 
-describe("board registered widget content kinds", () => {
-  afterEach(() => resetPluginRuntimeStateForTest());
-  it("validates, persists, composes, and updates registered source by name", async () => {
-    const { context, invoke, store, put, validateSource, composeDocument } =
-      registeredWidgetHarness();
-    await put("diagram:first");
-    const updated = await put("diagram:second");
-    expect(validateSource).toHaveBeenCalledTimes(2);
-    expect(updated.mock.calls[0]?.[1]).toMatchObject({
-      widgets: [
-        {
-          name: "status",
-          contentKind: "plugin",
-          contentOwner: "registered",
-          registeredContentKind: "diagram",
-          pluginKind: "diagram:diagram",
-          revision: 2,
-        },
-      ],
-    });
-    expect(
-      await readBoardRegistered(store, { sessionKey: "session", agentId: "main" }, "status"),
-    ).toMatchObject({ source: "diagram:second", pluginKind: "diagram:diagram", revision: 2 });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const widget = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
-    expect(widget).toMatchObject({
-      contentOwner: "registered",
-      registeredContentKind: "diagram",
-      kindLabel: "Diagram",
-      frameUrl: expect.stringContaining("/__openclaw__/board/"),
-      sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),
-    });
-    await withAuthorizedBoardWidgetView(
-      store,
-      widget.viewTicket!,
-      (authorized) => {
-        expect(authorized.document.html).toContain("<main>diagram:second</main>");
-        expect(authorized.document.html).toContain(
-          "https://gateway.test/__openclaw__/cap/diagram-token/__openclaw__/diagram/app.js",
-        );
-      },
-      { gatewayContext: context },
-    );
-    expect(composeDocument).toHaveBeenCalledOnce();
-  });
-
-  it("returns an actionable error when the providing plugin is unavailable", async () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const { invoke } = createBoardHarness();
-    const response = await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "status",
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:first" },
-    });
-    expect(response.mock.calls[0]).toMatchObject([
-      false,
-      undefined,
+it("validates, persists, composes, and updates registered source by name", async () => {
+  const { context, invoke, store, put, validateSource, composeDocument } =
+    registeredWidgetHarness();
+  await put("diagram:first");
+  const updated = await put("diagram:second");
+  expect(validateSource).toHaveBeenCalledTimes(2);
+  expect(updated.mock.calls[0]?.[1]).toMatchObject({
+    widgets: [
       {
-        message: expect.stringContaining(
-      'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
-        ),
+        name: "status",
+        contentKind: "plugin",
+        contentOwner: "registered",
+        registeredContentKind: "diagram",
+        pluginKind: "diagram:diagram",
+        revision: 2,
       },
-    ]);
+    ],
   });
+  expect(
+    await readBoardRegistered(store, { sessionKey: "session", agentId: "main" }, "status"),
+  ).toMatchObject({ source: "diagram:second", pluginKind: "diagram:diagram", revision: 2 });
+  const board = await invoke("board.get", { sessionKey: "session" });
+  const widget = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+  expect(widget).toMatchObject({
+    contentOwner: "registered",
+    registeredContentKind: "diagram",
+    kindLabel: "Diagram",
+    frameUrl: expect.stringContaining("/__openclaw__/board/"),
+    sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),
+  });
+  await withAuthorizedBoardWidgetView(
+    store,
+    widget.viewTicket!,
+    (authorized) => {
+      expect(authorized.document.html).toContain("<main>diagram:second</main>");
+      expect(authorized.document.html).toContain(
+        "https://gateway.test/__openclaw__/cap/diagram-token/__openclaw__/diagram/app.js",
+      );
+    },
+    { gatewayContext: context },
+  );
+  expect(composeDocument).toHaveBeenCalledOnce();
+});
 
-  it("composes registered widget prompt actions after an explicit grant", async () => {
-    const { context, invoke, store, put, composeDocument } = registeredWidgetHarness();
-    const response = await put("diagram:prompt", { tools: ["prompt"] });
-    const pending = (response.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
-    expect(pending.grantState).toBe("pending");
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "status",
-      decision: "granted",
-      revision: pending.revision,
-      instanceId: pending.instanceId,
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const widget = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
-    await withAuthorizedBoardWidgetView(store, widget.viewTicket!, () => {}, {
-      gatewayContext: context,
-    });
-    expect(composeDocument).toHaveBeenCalledWith(expect.objectContaining({ promptGranted: true }));
+it("returns an actionable error when the providing plugin is unavailable", async () => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  const { invoke } = createBoardHarness();
+  const response = await invoke("board.widget.put", {
+    sessionKey: "session",
+    name: "status",
+    content: { kind: "registered", contentKind: "diagram", source: "diagram:first" },
   });
+  expect(response.mock.calls[0]).toMatchObject([
+    false,
+    undefined,
+    {
+      message: expect.stringContaining(
+        'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
+      ),
+    },
+  ]);
+});
+
+it("composes registered widget prompt actions after an explicit grant", async () => {
+  const { context, invoke, store, put, composeDocument } = registeredWidgetHarness();
+  const response = await put("diagram:prompt", { tools: ["prompt"] });
+  const pending = (response.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+  expect(pending.grantState).toBe("pending");
+  await invoke("board.widget.grant", {
+    sessionKey: "session",
+    name: "status",
+    decision: "granted",
+    revision: pending.revision,
+    instanceId: pending.instanceId,
+  });
+  const board = await invoke("board.get", { sessionKey: "session" });
+  const widget = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+  await withAuthorizedBoardWidgetView(store, widget.viewTicket!, () => {}, {
+    gatewayContext: context,
+  });
+  expect(composeDocument).toHaveBeenCalledWith(expect.objectContaining({ promptGranted: true }));
 });

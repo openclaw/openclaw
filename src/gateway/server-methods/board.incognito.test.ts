@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import * as approvals from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
@@ -31,41 +30,23 @@ const cfg = {
 };
 const env = { OPENCLAW_STATE_DIR: "/synthetic/board-incognito-rpc" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+const widget = {
+  name: "status",
+  content: { kind: "html", html: "<p>Private status</p>" },
+  declared: { tools: ["health"] },
+};
 
 function privateBoard(sessionKey: string) {
   const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-  const put = (name = "health", html = "<p>health</p>") =>
-    harness.invoke("board.widget.put", {
-      sessionKey,
-      name,
-      content: { kind: "html", html },
-      declared: { tools: ["health"] },
-    });
-  return { ...harness, put };
-}
-
-beforeAll(() => {
-  setRuntimeConfigSnapshot(cfg, cfg);
-});
-
-async function createSession(sessionKey: string, entry: SessionEntry) {
-  const binding = await acquireSessionActorStorage(
-    { sessionKey, agentId: "main", storePath, env },
-    { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
-  );
-  assert(binding);
-  try {
-    const result = await binding.actor.storage.mutate(
-      { type: "session.entry.create", input: { entry } },
-      authority,
-    );
-    expect(result.kind).toBe("committed");
-  } finally {
-    await binding.actor.release();
-  }
+  const rpc = async (method: string, params: Record<string, unknown> = {}) => {
+    const target = method === "sessions.delete" ? { key: sessionKey } : { sessionKey };
+    return (await harness.invoke(method, { ...target, ...params })).mock.calls[0]!;
+  };
+  return { ...harness, rpc };
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot(cfg, cfg);
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   resetPluginRuntimeStateForTest();
   review.mockReset();
@@ -101,7 +82,20 @@ it.each([
       incognito: true as const,
       permissionMode: outcome === "guarded" ? ("guarded" as const) : ("workspace" as const),
     };
-    await createSession(sessionKey, entry);
+    const binding = await acquireSessionActorStorage(
+      { sessionKey, agentId: "main", storePath, env },
+      { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+    );
+    assert(binding);
+    try {
+      const result = await binding.actor.storage.mutate(
+        { type: "session.entry.create", input: { entry } },
+        authority,
+      );
+      expect(result.kind).toBe("committed");
+    } finally {
+      await binding.actor.release();
+    }
     const harness = privateBoard(sessionKey);
     const started = createDeferred();
     const release = createDeferred();
@@ -121,7 +115,7 @@ it.each([
       });
     }
     const sql = observeMainThreadSql();
-    const putting = harness.put("status", "<p>Private status</p>");
+    const putting = harness.rpc("board.widget.put", widget);
     try {
       if (outcome !== "guarded") {
         await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
@@ -149,10 +143,10 @@ it.each([
         outcome === "approval-failure" || outcome === "guarded" ? 0 : 1,
       );
       if (["permission", "replacement", "approval-failure", "closed"].includes(outcome)) {
-        expect(response.mock.calls[0]?.[0]).toBe(false);
+        expect(response[0]).toBe(false);
         expect(harness.broadcast).not.toHaveBeenCalled();
       } else {
-        expect(response.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState }] }]);
+        expect(response).toMatchObject([true, { widgets: [{ grantState }] }]);
       }
       if (outcome === "closed") {
         expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
@@ -178,44 +172,25 @@ it("returns explicit absence without opening Board, progress, or deletion source
   const harness = privateBoard(sessionKey);
   Object.assign(harness.handlers, createProgressCardHandlers(), sessionDeleteHandlers);
   const sql = observeMainThreadSql();
-  try {
-    const read = await harness.invoke("board.get", { sessionKey });
-    expect(read).toHaveBeenCalledWith(true, expect.objectContaining({ revision: 0, widgets: [] }));
-    expect(await boardStore.readWidgetMcpApp({ sessionKey }, "missing")).toBeUndefined();
-    await expect(
-      boardStore.putWidget({
-        sessionKey,
-        name: "status",
-        content: { kind: "html", html: "<p>Absent</p>" },
-      }),
-    ).rejects.toMatchObject({ code: "not_found" });
-    expect(await progressCardStore.get(sessionKey)).toBeNull();
-    await expect(progressCardStore.put(sessionKey, { markdown: "Absent" })).rejects.toBeInstanceOf(
-      IncognitoSessionMissingError,
-    );
-    const refresh = await harness.invoke("progressCard.refresh", {
-      sessionKey,
-      idempotencyKey: "missing-card",
-    });
-    expect(refresh.mock.calls[0]).toMatchObject([
-      false,
-      undefined,
-      { message: "There is no progress card to refresh." },
-    ]);
-    const deleted = await harness.invoke("sessions.delete", { key: sessionKey });
-    expect(deleted).toHaveBeenCalledWith(
-      true,
-      { ok: true, key: sessionKey, deleted: false, archived: [] },
-      undefined,
-    );
-    const changed = await harness.invoke("sessions.delete", {
-      key: sessionKey,
-      expectedSessionId: "old",
-    });
-    expect(changed.mock.calls[0]?.[0]).toBe(false);
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+  onTestFinished(() => sql.restore());
+  expect(await harness.rpc("board.get")).toMatchObject([true, { revision: 0, widgets: [] }]);
+  expect(await boardStore.readWidgetMcpApp({ sessionKey }, "missing")).toBeUndefined();
+  await expect(boardStore.putWidget({ ...widget, sessionKey })).rejects.toMatchObject({
+    code: "not_found",
+  });
+  expect(await progressCardStore.get(sessionKey)).toBeNull();
+  await expect(progressCardStore.put(sessionKey, { markdown: "Absent" })).rejects.toBeInstanceOf(
+    IncognitoSessionMissingError,
+  );
+  expect(
+    await harness.rpc("progressCard.refresh", { idempotencyKey: "missing-card" }),
+  ).toMatchObject([false, undefined, { message: "There is no progress card to refresh." }]);
+  expect(await harness.rpc("sessions.delete")).toEqual([
+    true,
+    { ok: true, key: sessionKey, deleted: false, archived: [] },
+    undefined,
+  ]);
+  expect((await harness.rpc("sessions.delete", { expectedSessionId: "old" }))[0]).toBe(false);
+  sql.expectIdle();
   expect(memorySessionActorOwners.list().some((owner) => owner.agentId === "absent")).toBe(false);
 });

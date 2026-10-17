@@ -43,12 +43,12 @@ afterEach(() => {
 
 it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
   "retains only current source tool authority after queueing (%s)",
-  async (outcome, { signal: testSignal }) => {
-    const revoke = outcome === "revoke";
-    const cancel = outcome === "cancel";
-    const retire = outcome === "retire";
-    const sharing = outcome === "sharing";
-    await withOpenClawTestState(profileState, async ({ workspaceDir }) => {
+  (outcome, { signal: testSignal }) =>
+    withOpenClawTestState(profileState, async ({ workspaceDir }) => {
+      const revoke = outcome === "revoke";
+      const cancel = outcome === "cancel";
+      const retire = outcome === "retire";
+      const sharing = outcome === "sharing";
       const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
       const cfg: OpenClawConfig = {
         ...rolePolicyConfig(),
@@ -147,20 +147,13 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         {
           resolveActiveView: resolveMcpAppActiveView,
           resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
-          mintFromTranscript: async ({
-            descriptor: sourceDescriptor,
-            allowedAppToolNames,
-            authorizeAppInteraction,
-            readOnly,
-          }) => {
+          mintFromTranscript: async ({ descriptor: sourceDescriptor, readOnly, ...options }) => {
             const fetched = await fetchMcpAppView({
+              ...options,
               runtime,
-              agentId: target.agentId,
               ...sourceDescriptor,
               toolInput: {},
               toolResult: { content: [] },
-              allowedAppToolNames,
-              authorizeAppInteraction,
               ...(readOnly ? { readOnly: true } : {}),
             });
             const view = fetched && getMcpAppViewLease(fetched.viewId, runtime);
@@ -230,7 +223,6 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         return pending;
       });
       let reservation: Promise<void> | undefined;
-      let revocation: ReturnType<typeof invoke> | undefined;
       let pin: ReturnType<typeof invoke> | undefined;
       let destinationBefore: ReturnType<typeof boardStore.readWidgetMcpApp> | undefined;
       try {
@@ -246,10 +238,10 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         expect(put).toHaveBeenCalledOnce();
         if (revoke) {
           // Revoke after source preflight, before the pin reaches its write.
-          revocation = invoke("board.update", {
+          const revocation = await invoke("board.update", {
             ops: [{ kind: "widget_remove", name: "source" }],
           });
-          expect((await revocation).mock.calls[0]?.[0]).toBe(true);
+          expect(revocation.mock.calls[0]?.[0]).toBe(true);
         }
         // Source preflight reads share the writer queue; finish them before holding it.
         reservation = runOpenClawAgentWorkerWrite(database, async () => {
@@ -284,8 +276,7 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         } finally {
           releasePolicy.resolve();
         }
-        await Promise.allSettled([revocation, pin, destinationBefore]);
-        await revocation;
+        await Promise.allSettled([pin, destinationBefore]);
         await pin;
       }
       await expect(destinationBefore).resolves.toBeUndefined();
@@ -304,7 +295,6 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
       }
       expect((await pin)!.mock.calls[0]?.[0]).toBe(true);
       if (revoke) {
-        expect((await revocation)!.mock.calls[0]?.[0]).toBe(true);
         expect(await boardStore.readWidgetMcpApp(target, "source")).toBeUndefined();
         await expect(requireMcpAppInteraction(sourceView.view)).rejects.toThrow(
           "grant is no longer active",
@@ -332,6 +322,5 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         effect: revoke ? "refused" : "called",
         calls: revoke ? [] : [["server", "refresh", {}]],
       });
-    });
-  },
+    }),
 );

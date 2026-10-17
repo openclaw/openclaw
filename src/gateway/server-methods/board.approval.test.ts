@@ -90,11 +90,7 @@ it("refuses a cached assessment when grant authority is revoked during write adm
   const harness = createHarness(undefined, undefined, undefined, { getRuntimeConfig: () => cfg });
   harness.context.resolveGatewayContext = () => (active ? harness.context : undefined);
   reviewWidgetApproval.mockResolvedValue(approved);
-  const widget = {
-    name: "health",
-    content: { kind: "html", html: "<p>health</p>" },
-    declared: { tools: ["health"] },
-  };
+  const widget = weatherWidget;
   await harness.invoke("board.widget.put", { ...widget, sessionKey });
   const grant = harness.store.grant.bind(harness.store);
   const intercepted = vi.spyOn(harness.store, "grant").mockImplementationOnce((...args) => {
@@ -175,8 +171,7 @@ it.each(
   }
 
   const response = await invoke("board.get", { sessionKey });
-  const snapshot = response.mock.calls[0]?.[1] as BoardSnapshot | undefined;
-  const widget = snapshot?.widgets[0];
+  const [widget] = (response.mock.calls[0]![1] as BoardSnapshot).widgets;
   expect(Boolean(widget?.frameUrl)).toBe(!emptyTools && grantState === "granted");
   if (emptyTools) {
     await invoke("board.widget.appView", {
@@ -189,10 +184,7 @@ it.each(
       expect.objectContaining({ readOnly: grantState !== "granted" }),
     );
   }
-  expect(broadcast).toHaveBeenCalledOnce();
-  expect(broadcast).toHaveBeenCalledWith(
-    "board.changed",
-    { sessionKey, revision: grantState === "pending" ? 1 : 2, widget: "weather" },
-    boardBroadcastScope,
-  );
+  expect(broadcast.mock.calls).toEqual([
+    ["board.changed", { sessionKey, revision: 2, widget: "weather" }, boardBroadcastScope],
+  ]);
 });
