@@ -1,4 +1,3 @@
-// Slack tests cover exec approvals plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
@@ -28,37 +27,35 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
+const availability = slackApprovalCapability.nativeRuntimeAsync!.availability;
+type HandleParams = Parameters<typeof availability.shouldHandle>[0];
+function shouldHandle(
+  cfg: OpenClawConfig,
+  request: HandleParams["request"]["request"],
+  accountId?: string,
+) {
+  return availability.shouldHandle({
+    approvalKind: "exec",
+    cfg,
+    accountId,
+    request: { id: "req-1", request, createdAtMs: 0, expiresAtMs: 1000 },
+  });
+}
+
+function clientEnabled(cfg: OpenClawConfig) {
+  return isSlackExecApprovalClientEnabled({ cfg });
+}
+
 describe("slack exec approvals", () => {
   it("requires explicit enablement even when owner approvers resolve", () => {
-    expect(isSlackExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
+    expect(clientEnabled(buildConfig())).toBe(false);
+    expect(clientEnabled(buildConfig({ enabled: true }))).toBe(false);
+    expect(clientEnabled(buildConfig({ approvers: ["U123"] }))).toBe(false);
     expect(
-      isSlackExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }),
-      }),
+      clientEnabled({ ...buildConfig(), commands: { ownerAllowFrom: ["slack:U123OWNER"] } }),
     ).toBe(false);
-    expect(
-      isSlackExecApprovalClientEnabled({
-        cfg: buildConfig({ approvers: ["U123"] }),
-      }),
-    ).toBe(false);
-    expect(
-      isSlackExecApprovalClientEnabled({
-        cfg: {
-          ...buildConfig(),
-          commands: { ownerAllowFrom: ["slack:U123OWNER"] },
-        } as OpenClawConfig,
-      }),
-    ).toBe(false);
-    expect(
-      isSlackExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: "auto", approvers: ["U123"] }),
-      }),
-    ).toBe(true);
-    expect(
-      isSlackExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: false, approvers: ["U123"] }),
-      }),
-    ).toBe(false);
+    expect(clientEnabled(buildConfig({ enabled: "auto", approvers: ["U123"] }))).toBe(true);
+    expect(clientEnabled(buildConfig({ enabled: false, approvers: ["U123"] }))).toBe(false);
   });
 
   it.each(["execApprovals", "execApprovals.enabled"] as const)(
@@ -147,12 +144,7 @@ describe("slack exec approvals", () => {
 
   it("matches slack target recipients from generic approval forwarding targets", () => {
     const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-        },
-      },
+      ...buildConfig(),
       approvals: {
         exec: {
           enabled: true,
@@ -172,12 +164,7 @@ describe("slack exec approvals", () => {
 
   it("keeps the local Slack approval prompt path active", () => {
     const payload = {
-      channelData: {
-        execApproval: {
-          approvalId: "req-1",
-          approvalSlug: "req-1",
-        },
-      },
+      channelData: { execApproval: { approvalId: "req-1", approvalSlug: "req-1" } },
     };
 
     expect(
@@ -219,55 +206,21 @@ describe("slack exec approvals", () => {
       sessionFilter: ["slack:direct:", "tail$"],
     });
 
+    const request = {
+      command: "echo hi",
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:slack:direct:U123:tail",
+    };
+    expect(await shouldHandle(cfg, request)).toBe(true);
     expect(
-      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
-        approvalKind: "exec",
-        cfg,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            agentId: "ops-agent",
-            sessionKey: "agent:ops-agent:slack:direct:U123:tail",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(true);
-
-    expect(
-      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
-        approvalKind: "exec",
-        cfg,
-        request: {
-          id: "req-2",
-          request: {
-            command: "echo hi",
-            agentId: "other-agent",
-            sessionKey: "agent:other-agent:slack:direct:U123:tail",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
+      await shouldHandle(cfg, {
+        ...request,
+        agentId: "other-agent",
+        sessionKey: "agent:other-agent:slack:direct:U123:tail",
       }),
     ).toBe(false);
-
     expect(
-      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
-        approvalKind: "exec",
-        cfg,
-        request: {
-          id: "req-3",
-          request: {
-            command: "echo hi",
-            agentId: "ops-agent",
-            sessionKey: "agent:ops-agent:discord:channel:123",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
+      await shouldHandle(cfg, { ...request, sessionKey: "agent:ops-agent:discord:channel:123" }),
     ).toBe(false);
   });
 
@@ -277,60 +230,20 @@ describe("slack exec approvals", () => {
       approvers: ["U123"],
     });
 
-    expect(
-      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
-        approvalKind: "exec",
-        cfg,
-        accountId: "work",
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "discord",
-            turnSourceAccountId: "work",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(false);
-
-    expect(
-      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
-        approvalKind: "exec",
-        cfg,
-        accountId: "work",
-        request: {
-          id: "req-2",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "slack",
-            turnSourceAccountId: "other",
-            sessionKey: "agent:ops-agent:missing",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(false);
-
-    expect(
-      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
-        approvalKind: "exec",
-        cfg,
-        accountId: "work",
-        request: {
-          id: "req-3",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "slack",
-            turnSourceAccountId: "work",
-            sessionKey: "agent:ops-agent:missing",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBe(true);
+    const request = {
+      command: "echo hi",
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "work",
+    };
+    expect(await shouldHandle(cfg, request, "work")).toBe(false);
+    const slackRequest = {
+      ...request,
+      turnSourceChannel: "slack",
+      sessionKey: "agent:ops-agent:missing",
+    };
+    expect(await shouldHandle(cfg, { ...slackRequest, turnSourceAccountId: "other" }, "work")).toBe(
+      false,
+    );
+    expect(await shouldHandle(cfg, slackRequest, "work")).toBe(true);
   });
 });

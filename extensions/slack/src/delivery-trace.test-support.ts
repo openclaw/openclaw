@@ -55,32 +55,24 @@ export function createSlackTsNormalizer(): TraceNormalizer {
 }
 
 export function collectSlackWireTexts(events: readonly TraceEvent[]): string[] {
-  const texts: string[] = [];
-  const pushText = (value: unknown) => {
-    if (typeof value === "string" && value.length > 0) {
-      texts.push(value);
-    }
-  };
-  for (const event of events) {
+  return events.flatMap((event) => {
     if (event.dir !== "out" || !event.data || typeof event.data !== "object") {
-      continue;
+      return [];
     }
     const payload = (event.data as { payload?: unknown }).payload;
     if (!payload || typeof payload !== "object") {
-      continue;
+      return [];
     }
     const record = payload as Record<string, unknown>;
-    pushText(record.text);
-    pushText(record.markdown_text);
-    if (Array.isArray(record.chunks)) {
-      for (const chunk of record.chunks) {
-        if (chunk && typeof chunk === "object") {
-          pushText((chunk as { text?: unknown }).text);
-        }
-      }
-    }
-  }
-  return texts;
+    const chunks = Array.isArray(record.chunks) ? record.chunks : [];
+    return [
+      record.text,
+      record.markdown_text,
+      ...chunks.map((chunk: unknown) =>
+        chunk && typeof chunk === "object" ? (chunk as { text?: unknown }).text : undefined,
+      ),
+    ].filter((text): text is string => typeof text === "string" && text.length > 0);
+  });
 }
 
 export function buildSlackDeliveryProofVerdict(params: {
