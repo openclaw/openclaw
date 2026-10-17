@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { decorativePrefix } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -168,7 +169,7 @@ async function runOneShotHooksCliAction(
   const result = await action().catch((err: unknown) => {
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
-    const humanOutput = `${theme.error("Error:")} ${message}`;
+    const humanOutput = `${theme.error("Error:")} ${sanitizeTerminalText(message)}`;
     if (failureOwner === "root") {
       throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
     }

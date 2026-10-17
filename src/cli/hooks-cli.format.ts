@@ -2,13 +2,18 @@ import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
-import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
+import {
+  formatCliRequirements,
+  formatCliStatusTable,
+  sanitizeCliDescriptorText,
+} from "./skills-hooks-cli.format.js";
 
 export type HooksReportOptions = {
   agent?: string;
@@ -29,7 +34,7 @@ function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
   }
   const reason =
     hook.blockedReason && hook.blockedReason !== "missing requirements"
-      ? hook.blockedReason
+      ? sanitizeTerminalText(hook.blockedReason)
       : detailed
         ? "missing requirements"
         : "missing";
@@ -49,8 +54,8 @@ const HOOK_REQUIREMENT_GROUPS = [
 function formatHookMissingRequirements(hook: HookStatusEntry, itemLimit?: number): string[] {
   const formatEntries = (entries: string[]) =>
     itemLimit === undefined
-      ? entries.join(", ")
-      : summarizeStringEntries({ entries, limit: itemLimit });
+      ? entries.map(sanitizeTerminalText).join(", ")
+      : summarizeStringEntries({ entries: entries.map(sanitizeTerminalText), limit: itemLimit });
   return HOOK_REQUIREMENT_GROUPS.filter(([key]) => hook.missing[key].length > 0).map(
     ([key]) => `${key}: ${formatEntries(hook.missing[key])}`,
   );
@@ -59,7 +64,7 @@ function formatHookMissingRequirements(hook: HookStatusEntry, itemLimit?: number
 export function formatHookMissingSummary(hook: HookStatusEntry, itemLimit?: number): string {
   const missing = formatHookMissingRequirements(hook, itemLimit);
   if (hook.enabledByConfig && hook.blockedReason && hook.blockedReason !== "missing requirements") {
-    missing.unshift(hook.blockedReason);
+    missing.unshift(sanitizeTerminalText(hook.blockedReason));
   }
   return missing.join("; ");
 }
@@ -106,13 +111,15 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
     sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
     verbose: opts.verbose,
     rows: hooks.map((hook) => {
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      const name = theme.command(hook.name);
+      const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
+      const name = theme.command(sanitizeTerminalText(hook.name));
       return {
         Status: formatHookStatus(hook),
         Hook: emoji ? `${emoji} ${name}` : name,
-        Description: theme.muted(hook.description),
-        Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+        Description: theme.muted(sanitizeCliDescriptorText(hook.description)),
+        Source: sanitizeTerminalText(
+          hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+        ),
         Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
       };
     }),
@@ -129,7 +136,7 @@ export function formatHookInfo(
       const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
       return JSON.stringify({ ...failure, hook: hookName }, null, 2);
     }
-    return `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
+    return `Hook "${sanitizeTerminalText(hookName)}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
   }
 
   if (opts.json) {
@@ -144,27 +151,27 @@ export function formatHookInfo(
     );
   }
 
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
   const lines = [
-    `${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${formatHookStatus(hook, true)}`,
+    `${emoji ? `${emoji} ` : ""}${theme.heading(sanitizeTerminalText(hook.name))} ${formatHookStatus(hook, true)}`,
     "",
-    hook.description,
+    sanitizeCliDescriptorText(hook.description),
     "",
     theme.heading("Details:"),
-    `${theme.muted("  Source:")} ${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`,
-    `${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`,
-    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+    `${theme.muted("  Source:")} ${sanitizeTerminalText(hook.source)}${hook.managedByPlugin ? ` (${sanitizeTerminalText(hook.pluginId ?? "unknown")})` : ""}`,
+    `${theme.muted("  Path:")} ${sanitizeTerminalText(shortenHomePath(hook.filePath))}`,
+    `${theme.muted("  Handler:")} ${sanitizeTerminalText(shortenHomePath(hook.handlerPath))}`,
   ];
   if (hook.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
+    lines.push(`${theme.muted("  Homepage:")} ${sanitizeTerminalText(hook.homepage)}`);
   }
   if (hook.events.length > 0) {
-    lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
+    lines.push(`${theme.muted("  Events:")} ${hook.events.map(sanitizeTerminalText).join(", ")}`);
   }
   if (hook.unknownEvents.length > 0) {
     lines.push(
       theme.warn(
-        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
+        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.map(sanitizeTerminalText).join(", ")}`,
       ),
     );
   }
@@ -172,7 +179,7 @@ export function formatHookInfo(
     lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
   }
   if (hook.blockedReason) {
-    lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
+    lines.push(`${theme.muted("  Blocked reason:")} ${sanitizeTerminalText(hook.blockedReason)}`);
   }
 
   lines.push(...formatCliRequirements(hook, HOOK_REQUIREMENT_GROUPS, hook.configChecks));
@@ -217,10 +224,12 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksReportOpti
     for (const hook of notEligible) {
       const reasons = formatHookMissingRequirements(hook);
       if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
-        reasons.unshift(hook.blockedReason);
+        reasons.unshift(sanitizeTerminalText(hook.blockedReason));
       }
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
+      const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
+      lines.push(
+        `  ${emoji ? `${emoji} ` : ""}${sanitizeTerminalText(hook.name)} - ${reasons.join("; ")}`,
+      );
     }
   }
 
