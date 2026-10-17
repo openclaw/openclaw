@@ -304,10 +304,7 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
   };
 }
 
-function createSettingsLaneHost(
-  patch: SessionPatchRoute,
-  refresh: () => Promise<void> = async () => {},
-) {
+function createSettingsLaneHost(patch: SessionPatchRoute) {
   const host = makeChatHost({
     requestHandlers: {},
     sessionKey: "main",
@@ -329,7 +326,6 @@ function createSettingsLaneHost(
     ]),
   });
   vi.spyOn(host.sessions, "patch").mockImplementation(patch);
-  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
   onTestFinished(() => host.sessions.dispose());
   return host;
 }
@@ -4439,11 +4435,9 @@ describe("chat model controls", () => {
           await options.waitFor;
         }
         patches.push(patch);
-        return patchResult;
-      },
-      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
+        return patchResult;
       },
     );
 
