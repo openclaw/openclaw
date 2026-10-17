@@ -25,6 +25,7 @@ afterEach(async () => {
   }
 });
 
+// mock-isolation: Forward-compat fixtures supply model hooks and isolated auth; real provider discovery changes fallback inputs.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],

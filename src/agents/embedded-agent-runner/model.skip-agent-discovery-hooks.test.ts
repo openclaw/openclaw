@@ -61,6 +61,7 @@ vi.mock("../agent-model-discovery.js", () => ({
     mocks.discoverModels(...args),
 }));
 
+// mock-isolation: The skip-discovery fixture must exercise only selected dynamic hooks without discovering host auth providers.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],

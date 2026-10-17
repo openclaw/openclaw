@@ -38,6 +38,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
+// mock-isolation: Synthetic auth and SecretRef fixtures supply provider hooks; external discovery would alter credential precedence.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],

@@ -329,6 +329,7 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: mocks.completeWithPreparedSimpleCompletionModel,
 }));
 
+// mock-isolation: Capability routing uses fixture profiles, never operator credential discovery.
 vi.mock("../agents/auth-profiles.js", () => ({
   loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForRuntimeAsync: async (

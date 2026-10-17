@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   refreshRunningGatewayAuthState: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Order tests record fixture writes instead of mutating persistent credentials.
 vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStoreAsync: async (...args: unknown[]) => mocks.ensureAuthProfileStore(...args),
   setAuthProfileOrder: mocks.setAuthProfileOrder,

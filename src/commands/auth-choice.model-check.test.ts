@@ -14,6 +14,7 @@ import {
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
+// mock-isolation: Model readiness compares fixture credentials without discovering host accounts.
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStoreAsync: async () => ensureAuthProfileStore(),
 }));

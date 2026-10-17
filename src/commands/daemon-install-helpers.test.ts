@@ -45,10 +45,12 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   ),
 }));
 
+// mock-isolation: Service-env planning controls whether synthetic credential sources exist.
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: async () => mocks.hasAnyAuthProfileStoreSource(),
 }));
 
+// mock-isolation: Service-env planning must not read operator secrets from the host auth store.
 vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntimeAsync: async () =>
     mocks.loadAuthProfileStoreForSecretsRuntime(),

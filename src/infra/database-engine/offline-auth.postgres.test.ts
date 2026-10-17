@@ -35,6 +35,7 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   password,
 }));
+// mock-isolation: This offline proof must not send credential-refresh RPCs to a running Gateway.
 vi.mock("../../commands/models/auth-refresh.js", () => ({
   refreshRunningGatewayAuthState: async () => "unavailable",
 }));

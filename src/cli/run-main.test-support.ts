@@ -402,6 +402,7 @@ vi.mock("../config/io.factory.js", () => ({
   }),
 }));
 
+// mock-isolation: Bare-root routing uses fixture receipts rather than operator onboarding state.
 vi.mock("../state/local-onboarding-state.js", () => ({
   readLocalOnboardingStateForConfigAsync: readLocalOnboardingStateMock,
 }));

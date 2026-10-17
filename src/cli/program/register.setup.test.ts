@@ -33,6 +33,7 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshotMock,
 }));
 
+// mock-isolation: Setup routing reads synthetic receipts without opening shared state.
 vi.mock("../../state/local-onboarding-state.js", () => ({
   readLocalOnboardingStateForConfigAsync: mocks.readLocalOnboardingStateMock,
 }));

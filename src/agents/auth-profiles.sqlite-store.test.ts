@@ -64,6 +64,7 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
 }));
 
+// mock-isolation: Persistence and migration fixtures own profile rows; external discovery must not import ambient credentials.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],

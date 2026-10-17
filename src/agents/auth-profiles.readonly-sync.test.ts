@@ -22,6 +22,7 @@ const { resolveExternalAuthProfilesWithPluginsMock } = vi.hoisted(() => ({
     },
   ]),
 }));
+// mock-isolation: Synthetic OAuth overlays prove scope forwarding and non-persistence without reading host credentials.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,

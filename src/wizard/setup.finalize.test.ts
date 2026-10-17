@@ -262,6 +262,7 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 // mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph.
 vi.mock("../tui/tui.js", () => ({ runTui }));
 
+// mock-isolation: Finalization controls readiness outcomes without probing live provider accounts.
 vi.mock("../commands/auth-choice.model-check.js", () => ({
   resolveDefaultModelCatalogFacts,
   resolveDefaultModelAuthStatus: async (
