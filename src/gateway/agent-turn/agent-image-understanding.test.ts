@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { MediaExecutionContext } from "../../media-understanding/provider-execution.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 // Include the shared runtime in the compiled fixture instead of compiling its lazy import mid-test.
@@ -157,5 +158,40 @@ describe("agent image understanding", () => {
       }),
     ).rejects.toThrow("Image attachments could not be analyzed.");
     expect(describeImage).not.toHaveBeenCalled();
+  });
+
+  it("carries cancellation and live authority into asynchronous image adapters", async () => {
+    const controller = new AbortController();
+    const sendPixels = vi.fn(async () => new Response("A red square."));
+    let current = true;
+    let adapterSignal: AbortSignal | undefined;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Request authority expired");
+      }
+    };
+    describeImage.mockImplementationOnce(async (request) => {
+      adapterSignal = request.signal;
+      await Promise.resolve();
+      current = false;
+      const result = await fetchWithSsrFGuard({
+        url: "https://vision.example/describe",
+        fetchImpl: sendPixels,
+        lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+        init: { method: "POST", body: request.buffer, signal: request.signal },
+      });
+      try {
+        return { text: await result.response.text() };
+      } finally {
+        await result.release();
+      }
+    });
+
+    await expect(
+      prepare(configuredVision, { signal: controller.signal, assertCurrent }),
+    ).rejects.toThrow("Image attachments could not be analyzed.");
+    expect(adapterSignal).toBe(controller.signal);
+    expect(sendPixels).not.toHaveBeenCalled();
+    expect(controller.signal.aborted).toBe(false);
   });
 });
