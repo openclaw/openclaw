@@ -1,17 +1,11 @@
-// Tests agent runner utility decisions for fallbacks, channels, and reasoning tags.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
-const hoisted = vi.hoisted(() => {
-  const resolveModelFallbackAvailabilityMock = vi.fn();
-  const getChannelPluginMock = vi.fn();
-  const isReasoningTagProviderMock = vi.fn();
-  return {
-    resolveModelFallbackAvailabilityMock,
-    getChannelPluginMock,
-    isReasoningTagProviderMock,
-  };
-});
+const hoisted = vi.hoisted(() => ({
+  resolveModelFallbackAvailabilityMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
+  isReasoningTagProviderMock: vi.fn(),
+}));
 
 vi.mock("../../agents/agent-scope.js", async () => ({
   modelFallbackOverrideFromAvailability: (
@@ -56,9 +50,6 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     sessionKey: "agent:test:session",
     sessionFile: "/tmp/session.json",
     workspaceDir: "/tmp/workspace",
-    skillsSnapshot: [],
-    ownerNumbers: ["+15550001"],
-    enforceFinalTag: false,
     thinkingCatalog: [
       { provider: "openai", id: "gpt-4.1-mini", input: ["text"] },
       { provider: "minimax", id: "MiniMax-M2.7", input: ["text"] },
@@ -67,11 +58,25 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
-    execOverrides: {},
-    bashElevated: false,
     timeoutMs: 60_000,
     ...overrides,
   } as unknown as FollowupRun["run"];
+}
+
+function buildContext(
+  run: FollowupRun["run"],
+  sessionCtx: Parameters<typeof buildEmbeddedRunExecutionParams>[0]["sessionCtx"],
+  provider = "openai",
+  model = "gpt-4.1-mini",
+) {
+  return buildEmbeddedRunExecutionParams({
+    run,
+    sessionCtx,
+    hasRepliedRef: undefined,
+    provider,
+    model,
+    runId: "run-1",
+  });
 }
 
 describe("agent-runner-utils", () => {
@@ -186,16 +191,9 @@ describe("agent-runner-utils", () => {
   it("uses the queued conversation policy snapshot", async () => {
     const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
 
-    const resolved = await buildEmbeddedRunExecutionParams({
-      run,
-      sessionCtx: {
-        Provider: "telegram",
-        ConversationToolPolicy: { deny: ["write"] },
-      },
-      hasRepliedRef: undefined,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
+    const resolved = await buildContext(run, {
+      Provider: "telegram",
+      ConversationToolPolicy: { deny: ["write"] },
     });
 
     expect(resolved.conversationToolPolicy).toEqual({ deny: ["exec"] });
@@ -208,9 +206,9 @@ describe("agent-runner-utils", () => {
       chatType: "direct",
     });
 
-    const resolved = await buildEmbeddedRunExecutionParams({
+    const resolved = await buildContext(
       run,
-      sessionCtx: {
+      {
         Provider: "OpenAI",
         To: "channel-1",
         ChatType: "Channel",
@@ -222,37 +220,29 @@ describe("agent-runner-utils", () => {
         },
         MemberRoleIds: ["admin", " ", "operator"],
       },
-      hasRepliedRef: undefined,
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      runId: "run-1",
-    });
+      "anthropic",
+      "claude-sonnet-4-6",
+    );
 
-    expect(resolved.authProfileId).toBeUndefined();
-    expect(resolved.authProfileIdSource).toBeUndefined();
-    expect(resolved.sessionId).toBe(run.sessionId);
-    expect(resolved.sessionKey).toBe(run.sessionKey);
-    expect(resolved.agentId).toBe(run.agentId);
-    expect(resolved.messageProvider).toBe("openai");
-    expect(resolved.chatType).toBe("channel");
-    expect(resolved.chatType).not.toBe(run.chatType);
-    expect(resolved.messageTo).toBe("channel-1");
-    expect(resolved.chatId).toBe("native-chat-1");
-    expect(resolved.memberRoleIds).toEqual(["admin", "operator"]);
-    expect(resolved.currentInboundAudio).toBe(false);
-    expect({
-      senderId: resolved.senderId,
-      channelContext: resolved.channelContext,
-      senderName: resolved.senderName,
-      senderUsername: resolved.senderUsername,
-      senderE164: resolved.senderE164,
-    }).toEqual({
+    expect(resolved).toMatchObject({
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+      sessionId: run.sessionId,
+      sessionKey: run.sessionKey,
+      agentId: run.agentId,
+      messageProvider: "openai",
+      chatType: "channel",
+      messageTo: "channel-1",
+      chatId: "native-chat-1",
+      memberRoleIds: ["admin", "operator"],
+      currentInboundAudio: false,
       senderId: "sender-1",
       channelContext: run.channelContext,
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
     });
+    expect(resolved.chatType).not.toBe(run.chatType);
   });
 
   it("hydrates the queued route before resolving channel threading policy", async () => {
@@ -383,9 +373,11 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context.currentChannelId).toBe("channel:123456789012345678");
-    expect(context.currentMessageId).toBe("msg-9");
-    expect(context.currentSourceTurnId).toBe("channel-user:v1:source-9");
+    expect(context).toMatchObject({
+      currentChannelId: "channel:123456789012345678",
+      currentMessageId: "msg-9",
+      currentSourceTurnId: "channel-user:v1:source-9",
+    });
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {
@@ -420,8 +412,10 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context.currentChannelId).toBe("telegram:-1003841603622:topic:928");
-    expect(context.currentThreadTs).toBe("928");
-    expect(context.currentMessageId).toBeUndefined();
+    expect(context).toMatchObject({
+      currentChannelId: "telegram:-1003841603622:topic:928",
+      currentThreadTs: "928",
+      currentMessageId: undefined,
+    });
   });
 });
