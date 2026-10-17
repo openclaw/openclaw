@@ -275,6 +275,11 @@ export const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
+/** A reasoning close tag followed only by whitespace at the end of the text. */
+export const THINKING_TAG_TRAILING_CLOSE_RE = new RegExp(
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>\s*$`,
+  "i",
+);
 const THINKING_TAG_EXACT_RE = new RegExp(
   String.raw`^<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>$`,
   "i",
