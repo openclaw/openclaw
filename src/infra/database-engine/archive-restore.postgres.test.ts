@@ -39,9 +39,23 @@ const configured = getEnvironmentData("openclaw.test.state.conformance.connectio
 const connection = typeof configured === "string" ? configured : undefined;
 
 describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
-  it.each([false, true])(
-    "rehydrates every family and retained Matrix root (SQLite agent: %s)",
-    async (sqliteAgent) => {
+  it.each([
+    {
+      scenario: "all",
+      name: "rehydrates every family and retained Matrix root before Gateway startup",
+    },
+    {
+      scenario: "mixed",
+      name: "publishes recovered PostgreSQL state and SQLite agent selection last",
+    },
+    {
+      scenario: "compatibility",
+      name: "restores legacy plugin archives and cleans failed provider restores",
+    },
+  ])(
+    "$name",
+    async ({ scenario }) => {
+      const sqliteAgent = scenario === "mixed";
       assert(connection);
       await withEnvAsync(
         { OPENCLAW_ARCHIVE_TEST_PG: connection, OPENCLAW_INCLUDE_ROOTS: undefined },
@@ -93,28 +107,33 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 await state.writeConfig(config);
               }
               const configBytes = await fs.readFile(state.configPath);
-              const matrix = loadBundledPluginPublicArtifactModuleSync<{
-                resolveMatrixAccountStorageRoot(params: {
-                  stateDir: string;
-                  homeserver: string;
-                  userId: string;
-                  accessToken: string;
-                  accountId: string;
-                }): { rootDir: string };
-              }>({ dirName: "matrix", artifactBasename: "runtime-api.js" });
-              const matrixRoots = ["current", "retained"].map((accessToken) =>
-                path.join(
-                  matrix.resolveMatrixAccountStorageRoot({
-                    stateDir: state.stateDir,
-                    homeserver: "https://matrix.example.org",
-                    userId: "@synthetic:example.org",
-                    accessToken: `synthetic-${accessToken}`,
-                    accountId: "archive",
-                  }).rootDir,
-                  "state",
-                  "openclaw.sqlite",
-                ),
-              );
+              const matrix =
+                scenario === "all"
+                  ? loadBundledPluginPublicArtifactModuleSync<{
+                      resolveMatrixAccountStorageRoot(params: {
+                        stateDir: string;
+                        homeserver: string;
+                        userId: string;
+                        accessToken: string;
+                        accountId: string;
+                      }): { rootDir: string };
+                    }>({ dirName: "matrix", artifactBasename: "runtime-api.js" })
+                  : undefined;
+              const matrixRoots = matrix
+                ? ["current", "retained"].map((accessToken) =>
+                    path.join(
+                      matrix.resolveMatrixAccountStorageRoot({
+                        stateDir: state.stateDir,
+                        homeserver: "https://matrix.example.org",
+                        userId: "@synthetic:example.org",
+                        accessToken: `synthetic-${accessToken}`,
+                        accountId: "archive",
+                      }).rootDir,
+                      "state",
+                      "openclaw.sqlite",
+                    ),
+                  )
+                : [];
               const stores = [
                 {
                   family: "state",
@@ -158,7 +177,13 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   column: "value_json",
                   value: JSON.stringify({ matrix: index }),
                 })),
-              ];
+              ].filter(
+                ({ family }) =>
+                  scenario === "all" ||
+                  (scenario === "mixed"
+                    ? family === "state" || family === "agent"
+                    : family === "workboard" || family === "logbook"),
+              );
               const descriptors = new Map(
                 await Promise.all(
                   [...new Set(stores.map(({ family }) => family))].map(
@@ -260,9 +285,6 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   output: state.path("archive.tar.gz"),
                   includeWorkspace: false,
                 });
-                const capturedRoot = state.path("captured-archive");
-                await fs.mkdir(capturedRoot);
-                await tar.x({ file: backup.archivePath, cwd: capturedRoot });
                 const capturedIdentities = new Map(
                   stores.map((store) => [store.file, readBackupEngine(store.file)]),
                 );
@@ -274,7 +296,6 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   await fs.unlink(store.file);
                 }
                 process.env.OPENCLAW_ARCHIVE_TEST_PG = recoveryConnection.href;
-                const recoveryConfig = config;
                 if (sqliteAgent) {
                   await fs.writeFile(
                     includePath,
@@ -285,330 +306,346 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 await state.writeConfig({ database: { engine: "sqlite" } });
                 resetDatabaseEngineSelectionForTest();
                 clearRuntimeConfigSnapshot();
-                const targetPath = state.path("restored");
-                const restoredConfig = path.join(
-                  targetPath,
-                  buildBackupArchivePath(backup.archiveRoot, state.configPath),
-                );
-                const rename = fs.rename.bind(fs);
-                let selectionPublished = false;
-                const publication = vi
-                  .spyOn(fs, "rename")
-                  .mockImplementation(async (source, destination) => {
-                    if (destination === restoredConfig) {
-                      await expect(fs.access(restoredConfig)).rejects.toMatchObject({
-                        code: "ENOENT",
-                      });
-                      for (const store of stores) {
-                        const anchor = readBackupEngine(
-                          path.join(
-                            targetPath,
-                            buildBackupArchivePath(backup.archiveRoot, store.file),
-                          ),
-                        );
-                        expect(anchor.engine).toBe(
-                          sqliteAgent && store.family === "agent" ? "sqlite" : "postgres",
-                        );
-                        if (anchor.engine === "postgres") {
-                          expect(namespaces.has(anchor.namespace)).toBe(false);
-                          expect(
-                            (
-                              await recovery.query(
-                                `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                              )
-                            ).rows,
-                          ).toEqual([{ value: store.value }]);
-                        }
-                      }
-                      selectionPublished = true;
-                    }
-                    await rename(source, destination);
-                  });
-                let restored: Awaited<ReturnType<typeof backupRestoreCommand>>;
-                try {
-                  restored = await backupRestoreCommand(createTestRuntime(), {
-                    archive: backup.archivePath,
-                    target: targetPath,
-                  });
-                } finally {
-                  publication.mockRestore();
-                }
-                expect(selectionPublished).toBe(true);
-                for (const store of stores) {
-                  const anchor = readBackupEngine(
-                    path.join(targetPath, buildBackupArchivePath(restored.archiveRoot, store.file)),
+                if (scenario !== "compatibility") {
+                  const targetPath = state.path("restored");
+                  const restoredConfig = path.join(
+                    targetPath,
+                    buildBackupArchivePath(backup.archiveRoot, state.configPath),
                   );
-                  if (sqliteAgent && store.family === "agent") {
-                    expect(anchor).toEqual({ engine: "sqlite" });
-                    using restoredAgent = openNodeSqliteDatabase(
+                  const rename = fs.rename.bind(fs);
+                  let selectionPublished = false;
+                  const publication = vi
+                    .spyOn(fs, "rename")
+                    .mockImplementation(async (source, destination) => {
+                      if (destination === restoredConfig) {
+                        await expect(fs.access(restoredConfig)).rejects.toMatchObject({
+                          code: "ENOENT",
+                        });
+                        for (const store of stores) {
+                          const anchor = readBackupEngine(
+                            path.join(
+                              targetPath,
+                              buildBackupArchivePath(backup.archiveRoot, store.file),
+                            ),
+                          );
+                          expect(anchor.engine).toBe(
+                            sqliteAgent && store.family === "agent" ? "sqlite" : "postgres",
+                          );
+                          if (anchor.engine === "postgres") {
+                            expect(namespaces.has(anchor.namespace)).toBe(false);
+                            expect(
+                              (
+                                await recovery.query(
+                                  `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                                )
+                              ).rows,
+                            ).toEqual([{ value: store.value }]);
+                          }
+                        }
+                        selectionPublished = true;
+                      }
+                      await rename(source, destination);
+                    });
+                  let restored: Awaited<ReturnType<typeof backupRestoreCommand>>;
+                  try {
+                    restored = await backupRestoreCommand(createTestRuntime(), {
+                      archive: backup.archivePath,
+                      target: targetPath,
+                    });
+                  } finally {
+                    publication.mockRestore();
+                  }
+                  expect(selectionPublished).toBe(true);
+                  for (const store of stores) {
+                    const anchor = readBackupEngine(
                       path.join(
                         targetPath,
                         buildBackupArchivePath(restored.archiveRoot, store.file),
                       ),
                     );
+                    if (sqliteAgent && store.family === "agent") {
+                      expect(anchor).toEqual({ engine: "sqlite" });
+                      using restoredAgent = openNodeSqliteDatabase(
+                        path.join(
+                          targetPath,
+                          buildBackupArchivePath(restored.archiveRoot, store.file),
+                        ),
+                      );
+                      expect(
+                        restoredAgent
+                          .prepare(
+                            "SELECT value_json AS value FROM cache_entries WHERE scope = 'archive'",
+                          )
+                          .all(),
+                      ).toEqual([{ value: store.value }]);
+                      continue;
+                    }
+                    assert(anchor.engine === "postgres");
+                    expect(namespaces.has(anchor.namespace)).toBe(false);
+                    expect(anchor).toMatchObject({
+                      ...capturedIdentities.get(store.file),
+                      namespace: anchor.namespace,
+                    });
+                    namespaces.add(anchor.namespace);
                     expect(
-                      restoredAgent
-                        .prepare(
-                          "SELECT value_json AS value FROM cache_entries WHERE scope = 'archive'",
+                      (
+                        await recovery.query(
+                          `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
                         )
-                        .all(),
+                      ).rows,
                     ).toEqual([{ value: store.value }]);
-                    continue;
+                    for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
+                      await expect(
+                        fs.access(
+                          path.join(
+                            targetPath,
+                            `${buildBackupArchivePath(restored.archiveRoot, store.file)}.postgres`,
+                            name,
+                          ),
+                        ),
+                      ).rejects.toMatchObject({ code: "ENOENT" });
+                    }
                   }
-                  assert(anchor.engine === "postgres");
-                  expect(namespaces.has(anchor.namespace)).toBe(false);
-                  expect(anchor).toMatchObject({
-                    ...capturedIdentities.get(store.file),
-                    namespace: anchor.namespace,
+                  expect(
+                    (
+                      await client.query(
+                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                      )
+                    ).rows,
+                  ).toEqual([]);
+
+                  expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
+
+                  // Activate the restored anchors where this synthetic installation expects them.
+                  for (const store of stores) {
+                    await fs.copyFile(
+                      path.join(
+                        targetPath,
+                        buildBackupArchivePath(restored.archiveRoot, store.file),
+                      ),
+                      store.file,
+                    );
+                  }
+                  const gatewayConfig: OpenClawConfig = {
+                    ...config,
+                    plugins: { enabled: false },
+                    gateway: {
+                      mode: "local",
+                      auth: { mode: "token", token: "archive-synthetic-token" },
+                      controlUi: { enabled: false },
+                    },
+                    skills: { load: { watch: false } },
+                    logging: { level: "silent", consoleLevel: "silent" },
+                    meta: { migrations: { webhookListeners: true } },
+                  };
+                  await state.writeConfig(gatewayConfig);
+                  setRuntimeConfigSnapshot(gatewayConfig);
+                  installDatabaseEngineSelection(
+                    await resolveDatabaseEngineSelection(gatewayConfig),
+                  );
+                  await withEnvAsync(
+                    {
+                      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+                      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+                      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+                      OPENCLAW_SKIP_CANVAS_HOST: "1",
+                      OPENCLAW_SKIP_CHANNELS: "1",
+                      OPENCLAW_SKIP_CRON: "1",
+                      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+                      OPENCLAW_SKIP_PROVIDERS: "1",
+                    },
+                    async () => {
+                      const claim = await acquireGatewayE2ePortBlock();
+                      const lock = await acquireGatewayLock({
+                        env: state.env,
+                        port: claim.port,
+                        listenerMode: "foreground",
+                        allowInTests: true,
+                      });
+                      assert(lock);
+                      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+                      try {
+                        server = await startClaimedGateway(claim, () =>
+                          startGatewayServer(claim.port, {
+                            gatewayStateOwner: lock,
+                            bind: "loopback",
+                            controlUiEnabled: false,
+                          }),
+                        );
+                        await server.startupSettled;
+                        const anchor = readBackupEngine(stores[0]!.file);
+                        expect(anchor).toEqual(
+                          readBackupEngine(
+                            path.join(
+                              targetPath,
+                              buildBackupArchivePath(restored.archiveRoot, stores[0]!.file),
+                            ),
+                          ),
+                        );
+                      } finally {
+                        await server?.close({ reason: "archive restore proof" });
+                        await lock.release();
+                        await claim.release();
+                        await closeStateDatabaseForTest();
+                      }
+                    },
+                  );
+                } else {
+                  const capturedRoot = state.path("captured-archive");
+                  await fs.mkdir(capturedRoot);
+                  await tar.x({ file: backup.archivePath, cwd: capturedRoot });
+                  const plugin = stores.find((store) => store.family === "workboard")!;
+                  const legacyRoot = state.path("legacy-archive");
+                  const pluginEntry = buildBackupArchivePath(backup.archiveRoot, plugin.file);
+                  const legacyAnchor = path.join(legacyRoot, pluginEntry);
+                  await fs.mkdir(path.dirname(legacyAnchor), { recursive: true });
+                  await fs.copyFile(path.join(capturedRoot, pluginEntry), legacyAnchor);
+                  await fs.cp(
+                    path.join(capturedRoot, `${pluginEntry}.postgres`),
+                    `${legacyAnchor}.postgres`,
+                    { recursive: true },
+                  );
+                  await fs.writeFile(
+                    path.join(`${legacyAnchor}.postgres`, "operator-note.txt"),
+                    "retain this user file\n",
+                  );
+                  await fs.writeFile(
+                    path.join(legacyRoot, backup.archiveRoot, "manifest.json"),
+                    JSON.stringify({
+                      schemaVersion: 1,
+                      archiveRoot: backup.archiveRoot,
+                      createdAt: backup.createdAt,
+                      platform: process.platform,
+                      assets: [
+                        {
+                          kind: "state",
+                          sourcePath: path.dirname(plugin.file),
+                          archivePath: buildBackupArchivePath(
+                            backup.archiveRoot,
+                            path.dirname(plugin.file),
+                          ),
+                        },
+                      ],
+                    }),
+                  );
+                  const legacyConfig = path.join(
+                    legacyRoot,
+                    buildBackupArchivePath(backup.archiveRoot, state.configPath),
+                  );
+                  await fs.mkdir(path.dirname(legacyConfig), { recursive: true });
+                  await fs.writeFile(legacyConfig, JSON.stringify(config));
+                  const legacyManifestPath = path.join(
+                    legacyRoot,
+                    backup.archiveRoot,
+                    "manifest.json",
+                  );
+                  const legacyManifest = JSON.parse(await fs.readFile(legacyManifestPath, "utf8"));
+                  legacyManifest.assets.push({
+                    kind: "config",
+                    sourcePath: state.configPath,
+                    archivePath: buildBackupArchivePath(backup.archiveRoot, state.configPath),
                   });
-                  namespaces.add(anchor.namespace);
+                  await fs.writeFile(legacyManifestPath, JSON.stringify(legacyManifest));
+                  const legacyArchive = state.path("legacy.tar.gz");
+                  await tar.c({ file: legacyArchive, cwd: legacyRoot, gzip: true }, [
+                    backup.archiveRoot,
+                  ]);
+                  const legacyTarget = state.path("legacy-restored");
+                  resetDatabaseEngineSelectionForTest();
+                  clearRuntimeConfigSnapshot();
+                  await backupRestoreCommand(createTestRuntime(), {
+                    archive: legacyArchive,
+                    target: legacyTarget,
+                  });
+                  const legacy = readBackupEngine(path.join(legacyTarget, pluginEntry));
+                  assert(legacy.engine === "postgres");
                   expect(
                     (
                       await recovery.query(
-                        `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                        `SELECT name FROM "${legacy.namespace}".workboard_boards`,
                       )
                     ).rows,
-                  ).toEqual([{ value: store.value }]);
-                  for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
-                    await expect(
-                      fs.access(
-                        path.join(
-                          targetPath,
-                          `${buildBackupArchivePath(restored.archiveRoot, store.file)}.postgres`,
-                          name,
-                        ),
-                      ),
-                    ).rejects.toMatchObject({ code: "ENOENT" });
-                  }
-                }
-                expect(
-                  (
-                    await client.query(
-                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                    )
-                  ).rows,
-                ).toEqual([]);
+                  ).toEqual([{ name: plugin.value }]);
+                  expect(
+                    await fs.readFile(
+                      path.join(legacyTarget, `${pluginEntry}.postgres`, "operator-note.txt"),
+                      "utf8",
+                    ),
+                  ).toBe("retain this user file\n");
 
-                expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
-
-                const plugin = stores.find((store) => store.family === "workboard")!;
-                const legacyRoot = state.path("legacy-archive");
-                const pluginEntry = buildBackupArchivePath(backup.archiveRoot, plugin.file);
-                const legacyAnchor = path.join(legacyRoot, pluginEntry);
-                await fs.mkdir(path.dirname(legacyAnchor), { recursive: true });
-                await fs.copyFile(path.join(capturedRoot, pluginEntry), legacyAnchor);
-                await fs.cp(
-                  path.join(capturedRoot, `${pluginEntry}.postgres`),
-                  `${legacyAnchor}.postgres`,
-                  { recursive: true },
-                );
-                await fs.writeFile(
-                  path.join(`${legacyAnchor}.postgres`, "operator-note.txt"),
-                  "retain this user file\n",
-                );
-                await fs.writeFile(
-                  path.join(legacyRoot, backup.archiveRoot, "manifest.json"),
-                  JSON.stringify({
-                    schemaVersion: 1,
-                    archiveRoot: backup.archiveRoot,
-                    createdAt: backup.createdAt,
-                    platform: process.platform,
-                    assets: [
-                      {
-                        kind: "state",
-                        sourcePath: path.dirname(plugin.file),
-                        archivePath: buildBackupArchivePath(
-                          backup.archiveRoot,
-                          path.dirname(plugin.file),
-                        ),
-                      },
-                    ],
-                  }),
-                );
-                const legacyConfig = path.join(
-                  legacyRoot,
-                  buildBackupArchivePath(backup.archiveRoot, state.configPath),
-                );
-                await fs.mkdir(path.dirname(legacyConfig), { recursive: true });
-                await fs.writeFile(legacyConfig, JSON.stringify(config));
-                const legacyManifestPath = path.join(
-                  legacyRoot,
-                  backup.archiveRoot,
-                  "manifest.json",
-                );
-                const legacyManifest = JSON.parse(await fs.readFile(legacyManifestPath, "utf8"));
-                legacyManifest.assets.push({
-                  kind: "config",
-                  sourcePath: state.configPath,
-                  archivePath: buildBackupArchivePath(backup.archiveRoot, state.configPath),
-                });
-                await fs.writeFile(legacyManifestPath, JSON.stringify(legacyManifest));
-                const legacyArchive = state.path("legacy.tar.gz");
-                await tar.c({ file: legacyArchive, cwd: legacyRoot, gzip: true }, [
-                  backup.archiveRoot,
-                ]);
-                const legacyTarget = state.path("legacy-restored");
-                resetDatabaseEngineSelectionForTest();
-                clearRuntimeConfigSnapshot();
-                await backupRestoreCommand(createTestRuntime(), {
-                  archive: legacyArchive,
-                  target: legacyTarget,
-                });
-                const legacy = readBackupEngine(path.join(legacyTarget, pluginEntry));
-                assert(legacy.engine === "postgres");
-                expect(
-                  (await recovery.query(`SELECT name FROM "${legacy.namespace}".workboard_boards`))
-                    .rows,
-                ).toEqual([{ name: plugin.value }]);
-                expect(
-                  await fs.readFile(
-                    path.join(legacyTarget, `${pluginEntry}.postgres`, "operator-note.txt"),
-                    "utf8",
-                  ),
-                ).toBe("retain this user file\n");
-
-                // Activate the restored anchors where this synthetic installation expects them.
-                for (const store of stores) {
-                  await fs.copyFile(
-                    path.join(targetPath, buildBackupArchivePath(restored.archiveRoot, store.file)),
-                    store.file,
-                  );
-                }
-                const gatewayConfig: OpenClawConfig = {
-                  ...recoveryConfig,
-                  plugins: { enabled: false },
-                  gateway: {
-                    mode: "local",
-                    auth: { mode: "token", token: "archive-synthetic-token" },
-                    controlUi: { enabled: false },
-                  },
-                  skills: { load: { watch: false } },
-                  logging: { level: "silent", consoleLevel: "silent" },
-                  meta: { migrations: { webhookListeners: true } },
-                };
-                await state.writeConfig(gatewayConfig);
-                setRuntimeConfigSnapshot(gatewayConfig);
-                installDatabaseEngineSelection(await resolveDatabaseEngineSelection(gatewayConfig));
-                await withEnvAsync(
-                  {
-                    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-                    OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-                    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-                    OPENCLAW_SKIP_CANVAS_HOST: "1",
-                    OPENCLAW_SKIP_CHANNELS: "1",
-                    OPENCLAW_SKIP_CRON: "1",
-                    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-                    OPENCLAW_SKIP_PROVIDERS: "1",
-                  },
-                  async () => {
-                    const claim = await acquireGatewayE2ePortBlock();
-                    const lock = await acquireGatewayLock({
-                      env: state.env,
-                      port: claim.port,
-                      listenerMode: "foreground",
-                      allowInTests: true,
-                    });
-                    assert(lock);
-                    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-                    try {
-                      server = await startClaimedGateway(claim, () =>
-                        startGatewayServer(claim.port, {
-                          gatewayStateOwner: lock,
-                          bind: "loopback",
-                          controlUiEnabled: false,
-                        }),
-                      );
-                      await server.startupSettled;
-                      const anchor = readBackupEngine(stores[0]!.file);
-                      expect(anchor).toEqual(
-                        readBackupEngine(
-                          path.join(
-                            targetPath,
-                            buildBackupArchivePath(restored.archiveRoot, stores[0]!.file),
-                          ),
-                        ),
-                      );
-                    } finally {
-                      await server?.close({ reason: "archive restore proof" });
-                      await lock.release();
-                      await claim.release();
-                      await closeStateDatabaseForTest();
-                    }
-                  },
-                );
-
-                // A later unavailable provider must clean namespaces already prepared for earlier stores.
-                const corruptRoot = state.path("corrupt");
-                await fs.mkdir(corruptRoot);
-                await tar.x({ file: backup.archivePath, cwd: corruptRoot });
-                const archiveManifest = JSON.parse(
-                  await fs.readFile(
-                    path.join(corruptRoot, backup.archiveRoot, "manifest.json"),
-                    "utf8",
-                  ),
-                ) as { postgresSnapshots: Array<{ sourcePath: string }> };
-                const lastPath = archiveManifest.postgresSnapshots.at(-1)!.sourcePath;
-                const corruptManifest = path.join(
-                  corruptRoot,
-                  `${buildBackupArchivePath(backup.archiveRoot, lastPath)}.postgres`,
-                  "manifest.json",
-                );
-                const originalManifest = await fs.readFile(corruptManifest, "utf8");
-                const unavailableProvider = JSON.parse(originalManifest);
-                unavailableProvider.source.owner = "missing-backup-owner";
-                await fs.writeFile(corruptManifest, JSON.stringify(unavailableProvider));
-                const corruptArchive = state.path("corrupt.tar.gz");
-                await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [
-                  backup.archiveRoot,
-                ]);
-                const before = (
-                  await recovery.query(
-                    "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                  )
-                ).rows;
-                resetDatabaseEngineSelectionForTest();
-                clearRuntimeConfigSnapshot();
-                await expect(
-                  backupRestoreCommand(createTestRuntime(), {
-                    archive: corruptArchive,
-                    target: state.path("failed"),
-                  }),
-                ).rejects.toThrow("incomplete target was cleaned");
-                expect(
-                  (
-                    await recovery.query(
-                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                    )
-                  ).rows,
-                ).toEqual(before);
-
-                await fs.writeFile(corruptManifest, originalManifest);
-                await fs.unlink(
-                  path.join(
+                  // A later unavailable provider must clean namespaces already prepared for earlier stores.
+                  const corruptRoot = state.path("corrupt");
+                  await fs.mkdir(corruptRoot);
+                  await tar.x({ file: backup.archivePath, cwd: corruptRoot });
+                  const archiveManifest = JSON.parse(
+                    await fs.readFile(
+                      path.join(corruptRoot, backup.archiveRoot, "manifest.json"),
+                      "utf8",
+                    ),
+                  ) as { postgresSnapshots: Array<{ sourcePath: string }> };
+                  const lastPath = archiveManifest.postgresSnapshots.at(-1)!.sourcePath;
+                  const corruptManifest = path.join(
                     corruptRoot,
-                    `${buildBackupArchivePath(backup.archiveRoot, plugin.file)}.postgres`,
+                    `${buildBackupArchivePath(backup.archiveRoot, lastPath)}.postgres`,
                     "manifest.json",
-                  ),
-                );
-                const missingArchive = state.path("missing-capsule.tar.gz");
-                await tar.c({ file: missingArchive, cwd: corruptRoot, gzip: true }, [
-                  backup.archiveRoot,
-                ]);
-                resetDatabaseEngineSelectionForTest();
-                clearRuntimeConfigSnapshot();
-                await expect(
-                  backupRestoreCommand(createTestRuntime(), {
-                    archive: missingArchive,
-                    target: state.path("missing-capsule"),
-                  }),
-                ).rejects.toThrow("manifest.json");
-                expect(
-                  (
+                  );
+                  const originalManifest = await fs.readFile(corruptManifest, "utf8");
+                  const unavailableProvider = JSON.parse(originalManifest);
+                  unavailableProvider.source.owner = "missing-backup-owner";
+                  await fs.writeFile(corruptManifest, JSON.stringify(unavailableProvider));
+                  const corruptArchive = state.path("corrupt.tar.gz");
+                  await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [
+                    backup.archiveRoot,
+                  ]);
+                  const before = (
                     await recovery.query(
                       "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
                     )
-                  ).rows,
-                ).toEqual(before);
+                  ).rows;
+                  resetDatabaseEngineSelectionForTest();
+                  clearRuntimeConfigSnapshot();
+                  await expect(
+                    backupRestoreCommand(createTestRuntime(), {
+                      archive: corruptArchive,
+                      target: state.path("failed"),
+                    }),
+                  ).rejects.toThrow("incomplete target was cleaned");
+                  expect(
+                    (
+                      await recovery.query(
+                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                      )
+                    ).rows,
+                  ).toEqual(before);
+
+                  await fs.writeFile(corruptManifest, originalManifest);
+                  await fs.unlink(
+                    path.join(
+                      corruptRoot,
+                      `${buildBackupArchivePath(backup.archiveRoot, plugin.file)}.postgres`,
+                      "manifest.json",
+                    ),
+                  );
+                  const missingArchive = state.path("missing-capsule.tar.gz");
+                  await tar.c({ file: missingArchive, cwd: corruptRoot, gzip: true }, [
+                    backup.archiveRoot,
+                  ]);
+                  resetDatabaseEngineSelectionForTest();
+                  clearRuntimeConfigSnapshot();
+                  await expect(
+                    backupRestoreCommand(createTestRuntime(), {
+                      archive: missingArchive,
+                      target: state.path("missing-capsule"),
+                    }),
+                  ).rejects.toThrow("manifest.json");
+                  expect(
+                    (
+                      await recovery.query(
+                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                      )
+                    ).rows,
+                  ).toEqual(before);
+                }
               } finally {
                 try {
                   await closeStateDatabaseForTest();
