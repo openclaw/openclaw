@@ -10,14 +10,14 @@ import {
 } from "../config/io.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import { upsertSessionEntry } from "../plugin-sdk/session-store-runtime.js";
-import { readVisibleSessionTranscriptMessageEntries } from "../plugin-sdk/session-transcript-runtime.js";
+import { readVisibleSessionTranscriptMessageEntries as readMessages } from "../plugin-sdk/session-transcript-runtime.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
 import * as externalContent from "../security/external-content.js";
 import {
   importSessionCatalogHistory,
   preserveSessionCatalogHistory,
-  readBoundedSessionCatalogHistory,
 } from "./session-catalog-history-import.js";
+import { catalogReader, readHistory } from "./session-catalog.test-support.js";
 
 function catalogStore(home: string, name: string) {
   const scope = {
@@ -31,30 +31,6 @@ function catalogStore(home: string, name: string) {
 
 async function initializeStore(scope: ReturnType<typeof catalogStore>["scope"]) {
   await upsertSessionEntry({ ...scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } });
-}
-
-function readHistory(
-  source: SessionCatalogTranscriptItem[],
-  maxItems = 50_000,
-  maxBytes = 64 * 1024 * 1024,
-) {
-  return readBoundedSessionCatalogHistory({
-    read: async ({ cursor, limit }) => {
-      // Mirrors the provider parsers, which reject transcript pages above 50 items.
-      if (limit > 50) {
-        throw new Error("limit must be an integer from 1 to 50");
-      }
-      const end = source.length - Number(cursor ?? 0);
-      const start = Math.max(0, end - limit);
-      return {
-        hostId: "gateway",
-        threadId: "source-thread",
-        items: source.slice(start, end).toReversed(),
-        ...(start > 0 ? { nextCursor: String(source.length - start) } : {}),
-      };
-    },
-    limits: { maxItems, maxBytes },
-  });
 }
 
 it("imports and deduplicates in the supplied config store without polluting runtime or default stores", async () => {
@@ -89,32 +65,25 @@ it("imports and deduplicates in the supplied config store without polluting runt
           catalogId: "fixture-catalog",
           threadId: "source-thread",
           config,
-          read: async () => ({
-            hostId: "fixture-host",
-            threadId: "source-thread",
-            items: [
-              { id: "answer", type: "agentMessage", text: "Imported answer" },
-              { id: "prompt", type: "userMessage", text: "Imported prompt" },
-            ],
-          }),
+          read: catalogReader([
+            { id: "prompt", type: "userMessage", text: "Imported prompt" },
+            { id: "answer", type: "agentMessage", text: "Imported answer" },
+          ]),
         };
         await importSessionCatalogHistory(importParams);
         await importSessionCatalogHistory(importParams);
 
-        expect(await readVisibleSessionTranscriptMessageEntries(supplied)).toMatchObject([
+        expect(await readMessages(supplied)).toMatchObject([
           {
             idempotencyKey: "fixture-catalog-catalog:source-thread:prompt",
             message: { role: "user", content: "Imported prompt" },
           },
           {
             idempotencyKey: "fixture-catalog-catalog:source-thread:answer",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "Imported answer" }],
-            },
+            message: { role: "assistant", content: [{ type: "text", text: "Imported answer" }] },
           },
         ]);
-        expect(await readVisibleSessionTranscriptMessageEntries(competing)).toMatchObject([
+        expect(await readMessages(competing)).toMatchObject([
           { message: { role: "user", content: "Existing runtime transcript" } },
         ]);
         expect(fs.existsSync(defaultDatabasePath)).toBe(false);
@@ -168,7 +137,7 @@ it("rechecks authority after awaited content preparation", async () => {
       }),
     ).rejects.toThrow("Catalog source revoked");
     expect(preparing).toHaveBeenCalledOnce();
-    expect(await readVisibleSessionTranscriptMessageEntries(scope)).toMatchObject([
+    expect(await readMessages(scope)).toMatchObject([
       { idempotencyKey: "catalog-preservation:notice" },
     ]);
   });
@@ -202,14 +171,14 @@ it("preserves items once across sync, including id-less duplicates and a shifted
         });
 
       expect(await preserve()).toEqual({ importedItems: 4 });
-      const original = await readVisibleSessionTranscriptMessageEntries(scope);
+      const original = await readMessages(scope);
       expect(await preserve()).toEqual({ importedItems: 0 });
-      expect(await readVisibleSessionTranscriptMessageEntries(scope)).toEqual(original);
+      expect(await readMessages(scope)).toEqual(original);
       source.push({ type: "agentMessage", text: "New source answer" });
       expect(await preserve()).toEqual({ importedItems: 1 });
       expect(await preserve()).toEqual({ importedItems: 0 });
 
-      const stored = await readVisibleSessionTranscriptMessageEntries(scope);
+      const stored = await readMessages(scope);
       expect(stored).toHaveLength(6);
       expect(stored.slice(0, original.length)).toEqual(original);
       expect(new Set(stored.map((entry) => entry.idempotencyKey)).size).toBe(6);

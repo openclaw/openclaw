@@ -70,6 +70,10 @@ const emptyRegistry = {
   diagnostics: [],
 };
 
+function diagnostic(code: string, pluginId: string, details: Record<string, unknown> = {}) {
+  return { pluginId, code, ...details };
+}
+
 function registration(register: (api: SetupRegistryApi, source: string) => unknown) {
   mocks.createJiti.mockImplementation(() => (source: string) => ({
     default: { register: (api: SetupRegistryApi) => register(api, source) },
@@ -123,13 +127,11 @@ describe("setup registry", () => {
     const registry = resolvePluginSetupRegistry({ env: {} });
 
     expect(registry.diagnostics).toEqual([
-      {
-        pluginId: "acme-plugin",
-        code: "setup-cli-backend-missing-model-provider",
+      diagnostic("setup-cli-backend-missing-model-provider", "acme-plugin", {
         runtimeId: "standalone-cli",
         message:
           'cli backend "standalone-cli" is missing modelProvider; provider-to-runtime binding will be skipped. Set modelProvider to the canonical model provider id to enable this binding.',
-      },
+      }),
     ]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual([
       "standalone-cli",
@@ -173,11 +175,7 @@ describe("setup registry", () => {
     expect(resolvePluginSetupRegistry({ env: {} })).toEqual({
       ...emptyRegistry,
       diagnostics: [
-        {
-          pluginId: "openai",
-          code: "setup-descriptor-runtime-disabled",
-          message: expect.any(String),
-        },
+        diagnostic("setup-descriptor-runtime-disabled", "openai", { message: expect.any(String) }),
       ],
     });
     expect(mocks.createJiti).not.toHaveBeenCalled();
@@ -196,21 +194,15 @@ describe("setup registry", () => {
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
     expect(registry.diagnostics).toMatchObject([
-      {
-        pluginId: "openai",
-        code: "setup-descriptor-provider-runtime-undeclared",
+      diagnostic("setup-descriptor-provider-runtime-undeclared", "openai", {
         runtimeId: "anthropic",
-      },
-      {
-        pluginId: "openai",
-        code: "setup-descriptor-cli-backend-missing-runtime",
+      }),
+      diagnostic("setup-descriptor-cli-backend-missing-runtime", "openai", {
         declaredId: "codex-cli",
-      },
-      {
-        pluginId: "openai",
-        code: "setup-descriptor-cli-backend-runtime-undeclared",
+      }),
+      diagnostic("setup-descriptor-cli-backend-runtime-undeclared", "openai", {
         runtimeId: "claude-cli",
-      },
+      }),
     ]);
   });
 
@@ -263,15 +255,11 @@ describe("setup registry", () => {
         pluginId: "openai",
         backend: { id: "codex-cli", modelProvider: "openai", config: { command: "codex" } },
       };
-      expect(
-        resolvePluginSetupCliBackend({ backend: "codex-cli", env: {}, metadataSnapshot }),
-      ).toEqual(expected);
-      expect(
-        resolvePluginSetupCliBackend({ backend: "codex-cli", env: {}, metadataSnapshot }),
-      ).toEqual(expected);
-      expect(
-        resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {}, metadataSnapshot }),
-      ).toBeUndefined();
+      const lookup = (id: string) =>
+        resolvePluginSetupCliBackend({ backend: id, env: {}, metadataSnapshot });
+      expect(lookup("codex-cli")).toEqual(expected);
+      expect(lookup("codex-cli")).toEqual(expected);
+      expect(lookup("legacy-openai-cli")).toBeUndefined();
       expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     },
   );
@@ -282,13 +270,11 @@ describe("setup registry", () => {
       api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 }),
     );
     expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toMatchObject([
-      {
-        pluginId: "runtime-dependent-setup",
-        code: "setup-registration-failed",
+      diagnostic("setup-registration-failed", "runtime-dependent-setup", {
         message: expect.stringContaining(
           'Plugin "runtime-dependent-setup" runtime is intentionally unavailable during "setup-only" registration.',
         ),
-      },
+      }),
     ]);
   });
 
@@ -326,7 +312,7 @@ describe("setup registry", () => {
       expect(registry.autoEnableProbes).toHaveLength(1);
       expect(registry.autoEnableProbes[0]?.probe({ config: {}, env: {} })).toBe("healthy");
       expect(registry.diagnostics).toMatchObject([
-        { pluginId: "shared-plugin", code: "setup-registration-failed" },
+        diagnostic("setup-registration-failed", "shared-plugin"),
       ]);
     }
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);

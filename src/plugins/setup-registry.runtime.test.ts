@@ -23,6 +23,8 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
+type Runtime = typeof import("./setup-registry.runtime.js");
+type Fixture = NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>;
 
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
   const current = await import("./current-plugin-metadata-snapshot.js");
@@ -58,35 +60,39 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+function metadata(...plugins: Fixture["plugins"]) {
+  return createPluginMetadataSnapshotFixture({ plugins });
+}
+
+function expectBackend(
+  actual: ReturnType<Runtime["resolvePluginSetupCliBackendDescriptor"]>,
+  pluginId: string,
+  id: string,
+) {
+  expect(actual).toEqual({ pluginId, backend: { id } });
+}
+
 function createCurrentSnapshot(
   manifestHash: string,
   backend: string,
   workspaceDir?: string,
 ): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const snapshot = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: "openai",
-        rootDir: `/tmp/openai-${manifestHash}`,
-        cliBackends: [backend],
-        enabledByDefault: true,
-      },
-    ],
+  const snapshot = metadata({
+    id: "openai",
+    rootDir: `/tmp/openai-${manifestHash}`,
+    cliBackends: [backend],
+    enabledByDefault: true,
   });
-  snapshot.index.policyHash = policyHash;
-  return {
-    ...snapshot,
-    policyHash,
-    configFingerprint: manifestHash,
-    workspaceDir,
-  };
+  snapshot.index.policyHash = snapshot.policyHash = resolveInstalledPluginIndexPolicyHash({});
+  return Object.assign(snapshot, { configFingerprint: manifestHash, workspaceDir });
 }
 
 describe("setup-registry descriptor lookup", () => {
   it("keeps prepared CLI activation in the caller's machine-state root", async () => {
-    const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
-      await import("./setup-registry.runtime.js");
+    const {
+      resolvePluginSetupCliBackendDescriptor: descriptor,
+      resolvePluginSetupCliBackendIds: ids,
+    } = await import("./setup-registry.runtime.js");
     const compatRoot = tempDirs.make("openclaw-cli-compat-");
     const strictRoot = tempDirs.make("openclaw-cli-strict-");
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -99,16 +105,12 @@ describe("setup-registry descriptor lookup", () => {
       writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: strictEnv });
       clearBundledDiscoveryModeMemo();
       await withPluginCache(cache, async () => {
-        const snapshot = createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id: "bundled-cli-owner",
-              origin: "bundled",
-              providers: ["fixture-provider"],
-              cliBackends: ["scope-cli"],
-              enabledByDefault: true,
-            },
-          ],
+        const snapshot = metadata({
+          id: "bundled-cli-owner",
+          origin: "bundled",
+          providers: ["fixture-provider"],
+          cliBackends: ["scope-cli"],
+          enabledByDefault: true,
         });
         snapshot.index.plugins[0]!.contributions = {
           channels: [],
@@ -130,12 +132,10 @@ describe("setup-registry descriptor lookup", () => {
           for (const env of [compatEnv, strictEnv, compatEnv]) {
             const enabled = env === compatEnv;
             const params = { config, env, metadataSnapshot: snapshot };
-            expect(
-              resolvePluginSetupCliBackendDescriptor({ ...params, backend: "scope-cli" }),
-            ).toEqual(
+            expect(descriptor({ ...params, backend: "scope-cli" })).toEqual(
               enabled ? { pluginId: "bundled-cli-owner", backend: { id: "scope-cli" } } : undefined,
             );
-            expect(resolvePluginSetupCliBackendIds(params)).toEqual(enabled ? ["scope-cli"] : []);
+            expect(ids(params)).toEqual(enabled ? ["scope-cli"] : []);
           }
           sql.expectIdle();
         } finally {
@@ -152,62 +152,56 @@ describe("setup-registry descriptor lookup", () => {
   });
 
   it("preserves declaration order across case-equivalent owners and setup contributions", async () => {
-    const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
-      await import("./setup-registry.runtime.js");
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        { id: "first-owner", cliBackends: ["Shared-CLI"] },
-        {
-          id: "second-owner",
-          cliBackends: ["shared-cli"],
-          setup: { cliBackends: ["shared-cli", "SHARED-CLI", "setup-cli"] },
-        },
-        { id: "third-owner", cliBackends: ["Shared-CLI"] },
-      ],
-    });
+    const {
+      resolvePluginSetupCliBackendDescriptor: descriptor,
+      resolvePluginSetupCliBackendIds: ids,
+    } = await import("./setup-registry.runtime.js");
+    const snapshot = metadata(
+      { id: "first-owner", cliBackends: ["Shared-CLI"] },
+      {
+        id: "second-owner",
+        cliBackends: ["shared-cli"],
+        setup: { cliBackends: ["shared-cli", "SHARED-CLI", "setup-cli"] },
+      },
+      { id: "third-owner", cliBackends: ["Shared-CLI"] },
+    );
     const config = { plugins: { entries: { "first-owner": { enabled: false } } } };
     withPluginMetadataSnapshotScope(
       snapshot,
       () => {
-        expect(resolvePluginSetupCliBackendDescriptor({ backend: "SHARED-CLI", config })).toEqual({
-          pluginId: "second-owner",
-          backend: { id: "shared-cli" },
-        });
-        expect(resolvePluginSetupCliBackendIds({ config })).toEqual([
+        expectBackend(descriptor({ backend: "SHARED-CLI", config }), "second-owner", "shared-cli");
+        expect(ids({ config })).toEqual([
           "shared-cli",
           "shared-cli",
           "SHARED-CLI",
           "setup-cli",
           "Shared-CLI",
         ]);
-        expect(resolvePluginSetupCliBackendDescriptor({ backend: "SETUP-CLI", config })).toEqual({
-          pluginId: "second-owner",
-          backend: { id: "setup-cli" },
-        });
+        expectBackend(descriptor({ backend: "SETUP-CLI", config }), "second-owner", "setup-cli");
       },
       { trustConfigIdentity: true },
     );
   });
 
   it("keeps descriptors inside a narrower scoped view of the same metadata generation", async () => {
-    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
+    const { resolvePluginSetupCliBackendDescriptor: descriptor } =
+      await import("./setup-registry.runtime.js");
     const snapshot = createCurrentSnapshot("scoped", "Scoped-CLI");
     const narrowed = projectPluginMetadataSnapshot(snapshot, []);
     const resolve = (view: PluginMetadataSnapshot) =>
-      withPluginMetadataSnapshotScope(
-        view,
-        () => resolvePluginSetupCliBackendDescriptor({ backend: "scoped-cli" }),
-        { trustConfigIdentity: true },
-      );
+      withPluginMetadataSnapshotScope(view, () => descriptor({ backend: "scoped-cli" }), {
+        trustConfigIdentity: true,
+      });
 
-    expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
+    expectBackend(resolve(snapshot), "openai", "Scoped-CLI");
     expect(resolve(narrowed)).toBeUndefined();
-    expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
+    expectBackend(resolve(snapshot), "openai", "Scoped-CLI");
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("uses workspace-scoped current metadata through the active plugin runtime", async () => {
-    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
+    const { resolvePluginSetupCliBackendDescriptor: descriptor } =
+      await import("./setup-registry.runtime.js");
 
     setActivePluginRegistry(
       createEmptyPluginRegistry(),
@@ -223,15 +217,8 @@ describe("setup-registry descriptor lookup", () => {
         createCurrentSnapshot(manifestHash, backend, "/workspace/a"),
         { config: {}, env: process.env },
       );
-      expect(
-        resolvePluginSetupCliBackendDescriptor({ backend: backend.toLowerCase(), config: {} }),
-      ).toEqual({
-        pluginId: "openai",
-        backend: { id: backend },
-      });
-      expect(
-        resolvePluginSetupCliBackendDescriptor({ backend: missing, config: {} }),
-      ).toBeUndefined();
+      expectBackend(descriptor({ backend: backend.toLowerCase(), config: {} }), "openai", backend);
+      expect(descriptor({ backend: missing, config: {} })).toBeUndefined();
     }
 
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
