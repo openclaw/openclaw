@@ -1,4 +1,3 @@
-// QA Lab tests cover canonical profile scheduling evidence.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
@@ -17,6 +16,8 @@ import {
   qaProofRequirementsSchema,
   type QaProofRequirements,
 } from "./scorecard-taxonomy.js";
+
+const { attest, evaluateProof, schema } = qaProfileEvidencePlan;
 
 describe("QA profile evidence plan", () => {
   const portable = readQaScenarioById("thread-isolation");
@@ -87,6 +88,24 @@ describe("QA profile evidence plan", () => {
       proofRequirements: structuredClone(requirements),
     };
   }
+  function receipt(
+    id: string,
+    phase: "runtime" | "prepared",
+    filePath: string,
+    identity = proofIdentity,
+  ) {
+    return {
+      id,
+      phase,
+      identity,
+      artifact: {
+        kind: phase === "runtime" ? "fixture" : "producer-evidence",
+        source: phase === "runtime" ? "qa-suite" : "script",
+        path: filePath,
+        sha256: "a".repeat(64),
+      },
+    };
+  }
   function proofInvocation() {
     const owner = createQaEvidenceInvocation({
       scenarios: [
@@ -122,28 +141,29 @@ describe("QA profile evidence plan", () => {
           },
           effective: true,
         })),
-        receipts: rows.map((row, index) => ({
-          id: `receipt-${index}`,
-          phase: "runtime",
-          identity: row.identity ?? proofIdentity,
-          artifact: {
-            kind: "fixture",
-            source: "qa-suite",
-            path: `artifacts/${id}-${index}.json`,
-            sha256: "a".repeat(64),
-          },
-        })),
+        receipts: rows.map((row, index) =>
+          receipt(`receipt-${index}`, "runtime", `artifacts/${id}-${index}.json`, row.identity),
+        ),
       });
       owner.select(0, id);
     }
-    return { owner, complete };
+    function record(
+      rows: Parameters<typeof complete>[1],
+      status?: QaEvidenceStatus,
+      retryOf?: string | null,
+    ) {
+      const id = owner.begin(0, retryOf);
+      complete(id, rows, status);
+      return id;
+    }
+    return { owner, complete, record };
   }
   function proofEvidence(
     rows: Array<{ status: QaEvidenceStatus; identity?: QaEvidenceIdentity }>,
     mode: "full" | "slim" = "full",
   ) {
-    const { owner, complete } = proofInvocation();
-    complete(owner.begin(0), rows);
+    const { owner, record } = proofInvocation();
+    record(rows);
     return snapshot(owner, mode);
   }
   function snapshot(
@@ -153,113 +173,95 @@ describe("QA profile evidence plan", () => {
     return owner.snapshot({ generatedAt: "2026-09-13T00:00:00Z", evidenceMode });
   }
   function evaluate(evidence: QaEvidenceSummaryJson, plan = proofPlan()) {
-    return qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]!;
+    return evaluateProof(plan, evidence)[0]!;
   }
   function proofCheck(occurrenceId: string, status: string) {
     return { occurrenceId, assertionId: "assertion-one", status };
   }
 
-  it.each(["slim"] as const)(
-    "applies captured coverage caps to both retry policies in %s evidence",
-    (evidenceMode) => {
-      for (const caseName of ["primary", "secondary", "rowless"] as const) {
-        const role = caseName === "secondary" ? "secondary" : "primary";
-        const parent = createQaEvidenceInvocation({
-          scenarios: [portable],
-          channel: "slack",
-          launch: proofIdentity,
-        });
-        const first = proofEvidence([{ status: "fail" }], evidenceMode);
-        const second = proofEvidence(
-          caseName === "rowless" ? [] : [{ status: "pass" }],
-          evidenceMode,
-        );
-        for (const [index, childEvidence] of [first, second].entries()) {
-          const status = index === 0 ? "fail" : "pass";
-          const id = parent.begin(0);
-          parent.complete(id, {
-            status,
-            childEvidence,
-            childCoverage: [{ id: "channels.dm", role: index === 0 ? "primary" : role }],
-            entries: [
-              {
-                test: { id: portable.id, kind: "script", title: "enclosing attempt" },
-                coverage: [],
-                result: { status },
-              },
-            ],
-            receipts: [
-              {
-                id: `${id}:bundle`,
-                phase: "prepared",
-                identity: proofIdentity,
-                artifact: {
-                  kind: "producer-evidence",
-                  source: "script",
-                  path: `${id}/qa-evidence.json`,
-                  sha256: "a".repeat(64),
-                },
-              },
-            ],
-          });
-          parent.select(0, id);
-        }
-        const evidence = parent.snapshot({ generatedAt: "2026-09-14T00:00:00Z", evidenceMode });
-        const original = JSON.stringify(evidence);
-        for (const retryAcceptance of ["selected-attempt", "all-recorded-attempts"] as const) {
-          const plan = proofPlan();
-          plan.proofRequirements = plan.proofRequirements.map((item) => ({
-            ...item,
-            retryAcceptance,
-          }));
-          const proof = evaluate(evidence, plan);
-          expect(proof.qualified).toBe(
-            caseName === "primary" && retryAcceptance === "selected-attempt",
-          );
-          if (retryAcceptance === "all-recorded-attempts") {
-            expect(proof.checks.some((check) => check.status === "failed")).toBe(true);
-          }
-          if (caseName === "rowless") {
-            expect(proof.checks.some((check) => check.status === "incomplete")).toBe(true);
-          }
-        }
-        expect(JSON.stringify(evidence)).toBe(original);
-        expect(evaluate(second).qualified).toBe(caseName !== "rowless");
-      }
-    },
-  );
-
-  it.each(["slim"] as const)(
-    "keeps synthetic observations out of child assertion obligations in %s evidence",
-    (evidenceMode) => {
-      const { owner, complete } = proofInvocation();
-      const dispatch = owner.begin(0, null, { diagnostic: true });
-      const child = owner.begin(0, null);
-      complete(child, [{ status: "pass" }]);
-      owner.complete(dispatch, { status: "pass", entries: [] });
-      owner.select(0, child);
-      const evidence = snapshot(owner, evidenceMode);
-      const original = structuredClone(evidence);
-      const plan = proofPlan();
-      plan.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
-      expect(qaProfileEvidencePlan.attest(plan, true, evidence).proof?.[0]?.qualified).toBe(true);
-      expect(evidence.occurrences.find((item) => item.id === dispatch)?.assertions).toBeNull();
-      expect(evidence).toEqual(original);
-
-      const incomplete = owner.begin(0, null);
-      owner.complete(incomplete, { status: "fail", entries: [] });
-      owner.select(0, incomplete);
-      const failed = snapshot(owner, evidenceMode);
-      expect(failed.occurrences.find((item) => item.id === incomplete)?.assertions).toHaveLength(1);
-      expect(evaluate(failed, plan).checks).toEqual([
-        expect.objectContaining({ occurrenceId: child, status: "qualified" }),
-        expect.objectContaining({ occurrenceId: incomplete, status: "incomplete" }),
-      ]);
-      expect(() => qaProfileEvidencePlan.attest(plan, true, failed)).toThrow(
-        "unqualified declared proof",
+  it("applies captured coverage caps to both retry policies in slim evidence", () => {
+    const evidenceMode = "slim";
+    for (const caseName of ["primary", "secondary", "rowless"] as const) {
+      const role = caseName === "secondary" ? "secondary" : "primary";
+      const parent = createQaEvidenceInvocation({
+        scenarios: [portable],
+        channel: "slack",
+        launch: proofIdentity,
+      });
+      const first = proofEvidence([{ status: "fail" }], evidenceMode);
+      const second = proofEvidence(
+        caseName === "rowless" ? [] : [{ status: "pass" }],
+        evidenceMode,
       );
-    },
-  );
+      for (const [index, childEvidence] of [first, second].entries()) {
+        const status = index === 0 ? "fail" : "pass";
+        const id = parent.begin(0);
+        parent.complete(id, {
+          status,
+          childEvidence,
+          childCoverage: [{ id: "channels.dm", role: index === 0 ? "primary" : role }],
+          entries: [
+            {
+              test: { id: portable.id, kind: "script", title: "enclosing attempt" },
+              coverage: [],
+              result: { status },
+            },
+          ],
+          receipts: [receipt(`${id}:bundle`, "prepared", `${id}/qa-evidence.json`)],
+        });
+        parent.select(0, id);
+      }
+      const evidence = parent.snapshot({ generatedAt: "2026-09-14T00:00:00Z", evidenceMode });
+      const original = JSON.stringify(evidence);
+      for (const retryAcceptance of ["selected-attempt", "all-recorded-attempts"] as const) {
+        const plan = proofPlan();
+        plan.proofRequirements = plan.proofRequirements.map((item) => ({
+          ...item,
+          retryAcceptance,
+        }));
+        const proof = evaluate(evidence, plan);
+        expect(proof.qualified).toBe(
+          caseName === "primary" && retryAcceptance === "selected-attempt",
+        );
+        if (retryAcceptance === "all-recorded-attempts") {
+          expect(proof.checks.some((check) => check.status === "failed")).toBe(true);
+        }
+        if (caseName === "rowless") {
+          expect(proof.checks.some((check) => check.status === "incomplete")).toBe(true);
+        }
+      }
+      expect(JSON.stringify(evidence)).toBe(original);
+      expect(evaluate(second).qualified).toBe(caseName !== "rowless");
+    }
+  });
+
+  it("keeps synthetic observations out of child assertion obligations in slim evidence", () => {
+    const evidenceMode = "slim";
+    const { owner, complete } = proofInvocation();
+    const dispatch = owner.begin(0, null, { diagnostic: true });
+    const child = owner.begin(0, null);
+    complete(child, [{ status: "pass" }]);
+    owner.complete(dispatch, { status: "pass", entries: [] });
+    owner.select(0, child);
+    const evidence = snapshot(owner, evidenceMode);
+    const original = structuredClone(evidence);
+    const plan = proofPlan();
+    plan.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
+    expect(attest(plan, true, evidence).proof?.[0]?.qualified).toBe(true);
+    expect(evidence.occurrences.find((item) => item.id === dispatch)?.assertions).toBeNull();
+    expect(evidence).toEqual(original);
+
+    const incomplete = owner.begin(0, null);
+    owner.complete(incomplete, { status: "fail", entries: [] });
+    owner.select(0, incomplete);
+    const failed = snapshot(owner, evidenceMode);
+    expect(failed.occurrences.find((item) => item.id === incomplete)?.assertions).toHaveLength(1);
+    expect(evaluate(failed, plan).checks).toEqual([
+      expect.objectContaining({ occurrenceId: child, status: "qualified" }),
+      expect.objectContaining({ occurrenceId: incomplete, status: "incomplete" }),
+    ]);
+    expect(() => attest(plan, true, failed)).toThrow("unqualified declared proof");
+  });
 
   it("classifies prepared identity without inventing a product failure", () => {
     const evidence = proofEvidence([{ status: "pass" }]);
@@ -279,15 +281,13 @@ describe("QA profile evidence plan", () => {
       const evidence = proofEvidence(statuses.map((status) => ({ status })));
       expect(evaluate(evidence).checks[0]?.status).toBe(expected);
       expect(evidence.entries.map((entry) => entry.result.status)).toEqual(statuses);
-      expect(() => qaProfileEvidencePlan.attest(proofPlan(), true, evidence)).toThrow(
-        `channel-proof (${expected})`,
-      );
+      expect(() => attest(proofPlan(), true, evidence)).toThrow(`channel-proof (${expected})`);
     },
   );
 
   it("distinguishes a prerequisite incident from an omitted started assertion", () => {
-    const { owner, complete } = proofInvocation();
-    complete(owner.begin(0), [], "blocked");
+    const { owner, record } = proofInvocation();
+    record([], "blocked");
     const evidence = snapshot(owner);
     const plan = proofPlan();
     expect(evaluate(evidence, plan).checks[0]?.status).toBe("incomplete");
@@ -301,59 +301,38 @@ describe("QA profile evidence plan", () => {
     expect(evaluate(evidence, missingPlan).checks[0]?.status).toBe("prerequisite");
   });
 
-  it.each(["skipped"] as const)(
-    "excludes a rejected rowless %s retry only from selected-attempt proof",
-    (status) => {
-      for (const evidenceMode of ["full", "slim"] as const) {
-        const { owner, complete } = proofInvocation();
-        const first = owner.begin(0);
-        complete(first, [{ status: "pass" }], "fail");
-        const retry = owner.begin(0, first);
-        complete(retry, [], status);
-        const evidence = snapshot(owner, evidenceMode);
-        const original = structuredClone(evidence);
-        const plan = proofPlan();
-        expect(owner.selectedObservation(0)?.occurrence.id).toBe(first);
-        expect(evaluate(evidence, plan).checks).toEqual([proofCheck(first, "qualified")]);
-        expect(qaProfileEvidencePlan.attest(plan, true, evidence).proof?.[0]?.qualified).toBe(true);
+  it.each([
+    { name: "rejected", firstRows: [{ status: "pass" }], status: "skipped", selected: false },
+    { name: "selected", firstRows: [], status: "pass", selected: true },
+  ] as const)("preserves $name rowless retry selection", ({ firstRows, status, selected }) => {
+    for (const evidenceMode of ["full", "slim"] as const) {
+      const { owner, record } = proofInvocation();
+      const first = record([...firstRows], "fail");
+      const retry = record([], status, first);
+      const evidence = snapshot(owner, evidenceMode);
+      const original = structuredClone(evidence);
+      const plan = proofPlan();
+      expect(owner.selectedObservation(0)?.occurrence.id).toBe(selected ? retry : first);
+      expect(evaluate(evidence, plan).checks).toEqual([
+        proofCheck(selected ? retry : first, selected ? "incomplete" : "qualified"),
+      ]);
+      if (!selected) {
+        expect(attest(plan, true, evidence).proof?.[0]?.qualified).toBe(true);
         plan.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
         expect(evaluate(evidence, plan).checks).toEqual([
           proofCheck(first, "qualified"),
           proofCheck(retry, "incomplete"),
         ]);
-        expect(() => qaProfileEvidencePlan.attest(plan, true, evidence)).toThrow(
-          "unqualified declared proof",
-        );
-        expect(evidence).toEqual(original);
       }
-    },
-  );
-
-  it("keeps selected rowless retries incomplete while retiring their predecessor proof", () => {
-    for (const evidenceMode of ["full", "slim"] as const) {
-      const { owner, complete } = proofInvocation();
-      const first = owner.begin(0);
-      complete(first, [], "fail");
-      const retry = owner.begin(0, first);
-      complete(retry, [], "pass");
-      const evidence = snapshot(owner, evidenceMode);
-      const original = structuredClone(evidence);
-      const plan = proofPlan();
-      expect(owner.selectedObservation(0)?.occurrence.id).toBe(retry);
-      expect(evaluate(evidence, plan).checks).toEqual([proofCheck(retry, "incomplete")]);
-      expect(() => qaProfileEvidencePlan.attest(plan, true, evidence)).toThrow(
-        "unqualified declared proof",
-      );
+      expect(() => attest(plan, true, evidence)).toThrow("unqualified declared proof");
       expect(evidence).toEqual(original);
     }
   });
 
   it("retains independent rowless observations in selected-attempt proof", () => {
-    const { owner, complete } = proofInvocation();
-    const first = owner.begin(0);
-    complete(first, [{ status: "pass" }]);
-    const independent = owner.begin(0, null);
-    complete(independent, [], "blocked");
+    const { owner, record } = proofInvocation();
+    const first = record([{ status: "pass" }]);
+    const independent = record([], "blocked", null);
     const evidence = snapshot(owner);
     const original = structuredClone(evidence);
     expect(evaluate(evidence).checks).toEqual([
@@ -368,7 +347,10 @@ describe("QA profile evidence plan", () => {
     complete(owner.begin(0, null), [
       {
         status: "pass",
-        identity: { ...proofIdentity, package: { ...proofIdentity.package!, integrity: "other" } },
+        identity: {
+          ...proofIdentity,
+          package: { ...proofIdentity.package!, integrity: "other" },
+        },
       },
     ]);
     complete(owner.begin(0, null), [
@@ -405,9 +387,7 @@ describe("QA profile evidence plan", () => {
     delete old.profilePlan.taxonomyIdentity;
     expect(evaluate(old, plan).checks[0]?.status).toBe("insufficient");
     const { proofRequirements: _requirements, ...withoutRequirements } = plan;
-    expect(qaProfileEvidencePlan.attest(withoutRequirements, true, old)).not.toHaveProperty(
-      "proof",
-    );
+    expect(attest(withoutRequirements, true, old)).not.toHaveProperty("proof");
   });
 
   it("accepts complete plans and rejects unexpected or non-canonical cells", () => {
@@ -416,7 +396,7 @@ describe("QA profile evidence plan", () => {
       { scenarioId: portable.id, executionKind: "flow", channel: "matrix" },
       { scenarioId: native.id, executionKind: "playwright", channel: null },
     ]);
-    expect(qaProfileEvidencePlan.attest(complete, true).plan).toEqual(complete);
+    expect(attest(complete, true).plan).toEqual(complete);
 
     expect(() =>
       buildPlan([
@@ -425,7 +405,7 @@ describe("QA profile evidence plan", () => {
       ]),
     ).toThrow("unexpected execution cells invalidate evidence");
     expect(
-      qaProfileEvidencePlan.schema.safeParse({
+      schema.safeParse({
         ...complete,
         expectedCells: complete.expectedCells.toReversed(),
       }).success,
@@ -447,25 +427,23 @@ describe("QA profile evidence plan", () => {
         retryAcceptance: "all-recorded-attempts",
       },
     ]);
-    const captured = qaProfileEvidencePlan.attest({
+    const captured = attest({
       ...plan,
       proofRequirements: declaredRequirements,
     });
     expect(captured.plan.proofRequirements).toEqual(declaredRequirements);
-    expect(captured.sha256).not.toBe(qaProfileEvidencePlan.attest(plan).sha256);
+    expect(captured.sha256).not.toBe(attest(plan).sha256);
     expect(plan).not.toHaveProperty("proofRequirements");
-    expect(() =>
-      qaProofRequirementsSchema.parse([{ ...declaredRequirements[0], owner: "" }]),
-    ).toThrow();
-    expect(() =>
-      qaProofRequirementsSchema.parse([{ ...declaredRequirements[0], acceptedRef: undefined }]),
-    ).toThrow();
-    expect(() =>
-      qaProofRequirementsSchema.parse([{ ...declaredRequirements[0], retryAcceptance: undefined }]),
-    ).toThrow();
-    expect(() =>
-      qaProofRequirementsSchema.parse([{ ...declaredRequirements[0], alternatives: [{}] }]),
-    ).toThrow();
+    for (const invalid of [
+      { owner: "" },
+      { acceptedRef: undefined },
+      { retryAcceptance: undefined },
+      { alternatives: [{}] },
+    ]) {
+      expect(() =>
+        qaProofRequirementsSchema.parse([{ ...declaredRequirements[0], ...invalid }]),
+      ).toThrow();
+    }
     expect(() =>
       qaProofRequirementsSchema.parse([declaredRequirements[0], declaredRequirements[0]]),
     ).toThrow();

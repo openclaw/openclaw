@@ -182,6 +182,36 @@ function collectUpgradeRequest(socket: Socket, resolve: (request: string) => voi
   });
 }
 
+async function expectOpeningFailure(kind: "tls" | "reset") {
+  const accepted = Promise.withResolvers<Socket>();
+  const server = trackServer(
+    net.createServer((socket) => {
+      if (kind === "tls") {
+        socket.resume();
+      } else {
+        socket.once("data", () => socket.resetAndDestroy());
+      }
+      accepted.resolve(socket);
+    }),
+  );
+  const port = await listenLoopback(server, "localhost");
+  const { browser, proxySocket } = await openBrowserPair();
+  const endSpy = vi.spyOn(proxySocket, "end");
+  const timeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
+  const response = kind === "tls" ? GATEWAY_TIMEOUT_RESPONSE : BAD_GATEWAY_RESPONSE;
+  const responsePromise = readSocket(browser, undefined, kind === "tls" ? 14_000 : 2_000);
+  runUpgradeProxy(proxySocket, `${kind === "tls" ? "https" : "http"}://localhost:${port}`);
+  const upstream = await accepted.promise;
+  const closed = once(upstream, "close");
+  await expect(responsePromise).resolves.toBe(response);
+  await closed;
+  expect(endSpy).toHaveBeenCalledWith(response, expect.any(Function));
+  expect([upstream.destroyed, proxySocket.destroyed]).toEqual([true, true]);
+  if (kind === "tls") {
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+  }
+}
+
 describe("proxyUpgradeRequest loopback transport", () => {
   it("forwards HTTPS upgrades only after the TLS handshake and clears the opening timeout", async () => {
     const connectTls = tls.connect;
@@ -192,12 +222,11 @@ describe("proxyUpgradeRequest loopback transport", () => {
         rejectUnauthorized: false,
       })) as typeof tls.connect);
 
-    let resolveRequest!: (request: string) => void;
-    const requestPromise = new Promise<string>((resolve) => {
-      resolveRequest = resolve;
-    });
+    const request = Promise.withResolvers<string>();
     const upstreamServer = trackServer(
-      tls.createServer(TEST_TLS_OPTIONS, (socket) => collectUpgradeRequest(socket, resolveRequest)),
+      tls.createServer(TEST_TLS_OPTIONS, (socket) =>
+        collectUpgradeRequest(socket, request.resolve),
+      ),
     );
     const upstreamPort = await listenLoopback(upstreamServer, "localhost");
     const { browser, proxySocket } = await openBrowserPair();
@@ -207,7 +236,7 @@ describe("proxyUpgradeRequest loopback transport", () => {
 
     runUpgradeProxy(proxySocket, `https://localhost:${upstreamPort}`);
 
-    await expect(requestPromise).resolves.toContain("GET /socket?client=qa HTTP/1.1");
+    await expect(request.promise).resolves.toContain("GET /socket?client=qa HTTP/1.1");
     await expect(responsePromise).resolves.toBe(UPGRADE_RESPONSE);
     expect(setTimeoutSpy).toHaveBeenCalledWith(10_000);
     expect(setTimeoutSpy).toHaveBeenCalledWith(0);
@@ -215,32 +244,7 @@ describe("proxyUpgradeRequest loopback transport", () => {
   });
 
   it("returns a flushed 504 and closes both sockets when TLS stays silent after TCP connect", async () => {
-    let resolveUpstream!: (socket: Socket) => void;
-    const upstreamPromise = new Promise<Socket>((resolve) => {
-      resolveUpstream = resolve;
-    });
-    const upstreamServer = trackServer(
-      net.createServer((socket) => {
-        socket.resume();
-        resolveUpstream(socket);
-      }),
-    );
-    const upstreamPort = await listenLoopback(upstreamServer, "localhost");
-    const { browser, proxySocket } = await openBrowserPair();
-    const setTimeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
-    const endSpy = vi.spyOn(proxySocket, "end");
-    const responsePromise = readSocket(browser, undefined, 14_000);
-
-    runUpgradeProxy(proxySocket, `https://localhost:${upstreamPort}`);
-
-    const upstreamSocket = await upstreamPromise;
-    const upstreamClosed = once(upstreamSocket, "close");
-    await expect(responsePromise).resolves.toBe(GATEWAY_TIMEOUT_RESPONSE);
-    await upstreamClosed;
-    expect(setTimeoutSpy).toHaveBeenCalledWith(10_000);
-    expect(endSpy).toHaveBeenCalledWith(GATEWAY_TIMEOUT_RESPONSE, expect.any(Function));
-    expect(upstreamSocket.destroyed).toBe(true);
-    expect(proxySocket.destroyed).toBe(true);
+    await expectOpeningFailure("tls");
   }, 16_000);
 
   it("closes a connecting upstream exactly once when the browser sends EOF", async () => {
@@ -277,20 +281,6 @@ describe("proxyUpgradeRequest loopback transport", () => {
   });
 
   it("returns a flushed 502 when the upstream resets before its upgrade response", async () => {
-    const upstreamServer = trackServer(
-      net.createServer((socket) => {
-        socket.once("data", () => socket.resetAndDestroy());
-      }),
-    );
-    const upstreamPort = await listenLoopback(upstreamServer);
-    const { browser, proxySocket } = await openBrowserPair();
-    const endSpy = vi.spyOn(proxySocket, "end");
-    const responsePromise = readSocket(browser);
-
-    runUpgradeProxy(proxySocket, `http://127.0.0.1:${upstreamPort}`);
-
-    await expect(responsePromise).resolves.toBe(BAD_GATEWAY_RESPONSE);
-    expect(endSpy).toHaveBeenCalledWith(BAD_GATEWAY_RESPONSE, expect.any(Function));
-    expect(proxySocket.destroyed).toBe(true);
+    await expectOpeningFailure("reset");
   });
 });

@@ -1,4 +1,3 @@
-// Qa Lab tests cover Multipass behavior through the production runner.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,10 +12,7 @@ const TEST_ENV_VALUE = "qa-fixture-value";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
-  return {
-    ...actual,
-    runExec: runExecMock,
-  };
+  return { ...actual, runExec: runExecMock };
 });
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
@@ -28,6 +24,11 @@ import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 
 const generatedPaths: string[] = [];
+type GuestScriptParams = Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
+  outputDirName: string;
+};
+const readText = (file: string) => fs.readFileSync(file, "utf8");
+const readLines = (file: string) => readText(file).trim().split("\n");
 
 function outputPath(name: string) {
   const dir = path.join(process.cwd(), ".artifacts", "qa-e2e", name);
@@ -41,47 +42,28 @@ function tempRoot() {
   return dir;
 }
 
-function missingMultipassError() {
-  return Object.assign(new Error("spawn multipass ENOENT"), { code: "ENOENT" });
+async function renderPersistedGuestScript(params: GuestScriptParams) {
+  return (await guestScripts(params)).persistedScript;
 }
 
-async function renderPersistedGuestScript(
-  params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
-    outputDirName: string;
-  },
-) {
-  const { outputDirName, ...runParams } = params;
-  const outputDir = outputPath(outputDirName);
-  await expect(
-    runQaMultipass({
-      repoRoot: process.cwd(),
-      outputDir,
-      ...runParams,
-    }),
-  ).rejects.toThrow("Multipass is not installed on this host.");
-  return fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
-}
-
-async function captureGuestScriptsAtTransfer(
-  params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
-    outputDirName: string;
-  },
-) {
+async function guestScripts(params: GuestScriptParams, captureTransfer = false) {
   const { outputDirName, ...runParams } = params;
   const outputDir = outputPath(outputDirName);
   let executableScript = "";
-  runExecMock.mockImplementation(async (_file: string, args: string[]) => {
-    const transferSourcePath = args[1];
-    if (
-      args[0] === "transfer" &&
-      transferSourcePath &&
-      path.basename(transferSourcePath) === "guest-run.sh"
-    ) {
-      executableScript = fs.readFileSync(transferSourcePath, "utf8");
-      throw new Error("stop after guest script transfer");
-    }
-    return { stdout: "", stderr: "" };
-  });
+  if (captureTransfer) {
+    runExecMock.mockImplementation(async (_file: string, args: string[]) => {
+      const transferSourcePath = args[1];
+      if (
+        args[0] === "transfer" &&
+        transferSourcePath &&
+        path.basename(transferSourcePath) === "guest-run.sh"
+      ) {
+        executableScript = readText(transferSourcePath);
+        throw new Error("stop after guest script transfer");
+      }
+      return { stdout: "", stderr: "" };
+    });
+  }
 
   await expect(
     runQaMultipass({
@@ -89,12 +71,18 @@ async function captureGuestScriptsAtTransfer(
       outputDir,
       ...runParams,
     }),
-  ).rejects.toThrow("stop after guest script transfer");
+  ).rejects.toThrow(
+    captureTransfer
+      ? "stop after guest script transfer"
+      : "Multipass is not installed on this host.",
+  );
 
-  expect(executableScript).not.toBe("");
+  if (captureTransfer) {
+    expect(executableScript).not.toBe("");
+  }
   return {
     executableScript,
-    persistedScript: fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8"),
+    persistedScript: readText(path.join(outputDir, "multipass-guest-run.sh")),
   };
 }
 
@@ -102,7 +90,9 @@ describe("qa multipass runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sleepMock.mockResolvedValue(undefined);
-    runExecMock.mockRejectedValue(missingMultipassError());
+    runExecMock.mockRejectedValue(
+      Object.assign(new Error("spawn multipass ENOENT"), { code: "ENOENT" }),
+    );
   });
 
   afterEach(() => {
@@ -179,7 +169,7 @@ describe("qa multipass runtime", () => {
     expect(sleepMock.mock.calls).toEqual(
       Array.from({ length: Math.min(failures, 4) }, () => [2_000]),
     );
-    const log = fs.readFileSync(path.join(outputDir, "multipass-host.log"), "utf8");
+    const log = readText(path.join(outputDir, "multipass-host.log"));
     for (let attempt = 1; attempt <= failures; attempt += 1) {
       expect(log).toContain(`${label} retry ${attempt}/5: mount failure ${attempt}\n\n`);
     }
@@ -267,10 +257,13 @@ describe("qa multipass runtime", () => {
     ["24.15.0", "24.99.0"],
     ["24.16.0", "24.16.0"],
   ])("bootstraps a runnable guest toolchain from Node %s", async (version, expectedVersion) => {
-    const { executableScript } = await captureGuestScriptsAtTransfer({
-      outputDirName: "multipass-node-" + version,
-      providerMode: "mock-openai",
-    });
+    const { executableScript } = await guestScripts(
+      {
+        outputDirName: "multipass-node-" + version,
+        providerMode: "mock-openai",
+      },
+      true,
+    );
     const vmName = runExecMock.mock.calls.find(([, args]) => args[0] === "launch")?.[1][2];
     generatedPaths.push("/tmp/" + vmName + "-bootstrap.log");
     await withTempWorkspace(
@@ -367,43 +360,42 @@ describe("qa multipass runtime", () => {
           },
         });
         expect(result.status, result.stderr).toBe(0);
-        const probeExits = fs
-          .readFileSync(probeExitsPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
+        const probeExits = readLines(probeExitsPath).map((line) => JSON.parse(line));
         expect(probeExits).toEqual([
           ...(["22.99.0", "24.15.0"].includes(version) ? [{ version, code: 1 }] : []),
           { version: expectedVersion, code: 0 },
         ]);
-        expect(fs.readFileSync(commandsPath, "utf8").trim().split("\n")).toEqual(
+        expect(readLines(commandsPath)).toEqual(
           ["install", "build", "openclaw"].map((command) => command + ":" + expectedVersion),
         );
-        const suiteArgs = fs.readFileSync(suiteArgsPath, "utf8").split("\0");
+        const suiteArgs = readText(suiteArgsPath).split("\0");
         const outputFlagIndex = suiteArgs.indexOf("--output-dir");
         expect(outputFlagIndex).toBeGreaterThan(-1);
         expect(
           resolveRepoRelativeOutputDir("/workspace/openclaw", suiteArgs[outputFlagIndex + 1]),
         ).toBe(`/workspace/openclaw/.artifacts/qa-e2e/multipass-node-${version}`);
-        const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        const pkg = JSON.parse(readText("package.json")) as {
           packageManager: string;
         };
-        expect(fs.readFileSync(pnpmSpecPath, "utf8")).toBe(pkg.packageManager);
+        expect(readText(pnpmSpecPath)).toBe(pkg.packageManager);
       },
     );
   });
 
   it("redacts persisted credentials while forwarding them to the executable script", async () => {
     vi.stubEnv("OPENAI_API_KEY", TEST_ENV_VALUE);
-    const { executableScript, persistedScript } = await captureGuestScriptsAtTransfer({
-      outputDirName: "multipass-live-test",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
-      fastMode: true,
-      allowFailures: true,
-      scenarioIds: ["channel-chat-baseline"],
-    });
+    const { executableScript, persistedScript } = await guestScripts(
+      {
+        outputDirName: "multipass-live-test",
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna",
+        fastMode: true,
+        allowFailures: true,
+        scenarioIds: ["channel-chat-baseline"],
+      },
+      true,
+    );
 
     expect(persistedScript).toContain("OPENAI_API_KEY='<redacted>'");
     expect(persistedScript).not.toContain(TEST_ENV_VALUE);

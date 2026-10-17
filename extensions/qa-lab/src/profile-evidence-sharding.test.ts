@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { vitestArtifactEvidence, writeJson } from "./evidence-gallery.test-support.js";
 import {
   buildQaOccurrenceEvidenceSummary,
-  QA_EVIDENCE_SUMMARY_KIND,
   validateQaEvidenceSummaryJson,
   type QaEvidenceOccurrence,
 } from "./evidence-summary.js";
@@ -79,10 +79,8 @@ function shardIdForScenario(plan: ShardPlan, scenarioId: string) {
   return plan.shards.find((shard) => shard.scenarioIds.includes(scenarioId))?.id;
 }
 
-async function writeShardEvidenceSet(params: {
-  incompleteFirstShard?: boolean;
-  outputDir: string;
-}) {
+async function writeShardEvidenceSet(params: { incompleteFirstShard?: boolean } = {}) {
+  const outputDir = tempDirs.make("qa-profile-shards-");
   const artifactContent = "shard artifact content\n";
   const artifactRelativePath = path.join("playwright", "scenario.log");
   const unreferencedPayloadContent = "unreferenced shard diagnostics\n";
@@ -117,39 +115,19 @@ async function writeShardEvidenceSet(params: {
       expectedCells,
       observedCells,
     });
-    const evidencePath = path.join(params.outputDir, shard.id, "qa-evidence.json");
-    await fs.mkdir(path.dirname(evidencePath), { recursive: true });
-    const entries =
-      index === 0
-        ? [
-            {
-              test: {
-                kind: "qa-scenario",
-                id: scenarios[0]?.id ?? "shard-scenario",
-                title: scenarios[0]?.title ?? "Shard scenario",
-              },
-              coverage: [],
-              execution: {
-                runner: "qa-suite",
-                environment: { ref: null, os: "linux", nodeVersion: "24.0.0" },
-                provider: {
-                  id: "mock-openai",
-                  live: false,
-                  model: { name: "test", ref: "mock-openai/test" },
-                },
-                packageSource: { kind: "source-checkout" },
-                artifacts: [
-                  {
-                    kind: "log",
-                    path: `.artifacts/qa-e2e/profile-all-123-1/${shard.id}/${artifactRelativePath}`,
-                    source: "qa-suite",
-                  },
-                ],
-              },
-              result: { status: "pass" },
-            },
-          ]
-        : [];
+    const evidencePath = path.join(outputDir, shard.id, "qa-evidence.json");
+    const summary = vitestArtifactEvidence({
+      id: scenarios[0]?.id ?? "shard-scenario",
+      title: scenarios[0]?.title ?? "Shard scenario",
+      artifact: {
+        kind: "log",
+        path: `.artifacts/qa-e2e/profile-all-123-1/${shard.id}/${artifactRelativePath}`,
+      },
+    });
+    const entry = summary.entries[0]!;
+    entry.test.kind = "qa-scenario";
+    entry.coverage = [];
+    entry.execution!.runner = "qa-suite";
     if (index === 0) {
       for (const [relative, content] of [
         [artifactRelativePath, artifactContent],
@@ -160,27 +138,20 @@ async function writeShardEvidenceSet(params: {
         await fs.writeFile(file, content, "utf8");
       }
     }
-    await fs.writeFile(
-      evidencePath,
-      `${JSON.stringify({
-        kind: QA_EVIDENCE_SUMMARY_KIND,
-        schemaVersion: 2,
-        generatedAt: "2026-08-16T00:00:00.000Z",
-        evidenceMode: "full",
-        entries,
-        profile: "all",
-        profilePlan,
-      })}\n`,
-      "utf8",
-    );
+    await writeJson(evidencePath, {
+      ...summary,
+      generatedAt: "2026-08-16T00:00:00.000Z",
+      entries: index === 0 ? [entry] : [],
+      profile: "all",
+      profilePlan,
+    });
     evidencePaths.push(evidencePath);
   }
   return {
+    outputDir,
     artifactContent,
     evidencePaths,
     shardPlan,
-    unreferencedPayloadContent,
-    unreferencedPayloadRelativePath,
   };
 }
 
@@ -188,10 +159,8 @@ describe("QA profile evidence sharding", () => {
   it.each(["full", "slim"] as const)(
     "rebases occurrence receipts with entry artifacts in %s evidence",
     async (evidenceMode) => {
-      const outputDir = tempDirs.make("qa-profile-shards-occurrences-");
-      const { evidencePaths, artifactContent, shardPlan } = await writeShardEvidenceSet({
-        outputDir,
-      });
+      const { outputDir, evidencePaths, artifactContent, shardPlan } =
+        await writeShardEvidenceSet();
       const digest = createHash("sha256").update(artifactContent).digest("hex");
       for (const [index, file] of evidencePaths.entries()) {
         const summary = await readEvidence(file);
@@ -236,7 +205,7 @@ describe("QA profile evidence sharding", () => {
             }),
           ),
         });
-        await fs.writeFile(file, JSON.stringify(v3));
+        await writeJson(file, v3);
       }
       const outputPath = aggregatePath(outputDir);
       const aggregate = await aggregateEvidence(outputDir, evidencePaths);
@@ -245,10 +214,10 @@ describe("QA profile evidence sharding", () => {
         throw new Error("expected occurrence evidence");
       }
       const receipt = aggregate.occurrences[0]?.receipts[0];
-      expect(receipt?.artifact.path).toBe(
-        `shards/${shardPlan.shards[0]!.id}/playwright/scenario.log`,
-      );
-      expect(receipt?.artifact.sha256).toBe(digest);
+      expect(receipt?.artifact).toMatchObject({
+        path: `shards/${shardPlan.shards[0]!.id}/playwright/scenario.log`,
+        sha256: digest,
+      });
       expect(
         await fs.readFile(path.resolve(path.dirname(outputPath), receipt!.artifact.path), "utf8"),
       ).toBe(artifactContent);
@@ -294,12 +263,11 @@ describe("QA profile evidence sharding", () => {
   });
 
   it("rejects mixed taxonomy identity before any aggregate writes", async () => {
-    const outputDir = tempDirs.make("qa-profile-shards-identity-");
-    const { evidencePaths } = await writeShardEvidenceSet({ outputDir });
+    const { outputDir, evidencePaths } = await writeShardEvidenceSet();
     const file = evidencePaths.at(-1)!;
     const summary = await readEvidence(file);
     summary.profilePlan!.taxonomyIdentity = { version: 1, sha256: "0".repeat(64) };
-    await fs.writeFile(file, JSON.stringify(summary));
+    await writeJson(file, summary);
     await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
       "semantic taxonomy identity",
     );
@@ -309,10 +277,8 @@ describe("QA profile evidence sharding", () => {
   });
 
   it("preserves an incomplete child as incomplete aggregate evidence", async () => {
-    const outputDir = tempDirs.make("qa-profile-shards-incomplete-");
-    const { evidencePaths } = await writeShardEvidenceSet({
+    const { outputDir, evidencePaths } = await writeShardEvidenceSet({
       incompleteFirstShard: true,
-      outputDir,
     });
     const aggregate = await aggregateEvidence(outputDir, evidencePaths);
 
@@ -323,8 +289,7 @@ describe("QA profile evidence sharding", () => {
   });
 
   it("rejects a repo-relative artifact path that cannot be mapped to its shard payload", async () => {
-    const outputDir = tempDirs.make("qa-profile-shards-missing-artifact-");
-    const { evidencePaths } = await writeShardEvidenceSet({ outputDir });
+    const { outputDir, evidencePaths } = await writeShardEvidenceSet();
     const evidencePath = evidencePaths[0];
     if (!evidencePath) {
       throw new Error("expected shard evidence");
@@ -335,7 +300,7 @@ describe("QA profile evidence sharding", () => {
       throw new Error("expected declared shard artifact");
     }
     artifact.path = ".artifacts/nonexistent/qa-evidence.json";
-    await fs.writeFile(evidencePath, `${JSON.stringify(summary)}\n`, "utf8");
+    await writeJson(evidencePath, summary);
 
     await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
       "was not found within downloaded payload",
@@ -345,8 +310,7 @@ describe("QA profile evidence sharding", () => {
   it.skipIf(process.platform === "win32")(
     "rejects a declared artifact symlink that would retain its source-payload target",
     async () => {
-      const outputDir = tempDirs.make("qa-profile-shards-symlink-artifact-");
-      const { evidencePaths } = await writeShardEvidenceSet({ outputDir });
+      const { outputDir, evidencePaths } = await writeShardEvidenceSet();
       const evidencePath = evidencePaths[0];
       if (!evidencePath) {
         throw new Error("expected shard evidence");
@@ -365,8 +329,7 @@ describe("QA profile evidence sharding", () => {
   );
 
   it("rejects duplicate or missing shards instead of treating them as partial evidence", async () => {
-    const outputDir = tempDirs.make("qa-profile-shards-invalid-");
-    const { evidencePaths, shardPlan } = await writeShardEvidenceSet({ outputDir });
+    const { outputDir, evidencePaths, shardPlan } = await writeShardEvidenceSet();
     const aggregate = (paths: string[]) => aggregateEvidence(outputDir, paths);
 
     await expect(aggregate(evidencePaths.slice(1))).rejects.toThrow(

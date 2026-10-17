@@ -1,4 +1,3 @@
-// Qa Lab tests cover manual lane plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,7 +23,7 @@ vi.mock("./lab-server.js", () => ({ startQaLabServer }));
 
 vi.mock("./gateway-child.js", () => ({
   createQaGatewayChild: () => ({
-    start: (params: unknown) => startQaGatewayChild(params),
+    start: startQaGatewayChild,
     stop: gatewayStop,
   }),
 }));
@@ -112,35 +111,45 @@ describe("runQaManualLane", () => {
     );
   });
 
-  it("starts the mock provider and threads its base url into the gateway child", async () => {
-    const result = await runLane({
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
-      timeoutMs: 5_000,
-    });
-
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
-      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
-    });
-    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
-    expect(gatewayOptions).toMatchObject({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "mock-openai",
-      providerBaseUrl: "http://127.0.0.1:44080/v1",
-    });
-    expect(startQaLabServer).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      embeddedGateway: "disabled",
-    });
-    expect(result.reply).toBe("Protocol note: mock reply.");
-    expectCleanup();
-    expect(cleanupTransportBeforeGatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
-      gatewayStop.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(gatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
-      cleanupTransportAfterGatewayStop.mock.invocationCallOrder[0] ?? 0,
-    );
-  });
+  it.each([
+    ["mock-openai", "mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt", "http://127.0.0.1:44080/v1"],
+    ["live-frontier", "openai/gpt-5.6-luna", "openai/gpt-5.6-luna", undefined],
+  ] as const)(
+    "starts %s with the correct provider bootstrap",
+    async (providerMode, primaryModel, alternateModel, providerBaseUrl) => {
+      const result = await runLane({
+        providerMode,
+        primaryModel,
+        alternateModel,
+        timeoutMs: 5_000,
+      });
+      expect(startQaProviderServer).toHaveBeenCalledWith(providerMode, {
+        modelRefs: [primaryModel, alternateModel],
+      });
+      const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+      expect(gatewayOptions).toMatchObject({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode,
+        providerBaseUrl,
+      });
+      expect(startQaLabServer).toHaveBeenCalledWith({
+        repoRoot: "/tmp/openclaw-repo",
+        embeddedGateway: "disabled",
+      });
+      expect(result.reply).toBe("Protocol note: mock reply.");
+      expect(gatewayStop).toHaveBeenCalledOnce();
+      expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledOnce();
+      expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledOnce();
+      expect(labStop).toHaveBeenCalledOnce();
+      expect(mockStop).toHaveBeenCalledTimes(providerMode === "mock-openai" ? 1 : 0);
+      expect(cleanupTransportBeforeGatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
+        gatewayStop.mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(gatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
+        cleanupTransportAfterGatewayStop.mock.invocationCallOrder[0] ?? 0,
+      );
+    },
+  );
 
   it.each([
     {
@@ -162,29 +171,6 @@ describe("runQaManualLane", () => {
     await expect(runLane()).rejects.toThrow(error);
 
     expectCleanup();
-  });
-
-  it("skips the mock provider bootstrap for live frontier runs", async () => {
-    const result = await runLane({
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
-      timeoutMs: 5_000,
-    });
-
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
-      modelRefs: ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"],
-    });
-    expect(startQaLabServer).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      embeddedGateway: "disabled",
-    });
-    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
-    expect(gatewayOptions).toMatchObject({
-      providerMode: "live-frontier",
-      providerBaseUrl: undefined,
-    });
-    expect(result.reply).toBe("Protocol note: mock reply.");
   });
 
   it.each([

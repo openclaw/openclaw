@@ -1,4 +1,3 @@
-// Qa Lab tests cover model catalog plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -18,9 +17,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts?.close();
-});
+afterAll(() => receipts?.close());
 afterEach(cleanup);
 
 async function fixtureReadyBeforeSettlement(
@@ -56,11 +53,7 @@ async function writeCatalog(repoRoot: string, script: string) {
   await fs.writeFile(path.join(repoRoot, "dist", "index.js"), script, "utf8");
 }
 
-async function abortedCatalog(
-  signal: AbortSignal,
-  cleanExit: boolean,
-  verify: (cleanupPath: string, startedAt: number) => Promise<void>,
-) {
+async function abortedCatalog(signal: AbortSignal, cleanExit: boolean) {
   const repoRoot = await makeTempDir("openclaw-qa-model-catalog-");
   const pidPath = path.join(repoRoot, "descendant.pid");
   const cleanupPath = path.join(repoRoot, "descendant.cleanup");
@@ -102,7 +95,11 @@ async function abortedCatalog(
     const startedAt = Date.now();
     controller.abort();
     await expect(withinTest(runPromise, signal)).rejects.toThrow("qa model catalog aborted");
-    await verify(cleanupPath, startedAt);
+    if (cleanExit) {
+      expect(await fs.readFile(cleanupPath, "utf8")).toBe("clean");
+      // The grace window is 300ms; allow loaded runners, not a fixed kill ceiling.
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    }
     await waitForDead(descendantPid);
   } finally {
     controller.abort();
@@ -156,22 +153,8 @@ describe("qa runner model catalog", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills aborted catalog process groups when the catalog child exits first",
-    async ({ signal }) => {
-      await abortedCatalog(signal, false, async () => {});
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "preserves abort grace when catalog descendants exit cleanly",
-    async ({ signal }) => {
-      await abortedCatalog(signal, true, async (cleanupPath, startedAt) => {
-        expect(await fs.readFile(cleanupPath, "utf8")).toBe("clean");
-        // Abort must settle with the exiting descendants (grace window is 300ms),
-        // never a long fixed kill ceiling; generous bound for loaded runners.
-        expect(Date.now() - startedAt).toBeLessThan(5_000);
-      });
-    },
+  it.runIf(process.platform !== "win32").for([false, true])(
+    "cleans up aborted catalog descendants (graceful exit: %s)",
+    async (cleanExit, { signal }) => abortedCatalog(signal, cleanExit),
   );
 });
